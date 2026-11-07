@@ -172,8 +172,28 @@
               }
             }
           },
+          "502": {
+            "description": "service-conflict: A service or database the request called refused it as a conflict; service-rejected: A service or database the request called refused it as invalid; service-denied: A service or database the request called denied it; service-failed: A call the request made failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "service-unavailable: A service or database the request calls is unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "504": {
-            "description": "deadline-exceeded: A call took longer than its deadline",
+            "description": "service-timeout: A call took longer than its deadline",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -258,7 +278,17 @@
             }
           },
           "502": {
-            "description": "call-failed: A call to another service failed",
+            "description": "service-not-found: A service the request called has no such thing; service-conflict: A service or database the request called refused it as a conflict; service-rejected: A service or database the request called refused it as invalid; service-denied: A service or database the request called denied it; service-bad-reply: A service the request called answered with a reply that is not the one it declares; service-failed: A call the request made failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "service-unavailable: A service or database the request calls is unavailable",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -268,7 +298,7 @@
             }
           },
           "504": {
-            "description": "deadline-exceeded: A call took longer than its deadline",
+            "description": "service-timeout: A call took longer than its deadline",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -341,7 +371,17 @@
             }
           },
           "502": {
-            "description": "call-failed: A call to another service failed",
+            "description": "service-not-found: A service the request called has no such thing; service-conflict: A service or database the request called refused it as a conflict; service-rejected: A service or database the request called refused it as invalid; service-denied: A service or database the request called denied it; service-bad-reply: A service the request called answered with a reply that is not the one it declares; service-failed: A call the request made failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "service-unavailable: A service or database the request calls is unavailable",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -351,7 +391,7 @@
             }
           },
           "504": {
-            "description": "deadline-exceeded: A call took longer than its deadline",
+            "description": "service-timeout: A call took longer than its deadline",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -423,8 +463,28 @@
               }
             }
           },
+          "502": {
+            "description": "service-conflict: A service or database the request called refused it as a conflict; service-rejected: A service or database the request called refused it as invalid; service-denied: A service or database the request called denied it; service-failed: A call the request made failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "service-unavailable: A service or database the request calls is unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "504": {
-            "description": "deadline-exceeded: A call took longer than its deadline",
+            "description": "service-timeout: A call took longer than its deadline",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -483,7 +543,17 @@
             }
           },
           "502": {
-            "description": "call-failed: A call to another service failed",
+            "description": "service-not-found: A service the request called has no such thing; service-conflict: A service or database the request called refused it as a conflict; service-rejected: A service or database the request called refused it as invalid; service-denied: A service or database the request called denied it; service-bad-reply: A service the request called answered with a reply that is not the one it declares; service-failed: A call the request made failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "service-unavailable: A service or database the request calls is unavailable",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -493,7 +563,7 @@
             }
           },
           "504": {
-            "description": "deadline-exceeded: A call took longer than its deadline",
+            "description": "service-timeout: A call took longer than its deadline",
             "content": {
               "application/problem+json": {
                 "schema": {

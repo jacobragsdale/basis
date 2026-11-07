@@ -7,13 +7,19 @@ system's clock. The fakes of another service, the clock and the ids are basis-co
 job's tests use too. Everything around it is the app's own, as in production: each call's deadline and span, the
 transaction that commits only after the response validates, the checks of every reply, and the cache's loads and
 expiry. A resource a test gives no fake opens as its settings say, so a test that fakes nothing reaches nothing only
-when its settings configure nothing."""
+when its settings configure nothing.
+
+Each fake fails on demand, as what it stands for would, so a test reaches every error path without a mock: another
+service's with `pricing.fails("/prices/X", api.Unavailable)` (basis-core's), and a database's with
+`warehouse.fails(api.Unavailable)`, every statement, or `warehouse.fails(api.Conflict, statement=RECORD)`, one, each
+every time or the next `times`. A route answers the kind's problem as it would the real resource's."""
 
 import threading
 from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Final
 
 import pyarrow as pa
 
@@ -21,9 +27,14 @@ from basis.api.compute import ComputeFunction
 from basis.api.outboxes import Row
 from basis.api.resources import Bind, Resource
 from basis.core.databases.base import Statements
+from basis.core.databases.failures import failure
+from basis.core.errors import Conflict, Denied, Failed, Rejected, ServiceError, Timeout, Unavailable
 from basis.core.fakes import Clock, Http, Ids
 
-__all__ = ["Answer", "Cache", "Clock", "Compute", "Database", "Fake", "Faked", "Fakes", "Http", "Ids", "Outbox", "Respond", "Rows", "Statement", "Transaction"]
+__all__ = [
+    "DATABASE_KINDS", "Answer", "Cache", "Clock", "Compute", "Database", "Fake", "Faked", "FakedDriverError", "Fakes", "Http", "Ids", "Outbox", "Respond", "Rows", "Statement",
+    "Transaction",
+]  # fmt: skip
 
 type Rows = Sequence[Mapping[str, object]]
 
@@ -38,6 +49,21 @@ class Respond:
 type Answer = Rows | int | Respond
 """What a fake database answers a statement: a query's rows, each a mapping of its columns in lower case; the count a
 statement changed; or a `Respond`, whose function of the binds gives either."""
+
+
+DATABASE_KINDS: Final = (Timeout, Unavailable, Conflict, Rejected, Denied, Failed)
+"""The kinds of `ServiceError` a database raises, and so a fake database fails with."""
+
+
+class FakedDriverError(Exception):
+    """What the fake database raises as its driver's error, which the kind it fails with holds as its cause."""
+
+
+@dataclass
+class _Failing:
+    kind: type[ServiceError]
+    left: int | None
+    """How many more statements it fails, or None for every one."""
 
 
 @dataclass(frozen=True)
@@ -64,6 +90,50 @@ class Database:
         self.rolled_back: list[Statement] = []
         self._lock = threading.Lock()
         self._outbox: dict[str, Row] = {row.id: row for row in outbox}
+        self._name: str | None = None
+        self._failing: dict[str | None, _Failing] = {}
+        """What fails, by the SQL of the one statement, or None for every statement."""
+
+    @property
+    def name(self) -> str:
+        """The database it fakes, which its failures name, as the app opens it."""
+        return self._name if self._name is not None else "fake"
+
+    def opened_as(self, name: str) -> None:
+        """The app opens it as the database `name`: one database, whichever app opens it."""
+        with self._lock:
+            if self._name is not None and self._name != name:
+                msg = f"a fake database fakes one database, and this one is given for both {self._name} and {name}: give each database a fakes.Database of its own"
+                raise ValueError(msg)
+            self._name = name
+
+    def fails(self, kind: type[ServiceError], /, *, statement: str | None = None, times: int | None = None) -> None:
+        """Fail each statement, a query's or one that changes rows, its outbox's among them, with `kind`, as the
+        database would; or, with `statement`, each run of that one, by its SQL exactly, as `answers` keys it: every
+        time, or the next `times`, after which it answers again. The failure is the one a real database's statement
+        raises, with the same detail."""
+        if not (isinstance(kind, type) and kind in DATABASE_KINDS):
+            msg = f"a fake database fails with one of the kinds of ServiceError a database raises, {', '.join(found.__name__ for found in DATABASE_KINDS)}, not {getattr(kind, '__name__', kind)!r}"
+            raise TypeError(msg)
+        if times is not None and (isinstance(times, bool) or not isinstance(times, int) or times < 1):
+            msg = f"a fake database fails a whole number of times, 1 or more, or every time with times=None, not {times!r}"
+            raise ValueError(msg)
+        with self._lock:
+            self._failing[statement] = _Failing(kind, times)
+
+    def check(self, sql: str | None) -> None:
+        """Raise the failure the test set for `sql`, the statement's, or for every statement, if any is left."""
+        with self._lock:
+            key = sql if sql is not None and sql in self._failing else None
+            if (failing := self._failing.get(key)) is None:
+                return
+            if failing.left is not None:
+                failing.left -= 1
+                if failing.left == 0:
+                    del self._failing[key]
+            kind, name = failing.kind, self.name
+        cause = FakedDriverError(f"the test made the fake database fail {'every statement' if key is None else repr(key)} with {kind.__name__}")
+        raise failure(name, kind, cause) from cause
 
     @property
     def outbox(self) -> list[Row]:
@@ -110,6 +180,7 @@ class Database:
         return Transaction(self, writes=writes)
 
     def answer(self, sql: str, binds: Mapping[str, Bind]) -> Rows | int:
+        self.check(sql)
         with self._lock:
             found = self.answers.get(sql)
         if found is None:
@@ -190,10 +261,12 @@ class Outbox:
     def add(self, row: Row, *, timeout_s: float) -> None:
         del timeout_s
         self._writes()
+        self.transaction.database.check(None)
         self.transaction.added[row.id] = row
 
     def due(self, now: datetime, limit: int, *, timeout_s: float) -> list[Row]:
         del timeout_s
+        self.transaction.database.check(None)
         seen = [*self.transaction.database.outbox, *self.transaction.added.values()]
         due = [row for row in seen if row.status in {"pending", "refused"} and row.next_at is not None and row.next_at <= now]
         return sorted(due, key=lambda row: (row.next_at, row.id))[:limit]
@@ -201,6 +274,7 @@ class Outbox:
     def update(self, row_id: str, *, was: str, seen: int, to: Mapping[str, object], timeout_s: float) -> bool:
         del timeout_s
         self._writes()
+        self.transaction.database.check(None)
         if (added := self.transaction.added.get(row_id)) is not None:  # its own, which no other transaction sees yet
             if added.status != was or added.attempts != seen:
                 return False

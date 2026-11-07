@@ -50,22 +50,21 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
-from http import HTTPStatus
 from typing import Annotated, Generic, Literal, Protocol, TypeAliasType, TypeVar, get_args, get_origin
 from uuid import UUID
 
 from pydantic import BaseModel
 
 from basis.api.compute import ComputeFunction
-from basis.api.errors import DeclarationError, Error
+from basis.api.errors import DeclarationError
 from basis.core import resources as core
 from basis.core.resources import NAME, Body, ClockResource, HttpMethod, HttpResource, IdsResource, Query, QueryValue
 from basis.core.settings import LEDGER as TABLE
 
 __all__ = [
-    "NAME", "TABLE", "TABLE_LENGTH", "Bind", "Body", "Cache", "CacheResource", "CallFailedError", "Client", "Clock", "ClockResource", "DatabaseResource",
-    "DeadlineExceededError", "HttpMethod", "HttpResource", "Ids", "IdsResource", "Opened", "Outbox", "Query", "QueryValue", "Reader", "Resource", "SendMethod",
-    "Session", "Writer", "cache", "check_outboxes", "clock", "database", "http", "ids", "outbox",
+    "NAME", "TABLE", "TABLE_LENGTH", "Bind", "Body", "Cache", "CacheResource", "Client", "Clock", "ClockResource", "DatabaseResource", "HttpMethod",
+    "HttpResource", "Ids", "IdsResource", "Opened", "Outbox", "Query", "QueryValue", "Reader", "Resource", "SendMethod", "Session", "Writer", "cache",
+    "check_outboxes", "clock", "database", "http", "ids", "outbox",
 ]  # fmt: skip
 
 type Bind = str | int | float | Decimal | bool | date | datetime | UUID | bytes | None
@@ -289,9 +288,11 @@ class Writer(Reader, Protocol):
 
 class Client(core.Client, Protocol):
     """Another HTTP service, as basis-core's `Client` calls it, and `send`. Each call's reply is validated as `reply`,
-    from JSON; a reply that is not a 2xx, a service that cannot be reached, or a body that is not a `reply` raises
-    `CallFailedError`. `path` is the service's own, after its base URL, and anything in it that a request supplied must
-    be validated first: a path parameter's pattern, say. Each call carries the request's trace on, as `traceparent`."""
+    from JSON, and a call that fails raises the kind of `api.ServiceError` its failure is, as basis-core's `Client`
+    says: a handler, or the repository it passes the client to, catches a kind that means something to it, as
+    `api.NotFound` for a thing the service does not have, and lets the rest answer their problems. `path` is the
+    service's own, after its base URL, and anything in it that a request supplied must be validated first: a path
+    parameter's pattern, say. Each call carries the request's trace on, as `traceparent`."""
 
     async def send(self, method: SendMethod, path: str, body: Body = None, /, *, key: str) -> None:
         """A call that changes the other service's state, with `key` as its `Idempotency-Key`: the service drops a call
@@ -317,31 +318,6 @@ class Cache[V](Protocol):
 
 Clock = core.Clock
 Ids = core.Ids
-
-
-class DeadlineExceededError(core.DeadlineExceededError, Error):
-    """basis-core's, as the 504 problem a route answers."""
-
-    status = HTTPStatus.GATEWAY_TIMEOUT
-    title = "A call took longer than its deadline"
-
-    @classmethod
-    def of(cls, error: core.DeadlineExceededError) -> DeadlineExceededError:
-        """basis-core's `error` as the problem it is in a request: the same resource, deadline and detail."""
-        return error if isinstance(error, cls) else cls(error.resource, error.deadline_s, detail=str(error))
-
-
-class CallFailedError(core.CallFailedError, Error):
-    """Another service's failure, basis-core's, as the 502 problem a route answers: a handler that has something better
-    to say, such as a 404 of its own when the other service has no such thing, catches it and raises its own error."""
-
-    status = HTTPStatus.BAD_GATEWAY
-    title = "A call to another service failed"
-
-    @classmethod
-    def of(cls, error: core.CallFailedError) -> CallFailedError:
-        """basis-core's `error` as the problem it is in a request: the same detail, resource and reply."""
-        return error if isinstance(error, cls) else cls(str(error), resource=error.resource, reply=error.reply)
 
 
 class Opened(Protocol):

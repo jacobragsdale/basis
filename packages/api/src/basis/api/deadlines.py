@@ -4,14 +4,14 @@ ever shortens the route's. The deadline starts when the route begins to serve th
 
 It is basis-core's deadline around the calls a block makes (`basis.core.deadlines.within`), of kind `route`, so that
 basis-core's own resources, another service's client among them, keep to it too. `limit` says how long one call may
-take, and `exceeded` is the 504 problem for one that takes longer."""
+take, and `exceeded` is the `Timeout` of one that takes longer, which a route answers 504."""
 
 from collections.abc import Generator
 from contextlib import contextmanager
 
-from basis.api.resources import DeadlineExceededError
 from basis.core import deadlines as core
 from basis.core.deadlines import Deadline, Limit
+from basis.core.errors import Timeout
 
 __all__ = ["Deadline", "Limit", "exceeded", "limit", "route", "serving"]
 _ROUTE = "route"
@@ -39,6 +39,6 @@ def limit(resource: str, own_s: float | None) -> Limit:
     return core.limit(resource, own_s)
 
 
-def exceeded(found: Limit) -> DeadlineExceededError:
-    """The 504 problem of a call that took longer than `found` allows."""
-    return DeadlineExceededError.of(found.exceeded())
+def exceeded(found: Limit) -> Timeout:
+    """The `Timeout` of a call that took longer than `found` allows."""
+    return found.exceeded()

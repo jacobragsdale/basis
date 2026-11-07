@@ -336,7 +336,11 @@ def test_a_call_with_a_key_the_outbox_cannot_hold_is_a_defect_and_rolls_back() -
     assert (ledger.seen, warehouse.outbox, len(warehouse.rolled_back)) == ([], [], 1)
 
 
-@pytest.mark.parametrize(("status", "answered"), [(HTTPStatus.CREATED, HTTPStatus.OK), (HTTPStatus.SERVICE_UNAVAILABLE, HTTPStatus.BAD_GATEWAY)], ids=["accepted", "refused"])
+@pytest.mark.parametrize(
+    ("status", "answered"),
+    [(HTTPStatus.CREATED, HTTPStatus.OK), (HTTPStatus.SERVICE_UNAVAILABLE, HTTPStatus.SERVICE_UNAVAILABLE), (HTTPStatus.INTERNAL_SERVER_ERROR, HTTPStatus.BAD_GATEWAY)],
+    ids=["accepted", "unavailable", "failed"],
+)
 def test_a_route_that_writes_no_database_makes_the_call_at_once(status: int, answered: int) -> None:
     warehouse = _warehouse()
     ledger = Ledger(warehouse, status=status)
@@ -654,7 +658,7 @@ def test_each_of_the_relays_statements_has_a_span_and_the_databases_deadline() -
 
     slowly = api.Service(name="prices", settings=api.Settings, resources=[SLOW, LEDGER], routes=[_post("/w", write)])
     [relayed] = _relay(_Slow(outbox=[_row()]), FastAPI(), service=slowly)  # the run waits for the query to end before it lets the connection go
-    assert relayed.failed == [(None, "DeadlineExceededError: its outbox's due in database slow did not finish within its deadline of 0.2s")]
+    assert relayed.failed == [(None, "Timeout: its outbox's due in database slow did not finish within its deadline of 0.2s")]
 
 
 def test_the_relay_needs_an_outbox_and_the_settings_of_what_it_reaches() -> None:

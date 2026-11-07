@@ -207,7 +207,7 @@ def _service(scratch: Scratch) -> api.Service:
         async def load() -> Price:
             return await warehouse.fetch_one(Price, f"SELECT security, price FROM {scratch.table}_locked") or price
 
-        with contextlib.suppress(api.DeadlineExceededError):
+        with contextlib.suppress(api.Timeout):
             await cached.get(price.security, load)
         return price
 

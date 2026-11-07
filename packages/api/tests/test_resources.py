@@ -111,7 +111,7 @@ async def slow_read(quick: Annotated[api.Reader, api.given(QUICK)]) -> list[Pric
 async def set_then_wait(price: Price, quick: Annotated[api.Writer, api.given(QUICK)]) -> Price:
     """Writes, then carries on past a statement that missed its deadline."""
     await quick.execute(INSERT, security=price.security, price=price.price)
-    with contextlib.suppress(api.DeadlineExceededError):
+    with contextlib.suppress(api.Timeout):
         await quick.fetch(Price, SLOW)
     return price
 
@@ -124,7 +124,7 @@ async def set_then_cache_slowly(price: Price, warehouse: Annotated[api.Writer, a
     async def load() -> Price:
         return await warehouse.fetch_one(Price, SLOW) or price
 
-    with contextlib.suppress(api.DeadlineExceededError):
+    with contextlib.suppress(api.Timeout):
         await once.get(price.security, load)
     return price
 
@@ -139,7 +139,7 @@ async def set_then_carry_on(price: Price, warehouse: Annotated[api.Writer, api.g
 
 async def read_again(quick: Annotated[api.Reader, api.given(QUICK)]) -> Price:
     """Reads past a query that missed its deadline, once the query has ended on the connection."""
-    with contextlib.suppress(api.DeadlineExceededError):
+    with contextlib.suppress(api.Timeout):
         await quick.fetch(Price, SLOW)
     for _ in range(500):
         try:
@@ -503,7 +503,7 @@ def test_a_statement_past_its_deadline_is_a_504() -> None:
     with TestClient(_app(quick=fakes.Database(answers={SLOW: _held(release)})).asgi) as client:
         response = client.get("/slow")
         release.set()
-    assert (response.status_code, response.json()["type"], response.json()["detail"]) == (HTTPStatus.GATEWAY_TIMEOUT, "deadline-exceeded", "quick did not answer within its deadline of 0.05s")
+    assert (response.status_code, response.json()["type"], response.json()["detail"]) == (HTTPStatus.GATEWAY_TIMEOUT, "service-timeout", "quick did not answer within its deadline of 0.05s")
 
 
 def test_a_write_never_commits_after_a_statement_misses_its_deadline() -> None:
@@ -514,7 +514,7 @@ def test_a_write_never_commits_after_a_statement_misses_its_deadline() -> None:
     with TestClient(_app(quick=quick).asgi) as client:
         response = client.post("/stubborn", json=PRICE)
         release.set()
-    assert (response.status_code, response.json()["type"]) == (HTTPStatus.GATEWAY_TIMEOUT, "deadline-exceeded")
+    assert (response.status_code, response.json()["type"]) == (HTTPStatus.GATEWAY_TIMEOUT, "service-timeout")
     assert (quick.committed, quick.rolled_back) == ([], [_statement()])
 
 
@@ -612,7 +612,7 @@ def test_a_cache_read_past_its_deadline_is_a_504() -> None:
         cache = MemoryCache(api.cache("prices", Price, ttl_s=60, max_entries=2, deadline_s=0.05), fakes.Cache().monotonic, NoOpTracer())
         await cache.get(SECURITY, _never)
 
-    with pytest.raises(api.DeadlineExceededError, match=r"prices did not answer within its deadline of 0\.05s"):
+    with pytest.raises(api.Timeout, match=r"prices did not answer within its deadline of 0\.05s"):
         asyncio.run(main())
 
 
@@ -656,34 +656,39 @@ def test_every_call_through_a_resource_has_a_span_in_the_requests_trace() -> Non
 
 
 @pytest.mark.parametrize(
-    ("pricing", "detail"),
+    ("pricing", "answered", "kind", "detail"),
     [
-        (_pricing(status=HTTPStatus.SERVICE_UNAVAILABLE), f"pricing answered 503 to GET /prices/{SECURITY}"),
-        (_pricing(body={"security": SECURITY}), f"pricing answered GET /prices/{SECURITY} with a body that is not a Price"),
+        (_pricing(status=HTTPStatus.SERVICE_UNAVAILABLE), HTTPStatus.SERVICE_UNAVAILABLE, "service-unavailable", f"pricing answered 503 to GET /prices/{SECURITY}"),
+        (_pricing(status=HTTPStatus.GATEWAY_TIMEOUT), HTTPStatus.GATEWAY_TIMEOUT, "service-timeout", f"pricing answered 504 to GET /prices/{SECURITY}"),
+        (_pricing(status=HTTPStatus.NOT_FOUND), HTTPStatus.BAD_GATEWAY, "service-not-found", f"pricing answered 404 to GET /prices/{SECURITY}"),
+        (_pricing(status=HTTPStatus.INTERNAL_SERVER_ERROR), HTTPStatus.BAD_GATEWAY, "service-failed", f"pricing answered 500 to GET /prices/{SECURITY}"),
+        (_pricing(body={"security": SECURITY}), HTTPStatus.BAD_GATEWAY, "service-bad-reply", f"pricing answered GET /prices/{SECURITY} with a body that is not a Price"),
     ],
-    ids=["error-status", "body-does-not-fit"],
+    ids=["unavailable", "timeout", "not-found", "failed", "body-does-not-fit"],
 )
-def test_another_services_failure_is_a_502(pricing: FastAPI, detail: str) -> None:
+def test_another_services_failure_answers_its_kinds_problem(pricing: FastAPI, answered: int, kind: str, detail: str) -> None:
     with TestClient(_app(pricing=pricing).asgi) as client:
         response = client.get(f"/quotes/{SECURITY}")
-    assert (response.status_code, response.json()["type"], response.json()["detail"]) == (HTTPStatus.BAD_GATEWAY, "call-failed", detail)
+    assert (response.status_code, response.json()["type"], response.json()["detail"]) == (answered, kind, detail)
 
 
 def test_a_record_logged_in_a_call_carries_the_requests_trace_and_the_calls_span(logged: Records) -> None:
-    app = _app(pricing=_pricing(status=HTTPStatus.SERVICE_UNAVAILABLE))
+    app = _app(pricing=_pricing(status=HTTPStatus.INTERNAL_SERVER_ERROR))
     exporter = _spans(app)
     with TestClient(app.asgi) as client:
         response = client.get(f"/quotes/{SECURITY}")
     called = _named(exporter.get_finished_spans(), "pricing GET")
-    [warned] = [record for record in logged() if record["message"] == f"pricing answered 503 to GET /prices/{SECURITY}"]
+    [warned] = [record for record in logged() if record["message"] == f"pricing answered 500 to GET /prices/{SECURITY}"]
     trace_id = response.headers["traceparent"].split("-")[1]
     assert (warned["trace_id"], warned["span_id"], called.context.trace_id) == (trace_id, f"{called.context.span_id:016x}", int(trace_id, 16))
 
 
-def test_a_service_that_cannot_be_reached_is_a_502() -> None:
+def test_a_service_that_cannot_be_reached_is_unavailable_a_503() -> None:
     with TestClient(_app(http={"pricing": {"url": "http://127.0.0.1:9"}}).asgi) as client:  # the discard port, which nothing serves here
         response = client.get(f"/quotes/{SECURITY}")
-    assert (response.status_code, response.json()["detail"]) == (HTTPStatus.BAD_GATEWAY, f"pricing could not be reached for GET /prices/{SECURITY}: ConnectError")
+    assert (response.status_code, response.json()["type"], response.json()["detail"]) == (
+        HTTPStatus.SERVICE_UNAVAILABLE, "service-unavailable", f"pricing could not be reached for GET /prices/{SECURITY}: ConnectError",
+    )  # fmt: skip
 
 
 _SIGNS_CERTIFICATES = x509.KeyUsage(
@@ -761,7 +766,7 @@ def test_another_services_certificate_is_checked_against_the_declared_ca_bundle_
         trusting = _quoted({"url": f"https://127.0.0.1:{port}", "ca_bundle": str(bundle)})
         undeclared = _quoted({"url": f"https://127.0.0.1:{port}"})
     assert trusting.json() == {"security": SECURITY, "price": "99.50"}
-    assert (undeclared.status_code, undeclared.json()["detail"]) == (HTTPStatus.BAD_GATEWAY, f"pricing could not be reached for GET /prices/{SECURITY}: ConnectError")
+    assert (undeclared.status_code, undeclared.json()["detail"]) == (HTTPStatus.SERVICE_UNAVAILABLE, f"pricing could not be reached for GET /prices/{SECURITY}: ConnectError")
 
 
 def test_calls_go_through_the_declared_proxy_alone(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -770,7 +775,7 @@ def test_calls_go_through_the_declared_proxy_alone(monkeypatch: pytest.MonkeyPat
         proxied = _quoted({"url": "http://127.0.0.1:9", "proxy": f"http://127.0.0.1:{port}"})  # nothing serves the discard port: only the proxy answers
         direct = _quoted({"url": "http://127.0.0.1:9"})
     assert proxied.json() == {"security": SECURITY, "price": "99.50"}
-    assert direct.status_code == HTTPStatus.BAD_GATEWAY
+    assert direct.status_code == HTTPStatus.SERVICE_UNAVAILABLE
 
 
 # The cache
@@ -935,7 +940,7 @@ def test_a_database_that_does_not_answer_in_time_stops_the_app_at_startup() -> N
         finally:
             release.set()  # the login the app stopped waiting for gives up, as a driver's login timeout does
 
-    with pytest.raises(api.DeadlineExceededError, match="quick did not answer within its deadline"):
+    with pytest.raises(api.Timeout, match="quick did not answer within its deadline"):
         asyncio.run(main())
     assert app.lifecycle.stage is Stage.STARTING
 

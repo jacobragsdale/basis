@@ -209,7 +209,7 @@ def embedded(security: str, order: Annotated[Order, Body(embed=True)]) -> Quote:
         (_ok(stale, errors=Stale), r"give errors=\[...\], each api.Error its handler may raise"),
         (_ok(stale, errors=[ValueError]), "declares <class 'ValueError'> among its errors"),
         (_ok(stale, errors=[Priced]), "a base that is never raised itself"),
-        (_ok(stale, errors=[api.DeadlineExceededError]), "which basis raises itself"),
+        (_ok(stale, errors=[api.Timeout]), "declares Timeout, a kind of api.ServiceError, which basis adds to each route that asks for what can raise it"),
         (_ok(stale, errors=[Stale, Stale]), "declares Stale twice"),
         (lambda: api.get("/lots/{number:int}", lot, deadline_s=1, response=Quote, errors=[]), r"converts \{number:int\} in its path: name the parameter alone, as \{number\}"),
         (_ok(by_time), "query parameter at holds time, a time of day, whose offset pydantic cannot require"),
@@ -230,7 +230,10 @@ def test_a_route_cannot_skip_its_declarations(declare: Callable[[], object], mes
 
 def test_basis_adds_the_errors_a_route_can_meet_to_those_it_declares() -> None:
     routes = {route.name: route.answers for route in SERVICE.routes}
-    assert (routes["stale"], routes["from_the_warehouse"], routes["from_pricing"]) == ((Stale,), (api.DeadlineExceededError,), (api.DeadlineExceededError, api.CallFailedError))
+    every = (api.Timeout, api.Unavailable, api.NotFound, api.Conflict, api.Rejected, api.Denied, api.BadReply, api.Failed)
+    assert (routes["stale"], routes["from_the_warehouse"], routes["from_pricing"]) == (
+        (Stale,), (api.Timeout, api.Unavailable, api.Conflict, api.Rejected, api.Denied, api.Failed), every,
+    )  # fmt: skip
 
 
 class _Rating(StrEnum):
@@ -365,7 +368,15 @@ def test_each_error_a_route_answers_with_is_in_the_openapi_document_as_a_problem
     assert _at(document, "paths", "/warehouse", "get", "responses") == {
         "200": _at(document, "paths", "/warehouse", "get", "responses", "200"),
         "422": {"description": "invalid-request: The request is not valid", "content": invalid},
-        "504": {"description": "deadline-exceeded: A call took longer than its deadline", "content": problem},
+        "502": {
+            "description": (
+                "service-conflict: A service or database the request called refused it as a conflict; service-rejected: A service or database the request called refused it as invalid;"
+                " service-denied: A service or database the request called denied it; service-failed: A call the request made failed"
+            ),
+            "content": problem,
+        },
+        "503": {"description": "service-unavailable: A service or database the request calls is unavailable", "content": problem},
+        "504": {"description": "service-timeout: A call took longer than its deadline", "content": problem},
     }
     assert _at(document, "paths", "/stale/{security}", "get", "responses", "409") == {"description": "stale: The quote is stale", "content": problem}
     schemas = _at(document, "components", "schemas")

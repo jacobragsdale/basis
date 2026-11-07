@@ -22,9 +22,12 @@ Every route declares three things, none of which has a default, so a route that 
   that answers 204 with no body;
 - `errors`, every `api.Error` its handler may raise. Each appears in the OpenAPI document under its status, and an
   error the route does not declare, or an `HTTPException`, answers 500 as the defect it is. basis adds its own: an
-  invalid request's 422 on every route, a deadline's 504 on one that asks for a resource or a compute function, and
-  another service's 502 on one that asks for an `api.http`. It adds `api.SignInRequiredError`, the 401 a handler
-  raises for an anonymous request, to each route whose parameters ask for the user. `Route.answers` holds them all.
+  invalid request's 422 on every route, and each kind of `api.ServiceError` that what the route asks for can raise,
+  which its handler need not catch (see `errors.py`): `api.Timeout`, a 504, on one that asks for a resource that
+  waits or a compute function; `api.Unavailable`, a 503, and `api.Conflict`, `api.Rejected`, `api.Denied` and
+  `api.Failed`, each a 502, on one that asks for a database or an `api.http`; and `api.NotFound` and `api.BadReply`,
+  502s too, on one that asks for an `api.http`. It adds `api.SignInRequiredError`, the 401 a handler raises for an
+  anonymous request, to each route whose parameters ask for the user. `Route.answers` holds them all.
 
 A route that answers a dataset says so, `dataset=True`, and answers it as Arrow when the request asks for it (see
 `dataset.py`). A route's name is its handler's, and its operation's id in the OpenAPI document, so a service gives each
@@ -71,28 +74,11 @@ from starlette.routing import Route as StarletteRoute
 from basis.api import strict
 from basis.api.compute import Compute, ComputeFunction
 from basis.api.dataset import Rows, rows
-from basis.api.errors import DeclarationError, Error, NotReadyError
+from basis.api.errors import Answerable, DeclarationError, Error, NotReadyError
 from basis.api.identity import GivenUser, SignInRequiredError, User, annotation_refusal
-from basis.api.resources import (
-    Cache,
-    CacheResource,
-    CallFailedError,
-    Client,
-    Clock,
-    ClockResource,
-    DatabaseResource,
-    DeadlineExceededError,
-    HttpResource,
-    Ids,
-    IdsResource,
-    Opened,
-    Reader,
-    Resource,
-    Session,
-    Writer,
-    check_outboxes,
-)
+from basis.api.resources import Cache, CacheResource, Client, Clock, ClockResource, DatabaseResource, HttpResource, Ids, IdsResource, Opened, Reader, Resource, Session, Writer, check_outboxes
 from basis.api.settings import Settings
+from basis.core.errors import KINDS, Conflict, Denied, Failed, Rejected, ServiceError, Timeout, Unavailable
 
 GROUP = "basis.apis"
 STATE = "basis"
@@ -102,8 +88,11 @@ RESERVED = ("/health", "/docs", "/redoc", "/openapi.json")
 NAME = re.compile(r"[a-z][a-z0-9-]{0,62}")
 _PARAMETER = re.compile(r"\{[^}]*\}")
 _REFERENCE = re.compile(r"[A-Za-z_][\w.]*:[A-Za-z_]\w*")
-BASIS_ERRORS: tuple[type[Error], ...] = (DeadlineExceededError, CallFailedError, NotReadyError)
+BASIS_ERRORS: tuple[Answerable, ...] = (*KINDS, NotReadyError)
 """The errors basis raises itself, which a route never declares: `Route.answers` adds each where the route can meet it."""
+_DATABASE_KINDS: tuple[type[ServiceError], ...] = (Timeout, Unavailable, Conflict, Rejected, Denied, Failed)
+"""What a database's statements can raise; another service's calls can raise every kind, and a cache's read or a
+compute call only its `Timeout`."""
 
 type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
 _RESOURCES = (DatabaseResource, HttpResource, CacheResource, ClockResource, IdsResource)
@@ -146,8 +135,9 @@ class Route:
     writes: DatabaseResource | None = field(init=False)
     """The database the handler writes, which it asks for as an `api.Writer`: one at most, since a request commits one
     transaction."""
-    answers: tuple[type[Error], ...] = field(init=False)
-    """Every `api.Error` the route may answer with: its declared `errors`, and each of basis's own that it can meet."""
+    answers: tuple[Answerable, ...] = field(init=False)
+    """Every error the route may answer with: its declared `errors`, and each of basis's own that it can meet, the
+    kinds of `api.ServiceError` among them."""
     reads: strict.Shape = field(init=False)
     """What it reads from a request, strictly."""
     rows: Rows | None = field(init=False)
@@ -246,6 +236,9 @@ def _declared_errors(name: str, declared: object) -> tuple[type[Error], ...]:
         raise DeclarationError(msg)
     found: list[type[Error]] = []
     for error in declared:
+        if isinstance(error, type) and issubclass(error, ServiceError):
+            msg = f"{name} declares {error.__qualname__}, a kind of api.ServiceError, which basis adds to each route that asks for what can raise it: remove it from errors=[...]"
+            raise DeclarationError(msg)
         if not (isinstance(error, type) and issubclass(error, Error)):
             msg = f"{name} declares {error!r} among its errors: give each api.Error subclass its handler may raise"
             raise DeclarationError(msg)
@@ -265,14 +258,22 @@ def _declared_errors(name: str, declared: object) -> tuple[type[Error], ...]:
     return tuple(found)
 
 
-def _met(asks: Sequence[Ask]) -> Iterator[type[Error]]:
-    """The errors of basis's own that a route which asks for `asks` can meet, and `SignInRequiredError` where it asks for
-    the user, which its handler raises for an anonymous request that needs one."""
-    given = [ask.given for ask in asks if not isinstance(ask.given, type)]
-    if any(not isinstance(found, ClockResource | IdsResource) for found in given):
-        yield DeadlineExceededError
-    if any(isinstance(found, HttpResource) for found in given):
-        yield CallFailedError
+def _met(asks: Sequence[Ask]) -> Iterator[Answerable]:
+    """The errors of basis's own that a route which asks for `asks` can meet, each kind of `ServiceError` once, in
+    `KINDS`' order, and `SignInRequiredError` where it asks for the user, which its handler raises for an anonymous
+    request that needs one."""
+    met: set[type[ServiceError]] = set()
+    for ask in asks:
+        match ask.given:
+            case HttpResource():
+                met.update(KINDS)
+            case DatabaseResource():
+                met.update(_DATABASE_KINDS)
+            case CacheResource() | ComputeFunction():
+                met.add(Timeout)
+            case _:  # the settings, the user, the clock and the ids, which never fail
+                pass
+    yield from (kind for kind in KINDS if kind in met)
     if any(isinstance(ask.given, type) and issubclass(ask.given, User) for ask in asks):
         yield SignInRequiredError
 

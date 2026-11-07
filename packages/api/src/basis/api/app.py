@@ -44,6 +44,7 @@ from basis.api.requests import HEALTH, REQUEST_ID, Requests
 from basis.api.service import STATE, DeclarationError, Runtime, Service
 from basis.api.settings import Settings, read
 from basis.core import traces
+from basis.core.errors import ServiceError
 from basis.core.model import Model
 
 log = logging.getLogger(__name__)
@@ -156,7 +157,7 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | 
             Middleware(Requests),
             *([Middleware(tokens.Bearer, verifier=identity)] if identity is not None else []),  # Bearer inside Requests
         ],
-        exception_handlers={errors.Error: _problem, HTTPException: _problem, RequestValidationError: _problem},
+        exception_handlers={errors.Error: _problem, ServiceError: _problem, HTTPException: _problem, RequestValidationError: _problem},
         telemetry={
             "tracer_provider": provider,
             "metrics": False,

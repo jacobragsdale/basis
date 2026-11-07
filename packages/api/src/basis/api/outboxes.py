@@ -21,6 +21,10 @@ How an attempt is recorded, by the request or the relay, depends on how the serv
 - any other 4xx: `refused`, made no more. A relay reports it at once; one the request recorded is due to the next relay,
   to report.
 
+The rule is the status's, so it is the same for every kind of `api.ServiceError` a call fails with: a `Timeout`, an
+`Unavailable` (a 502, a 503, a 429, or no answer) and a `Conflict` (a 409) are made again; a `NotFound`, a `Rejected`
+and a `Denied` are refused; and a `Failed` is made again for a 5xx or a 408 or 425, and refused for any other 4xx.
+
 A relay's run that reports a refused or an expired call fails, its one ERROR line naming each such call, its key and
 how it ended, so the scheduler's alert fires.
 
@@ -49,6 +53,7 @@ from basis.api.resources import Outbox, SendMethod
 from basis.core import ddl as core_ddl
 from basis.core.databases.base import Bind, Statements, naive_in_zone
 from basis.core.destination import Dialect
+from basis.core.errors import ServiceError
 from basis.core.model import Model
 from basis.core.tables import Column
 
@@ -134,6 +139,11 @@ class Failure:
     error: str
     reply: int | None
     """The status the service answered with, or None where it gave none, such as a call past its deadline."""
+
+    @classmethod
+    def of(cls, failed: ServiceError) -> Failure:
+        """The attempt that failed with `failed`, the kind of a call's failure: its detail, and its status."""
+        return cls(str(failed), failed.status)
 
     @property
     def permanent(self) -> bool:

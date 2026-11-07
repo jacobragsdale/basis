@@ -37,11 +37,12 @@ from opentelemetry.trace import Tracer
 from basis.api import fakes, outboxes
 from basis.api.opened import HttpClient, OpenDatabase, client, faked, open_one, unconfigured
 from basis.api.outboxes import Failure, Row
-from basis.api.resources import DatabaseResource, DeadlineExceededError, HttpResource
+from basis.api.resources import DatabaseResource, HttpResource
 from basis.api.service import DeclarationError, Service
 from basis.api.settings import Settings
 from basis.core import opened
 from basis.core.databases import Statements
+from basis.core.errors import Timeout
 from basis.core.logs import utc_now
 from basis.core.settings import SettingsError
 
@@ -263,7 +264,7 @@ class _Run:
                 raise
             self._running = asyncio.get_running_loop().create_task(_settled(running))
             detail = f"{what} in database {resource.name} did not finish within its deadline of {resource.deadline_s:g}s"
-            raise DeadlineExceededError(resource.name, resource.deadline_s, detail=detail) from error
+            raise Timeout(detail, resource=resource.name) from error
         except asyncio.CancelledError:
             self._running = asyncio.get_running_loop().create_task(_settled(running))
             raise
