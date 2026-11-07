@@ -12,7 +12,7 @@ from basis import api
 from basis.api import contract, fakes, openapi
 from fastapi.testclient import TestClient
 
-from basis.api.example import dev, service
+from basis.api.example import dev, resources, service
 from basis.api.example.__main__ import SAMPLE
 
 ROOT = Path(__file__).parents[7]
@@ -24,7 +24,7 @@ def test_the_sample_is_the_examples_document() -> None:
 
 
 def test_the_sample_is_what_the_examples_app_serves() -> None:
-    app = api.build(service.service, settings=service.Settings.given(), fakes=dev.fakes() | {service.SOLVE: fakes.Compute()})
+    app = api.build(service.service, settings=resources.Settings.given(), fakes=dev.fakes() | {resources.SOLVE: fakes.Compute()})
     with TestClient(app.asgi) as client:
         served = client.get("/openapi.json").json()
     sample = json.loads(SAMPLE.read_text(encoding="utf-8"))
