@@ -16,33 +16,43 @@ not listed is named by its module path. The module exports:
 | `transform(inputs, params)` | yes | Returns an instance of `Outputs`, with every declared output by name. |
 | `check(inputs, outputs, params)` | no | Returns a list of reasons not to write; an empty list writes. |
 
-The module, and everything it imports, must not reach a database driver, an HTTP client, storage, or the run loop's
-modules; the contract tests list the import chain if it does. `main.py` and tests are not job code.
+The module, and everything it imports, must not reach a database driver, an HTTP client, storage, pyarrow, or the run
+loop's modules; the contract tests list the import chain if it does. `main.py` and tests are not job code.
+
+Every frame a job gets and returns is a pandas `DataFrame`, its columns of the types the next section gives.
 
 ## Rows
 
 A row is a subclass of `etl.Row` with one annotated attribute per column, in column order. It is never instantiated.
 
-| Annotation | Frame type | Requires |
+| Annotation | Frame dtype | Requires |
 |---|---|---|
-| `int` | `Int64` | |
-| `float` | `Float64` | |
-| `Annotated[Decimal, etl.Precision(P, S)]` | `Decimal(P, S)` | `1 <= P <= 38`, `0 <= S <= P` |
-| `str`, or `Annotated[str, etl.MaxLength(N)]` | `String` | `N >= 1` |
-| `bool` | `Boolean` | |
-| `date` | `Date` | |
-| `Annotated[datetime, etl.Zone(NAME)]` | `Datetime("us", "UTC")` | an IANA zone name |
+| `int` | `pd.ArrowDtype(pa.int64())` | |
+| `float` | `pd.ArrowDtype(pa.float64())` | |
+| `Annotated[Decimal, etl.Precision(P, S)]` | `pd.ArrowDtype(pa.decimal128(P, S))` | `1 <= P <= 38`, `0 <= S <= P` |
+| `str`, or `Annotated[str, etl.MaxLength(N)]` | `pd.ArrowDtype(pa.string())` | `N >= 1` |
+| `bool` | `pd.ArrowDtype(pa.bool_())` | |
+| `date` | `pd.ArrowDtype(pa.date32())` | |
+| `Annotated[datetime, etl.Zone(NAME)]` | `pd.ArrowDtype(pa.timestamp("us", "UTC"))` | an IANA zone name |
 
-`T | None`, or `Annotated[T, ...] | None`, makes a column nullable. A column name is lower-case letters, digits and
-underscores, starting with a letter or an underscore. `Zone` names the zone a datetime's naive values are in, in
-sources and destinations; in a frame, every datetime is UTC.
+Every column is backed by Arrow, so a null is `pd.NA` in every type, an `int` with nulls stays an integer, a
+`Decimal` stays exact through arithmetic and sums, and no column is `object`. Job code, which may not import pyarrow,
+names a dtype through its row: `Row.dtypes()` gives each column's by name, for `frame.astype(Row.dtypes())`, and
+`Row.empty()` a frame with no rows. `T | None`, or
+`Annotated[T, ...] | None`, makes a column nullable. A column name is lower-case letters, digits and underscores,
+starting with a letter or an underscore. `Zone` names the zone a datetime's naive values are in, in sources and
+destinations; in a frame, every datetime is UTC.
 
 Every frame that enters or leaves a job is conformed to its row:
 
-- Its columns must be exactly the row's, matched without regard to case.
-- A value converts only without loss: an integer type to `int`, a decimal or integer to a `Decimal` whose cast back is
-  unchanged, a datetime at midnight to `date`, `0` and `1` to `bool`, text to any type. A float never converts to an
-  `int` or a `Decimal`.
+- Its columns must be exactly the row's, matched without regard to case; a column left in the frame's index, as a
+  `groupby` without `as_index=False` leaves its keys, is named as such. Its index is never data: a conformed frame's
+  only counts its rows.
+- A column of any dtype converts, Arrow's, numpy's, a category or `object`'s Python values, but only without loss: an
+  integer type to `int`, a decimal or integer to a `Decimal` that keeps every digit, a datetime at midnight to `date`,
+  `0` and `1` to `bool`, text to any type. A float never converts to an `int` or a `Decimal`, and numpy's `NaN` is a
+  null. Since numpy's integers have no null, pandas makes `[1, None]` floats: give such a column its dtype, as
+  `pd.array(values, dtype=Row.dtypes()["count"])`.
 - A naive datetime from a source is read in its column's zone. A naive datetime in a transform's output is refused.
 - Non-null columns have no nulls, floats are finite, and strings are at most their `MaxLength`.
 
@@ -343,8 +353,8 @@ UTC), `rerun_safe`, `deleted`, `upserted`, `inserted_new`, `inserted` (as the da
 - `ContractTests`: a test class to subclass with `job = job`. It checks that `params/default.json` validates, that
   the job runs on `tests/fixture` with every check passing, and that `job.py` cannot reach I/O through its imports.
   Set `params` or `fixture` on the subclass for other paths, relative to the job's folder.
-- `frame(row, *rows)`: a frame of `row` from partial rows, conformed as a load conforms it; a column a row leaves out
-  is null.
+- `frame(row, *rows)`: a frame of `row` from partial rows of Python values, conformed as a load conforms it; a column a
+  row leaves out is null, and a `Decimal` column's `int` or `str` is exact.
 - `inputs(Inputs, *, interval=None, now=None, **frames)`: an `Inputs` instance; a dataset not given has no rows. Each
   clock reads `now`, which an `Inputs` with a clock needs, and each ids counts up from
   `00000000-0000-7000-8000-000000000001`.

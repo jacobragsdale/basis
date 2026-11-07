@@ -59,13 +59,15 @@ written them.
 
 ## Exact values
 
-Data that moves between systems has to arrive as it left. Frames are polars, whose types are strict: integers with
-nulls stay integers, decimals keep their precision and scale, and datetimes carry their zone. A row's types are checked
-at every boundary, in both directions, and a conversion is allowed only where nothing is lost. polars itself rounds a
-decimal cast to a smaller scale and truncates one cast to an integer, so the framework casts back and compares rather
-than trusting the cast. Floats never become decimals implicitly; the transform rounds, as the data needs. The
-destination is checked too, against what the database says the table is: a string longer than its column, or a time
-finer than `DATE` keeps, stops the run before the database would truncate it or fail halfway.
+Data that moves between systems has to arrive as it left. Frames are pandas, and every column is backed by Arrow, of
+the type its row declares: integers with nulls stay integers, decimals keep their precision and scale, and datetimes
+carry their zone, where numpy's types would make a nullable integer a float and a decimal an untyped object. The data
+arrives as Arrow, from the drivers and Parquet, and leaves as Arrow, so a frame shares its buffers both ways. A row's
+types are checked at every boundary, in both directions, and a conversion is allowed only where nothing is lost:
+Arrow's safe casts refuse a rounded or truncated value, and the framework checks the rest itself, such as a time of
+day that a cast to a date would drop. Floats never become decimals implicitly; the transform rounds, as the data
+needs. The destination is checked too, against what the database says the table is: a string longer than its column,
+or a time finer than `DATE` keeps, stops the run before the database would truncate it or fail halfway.
 
 ## Snapshots, replay and regression
 

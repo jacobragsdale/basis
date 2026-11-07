@@ -15,6 +15,9 @@ Rules to keep:
 - Every output names its write mode: `Append`, `Replace`, `ReplaceWhere`, `Upsert`, `InsertNew`, or `Manual` with
   `Changes`. Nothing about a table is assumed.
 - Every `Decimal` column names its `Precision`, every `datetime` column its `Zone`; in a frame, datetimes are UTC.
+- Frames are pandas, every column Arrow-backed, of its row's type. Job code names a dtype through its row, as
+  `Row.dtypes()`, never through pyarrow, and gives an integer column with nulls its dtype: pandas makes `[1, None]`
+  floats, which an `int` column refuses.
 - Every input names `empty="fail"` or `empty="allow"`.
 - Every dataset has a file in the job's `tests/fixture/`, and `fixture.json` gives the fixture's interval.
 
