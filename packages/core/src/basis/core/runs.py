@@ -88,11 +88,12 @@ def replaying[P](source: Snapshot, *, name: str, module: str, params: Path | Non
 
 
 def resume(  # noqa: PLR0913 -- the part says what it is and writes, by keyword
-    source: Snapshot, record: RunRecord, *, name: str, targets: Mapping[str, Target], databases: Callable[[str], Database], version: str, clock: Callable[[], datetime]
+    source: Snapshot, record: RunRecord, *, name: str, targets: Mapping[str, Target], databases: Callable[[str], Database], version: str, clock: Callable[[], datetime], again: bool = False
 ) -> RunRecord:
     """Finish publishing `record`, a run of `name` that committed to some of its databases and failed on another, from
     its snapshot, and save its record. `targets` are where the part writes each output now, which must be where the
-    run wrote it."""
+    run wrote it. It publishes a plain insert for an interval the ledger has already when the run was told to, or when
+    `again` says so now."""
     if record.reasons or not record.publishes:
         msg = f"run {record.run_id} is {record.status} and never published: only a run that failed while publishing resumes; run it again instead"
         raise ValueError(msg)
@@ -101,7 +102,7 @@ def resume(  # noqa: PLR0913 -- the part says what it is and writes, by keyword
         if now != (output.database, output.table):
             msg = f"{output_name} is written to {now} now, and the run wrote ({output.database}, {output.table}): resume with the code the run ran"
             raise ValueError(msg)
-    publication = publish.Publication(record.run_id, name, record.parsed_interval(), version, False, clock)  # noqa: FBT003 -- a dataclass field, by position
+    publication = publish.Publication(record.run_id, name, record.parsed_interval(), version, record.again or again, clock)
     publishes = record.publishes | publish.publish(publication, targets, source.changes(), databases)
     final = RunRecord.model_validate(record.model_dump() | {"publishes": publishes, "status": status_of(publishes, len({output.database for output in record.outputs.values()}))})
     source.save_record(final)

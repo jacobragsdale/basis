@@ -1,6 +1,7 @@
 import json
 import os
 from datetime import UTC, datetime
+from importlib.metadata import entry_points
 from pathlib import Path
 
 import pytest
@@ -50,7 +51,8 @@ def ran(repo: Path, capsys: pytest.CaptureFixture[str]) -> str:
 
 
 def test_basis_finds_the_job_part_through_its_entry_point() -> None:
-    assert [verb.name for verb in command.installed()["job"]().verbs] == ["run", "resume", "describe", "ddl"]
+    runs = command.installed()["job"]().runs
+    assert [name for name in ("run", "resume", "describe", "ddl") if runs is not None and getattr(runs, name) is not None] == ["run", "resume", "describe", "ddl"]
 
 
 def test_a_run_that_passes_every_check_exits_zero(repo: Path) -> None:
@@ -109,6 +111,15 @@ def test_a_resume_of_a_run_that_never_published_is_refused_in_one_line(repo: Pat
     err = capsys.readouterr().err
     assert err.startswith(f"ERROR: run {run_id} is checked and never published")
     assert err.count("\n") == 1
+
+
+def test_a_run_told_again_records_it_and_resume_takes_again_too(repo: Path, snapshot_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """A resume publishes as its run was told to; `--again` tells a resume of a run that was not."""
+    assert basis(repo, *RUN, "--again") == 0
+    run_id = next(json.loads(line)["run_id"] for line in capsys.readouterr().err.splitlines() if '"run_id"' in line)
+    assert snapshots.find(Root.at(snapshot_root), run_id).record().again
+    assert basis(repo, "resume", run_id, "--again") == 1
+    assert error_line(capsys).startswith(f"ERROR: run {run_id} is checked and never published")
 
 
 @pytest.mark.parametrize(
@@ -214,4 +225,6 @@ def test_a_repo_made_before_basis_has_a_release_fails_with_one_error_line_that_n
 def test_basis_job_names_every_installed_parts_version(capsys: pytest.CaptureFixture[str]) -> None:
     assert cli.scaffold(["--version"]) == 0
     core, *parts = capsys.readouterr().out.rstrip("\n").split(", ")  # the parts in the order their packages are found
-    assert (core, sorted(parts)) == ("basis-core 0.0.0", ["basis-api 0.0.0", "basis-job 0.0.0"])
+    installed = {f"{entry.dist.name} {entry.dist.version}" for entry in entry_points(group=command.GROUP) if entry.dist is not None}
+    assert (core, sorted(parts)) == ("basis-core 0.0.0", sorted(installed))
+    assert "basis-job 0.0.0" in installed

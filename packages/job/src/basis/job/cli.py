@@ -23,7 +23,7 @@ from basis.core.settings import Settings
 from basis.core.snapshots import RunRecord, Snapshot
 from basis.core.storage import Root
 from basis.core.tables import Column
-from basis.core.verbs import Part, Regress, Runs, Verb, fail
+from basis.core.verbs import Part, Runs, Shared, Verb, fail
 from basis.job import ddl, docs, new, runs, sync
 from basis.job import job as jobs
 
@@ -55,6 +55,8 @@ class ReplayArgs:
 class ResumeArgs:
     job: str | None
     run_id: str
+    again: bool
+    """Whether to publish a plain insert for an interval the ledger has already, though the run was not told to."""
 
 
 @dataclass(frozen=True)
@@ -67,7 +69,7 @@ class RegressArgs:
 
 @dataclass(frozen=True)
 class DescribeArgs:
-    job: str | None
+    job: str
 
 
 @dataclass(frozen=True)
@@ -88,19 +90,22 @@ class NewArgs:
 
 
 def part() -> Part:
-    """basis-job's verbs, and what core's verbs do with its jobs: `basis new job`, `basis replay`, `basis regress`,
-    its docs and its agent files."""
+    """basis-job's side of the verbs core shares among the parts that run things, which every job verb is, and what
+    core's verbs do with its jobs: `basis new job`, its docs and its agent files."""
     return Part(
-        verbs=(
-            Verb("run", "run a job, and with --publish write its changes to its databases", _run_arguments, _run_from),
-            Verb("resume", "finish publishing a run that failed partway, from its snapshot", _resume_arguments, lambda n: _resume(ResumeArgs(n.job, n.run_id))),
-            Verb("describe", "print a job's params, inputs and outputs as JSON, or every job's name", _describe_arguments, lambda n: _describe(DescribeArgs(n.job))),
-            Verb("ddl", "print CREATE TABLE statements for a job's tables, or for the ledger", _ddl_arguments, lambda n: _ddl(DdlArgs(n.job, n.ledger, n.dialect))),
-        ),
         files=sync.agent_files,
         docs=docs.FOLDER,
         new={"job": new.job},
-        runs=Runs(names=lambda: sorted(jobs.listed()), replay=lambda args: _replay(ReplayArgs(args.name, args.run_id, args.params)), regress=_regress_jobs),
+        runs=Runs(
+            "job",
+            jobs.listed,
+            run=Shared("run a job, and with --publish write its changes to its databases", _run_from, _run_arguments),
+            describe=Shared("print a job's params, inputs and outputs as JSON, or every job's name", lambda n: _describe(DescribeArgs(n.name))),
+            resume=Shared("finish publishing a run that failed partway, from its snapshot", lambda n: _resume(ResumeArgs(n.name, n.run_id, n.again)), _resume_arguments),
+            replay=Shared("rerun a saved run's transform with today's code, and print how its outputs differ", lambda n: _replay(ReplayArgs(n.name, n.run_id, n.params)), _replay_arguments),
+            regress=Shared("replay recent published runs with today's code, and list what changed", _regress_from, _regress_arguments),
+            ddl=Shared("print CREATE TABLE statements for a job's tables, or for the ledger", lambda n: _ddl(DdlArgs(n.name, n.ledger, n.dialect)), _ddl_arguments),
+        ),
     )
 
 
@@ -110,11 +115,10 @@ def scaffold(argv: Sequence[str] | None = None) -> int:
 
 
 def _run_from(n: argparse.Namespace) -> int:
-    return _run(RunArgs(n.job, n.params, n.interval, n.data, dict(n.label), publish=n.publish, again=n.again))
+    return _run(RunArgs(n.name, n.params, n.interval, n.data, dict(n.label), publish=n.publish, again=n.again))
 
 
 def _run_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("job", metavar="JOB", help="the job's name, as the repo lists it, or its module path")
     parser.add_argument("--params", type=command.existing_file, required=True, help="the params JSON file")
     parser.add_argument("--interval", type=_interval, help="START..END, dates or ISO datetimes with an offset")
     parser.add_argument("--data", type=command.existing_folder, help="a folder of files that replace the datasets they name")
@@ -131,16 +135,20 @@ def _interval(text: str) -> Interval:
 
 
 def _resume_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("job", metavar="JOB", nargs="?", help="the job whose run it is; without it, the run is found by its id")
-    parser.add_argument("run_id", metavar="RUN_ID")
+    parser.add_argument("--again", action="store_true", help="publish a plain insert for an interval the ledger has already, as a run told --again does")
 
 
-def _describe_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("job", metavar="JOB", nargs="?", help="the job to describe; without it, every job the repo lists, by name")
+def _replay_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--params", type=command.existing_file, help="other params to replay with, instead of the run's own")
+
+
+def _regress_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--last", type=command.positive, default=10, help="how many published runs of each, newest first")
+    parser.add_argument("--label", type=command.label, action="append", default=[], help="KEY=VALUE a run's labels must include; repeatable")
+    parser.add_argument("--snapshots", help="the snapshot root to read, instead of BASIS_SNAPSHOT_ROOT")
 
 
 def _ddl_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("job", metavar="JOB", nargs="?")
     parser.add_argument("--ledger", metavar="TABLE", help="print the ledger's CREATE TABLE instead, for TABLE")
     parser.add_argument("--dialect", choices=["mssql", "oracle"], required=True)
 
@@ -216,14 +224,14 @@ def _resume(args: ResumeArgs) -> int:
     settings = Settings()
     source, job = _saved(settings.snapshots(), args.run_id, args.job)
     with deliberate(ValueError):  # a run that never published, or one whose tables the job writes elsewhere now
-        record = runs.resume(job, source, settings)
+        record = runs.resume(job, source, settings, again=args.again)
     if record.status == "published":
         return 0
     return fail(f"run {args.run_id} of {job.name} is still {record.status}", f"fix what its publishes record, then `basis resume {job.name} {args.run_id}` again")
 
 
-def _regress_jobs(args: Regress) -> int:
-    return regress_jobs(RegressArgs((args.name,) if args.name is not None else tuple(sorted(jobs.listed())), args.last, args.labels, args.snapshots))
+def _regress_from(n: argparse.Namespace) -> int:
+    return regress_jobs(RegressArgs((n.name,) if n.name is not None else tuple(sorted(jobs.listed())), n.last, dict(n.label), n.snapshots))
 
 
 def regress_jobs(args: RegressArgs) -> int:
@@ -248,9 +256,6 @@ def regress_jobs(args: RegressArgs) -> int:
 
 
 def _describe(args: DescribeArgs) -> int:
-    if args.job is None:
-        _print(jobs.listed())
-        return 0
     job = jobs.load(args.job)
     _print(describe(job))
     return 0

@@ -14,9 +14,9 @@ from builders import Price, prices
 from integration.scratch import Scratch, run
 
 import basis.job as etl
-from basis.core import snapshots
+from basis.core import command, snapshots
 from basis.core.settings import GivenSettings
-from basis.job import ddl, runs
+from basis.job import cli, ddl, runs
 from basis.job.job import Job
 from basis.job.outputs import FrameWrite, Target
 
@@ -150,12 +150,8 @@ def test_a_datetime_is_stored_naive_in_its_columns_zone(scratch: Scratch, tmp_pa
     assert prices({"booked_at": datetime(2026, 11, 5, 9, 30)}).get_column("booked_at").to_list() == [datetime(2026, 11, 5, 14, 30, tzinfo=UTC)]
 
 
-def test_a_run_that_committed_to_one_database_resumes_on_the_other(both: tuple[Scratch, Scratch], tmp_path: Path) -> None:
-    alpha, beta = both
-    table = f"prices_{alpha.suffix}"
-    create(alpha, table, key=None)
-    create(beta, table, key=None)
-    alpha.with_ledger()  # beta has no ledger yet, so its publish fails after alpha's commits
+def two_databases(table: str) -> Job:
+    """A job that appends its `prices` input to `table` in two databases, alpha and beta, each committed on its own."""
 
     class Inputs(etl.Inputs):
         prices = etl.File(Price, path="prices.parquet", empty="fail")
@@ -167,7 +163,17 @@ def test_a_run_that_committed_to_one_database_resumes_on_the_other(both: tuple[S
     def transform(inputs: Inputs, _params: etl.Params) -> Outputs:
         return Outputs(a=inputs.prices, b=inputs.prices)
 
-    job = Job("two_databases", "tests.two_databases", etl.Params, Inputs, Outputs, transform, None, Path(__file__).parent)
+    return Job("two_databases", "tests.two_databases", etl.Params, Inputs, Outputs, transform, None, Path(__file__).parent)
+
+
+def test_a_run_that_committed_to_one_database_resumes_on_the_other(both: tuple[Scratch, Scratch], tmp_path: Path) -> None:
+    alpha, beta = both
+    table = f"prices_{alpha.suffix}"
+    create(alpha, table, key=None)
+    create(beta, table, key=None)
+    alpha.with_ledger()  # beta has no ledger yet, so its publish fails after alpha's commits
+
+    job = two_databases(table)
     partial = run(job, {"alpha": alpha, "beta": beta}, TODAY, tmp_path)
     assert partial.record.status == "partial"
     assert [record.status for record in partial.record.publishes.values()] == ["committed", "failed"]
@@ -192,3 +198,32 @@ def test_the_ledger_records_each_publish_with_what_the_database_counted(scratch:
 
 def test_frames_shared_by_both_dialects_round_trip_exactly() -> None:
     assert pl.DataFrame(TODAY).equals(TODAY)
+
+
+def test_a_run_told_again_that_committed_to_one_database_resumes_again_on_the_other(
+    both: tuple[Scratch, Scratch], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Both ledgers hold the interval, from the run before; the run told `--again` commits to alpha, and fails on beta,
+    whose ledger it is pointed away from. `basis resume` inserts beta's rows again, as the run was told to."""
+    alpha, beta = both
+    table = f"prices_{alpha.suffix}"
+    create(alpha, table, key=None)
+    create(beta, table, key=None)
+    alpha.with_ledger()
+    beta.with_ledger()
+    job = two_databases(table)
+    assert run(job, {"alpha": alpha, "beta": beta}, TODAY, tmp_path).record.status == "published"
+    write = beta.settings["write"]
+    assert isinstance(write, dict)
+    unledgered = dataclasses.replace(beta, settings=beta.settings | {"write": write | {"ledger": f"no_ledger_{beta.suffix}"}})
+    partial = run(job, {"alpha": alpha, "beta": unledgered}, TODAY, tmp_path, again=True)
+    assert (partial.record.status, partial.record.again) == ("partial", True)
+    settings = GivenSettings(databases={"alpha": alpha.settings, "beta": beta.settings}, snapshot_root=str(tmp_path / "snapshots"))
+    monkeypatch.setattr(cli, "Settings", lambda: settings)
+    monkeypatch.setattr("basis.job.job.load", lambda _: job)  # the test's own job, which no module holds
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text('[project]\nname = "repo"\n\n[tool.basis]\nparts = ["job"]\n', encoding="utf-8")
+
+    assert command.run(["resume", partial.record.run_id], cwd=repo, installed={"job": cli.part}) == 0, capsys.readouterr().err
+    assert (len(contents(alpha, table)), len(contents(beta, table))) == (4, 4)

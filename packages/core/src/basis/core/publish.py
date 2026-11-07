@@ -63,7 +63,7 @@ def _publish_database(publication: Publication, database: Database, targets: Map
         for name, target in targets.items():
             spec = writer.describe(target.table)
             if spec is None:
-                msg = f"{target.table} does not exist in {database.name}: `basis ddl` prints a CREATE TABLE for it"
+                msg = f"{target.table} does not exist in {database.name}: `basis ddl {publication.job} --dialect DIALECT` prints a CREATE TABLE for it"
                 raise PublishRefusedError(msg)
             if reasons := check_table(target, spec) + check_values(target, spec, changes[name]):
                 raise PublishRefusedError(f"{name}: {target.table} changed since the run checked it:\n" + "\n".join(reasons))
