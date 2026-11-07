@@ -1,10 +1,13 @@
 import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from basis.core import command
+from basis.core import command, snapshots
+from basis.core.snapshots import RunRecord
+from basis.core.storage import Root
 from basis.job import cli
 from basis.job.example import job
 
@@ -38,6 +41,12 @@ def error_line(capsys: pytest.CaptureFixture[str]) -> str:
     line = capsys.readouterr().err.splitlines()[-1]
     assert line.startswith("ERROR: ")
     return line
+
+
+def ran(repo: Path, capsys: pytest.CaptureFixture[str]) -> str:
+    """The id of a run of the example on its fixture."""
+    assert basis(repo, *RUN) == 0
+    return next(json.loads(line)["run_id"] for line in capsys.readouterr().err.splitlines() if '"run_id"' in line)
 
 
 def test_basis_finds_the_job_part_through_its_entry_point() -> None:
@@ -86,12 +95,110 @@ def test_an_unknown_job_exits_nonzero_and_says_what_to_give(repo: Path, capsys: 
     assert error_line(capsys).endswith("or a job's module path, as jobs.NAME.job")
 
 
-def test_a_replay_of_a_run_on_the_same_code_changes_nothing(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    assert basis(repo, *RUN) == 0
-    run_id = next(json.loads(line)["run_id"] for line in capsys.readouterr().err.splitlines() if '"run_id"' in line)
-    assert basis(repo, "replay", "basis.job.example.job", run_id) == 0
+@pytest.mark.parametrize("named", [True, False], ids=["with-its-job", "by-its-id-alone"])
+def test_a_replay_of_a_run_on_the_same_code_changes_nothing(repo: Path, capsys: pytest.CaptureFixture[str], *, named: bool) -> None:
+    run_id = ran(repo, capsys)
+    assert basis(repo, "replay", *(["basis.job.example.job"] if named else []), run_id) == 0
     replayed = json.loads(capsys.readouterr().out)
     assert (replayed["replay_of"], replayed["status"], replayed["differences"]) == (run_id, "checked", [])
+
+
+def test_a_resume_of_a_run_that_never_published_is_refused_in_one_line(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    run_id = ran(repo, capsys)
+    assert basis(repo, "resume", run_id) == 1
+    err = capsys.readouterr().err
+    assert err.startswith(f"ERROR: run {run_id} is checked and never published")
+    assert err.count("\n") == 1
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        (["replay", "R1"], {"BASIS_SNAPSHOT_ROOT": None}, 1),
+        (["replay", "R1"], {}, 1),
+        (["replay", "basis.job.example.job", "R1"], {}, 1),
+        (["resume", "R1"], {}, 1),
+        (["describe", "no_such_job"], {}, 1),
+        (["run", "basis.job.example.job", "--params", "nope.json"], {}, 2),
+        (RUN, {"BASIS_DATABASES__SOURCE__KIND": "mssql"}, 1),
+        (RUN, {"ETL_SNAPSHOT_ROOT": "snapshots"}, 1),
+        (["ddl", "--dialect", "mssql"], {}, 1),
+        (["new", "job", "Bad"], {}, 1),
+        (["regress", "--last", "0"], {}, 2),
+    ],
+    ids=[
+        "no-snapshot-root",
+        "no-such-run",
+        "no-such-run-of-the-job",
+        "no-run-to-resume",
+        "no-such-job",
+        "no-params-file",
+        "settings-that-do-not-validate",
+        "an-old-variable",
+        "ddl-of-nothing",
+        "a-bad-job-name",
+        "regress-nothing",
+    ],
+)
+def test_each_failure_the_caller_can_fix_is_one_line_with_no_traceback(
+    repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, case: tuple[list[str], dict[str, str | None], int]
+) -> None:
+    argv, variables, code = case
+    for name, value in variables.items():
+        if value is None:
+            monkeypatch.delenv(name)
+        else:
+            monkeypatch.setenv(name, value)
+    assert basis(repo, *argv) == code
+    err = capsys.readouterr().err
+    assert err.startswith("ERROR: ")
+    assert err.count("\n") == 1
+
+
+def test_regress_replays_each_job_on_its_own(repo: Path, snapshot_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    run_id = ran(repo, capsys)
+    source = snapshots.find(Root.at(snapshot_root), run_id)
+    source.save_record(RunRecord.model_validate(source.record().model_dump() | {"status": "published"}))
+    assert cli.regress_jobs(cli.RegressArgs(("no_such_job", "basis.job.example.job"), 10, {}, None)) == 1
+    captured = capsys.readouterr()
+    assert [(entry["job"], entry["run_id"], entry["differences"]) for entry in json.loads(captured.out)] == [("basis.job.example.job", run_id, [])]
+    assert [line for line in captured.err.splitlines() if line.startswith("ERROR")] == [
+        "ERROR: while regressing no_such_job: no job named 'no_such_job', and it is no module path: give one the repo lists (none yet), or a job's module path, as jobs.NAME.job"
+    ]
+
+
+RECORD = {"run_id": "R1", "job": "prices", "module": "jobs.prices.job", "version": "0.0.0", "started_at": datetime(2026, 11, 6, tzinfo=UTC), "params_path": "p.json", "params_sha256": "0"}
+READ = {"inputs": {"trades": {"source": "source: sql/trades.sql", "rows": 5, "read_ms": 1.0}}}
+
+
+@pytest.mark.parametrize(
+    ("fields", "publish", "failure"),
+    [
+        ({"status": "checked"}, False, None),
+        ({"status": "published"}, True, None),
+        ({"status": "partial"}, True, ("run R1 of prices published to some of its databases and failed on another", "fix what its publishes record, then `basis resume prices R1`")),
+        ({"status": "failed", "error": "OperationalError: login failed"}, False, ("run R1 of prices failed: OperationalError: login failed", "fix it, and run the job again")),
+        (
+            {"status": "failed", "reasons": ["a", "b"]} | READ,
+            False,
+            ("run R1 of prices wrote nothing, because a, and 1 more the log lists", "fix each, and run the job again; `basis replay prices R1` reruns it on what it read"),
+        ),
+        ({"status": "failed", "reasons": ["a"]}, True, ("run R1 of prices wrote nothing, because a", "fix it, and run the job again")),
+        (
+            {"status": "failed", "publishes": {"warehouse": {"status": "failed", "at": datetime(2026, 11, 6, tzinfo=UTC), "error": "deadlock"}}},
+            True,
+            ("run R1 of prices committed to no database: warehouse: deadlock", "fix it, and run the job again"),
+        ),
+        (
+            {"status": "checked"},
+            True,
+            ("run R1 of prices ended checked with no reason recorded, when it was asked to publish", "its log records say what happened; run it again, and report it if it does the same"),
+        ),
+    ],
+    ids=["checked", "published", "partial", "an-error", "reasons-and-inputs", "a-reason-before-loading", "no-database-committed", "checked-when-asked-to-publish"],
+)
+def test_a_runs_failure_says_why_and_how_to_fix_it(fields: dict[str, object], *, publish: bool, failure: tuple[str, str] | None) -> None:
+    assert cli.failure_of(RunRecord.model_validate(RECORD | fields), publish=publish) == failure
 
 
 def test_a_repo_made_before_basis_has_a_release_fails_with_one_error_line_that_names_the_fix(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -102,3 +209,8 @@ def test_a_repo_made_before_basis_has_a_release_fails_with_one_error_line_that_n
     assert captured.err.rstrip("\n").endswith("pass --framework-path with the clone's folder")
     assert captured.err.count("\n") == 1
     assert not (tmp_path / "pricing-etl").exists()
+
+
+def test_basis_job_names_every_installed_parts_version(capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.scaffold(["--version"]) == 0
+    assert capsys.readouterr().out == "basis-core 0.0.0, basis-job 0.0.0\n"

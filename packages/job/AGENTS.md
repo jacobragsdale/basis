@@ -3,8 +3,8 @@
 This package is basis-job, which ETL job repos depend on; it was etl-framework until basis's step 1.3. A job is a
 folder in a repo's `jobs/`, whose `job.py` exports `Params`, `Inputs`, `Outputs`, `transform` and optionally `check`;
 the framework loads its inputs, runs its transform, checks its changes, saves a snapshot, and with `basis run
---publish` writes each database in one transaction with a ledger row per table. The job contract is this package's, and the
-plumbing it runs on is basis-core's, in `packages/core`, which imports nothing from here.
+--publish` writes each database in one transaction with a ledger row per table. The job contract is this package's,
+and the plumbing it runs on is basis-core's, in `packages/core`, which imports nothing from here.
 [docs/design.md](docs/design.md) is the design and its decisions; the docs for job authors are in
 `src/basis/job/docs/` and ship with the package.
 
@@ -36,10 +36,11 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
 | `diff.py` | How two runs' changes to a table differ. |
 | `ddl.py` | `CREATE TABLE` for a job's tables and for the ledger. |
 | core `logs.py` | JSON lines, run fields on every record, and the exception record. |
-| `testing.py` | `ContractTests`, the import check's `FORBIDDEN`, `check_agent_files`, and the builders `frame` and `inputs`. |
-| core `testing.py` | What every part's contract tests share: the import chains, with basis's portions named, and the agent-files check. |
+| `testing.py` | `ContractTests`, the import check's `FORBIDDEN`, and the builders `frame` and `inputs`. |
+| core `testing.py` | What every part's contract tests share: the import chains, with basis's portions named. |
+| core `errors.py` | `BasisError`, the failures basis raises on purpose, which print as one line, and `deliberate`, for a call that raises a builtin error on purpose. |
 | `new.py`, `sync.py`, `templates/`, `skills/` | `basis-job new repo`, `basis new job` and `basis sync`: a job repo from the example and the templates, declaring the job part, and its agent files, whose skills are named `job-*`. |
-| core `new.py`, `sync.py`, `templates/` | What `new` and `sync` share across parts: the shared templates, the sources for a repo's basis packages, and a part's agent files. |
+| core `new.py`, `sync.py`, `templates/` | What `new` and `sync` share across parts: the shared templates, the sources for a repo's basis packages, and the files basis owns in a repo, which `sync` writes and removes. |
 | core `verbs.py`, `command.py`, `check.py` | The interface a part gives the `basis` command; the command, which finds the repo's declared parts and runs core's verbs and theirs, printing every failure as one `ERROR` line; and `basis check`'s steps. |
 | `example/` | The example job, laid out as a job's folder, with its fixture and tests; `basis new job` copies it, leaving out its `ruff.toml`. |
 | `docs/` | The docs for job authors, which `basis docs` prints. |
@@ -73,8 +74,12 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
 - A verb is a `Verb` in `cli.part()` with its handler in `cli.py`; its Python twin, if any, is in `api.py`. A verb that
   every kind of part has, such as `replay`, is core's, in core's `command.py`, and reaches the job part through a
   field of its `Part`.
-- Every failure a verb reports is one line, `ERROR: REASON: FIX`: return `fail(reason, fix)`, or raise with a message
-  that ends with the fix.
+- Every failure a verb reports is one line, `ERROR: REASON: FIX`: return `fail(reason, fix)`, or raise a `BasisError`
+  (such as `JobError` or `SettingsError`) whose message ends with the fix. Any other exception is a defect, and prints
+  its traceback first; wrap a call that raises a builtin error on purpose in `deliberate`, as `cli.py` does around
+  finding a run.
+- A file basis-job wrote before it carried the managed-by marker, and no longer writes, goes in `sync.RETIRED`, so
+  `basis sync` removes it from repos.
 
 ## Checks
 

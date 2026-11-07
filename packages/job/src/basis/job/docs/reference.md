@@ -151,16 +151,16 @@ with how to declare it. `basis-job`, which `uvx` runs before a repo exists, make
 
 | Command | Does |
 |---|---|
-| `basis check` | Checks that the agent files match the installed basis-job and that `uv.lock` matches `pyproject.toml`, then runs `ruff check`, `ruff format --check`, `ty check` and `pytest`, each through `uv run --locked`. Every step runs, and each that fails prints its findings and then its `ERROR` line. Needs no network or database. |
+| `basis check` | Checks that the agent files are what the installed basis-job writes, with nothing left over that it no longer writes, and that `uv.lock` matches `pyproject.toml`, then runs `ruff check`, `ruff format --check`, `ty check` and `pytest`, each through `uv run --locked`. Every step runs, and each that fails prints its findings and then its `ERROR` line. Needs no network or database. |
 | `basis run JOB --params FILE [--interval START..END] [--data DIR] [--label KEY=VALUE]... [--publish] [--again]` | Runs a job, saves its snapshot, and with `--publish` writes its changes. `--again` publishes an `Append()` table for an interval the ledger already has. |
-| `basis replay JOB RUN_ID [--params FILE]` | Runs a saved run's transform again on its inputs; prints the replay's status, reasons and differences as JSON. |
-| `basis resume JOB RUN_ID` | Writes a partly published run's changes to each database whose ledger lacks the run. |
+| `basis replay [JOB] RUN_ID [--params FILE]` | Runs a saved run's transform again on its inputs; prints the replay's status, reasons and differences as JSON. Without `JOB`, the run is found by its id alone. |
+| `basis resume [JOB] RUN_ID` | Writes a partly published run's changes to each database whose ledger lacks the run. Without `JOB`, the run is found by its id alone. |
 | `basis regress [JOB] [--last N] [--label KEY=VALUE]... [--snapshots ROOT]` | Replays the last `N` (default 10) published runs of `JOB`, or of every job the repo lists, whose labels include every `--label`; prints each run's job, reasons and differences as JSON. |
 | `basis describe [JOB]` | Prints the job's params schema, inputs and outputs as JSON; without `JOB`, every job the repo lists, with its module. |
 | `basis ddl JOB --dialect mssql\|oracle` | Prints `CREATE TABLE` for each of the job's tables. |
 | `basis ddl --ledger TABLE --dialect mssql\|oracle` | Prints `CREATE TABLE` and `CREATE INDEX` for the ledger. |
 | `basis new job NAME` | Adds a job to the repo, copied from the example, and lists it in `pyproject.toml`. |
-| `basis sync` | Rewrites `AGENTS.md`'s basis-job block and `.agents/skills/job-*` from the installed version. |
+| `basis sync` | Rewrites `AGENTS.md`'s basis-job block and `.agents/skills/job-*` from the installed version, and removes what basis wrote that no installed part writes now: the block of a part the repo no longer has, a `job-*` skill the version dropped, a file whose first lines say basis manages it, and what basis-job wrote before 1.5 (its `etl-*` skills and `tests/test_agent_files.py`). |
 | `basis docs [PAGE]` | Lists the docs, as `job/PAGE`, or prints one; `PAGE` alone does where no other part has a page of that name. |
 | `basis-job new repo NAME [JOB] [--dir DIR] [--index URL \| --framework-path PATH]` | Makes a job repo, `NAME`, whose first job, `JOB` (`positions` if not given), is a copy of the example, and runs `git init` and `uv sync`. `PATH` is a checkout of basis, the folder that holds `packages/`, installed editable. `URL` replaces PyPI for the whole repo, so it must proxy PyPI. Without either option, basis-job comes from basis's GitHub tag for this version, which needs a release: until basis has one, `basis-job new repo` fails and says to pass `--framework-path`. |
 
@@ -261,7 +261,7 @@ UTC), `rerun_safe`, `deleted`, `upserted`, `inserted_new`, `inserted` (as the da
 - `frame(row, *rows)`: a frame of `row` from partial rows, conformed as a load conforms it; a column a row leaves out
   is null.
 - `inputs(Inputs, *, interval=None, **frames)`: an `Inputs` instance; a dataset not given has no rows.
-- `check_params`, `check_fixture`, `check_imports`, `check_agent_files`: the contract tests' checks, as functions.
+- `check_params`, `check_fixture`, `check_imports`: the contract tests' checks, as functions. Whether the agent files match the installed version is `basis check`'s to say.
 
 A fixture is a folder with one `NAME.csv` or `NAME.parquet` per dataset and a `fixture.json` that gives its interval,
 as `{"interval": "2026-11-05..2026-11-06"}`, or `{"interval": null}`.

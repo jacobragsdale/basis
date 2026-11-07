@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from basis.core import command
+from basis.core.errors import BasisError, deliberate
 from basis.core.settings import Settings
 from basis.core.sync import AgentFiles
 from basis.core.verbs import Part, Regress, Replay, Runs, Verb
@@ -130,19 +131,46 @@ def test_a_command_line_that_does_not_parse_exits_2_with_one_line(tmp_path: Path
     assert error_line(capsys) == "ERROR: basis serve: the following arguments are required: --port: `basis serve --help` says what it takes"
 
 
-def test_an_error_with_its_fix_prints_as_its_line_alone_with_its_notes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    error = LookupError("no run R1\nof prices: give another")
+def test_a_basis_error_prints_as_its_line_alone_with_its_notes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    error = BasisError("no run R1\nof prices: give another")
     error.add_note("while replaying")
     assert basis(repo(tmp_path), "serve", installed={"alpha": lambda: Part(verbs=(verb("serve", raises(error)),))}) == 1
-    captured = capsys.readouterr()
-    assert captured.err == "ERROR: while replaying: no run R1 of prices: give another\n"
+    assert capsys.readouterr().err == "ERROR: while replaying: no run R1 of prices: give another\n"
 
 
-def test_a_defect_logs_its_traceback_before_its_line(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    assert basis(repo(tmp_path), "serve", installed={"alpha": lambda: Part(verbs=(verb("serve", raises(KeyError("prices"))),))}) == 1
-    err = capsys.readouterr().err
-    assert '"traceback":' in err.splitlines()[0]
-    assert err.splitlines()[-1] == "ERROR: KeyError: 'prices': a defect; the log record above holds its traceback"
+def test_a_builtin_error_raised_on_purpose_prints_as_one_line_where_the_call_says_so(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    def handle(_: argparse.Namespace) -> int:
+        with deliberate(LookupError):
+            msg = "no run R1: is it the right snapshot root?"
+            raise LookupError(msg)
+
+    assert basis(repo(tmp_path), "serve", installed={"alpha": lambda: Part(verbs=(verb("serve", handle),))}) == 1
+    assert capsys.readouterr().err == "ERROR: no run R1: is it the right snapshot root?\n"
+
+
+@pytest.mark.parametrize("error", [KeyError("prices"), IndexError("list index out of range"), TypeError("unsupported operand"), LookupError("no run R1"), ValueError("bad")])
+def test_any_other_exception_is_a_defect_that_logs_its_traceback_before_its_line(tmp_path: Path, capsys: pytest.CaptureFixture[str], error: Exception) -> None:
+    assert basis(repo(tmp_path), "serve", installed={"alpha": lambda: Part(verbs=(verb("serve", raises(error)),))}) == 1
+    err = capsys.readouterr().err.splitlines()
+    assert '"traceback":' in err[0]
+    assert err[-1].startswith(f"ERROR: {type(error).__name__}: ")
+    assert err[-1].endswith(": a defect; the log record above holds its traceback")
+
+
+def test_variables_under_the_names_basis_read_before_are_refused_with_their_new_names(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ETL_SNAPSHOT_ROOT", "snapshots")
+    monkeypatch.setenv("ETL_DATABASES__WAREHOUSE__KIND", "mssql")
+    monkeypatch.setenv("ETL_HOME", "/opt/another-tool")  # another tool's, which basis never read
+    assert basis(repo(tmp_path), "serve") == 1
+    assert capsys.readouterr().err == (
+        "ERROR: ETL_DATABASES__WAREHOUSE__KIND, ETL_SNAPSHOT_ROOT are set, and basis reads only BASIS_ variables now: rename ETL_DATABASES__WAREHOUSE__KIND"
+        " to BASIS_DATABASES__WAREHOUSE__KIND, ETL_SNAPSHOT_ROOT to BASIS_SNAPSHOT_ROOT, where they are set and in each .env file\n"
+    )
+
+
+def test_version_names_basis_core_and_each_installed_part_anywhere(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert basis(tmp_path, "--version") == 0
+    assert capsys.readouterr().out == "basis-core 0.0.0, basis-job 0.0.0\n"
 
 
 def test_settings_that_do_not_validate_name_the_variables_to_set(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -165,9 +193,22 @@ def test_two_declared_parts_cannot_add_the_same_verb(tmp_path: Path, capsys: pyt
     assert error_line(capsys).endswith("the alpha and beta parts both add `basis run`, and a repo cannot have both: declare one of them")
 
 
-def test_a_part_cannot_add_a_verb_core_has(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    assert basis(repo(tmp_path), "check", installed={"alpha": lambda: Part(verbs=(verb("check"),))}) == 1
-    assert "the alpha part adds `basis check`, which is a verb of core's" in error_line(capsys)
+@pytest.mark.parametrize(
+    ("part", "problem"),
+    [
+        (Part(verbs=(verb("check"),)), "the alpha part adds `basis check`, which is core's: install every basis package from one release"),
+        (Part(verbs=(verb("serve"), verb("serve"))), "the alpha part adds `basis serve` twice, a defect in its package"),
+        (Part(verbs=(verb("serve"),), new={"job": lambda root, _: root}), ""),
+    ],
+    ids=["a-core-verb", "a-verb-twice", "no-clash"],
+)
+def test_a_part_cannot_add_a_verb_core_has_nor_one_twice(tmp_path: Path, capsys: pytest.CaptureFixture[str], part: Part, problem: str) -> None:
+    code = basis(repo(tmp_path), "serve", installed={"alpha": lambda: part})
+    if problem:
+        assert code == 1
+        assert problem in error_line(capsys)
+    else:
+        assert code == 0
 
 
 def test_replay_and_regress_go_to_the_part_whose_names_hold_the_name(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -179,6 +220,13 @@ def test_replay_and_regress_go_to_the_part_whose_names_hold_the_name(tmp_path: P
     assert capsys.readouterr().out.splitlines() == ["beta replays income R1", "alpha regresses prices", "alpha regresses None", "beta regresses None"]
     assert basis(folder, "replay", "rates", "R1", installed=installed) == 1
     assert error_line(capsys).endswith("nothing in this repo is named 'rates': give one of income, prices")
+    assert basis(folder, "replay", "R1", installed=installed) == 1
+    assert error_line(capsys).endswith("more than one part of this repo saves runs (alpha, beta): give the job's or model's name before the run's id")
+
+
+def test_replay_finds_a_run_by_its_id_alone_where_one_part_saves_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert basis(repo(tmp_path, '[tool.basis]\nparts = ["beta"]\n'), "replay", "R1") == 0
+    assert capsys.readouterr().out == "beta replays None R1\n"
 
 
 @pytest.mark.parametrize("last", ["0", "-3", "ten"])
@@ -217,11 +265,11 @@ def test_docs_lists_each_parts_pages_and_prints_one_by_its_name_where_one_part_h
 def test_sync_writes_each_declared_parts_agent_files(tmp_path: Path) -> None:
     files = AgentFiles("basis-alpha", "the alpha block\n", {"alpha-new": "# Make one\n"})
     folder = repo(tmp_path)
-    assert basis(folder, "sync", installed={"alpha": lambda: Part(files=files)}) == 0
+    assert basis(folder, "sync", installed={"alpha": lambda: Part(files=lambda: files)}) == 0
     assert "the alpha block" in (folder / "AGENTS.md").read_text(encoding="utf-8")
     assert (folder / ".agents/skills/alpha-new/SKILL.md").read_text(encoding="utf-8") == "# Make one\n"
 
 
 def test_a_standalone_command_fails_as_basis_does(capsys: pytest.CaptureFixture[str]) -> None:
-    assert command.standalone("basis-alpha", "Make an alpha repo.", [verb("new", raises(FileExistsError("pricing already exists: give a new folder")))], ["new"]) == 1
+    assert command.standalone("basis-alpha", "Make an alpha repo.", [verb("new", raises(BasisError("pricing already exists: give a new folder")))], ["new"]) == 1
     assert capsys.readouterr().err == "ERROR: pricing already exists: give a new folder\n"

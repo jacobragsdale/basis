@@ -11,6 +11,7 @@ from importlib.metadata import entry_points
 from pathlib import Path
 from types import ModuleType
 
+from basis.core.errors import BasisError
 from basis.job.inputs import Inputs
 from basis.job.outputs import Outputs
 from basis.job.params import Params
@@ -18,7 +19,7 @@ from basis.job.params import Params
 GROUP = "basis.jobs"
 
 
-class JobError(TypeError):
+class JobError(BasisError, TypeError):
     """A job module that does not export the contract."""
 
 

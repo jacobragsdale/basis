@@ -17,9 +17,10 @@ from typing import Literal
 
 from basis.core import command, logs, snapshots
 from basis.core.destination import Dialect
+from basis.core.errors import BasisError, deliberate
 from basis.core.interval import Interval
 from basis.core.settings import Settings
-from basis.core.snapshots import RunRecord
+from basis.core.snapshots import RunRecord, Snapshot
 from basis.core.storage import Root
 from basis.core.tables import Column
 from basis.core.verbs import Part, Regress, Runs, Verb, fail
@@ -45,14 +46,14 @@ class RunArgs:
 
 @dataclass(frozen=True)
 class ReplayArgs:
-    job: str
+    job: str | None
     run_id: str
     params: Path | None
 
 
 @dataclass(frozen=True)
 class ResumeArgs:
-    job: str
+    job: str | None
     run_id: str
 
 
@@ -96,7 +97,7 @@ def part() -> Part:
             Verb("describe", "print a job's params, inputs and outputs as JSON, or every job's name", _describe_arguments, lambda n: _describe(DescribeArgs(n.job))),
             Verb("ddl", "print CREATE TABLE statements for a job's tables, or for the ledger", _ddl_arguments, lambda n: _ddl(DdlArgs(n.job, n.ledger, n.dialect))),
         ),
-        files=sync.agent_files(),
+        files=sync.agent_files,
         docs=docs.FOLDER,
         new={"job": new.job},
         runs=Runs(names=lambda: sorted(jobs.listed()), replay=lambda args: _replay(ReplayArgs(args.name, args.run_id, args.params)), regress=_regress_jobs),
@@ -114,9 +115,9 @@ def _run_from(n: argparse.Namespace) -> int:
 
 def _run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("job", metavar="JOB", help="the job's name, as the repo lists it, or its module path")
-    parser.add_argument("--params", type=Path, required=True, help="the params JSON file")
+    parser.add_argument("--params", type=command.existing_file, required=True, help="the params JSON file")
     parser.add_argument("--interval", type=_interval, help="START..END, dates or ISO datetimes with an offset")
-    parser.add_argument("--data", type=Path, help="a folder of files that replace the datasets they name")
+    parser.add_argument("--data", type=command.existing_folder, help="a folder of files that replace the datasets they name")
     parser.add_argument("--label", type=command.label, action="append", default=[], help="KEY=VALUE, recorded in the run's manifest; repeatable")
     parser.add_argument("--publish", action="store_true", help="write the changes to their databases, if every check passes")
     parser.add_argument("--again", action="store_true", help="publish a plain insert for an interval the ledger has already")
@@ -130,7 +131,7 @@ def _interval(text: str) -> Interval:
 
 
 def _resume_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("job", metavar="JOB")
+    parser.add_argument("job", metavar="JOB", nargs="?", help="the job whose run it is; without it, the run is found by its id")
     parser.add_argument("run_id", metavar="RUN_ID")
 
 
@@ -163,31 +164,47 @@ def _run(args: RunArgs) -> int:
     settings = Settings()
     request = runs.Request(args.params, args.interval, args.data, args.labels, publish=args.publish, again=args.again, git_sha=os.environ.get("BASIS_GIT_SHA"))
     result = runs.run(job, settings, request, snapshot_root=settings.snapshots())
-    return _ran(result.record, publish=args.publish)
+    return fail(*found) if (found := failure_of(result.record, publish=args.publish)) is not None else 0
 
 
-def _ran(record: RunRecord, *, publish: bool) -> int:
-    """0 for a run that did what it was asked, else its one failure line."""
-    if record.status == "published" or (record.status == "checked" and not publish):
-        return 0
+def failure_of(record: RunRecord, *, publish: bool) -> tuple[str, str] | None:
+    """Why a run did not do what it was asked, and the fix, or None when it did: `checked` without `--publish`, or
+    `published` with it."""
+    if record.status == ("published" if publish else "checked"):
+        return None
     run = f"run {record.run_id} of {record.job}"
     if record.status == "partial":
-        return fail(f"{run} published to some of its databases and failed on another", f"fix what its publishes record, then `basis resume {record.job} {record.run_id}`")
+        return f"{run} published to some of its databases and failed on another", f"fix what its publishes record, then `basis resume {record.job} {record.run_id}`"
     if record.error is not None:
-        return fail(f"{run} failed: {record.error}", "fix it, and run the job again")
+        return f"{run} failed: {record.error}", "fix it, and run the job again"
     if record.reasons:
         more = f", and {len(record.reasons) - 1} more the log lists" if len(record.reasons) > 1 else ""
         replay = f"; `basis replay {record.job} {record.run_id}` reruns it on what it read" if record.inputs else ""
-        return fail(f"{run} wrote nothing, because {record.reasons[0]}{more}", f"fix {'each' if more else 'it'}, and run the job again{replay}")
+        return f"{run} wrote nothing, because {record.reasons[0]}{more}", f"fix {'each' if more else 'it'}, and run the job again{replay}"
     if errors := [f"{name}: {entry.error}" for name, entry in record.publishes.items() if entry.error is not None]:
-        return fail(f"{run} committed to no database: {'; '.join(errors)}", "fix it, and run the job again")
-    return fail(f"{run} is {record.status}, and was asked to publish", "run it again with --publish")
+        return f"{run} committed to no database: {'; '.join(errors)}", "fix it, and run the job again"
+    return f"{run} ended {record.status} with no reason recorded, when it was asked to publish", "its log records say what happened; run it again, and report it if it does the same"
+
+
+def _saved(root: Root, run_id: str, name: str | None) -> tuple[Snapshot, jobs.Job]:
+    """The run `run_id` in the store at `root`, and the job it is a run of: `name`, or the job its manifest names."""
+    if name is not None:
+        job = jobs.load(name)
+        with deliberate(LookupError):  # the store finds no such run of the job
+            return snapshots.find(root, run_id, job.name), job
+    with deliberate(LookupError):  # the store finds no such run
+        source = snapshots.find(root, run_id)
+    if (part := source.path.parent.parent.name) != runs.PACKAGE:  # the manifest is at runs/PACKAGE/NAME/RUN_ID.json
+        msg = f"run {run_id} is a run of the {part} part, not a job's: replay it in a repo with that part"
+        raise BasisError(msg)
+    return source, jobs.load(source.record().job)
 
 
 def _replay(args: ReplayArgs) -> int:
-    job = jobs.load(args.job)
     root = Settings().snapshots()
-    result, diffs = runs.replay(job, snapshots.find(root, args.run_id, job.name), params=args.params, snapshot_root=root)
+    source, job = _saved(root, args.run_id, args.job)
+    with deliberate(ValueError):  # a run of another job, or one that did not save what the job reads now
+        result, diffs = runs.replay(job, source, params=args.params, snapshot_root=root)
     _print({"run_id": result.record.run_id, "replay_of": args.run_id, "status": result.record.status, "reasons": result.record.reasons, "differences": [vars(entry) for entry in diffs]})
     if result.ok:
         return 0
@@ -196,25 +213,38 @@ def _replay(args: ReplayArgs) -> int:
 
 
 def _resume(args: ResumeArgs) -> int:
-    job = jobs.load(args.job)
     settings = Settings()
-    record = runs.resume(job, snapshots.find(settings.snapshots(), args.run_id, job.name), settings)
+    source, job = _saved(settings.snapshots(), args.run_id, args.job)
+    with deliberate(ValueError):  # a run that never published, or one whose tables the job writes elsewhere now
+        record = runs.resume(job, source, settings)
     if record.status == "published":
         return 0
     return fail(f"run {args.run_id} of {job.name} is still {record.status}", f"fix what its publishes record, then `basis resume {job.name} {args.run_id}` again")
 
 
 def _regress_jobs(args: Regress) -> int:
-    return _regress(RegressArgs((args.name,) if args.name is not None else tuple(sorted(jobs.listed())), args.last, args.labels, args.snapshots))
+    return regress_jobs(RegressArgs((args.name,) if args.name is not None else tuple(sorted(jobs.listed())), args.last, args.labels, args.snapshots))
 
 
-def _regress(args: RegressArgs) -> int:
+def regress_jobs(args: RegressArgs) -> int:
+    """`basis regress` for the jobs `args` names. Each job replays on its own: one that fails to load or to replay
+    prints its failure, and the rest still replay and print."""
     root = Root.at(args.snapshots) if args.snapshots is not None else Settings().snapshots()
-    found = [(job.name, entry) for job in map(jobs.load, args.jobs) for entry in runs.regress(job, root, last=args.last, labels=args.labels)]
-    _print([{"job": name, "run_id": entry.run_id, "reasons": entry.reasons, "differences": [vars(diff) for diff in entry.diffs]} for name, entry in found])
-    if changed := [entry.run_id for _, entry in found if entry.diffs or entry.reasons]:
-        return fail(f"{len(changed)} of the {len(found)} runs replayed differ, or would not write", "stdout lists how; fix the code, or say in the pull request why the change is meant")
-    return 0
+    found: list[dict[str, object]] = []
+    failed = 0
+    for name in args.jobs:
+        try:
+            job = jobs.load(name)
+            entries = runs.regress(job, root, last=args.last, labels=args.labels)
+        except Exception as error:  # noqa: BLE001 -- each job's failure is its own line, and the other jobs still replay
+            error.add_note(f"while regressing {name}")
+            failed += command.report(error)
+            continue
+        found += [{"job": job.name, "run_id": entry.run_id, "reasons": entry.reasons, "differences": [vars(diff) for diff in entry.diffs]} for entry in entries]
+    _print(found)
+    if changed := [entry for entry in found if entry["differences"] or entry["reasons"]]:
+        failed += fail(f"{len(changed)} of the {len(found)} runs replayed differ, or would not write", "stdout lists how; fix the code, or say in the pull request why the change is meant")
+    return 1 if failed else 0
 
 
 def _describe(args: DescribeArgs) -> int:

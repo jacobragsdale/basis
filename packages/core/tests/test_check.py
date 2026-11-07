@@ -29,7 +29,7 @@ def errors(capsys: pytest.CaptureFixture[str]) -> list[str]:
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    sync.write(tmp_path, FILES)
+    sync.write(tmp_path, [FILES])
     return tmp_path
 
 
@@ -57,8 +57,9 @@ def test_a_stale_lockfile_stops_the_check_before_the_tools_run(repo: Path, capsy
     assert errors(capsys) == ["ERROR: uv.lock does not match pyproject.toml: run `uv lock`, and commit uv.lock"]
 
 
-def test_agent_files_that_differ_from_the_installed_part_fail_and_say_to_sync(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_agent_files_that_differ_from_what_the_parts_write_fail_and_say_to_sync(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (repo / "AGENTS.md").write_text("# Agent guide\n", encoding="utf-8")
+    (repo / ".agents/skills/job-gone").mkdir(parents=True)
     _, run = runner()
     assert check(repo, [FILES], run=run) == 1
-    assert errors(capsys) == ["ERROR: AGENTS.md does not match the installed basis-alpha: run `uv run basis sync`, which rewrites them"]
+    assert errors(capsys) == ["ERROR: AGENTS.md, .agents/skills/job-gone do not match what the installed parts write: run `uv run basis sync`, which rewrites or removes each"]

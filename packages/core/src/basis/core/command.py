@@ -6,13 +6,14 @@ one verb: a part's own, or one of core's, which reach the parts through their `P
 not declare is refused, never offered.
 
 Every failure is one line on stderr, `ERROR: REASON: FIX`, and the exit code is 1, or 2 for a command line that does
-not parse. An exception of a kind basis raises on purpose, with the fix in its message, prints as that line alone;
-any other is a defect, and its traceback is logged before the line, as every exception's is with
-`BASIS_LOG_LEVEL=DEBUG`. `standalone` runs a command of the same kind outside a repo, such as `basis-job`, which
-makes one."""
+not parse. A `BasisError`, which basis raises on purpose with the fix in its message, prints as that line alone, as
+does a pydantic `ValidationError` of the caller's settings or params; any other exception is a defect, and its
+traceback is logged before the line, as every exception's is with `BASIS_LOG_LEVEL=DEBUG`. `standalone` runs a
+command of the same kind outside a repo, such as `basis-job`, which makes one."""
 
 import argparse
 import logging
+import os
 import sys
 import tomllib
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
@@ -25,6 +26,7 @@ from typing import NoReturn, override
 from pydantic import ValidationError
 
 from basis.core import check, logs, settings, sync
+from basis.core.errors import BasisError
 from basis.core.verbs import Part, Regress, Replay, Runs, Verb, fail
 
 GROUP = "basis.verbs"
@@ -33,8 +35,6 @@ PACKAGES = {"job": "basis-job", "api": "basis-api", "optim": "optim"}
 CORE = ("check", "replay", "regress", "new", "sync", "docs")
 """Core's verbs, which no part may add: in the order `basis --help` lists them, each when a declared part gives it
 something to do."""
-_DELIBERATE = (ValueError, LookupError, TypeError, OSError)
-"""What basis raises on purpose, with the fix in its message; a `KeyError` is a defect all the same."""
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ type Installed = Mapping[str, Callable[[], Part]]
 """Each installed part by name, loaded when called."""
 
 
-class CommandError(Exception):
+class CommandError(BasisError):
     """A command that cannot run as given; it prints as its one line, and exits with `code`."""
 
     def __init__(self, message: str, *, code: int = 1) -> None:
@@ -75,13 +75,17 @@ def run(argv: Sequence[str], *, cwd: Path, installed: Installed) -> int:
     """`basis` with `argv`, in the repo at or above `cwd`, with the parts `installed` lists."""
     try:
         logs.setup()
+        if list(argv[:1]) == ["--version"]:  # which needs no repo
+            sys.stdout.write(f"{versions()}\n")
+            return 0
+        settings.refuse_renamed(os.environ)
         repo = find(cwd, installed)
         groups = _groups(repo)
         verbs = {verb.name: verb for _, group in groups for verb in group}
         _refuse_undeclared(argv, repo, verbs, installed)
         return _execute(_parser("basis", _describe(repo, groups), verbs.values()), verbs, argv)
     except Exception as error:  # noqa: BLE001 -- the boundary where every failure becomes its one line
-        return _failed(error)
+        return report(error)
 
 
 def standalone(prog: str, description: str, verbs: Sequence[Verb], argv: Sequence[str] | None = None) -> int:
@@ -91,7 +95,16 @@ def standalone(prog: str, description: str, verbs: Sequence[Verb], argv: Sequenc
         logs.setup()
         return _execute(_parser(prog, description, verbs), {verb.name: verb for verb in verbs}, sys.argv[1:] if argv is None else argv)
     except Exception as error:  # noqa: BLE001 -- the boundary where every failure becomes its one line
-        return _failed(error)
+        return report(error)
+
+
+def versions() -> str:
+    """basis-core's version and each installed part's package's, as `--version` prints them."""
+    found = {"basis-core": version("basis-core")}
+    for entry in entry_points(group=GROUP):
+        if entry.dist is not None:
+            found.setdefault(entry.dist.name, entry.dist.version)
+    return ", ".join(f"{name} {number}" for name, number in found.items())
 
 
 def find(cwd: Path, installed: Installed) -> Repo:
@@ -147,24 +160,37 @@ def _load(entry: EntryPoint) -> Part:
     part: object = entry.load()()  # the entry point names a callable that takes nothing and returns the part
     if not isinstance(part, Part):
         msg = f"{entry.value}, the {entry.name} part's entry point in {GROUP}, gives a {type(part).__name__} rather than a Part: reinstall the part's package with `uv sync --reinstall`"
-        raise TypeError(msg)
+        raise CommandError(msg)
     return part
 
 
 def _groups(repo: Repo) -> list[tuple[str, list[Verb]]]:
     """Core's verbs and each declared part's, as `basis --help` lists them."""
     groups = [("In every basis repo", _core(repo))]
-    owners = dict.fromkeys(CORE, "core")
+    owners = dict.fromkeys(CORE, _CORE)
     for name, part in repo.parts.items():
         for verb in part.verbs:
-            if (owner := owners.setdefault(verb.name, name)) == "core":
-                msg = f"the {name} part adds `basis {verb.name}`, which is a verb of core's: install every basis package from one release, with `uv sync`"
-                raise CommandError(msg)
-            if owner != name:
-                msg = f"the {owner} and {name} parts both add `basis {verb.name}`, and a repo cannot have both: declare one of them"
-                raise CommandError(msg)
+            _claim(owners, verb.name, name, f"basis {verb.name}")
         groups.append((f"From the {name} part", list(part.verbs)))
     return groups
+
+
+_CORE = "core"
+
+
+def _claim(owners: dict[str, str], key: str, part: str, what: str) -> None:
+    """Record that `part` adds `what`, as `key` in `owners`, unless something already does: core, another part, or
+    the same part twice."""
+    if (owner := owners.get(key)) is None:
+        owners[key] = part
+        return
+    if owner == _CORE:
+        msg = f"the {part} part adds `{what}`, which is core's: install every basis package from one release, with `uv sync`"
+    elif owner == part:
+        msg = f"the {part} part adds `{what}` twice, a defect in its package: install its package from a basis release, with `uv sync --reinstall`"
+    else:
+        msg = f"the {owner} and {part} parts both add `{what}`, and a repo cannot have both: declare one of them"
+    raise CommandError(msg)
 
 
 def _core(repo: Repo) -> list[Verb]:
@@ -174,18 +200,21 @@ def _core(repo: Repo) -> list[Verb]:
     kinds = _kinds(repo)
     saving = {name: part.runs for name, part in repo.parts.items() if part.runs is not None}
 
+    def agent_files() -> list[sync.AgentFiles]:
+        return [read() for read in files]
+
     def replay(n: argparse.Namespace) -> int:
-        return _owner(saving, str(n.name)).replay(Replay(str(n.name), str(n.run_id), n.params))
+        return _owner(saving, n.name).replay(Replay(n.name, str(n.run_id), n.params))
 
     def regress(n: argparse.Namespace) -> int:
         return _regress(saving, Regress(n.name, n.last, dict(n.label), n.snapshots))
 
     offered = {
-        "check": Verb("check", "lint, format check, type check and test the repo, and check its agent files", _no_arguments, lambda _: check.check(repo.root, files, run=check.run_command)),
+        "check": Verb("check", "lint, format check, type check and test the repo, and check its agent files", _no_arguments, lambda _: check.check(repo.root, agent_files(), run=check.run_command)),
         "replay": Verb("replay", "rerun a saved run's transform with today's code, and print how its outputs differ", _replay_arguments, replay),
         "regress": Verb("regress", "replay recent published runs with today's code, and list what changed", _regress_arguments, regress),
         "new": Verb("new", f"add a {' or a '.join(kinds)} to the repo", partial(_new_arguments, kinds), lambda n: _new(repo, kinds[str(n.kind)], str(n.name))),
-        "sync": Verb("sync", "rewrite the repo's agent files from the installed parts", _no_arguments, lambda _: _sync(repo.root, files)),
+        "sync": Verb("sync", "rewrite the repo's agent files from the installed parts", _no_arguments, lambda _: _sync(repo.root, agent_files())),
         "docs": Verb("docs", "list the docs of the installed parts, or print one", _docs_arguments, lambda n: _docs(_pages(repo), n.page)),
     }
     given = {"check"}.union(*map(_gives, parts))
@@ -226,17 +255,18 @@ def _kinds(repo: Repo) -> dict[str, Callable[[Path, str], Path]]:
     owners: dict[str, str] = {}
     for name, part in repo.parts.items():
         for kind, make in part.new.items():
-            if (owner := owners.setdefault(kind, name)) != name:
-                msg = f"the {owner} and {name} parts both add `basis new {kind}`, and a repo cannot have both: declare one of them"
-                raise CommandError(msg)
+            _claim(owners, kind, name, f"basis new {kind}")
             kinds[kind] = make
     return kinds
 
 
-def _owner(saving: Mapping[str, Runs], name: str) -> Runs:
+def _owner(saving: Mapping[str, Runs], name: str | None) -> Runs:
     """The runs of the part that runs `name`: the only part that saves runs, or the one whose names hold it."""
     if len(saving) == 1:
         return next(iter(saving.values()))
+    if name is None:
+        msg = f"more than one part of this repo saves runs ({', '.join(saving)}): give the job's or model's name before the run's id"
+        raise CommandError(msg)
     owners = [runs for runs in saving.values() if name in runs.names()]
     if len(owners) == 1:
         return owners[0]
@@ -259,10 +289,9 @@ def _new(repo: Repo, make: Callable[[Path, str], Path], name: str) -> int:
     return 0
 
 
-def _sync(root: Path, files: Iterable[sync.AgentFiles]) -> int:
-    for part in files:
-        for path in sync.write(root, part):
-            log.info("wrote %s", path)
+def _sync(root: Path, files: Sequence[sync.AgentFiles]) -> int:
+    for path in sync.write(root, files):
+        log.info("synced %s", path)
     return 0
 
 
@@ -298,6 +327,22 @@ def label(value: str) -> tuple[str, str]:
     return key, text
 
 
+def existing_file(text: str) -> Path:
+    """A path to a file that exists, as argparse's `type`."""
+    if not Path(text).is_file():
+        msg = f"no file {text}: give the path of one that exists"
+        raise argparse.ArgumentTypeError(msg)
+    return Path(text)
+
+
+def existing_folder(text: str) -> Path:
+    """A path to a folder that exists, as argparse's `type`."""
+    if not Path(text).is_dir():
+        msg = f"no folder {text}: give the path of one that exists"
+        raise argparse.ArgumentTypeError(msg)
+    return Path(text)
+
+
 def _positive(text: str) -> int:
     """A count of at least 1, as argparse's `type`."""
     if not text.isdecimal() or int(text) < 1:
@@ -307,9 +352,9 @@ def _positive(text: str) -> int:
 
 
 def _replay_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("name", metavar="NAME", help="the job or model whose run it is")
+    parser.add_argument("name", metavar="NAME", nargs="?", help="the job or model whose run it is; without it, the run is found by its id")
     parser.add_argument("run_id", metavar="RUN_ID")
-    parser.add_argument("--params", type=Path, help="other params to replay with, instead of the run's own")
+    parser.add_argument("--params", type=existing_file, help="other params to replay with, instead of the run's own")
 
 
 def _regress_arguments(parser: argparse.ArgumentParser) -> None:
@@ -337,7 +382,7 @@ class _Parser(argparse.ArgumentParser):
 
 def _parser(prog: str, description: str, verbs: Iterable[Verb]) -> argparse.ArgumentParser:
     parser = _Parser(prog=prog, usage=f"{prog} [-h] [--version] VERB ...", description=description, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--version", action="version", version=f"basis {version('basis-core')}")
+    parser.add_argument("--version", action="version", version=versions())
     commands = parser.add_subparsers(dest="verb", metavar="VERB", required=True, help=argparse.SUPPRESS)
     for verb in verbs:
         verb.arguments(commands.add_parser(verb.name, description=verb.help, help=verb.help))
@@ -360,11 +405,12 @@ def _execute(parser: argparse.ArgumentParser, verbs: Mapping[str, Verb], argv: S
     return verbs[str(namespace.verb)].handle(namespace)
 
 
-def _failed(error: Exception) -> int:
+def report(error: Exception) -> int:
+    """Print `error` as its one line, after its traceback if it is a defect, and return its exit code."""
     if isinstance(error, CommandError):
         sys.stderr.write(f"ERROR: {error}\n")
         return error.code
-    deliberate = isinstance(error, _DELIBERATE) and not isinstance(error, KeyError)
+    deliberate = isinstance(error, BasisError | ValidationError)
     if not deliberate or log.isEnabledFor(logging.DEBUG):
         log.error("failed", exc_info=error)
     message = one_line(error)

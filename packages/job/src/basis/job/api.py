@@ -22,7 +22,7 @@ from types import ModuleType
 
 from dotenv import dotenv_values
 
-from basis.core import logs
+from basis.core import logs, settings
 from basis.core import runs as core_runs
 from basis.core.interval import Interval
 from basis.core.model import Model
@@ -109,10 +109,12 @@ def _settings_file(directory: Path, env: str | Path | None) -> Path | None:
 
 @contextmanager
 def _environment(path: Path | None) -> Generator[None]:
-    """The settings file's variables, set for the block alone; a variable the process already has keeps its value."""
+    """The settings file's variables, set for the block alone; a variable the process already has keeps its value.
+    A variable under a name basis no longer reads, `ETL_*`, is refused rather than ignored."""
     added = {key: value for key, value in (dotenv_values(path) if path is not None else {}).items() if value is not None and key not in os.environ}
     os.environ.update(added)
     try:
+        settings.refuse_renamed(os.environ)
         yield
     finally:
         for key in added:

@@ -25,7 +25,7 @@ from basis.core.interval import Interval
 from basis.core.settings import GivenSettings
 from basis.core.storage import Root
 from basis.core.testing import ContractError
-from basis.job import api, runs, sync
+from basis.job import api, runs
 from basis.job import job as jobs
 from basis.job.inputs import Inputs, Query
 from basis.job.rows import Row, conform
@@ -94,12 +94,6 @@ def check_imports(job: jobs.Job) -> None:
     if chains := core_testing.import_chains(job.module, packages=("basis.job", "basis.core"), forbidden=FORBIDDEN, lazy=_LAZY):
         msg = f"{job.name} can reach I/O through its imports, which job code must not do: its data arrives in its Inputs.\n" + "\n".join(" -> ".join(chain) for chain in chains)
         raise ContractError(msg)
-
-
-def check_agent_files(repo: Path) -> None:
-    """`AGENTS.md`'s block and the `job-*` skills in the repo at `repo` match the installed basis-job."""
-    __tracebackhide__ = True
-    core_testing.check_agent_files(repo, sync.agent_files())
 
 
 def frame(row: type[Row], *rows: Mapping[str, object]) -> pl.DataFrame:

@@ -4,18 +4,36 @@ fields under a double underscore. A database without a `WRITE` block can be read
 read-only credentials runs a job, and writes nothing. A job's `main.py` names the settings file it reads, such as
 `.env.prod`; the command line reads the process's environment, as `uv run --env-file .env` sets it."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Annotated, Literal, override
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
+from basis.core.errors import BasisError
 from basis.core.model import Model
 from basis.core.storage import Root
 from basis.core.tables import IDENTIFIER
 
 PREFIX = "BASIS_"
+RENAMED = ("ETL_SNAPSHOT_ROOT", "ETL_DATABASES__", "ETL_LOG_", "ETL_GIT_SHA", "ETL_TEST_")
+"""The variables basis read before its settings took the `BASIS_` prefix, by name or by prefix. Only these are
+refused, since other tools at a firm that runs ETL may well read variables of their own that start `ETL_`."""
+
+
+class SettingsError(BasisError, ValueError):
+    """Settings that are missing, or that cannot be read."""
+
+
+def refuse_renamed(environ: Mapping[str, str]) -> None:
+    """Fail when `environ` sets a variable under the name basis read before, which it now ignores."""
+    if old := sorted(name for name in environ if name.startswith(RENAMED)):
+        renames = ", ".join(f"{name} to {PREFIX}{name.removeprefix('ETL_')}" for name in old)
+        msg = f"{', '.join(old)} {'is' if len(old) == 1 else 'are'} set, and basis reads only BASIS_ variables now: rename {renames}, where they are set and in each .env file"
+        raise SettingsError(msg)
+
+
 LEDGER = r"^[A-Za-z_][A-Za-z0-9_$]{0,127}(\.[A-Za-z_][A-Za-z0-9_$]{0,127})?$"
 
 
@@ -93,16 +111,16 @@ class Settings(BaseSettings):
     def snapshots(self) -> Root:
         if self.snapshot_root is None:
             msg = "no snapshot root is set, which is where `basis run` saves its snapshots and where a replay finds a run by its id: set BASIS_SNAPSHOT_ROOT, as .env.example shows"
-            raise ValueError(msg)
+            raise SettingsError(msg)
         return Root.at(self.snapshot_root)
 
     def database(self, name: str) -> MssqlSettings | OracleSettings:
         if not IDENTIFIER.match(name):
-            msg = f"database {name!r}: a database's name is lower-case letters, digits and underscores"
-            raise ValueError(msg)
+            msg = f"database {name!r}: a database's name is lower-case letters, digits and underscores: rename it where the job names it"
+            raise SettingsError(msg)
         if (found := self.databases.get(name)) is None:
             msg = f"database {name!r} is not configured: set BASIS_DATABASES__{name.upper()}__KIND and the rest of its block, as .env.example shows"
-            raise LookupError(msg)
+            raise SettingsError(msg)
         return found
 
 

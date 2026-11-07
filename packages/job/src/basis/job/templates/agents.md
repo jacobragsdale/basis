@@ -26,7 +26,7 @@ uv run basis check                                  # lint, format, types, the j
 uv run basis new job NAME                           # a new job, copied from the example and listed in pyproject.toml
 uv run basis describe JOB                           # params, inputs and outputs as JSON
 uv run basis run JOB --params jobs/JOB/params/default.json --data jobs/JOB/tests/fixture
-uv run basis replay JOB RUN_ID [--params FILE]      # a saved run again, with the code of the day
+uv run basis replay [JOB] RUN_ID [--params FILE]    # a saved run again, with the code of the day
 uv run basis regress [JOB] --last 10                # recent published runs replayed; exit 1 if anything changed
 uv run basis ddl JOB --dialect mssql                # CREATE TABLE for the job's tables
 uv run basis docs job/reference                     # the job contract, write modes, settings

@@ -17,19 +17,21 @@ that one of them gives something to do:
 
 | Core verb | Listed when a declared part has | What it does with them |
 |---|---|---|
-| `check` | always | lints, type checks and tests the repo, and compares each part's `files` with the repo's |
-| `sync` | `files` | writes each part's `files` into the repo |
+| `check` | always | lints, type checks and tests the repo, and compares the files `sync` owns with what `files` give |
+| `sync` | `files` | writes what every part's `files` give, and removes what basis wrote that none of them gives now |
 | `docs [PAGE]` | `docs` | lists every part's pages as `PART/PAGE`, or prints one |
 | `new KIND NAME` | `new` | calls `new[KIND](repo, NAME)` |
-| `replay NAME RUN_ID`, `regress [NAME]` | `runs` | calls `runs.replay` or `runs.regress`, of the part whose `runs.names` holds NAME |
+| `replay [NAME] RUN_ID`, `regress [NAME]` | `runs` | calls `runs.replay` or `runs.regress`, of the part whose `runs.names` holds NAME, or of the only part that saves runs |
 
 No two declared parts may add the same verb, nor a verb core has, nor the same kind to `new`. A verb that several
 kinds of part share is core's, and reaches each part through a field of `Part`, as `replay` does.
 
 A handler reads its `argparse.Namespace` into a frozen dataclass before anything else reads it, and returns the exit
-code: 0 when the verb did what it says, and 1 when it did not. It reports a failure as one line, with `fail`, or by
-raising a `ValueError`, `LookupError`, `TypeError` or `OSError` whose message gives the reason and ends with the fix,
-which `basis` prints as the line. Any other exception is a defect, and `basis` logs its traceback before its line.
+code: 0 when the verb did what it says, and 1 when it did not. It reports a failure the caller can fix as one line,
+with `fail`, or by raising a `basis.core.errors.BasisError` whose message gives the reason and ends with the fix, which
+`basis` prints as the line; a pydantic `ValidationError` of the caller's input prints as one line too. Any other
+exception is a defect, and `basis` logs its traceback before its line; `basis.core.errors.deliberate` marks a builtin
+error that a call raises on purpose, such as a lookup that finds no run.
 A result that a caller reads, such as `describe`'s, is JSON on stdout, and logs are JSON lines on stderr."""
 
 import argparse
@@ -55,10 +57,10 @@ class Verb:
 
 @dataclass(frozen=True)
 class Replay:
-    """`basis replay NAME RUN_ID [--params FILE]`."""
+    """`basis replay [NAME] RUN_ID [--params FILE]`."""
 
-    name: str
-    """The job or model whose run it is."""
+    name: str | None
+    """The job or model whose run it is, or None to find the run by its id alone."""
     run_id: str
     params: Path | None
     """Other params to replay with, instead of the run's own."""
@@ -95,8 +97,9 @@ class Part:
 
     verbs: tuple[Verb, ...] = ()
     """The part's own verbs, such as basis-job's `run`."""
-    files: AgentFiles | None = None
-    """The part's block of `AGENTS.md` and its skills, as the installed version writes them."""
+    files: Callable[[], AgentFiles] | None = None
+    """The part's block of `AGENTS.md` and its skills, as the installed version writes them; read only by the verbs
+    that use them."""
     docs: Path | None = None
     """A folder of Markdown pages, each `PAGE.md`, for the installed version."""
     new: Mapping[str, Callable[[Path, str], Path]] = field(default_factory=dict[str, Callable[[Path, str], Path]])
