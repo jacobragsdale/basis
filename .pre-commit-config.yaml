@@ -22,13 +22,16 @@ repos:
     hooks:
       - id: uv-lock   # fails the commit if a pyproject.toml changed without uv.lock
 
-  - repo: https://github.com/astral-sh/ty-pre-commit
-    rev: v0.0.99   # keep in sync with the pinned ty dev dependency
-    hooks:
-      - id: ty
 
   - repo: local
     hooks:
+      - id: ty   # ty-pre-commit's hook found no Python files at this virtual workspace root and checked nothing
+        name: ty
+        entry: uv run ty check
+        language: system
+        types: [python]
+        pass_filenames: false
+
       - id: lint-imports   # the import contracts in pyproject.toml
         name: lint-imports
         entry: uv run lint-imports --no-cache   # no .import_linter_cache folder; the graph builds fresh each run
