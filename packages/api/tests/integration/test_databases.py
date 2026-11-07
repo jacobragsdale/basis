@@ -591,7 +591,7 @@ def test_two_relays_claim_a_call_once(outboxed: Outboxed) -> None:
 def test_an_app_whose_outbox_table_is_missing_does_not_start(scratch: Scratch) -> None:
     service = _outboxed_service(scratch, f"{scratch.table}_nowhere")
     app = api.build(service, settings=api.Settings.given(databases={"warehouse": scratch.settings}), fakes={LEDGER: fakes.Http(FastAPI())})
-    with pytest.raises(api.ServiceError, match=f"database warehouse's outbox {scratch.table}_nowhere cannot be read through its write login"), TestClient(app.asgi):
+    with pytest.raises(api.DeclarationError, match=f"database warehouse's outbox {scratch.table}_nowhere cannot be read through its write login"), TestClient(app.asgi):
         pass
 
 

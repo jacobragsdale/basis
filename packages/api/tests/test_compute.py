@@ -173,7 +173,7 @@ def solve_here(dirty: Decimal) -> Decimal:
     ids=["lambda", "async", "nested", "not-in-a-compute-module"],
 )
 def test_a_compute_function_is_a_plain_def_in_a_compute_module(declare: Callable[[], object], message: str) -> None:
-    with pytest.raises(api.ServiceError, match=message):
+    with pytest.raises(api.DeclarationError, match=message):
         declare()
 
 
@@ -209,7 +209,7 @@ async def _in_a_dependency(solved: Annotated[Decimal, Depends(_solves)]) -> dict
     ids=["wrong-annotation", "sync-handler", "in-a-dependency"],
 )
 def test_a_handler_asks_for_a_compute_function_as_it_is(handler: Callable[..., object], message: str) -> None:
-    with pytest.raises(api.ServiceError, match=message):
+    with pytest.raises(api.DeclarationError, match=message):
         api.get("/y", handler, deadline_s=1, response=dict[str, str], errors=[])  # ty: ignore[invalid-argument-type] -- each a function
 
 
@@ -220,7 +220,7 @@ def test_a_compute_function_reaches_no_resource(workloads: ModuleType) -> None:
         del run
         return {}
 
-    with pytest.raises(api.ServiceError, match="compute function reads takes Reader, and a compute function reaches no resource"):
+    with pytest.raises(api.DeclarationError, match="compute function reads takes Reader, and a compute function reaches no resource"):
         api.get("/r", handler, deadline_s=1, response=dict[str, int], errors=[])
 
 

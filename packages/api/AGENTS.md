@@ -106,7 +106,7 @@ Paths are under `src/basis/api/`.
   client.
 - Settings come from `Settings` alone, as `BASIS_*` variables, and a failure names them with basis-core's
   `settings.variable`; no `OTEL_*` variable changes what basis does (`basis.core.traces`).
-- A failure the developer can fix is a `BasisError`, such as `ServiceError` or basis-core's `SettingsError`, whose
+- A failure the developer can fix is a `BasisError`, such as `DeclarationError` or basis-core's `SettingsError`, whose
   message ends with the fix, so `basis` prints it as one line.
 - Each app has its own tracer provider, from `basis.core.traces`; nothing sets OpenTelemetry's global one. Spans go
   only where `BASIS_TRACES__*` says, to stderr for `console`, never stdout, and nowhere when it is unset.

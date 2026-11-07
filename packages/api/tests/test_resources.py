@@ -350,7 +350,7 @@ class Plain:
     ],
 )  # fmt: skip
 def test_resources_cannot_be_declared_wrong(declare: Callable[[], object], message: str) -> None:
-    with pytest.raises(api.ServiceError, match=message):
+    with pytest.raises(api.DeclarationError, match=message):
         declare()
 
 
@@ -404,7 +404,7 @@ def test_an_oracle_database_a_route_writes_needs_its_write_user_and_password() -
     ids=["undeclared", "wrong-kind"],
 )
 def test_a_fake_fakes_a_declared_resource_of_its_kind(given: fakes.Fakes, message: str) -> None:
-    with pytest.raises(api.ServiceError, match=message):
+    with pytest.raises(api.DeclarationError, match=message):
         api.build(SERVICE, settings=api.Settings.given(), fakes=given)
 
 

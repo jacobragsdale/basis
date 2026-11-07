@@ -51,7 +51,7 @@ def test_an_app_starts_once() -> None:
     app = api.build(SERVICE, settings=api.Settings.given())
     with TestClient(app.asgi):
         pass
-    with pytest.raises(api.ServiceError, match="has started once already"), TestClient(app.asgi):
+    with pytest.raises(api.DeclarationError, match="has started once already"), TestClient(app.asgi):
         pass
 
 

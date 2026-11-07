@@ -170,7 +170,7 @@ def _warehouse(*rows: Row) -> fakes.Database:
     ids=["a-space", "three-parts", "name-too-long", "no-age", "endless-backoff", "backoff-past-its-maximum", "a-name-for-an-outbox"],
 )
 def test_an_outbox_cannot_be_declared_wrong(declare: Callable[[], object], message: str) -> None:
-    with pytest.raises(api.ServiceError, match=message):
+    with pytest.raises(api.DeclarationError, match=message):
         declare()
 
 
@@ -188,7 +188,7 @@ def test_an_outbox_leaves_room_past_the_deadline_of_each_route_that_writes_its_d
     if declared == "kept":
         declare()
         return
-    with pytest.raises(api.ServiceError, match=r"route write, which writes warehouse, has 10s to answer.* give the outbox a max_age_s above 70s"):
+    with pytest.raises(api.DeclarationError, match=r"route write, which writes warehouse, has 10s to answer.* give the outbox a max_age_s above 70s"):
         declare()
 
 
@@ -659,11 +659,11 @@ def test_each_of_the_relays_statements_has_a_span_and_the_databases_deadline() -
 
 def test_the_relay_needs_an_outbox_and_the_settings_of_what_it_reaches() -> None:
     bare = api.Service(name="bare", settings=api.Settings, resources=[PLAIN, LEDGER], routes=[_post("/direct", book_directly)])
-    with pytest.raises(api.ServiceError, match="service bare keeps no outbox, so basis relay has no calls to make"):
+    with pytest.raises(api.DeclarationError, match="service bare keeps no outbox, so basis relay has no calls to make"):
         relay.plan(bare, api.Settings.given(), {})
     with pytest.raises(api.SettingsError, match="set BASIS_DATABASES__WAREHOUSE__KIND and the rest of its block, for the database warehouse; BASIS_HTTP__LEDGER__URL"):
         relay.plan(SERVICE, api.Settings.given(), {})
-    with pytest.raises(api.ServiceError, match="a fake is given for plain, which basis relay does not reach"):
+    with pytest.raises(api.DeclarationError, match="a fake is given for plain, which basis relay does not reach"):
         relay.plan(SERVICE, api.Settings.given(), {PLAIN: fakes.Database()})
 
 

@@ -48,7 +48,7 @@ from basis.api import deadlines, fakes, outboxes
 from basis.api.compute import ComputeFunction
 from basis.api.pool import Call, InProcess, Pool, Runs
 from basis.api.resources import Bind, Body, CacheResource, CallFailedError, ClockResource, DatabaseResource, DeadlineExceededError, HttpMethod, HttpResource, IdsResource, Query, Resource, SendMethod
-from basis.api.service import Service, ServiceError
+from basis.api.service import DeclarationError, Service
 from basis.api.settings import Settings
 from basis.core import logs, opened
 from basis.core import resources as core
@@ -107,10 +107,10 @@ def plan(service: Service, settings: Settings, given: fakes.Fakes) -> Plan:
         if isinstance(resource, ComputeFunction):
             if resource not in compute:
                 msg = f"a fake is given for the compute function {resource.name}, which no route of service {service.name} asks for: fake the ones its routes run"
-                raise ServiceError(msg)
+                raise DeclarationError(msg)
             if not isinstance(fake, fakes.Compute):
                 msg = f"the compute function {resource.name} is given a fakes.{type(fake).__name__}: give it fakes.Compute()"
-                raise ServiceError(msg)
+                raise DeclarationError(msg)
             in_process.add(resource)
     outside = f"which service {service.name} does not declare: fake the service's own resources"
     by_name = faked({resource: fake for resource, fake in given.items() if not isinstance(resource, ComputeFunction)}, service.resources, outside)
@@ -149,10 +149,10 @@ def faked(given: fakes.Fakes, reached: Collection[Resource], outside: str) -> di
     for resource, fake in given.items():
         if isinstance(resource, ComputeFunction) or resource not in reached:
             msg = f"a fake is given for {resource.name}, {outside}"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if not fits(resource, fake):
             msg = f"{resource.name} is given a fakes.{type(fake).__name__}, which does not fake its kind of resource: give it the fake of its kind"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         by_name[resource.name] = fake
     return by_name
 
@@ -345,7 +345,7 @@ async def _answers(database: OpenDatabase, *, writes: bool) -> None:
                             f"database {database.resource.name}'s outbox {declared.table} cannot be read through its write login ({type(error).__name__}: {' '.join(str(error).split())}):"
                             " create it with `basis ddl SERVICE --dialect DIALECT`, and let that login select, insert and update its rows"
                         )
-                        raise ServiceError(msg) from error
+                        raise DeclarationError(msg) from error
 
     resource = database.resource
     with database.span("open"):

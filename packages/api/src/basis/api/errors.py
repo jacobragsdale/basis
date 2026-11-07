@@ -64,7 +64,7 @@ _NO_HEADERS: Mapping[str, str] = MappingProxyType({})
 _JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 
-class ServiceError(BasisError, TypeError):
+class DeclarationError(BasisError, TypeError):
     """A service that does not declare what basis needs; the message says what to declare, and `basis` prints it as
     one line."""
 
@@ -92,14 +92,14 @@ class Error(Exception):
         status = getattr(cls, "status", None)
         if not isinstance(status, int) or status not in _STATUSES:
             msg = f"{cls.__qualname__} declares no error status: give it `status = HTTPStatus.NOT_FOUND`, or another 4xx or 5xx, or declare it `abstract=True`, a base for errors that do"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         title = getattr(cls, "title", None)
         if not isinstance(title, str) or not title.strip():
             msg = f'{cls.__qualname__} declares no title: give it `title = "..."`, what kind of problem it is, in the same words every time'
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if status == HTTPStatus.UNAUTHORIZED and "www-authenticate" not in {name.lower() for name in cls.headers}:
             msg = f'{cls.__qualname__} is a 401, whose response carries a challenge: raise api.SignInRequiredError instead, or give it `headers = MappingProxyType({{"WWW-Authenticate": "Bearer"}})`'
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if "type" not in vars(cls):
             cls.type = re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "-", cls.__name__.removesuffix("Error") or cls.__name__).lower()
 

@@ -38,7 +38,7 @@ from basis.api import fakes, outboxes
 from basis.api.opened import HttpClient, OpenDatabase, client, faked, open_one, unconfigured
 from basis.api.outboxes import Failure, Row
 from basis.api.resources import DatabaseResource, DeadlineExceededError, HttpResource
-from basis.api.service import Service, ServiceError
+from basis.api.service import DeclarationError, Service
 from basis.api.settings import Settings
 from basis.core import opened
 from basis.core.databases import Statements
@@ -95,7 +95,7 @@ def plan(service: Service, settings: Settings, given: fakes.Fakes) -> Plan:
             f"service {service.name} keeps no outbox, so basis relay has no calls to make: declare one where a route sends a call after its commit,"
             " as api.database(NAME, ..., outbox=api.outbox(TABLE, ...)), or schedule no relay"
         )
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     reached: list[DatabaseResource | HttpResource] = [*outboxed, *(resource for resource in service.resources if isinstance(resource, HttpResource))]
     by_name = faked(given, reached, "which basis relay does not reach: fake the databases whose outboxes it relays, and the services it calls")
     if missing := [found for resource in reached if resource.name not in by_name and (found := unconfigured(resource, settings, written=True)) is not None]:

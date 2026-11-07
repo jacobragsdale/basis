@@ -224,7 +224,7 @@ def embedded(security: str, order: Annotated[Order, Body(embed=True)]) -> Quote:
     ],
 )  # fmt: skip
 def test_a_route_cannot_skip_its_declarations(declare: Callable[[], object], message: str) -> None:
-    with pytest.raises(api.ServiceError, match=message):
+    with pytest.raises(api.DeclarationError, match=message):
         declare()
 
 
@@ -477,7 +477,7 @@ class Sets(BaseModel):
     ids=["alias-choices", "by-name", "a-set-of-dataclasses"],
 )
 def test_a_body_reads_each_field_by_one_key_and_holds_no_set_of_what_basis_checks(kind: type, message: str) -> None:
-    with pytest.raises(api.ServiceError, match=message):
+    with pytest.raises(api.DeclarationError, match=message):
         strict.shape("/a", _taking(kind), "taking")
 
 
@@ -499,7 +499,7 @@ def later(tasks: BackgroundTasks) -> dict[str, str]:
 
 
 def test_a_route_runs_no_background_tasks() -> None:
-    with pytest.raises(api.ServiceError, match="takes BackgroundTasks, whose work runs after the response, outside the route's deadline"):
+    with pytest.raises(api.DeclarationError, match="takes BackgroundTasks, whose work runs after the response, outside the route's deadline"):
         api.get("/later", later, deadline_s=1, response=dict[str, str], errors=[])
 
 
@@ -568,12 +568,12 @@ def tree() -> Tree:
     ids=["a-response-model", "a-mapping", "a-query-parameter", "a-body", "a-time-of-day"],
 )
 def test_a_route_whose_times_may_lack_their_offsets_is_refused_when_it_is_declared(declare: Callable[[], object], message: str) -> None:
-    with pytest.raises(api.ServiceError, match=re.escape(message)):
+    with pytest.raises(api.DeclarationError, match=re.escape(message)):
         declare()
 
 
 def test_the_fix_names_pydantics_aware_datetime() -> None:
-    with pytest.raises(api.ServiceError, match=re.escape("declare it pydantic's AwareDatetime, which refuses a time without its offset")):
+    with pytest.raises(api.DeclarationError, match=re.escape("declare it pydantic's AwareDatetime, which refuses a time without its offset")):
         api.get("/noon", at_noon_naively, deadline_s=1, response=NaiveStamp, errors=[])
 
 

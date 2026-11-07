@@ -68,7 +68,7 @@ from fastapi.dependencies.utils import get_dependant
 from pydantic import AwareDatetime, BaseModel, FutureDatetime, JsonValue, NaiveDatetime, PastDatetime, RootModel, TypeAdapter, ValidationError
 from pydantic.fields import FieldInfo
 
-from basis.api.errors import ServiceError
+from basis.api.errors import DeclarationError
 
 type ErrorEntry = dict[str, object]
 """One error as pydantic and FastAPI give them: `type`, `loc`, `msg` and `input`, which `errors.problem` turns into a
@@ -154,7 +154,7 @@ def shape(path: str, handler: Callable[..., object], name: str) -> Shape:
             f"{name} takes BackgroundTasks, whose work runs after the response, outside the route's deadline and transaction, where a failure reaches nobody:"
             " do the work in the handler; a call to another service that changes its state waits for the outbox basis is to have"
         )
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     readable_path = tuple(_parameter(name, "path", field.alias, field.field_info) for dependant in found for field in dependant.path_params)
     query: list[Parameter] = []
     for dependant in found:
@@ -167,22 +167,22 @@ def shape(path: str, handler: Callable[..., object], name: str) -> Shape:
     bodies = [field for dependant in found for field in dependant.body_params]
     if len(bodies) > 1:
         msg = f"{name} takes {len(bodies)} bodies, {', '.join(field.name for field in bodies)}: a route takes one JSON body, so declare one model that holds them all"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     if bodies and not found[0].body_params:
         msg = f"a dependency of {name}'s takes the body {bodies[0].name}: take it in {name}'s own parameters, and pass it on"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     body: Body | None = None
     if bodies:
         info = bodies[0].field_info
         if isinstance(info, params.Body) and info.embed:
             msg = f"{name}'s body {bodies[0].name} is embedded in an object of its own: drop embed=True, so the body is the model's JSON itself"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if isinstance(info, params.Form | params.File):
             msg = f"{name} takes a form: a route's body is JSON, so declare a model for it"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if info.annotation is None:
             msg = f"{name}'s body {bodies[0].name} has no type: annotate it with the model it reads"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         aware(name, "body", info.annotation)
         body = Body(TypeAdapter(info.annotation), _precise(name, info.annotation, frozenset()), info)
     return Shape(readable_path, tuple(query), body)
@@ -226,7 +226,7 @@ def _precise_of(route: str, kind: object, origin: object, within: frozenset[type
         holds = _precise(route, items, within)
         if holds and not (isinstance(items, type) and issubclass(items, Decimal)):
             msg = f"{route}'s body holds a {named(kind)}, whose items basis cannot match to the JSON's to check their decimals: hold a tuple or a list instead"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         return holds
     held = [_precise(route, argument, within) for argument in arguments]
     return any(held)
@@ -236,11 +236,11 @@ def _one_key(route: str, model: type, config: Mapping[str, object], fields: Mapp
     """That each of `model`'s fields reads from one key of the JSON: its plain alias, or else its name."""
     if config.get("populate_by_name") or config.get("validate_by_name") or config.get("validate_by_alias") is False:
         msg = f"{route}'s body {model.__qualname__} reads its fields by their names and their aliases: drop populate_by_name, validate_by_name and validate_by_alias, so each reads by one key"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     for name, field in fields.items():
         if field.validation_alias is not None and field.validation_alias != field.alias:
             msg = f"{route}'s body {model.__qualname__} reads {name} by {field.validation_alias!r}: give it a plain alias=, the one key it reads by, or none"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
 
 
 def _flat(dependant: Dependant) -> Iterator[Dependant]:
@@ -262,7 +262,7 @@ def _parameter(route: str, where: Literal["path", "query"], key: str, info: Fiel
     if found is None:
         listing = "str, int, Decimal, float, bool, date, AwareDatetime, UUID, a Literal or an Enum" + (", or a list or tuple of one" if where == "query" else "")
         msg = f"{route}'s {where} parameter {key} is {named(bare(annotation))}, which basis cannot read strictly from text: give it {listing}"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     return Parameter(key, found, is_many, info)
 
 
@@ -495,7 +495,7 @@ def aware(route: str, where: str, kind: object) -> None:
     else:
         fix = "declare it pydantic's AwareDatetime, which refuses a time without its offset, as `from pydantic import AwareDatetime`"
         msg = f"{route}'s {where} holds {at}, {what}, which takes a time without its offset, and every time basis gives or takes carries one: {fix}"
-    raise ServiceError(msg)
+    raise DeclarationError(msg)
 
 
 def _naive_time(kind: object, at: str, within: frozenset[object]) -> tuple[str, str] | None:

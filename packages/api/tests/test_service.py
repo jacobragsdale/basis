@@ -70,7 +70,7 @@ def _service(**changed: object) -> Callable[[], api.Service]:
     ],
 )  # fmt: skip
 def test_a_service_cannot_skip_its_declarations(declare: Callable[[], object], message: str) -> None:
-    with pytest.raises(api.ServiceError, match=message):
+    with pytest.raises(api.DeclarationError, match=message):
         declare()
 
 
@@ -101,7 +101,7 @@ def test_basis_serves_only_a_declared_service(tmp_path: Path, monkeypatch: pytes
     (tmp_path / f"{module}.py").write_text(source, encoding="utf-8")
     monkeypatch.syspath_prepend(tmp_path)
     monkeypatch.delitem(sys.modules, module, raising=False)
-    with pytest.raises(api.ServiceError, match=message):
+    with pytest.raises(api.DeclarationError, match=message):
         api.load(module)
 
 
@@ -116,7 +116,7 @@ def test_a_service_loads_by_its_entry_point(reference: str | None, listed: list[
 
 @pytest.mark.parametrize("listed", [[], [EXAMPLE, BY_MODULE]], ids=["none", "two"])
 def test_without_a_name_one_service_must_be_listed(listed: list[EntryPoint]) -> None:
-    with pytest.raises(api.ServiceError, match="name the service to serve"):
+    with pytest.raises(api.DeclarationError, match="name the service to serve"):
         api.load(listed=listed)
 
 
@@ -129,7 +129,7 @@ def test_a_missing_import_of_the_services_module_is_not_a_missing_service(tmp_pa
 
 
 def test_an_unknown_service_names_what_is_listed() -> None:
-    with pytest.raises(api.ServiceError, match="no service named 'nowhere'"):
+    with pytest.raises(api.DeclarationError, match="no service named 'nowhere'"):
         api.load("nowhere")
 
 
@@ -157,5 +157,5 @@ def test_given_settings_ignore_the_environment(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_an_app_is_built_with_its_services_settings() -> None:
-    with pytest.raises(api.ServiceError, match="build it with those, not a Other"):
+    with pytest.raises(api.DeclarationError, match="build it with those, not a Other"):
         api.build(_service()(), settings=Other.given())

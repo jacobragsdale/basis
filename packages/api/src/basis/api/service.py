@@ -71,7 +71,7 @@ from starlette.routing import Route as StarletteRoute
 from basis.api import strict
 from basis.api.compute import Compute, ComputeFunction
 from basis.api.dataset import Rows, rows
-from basis.api.errors import Error, NotReadyError, ServiceError
+from basis.api.errors import DeclarationError, Error, NotReadyError
 from basis.api.identity import GivenUser, SignInRequiredError, User, annotation_refusal
 from basis.api.resources import (
     Cache,
@@ -156,28 +156,28 @@ class Route:
     def __post_init__(self, dataset: bool) -> None:
         if not self.path.startswith("/"):
             msg = f"route {self.path!r} is not a path: start it with /, as /accrued-interest"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if any(self.path == reserved or self.path.startswith(f"{reserved}/") for reserved in RESERVED):
             msg = f"route {self.path!r} is one the app answers itself ({', '.join(RESERVED)}): give the route another path"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         handler = self.handler
         if not inspect.isfunction(handler) or handler.__name__ == "<lambda>":
             msg = f"route {self.path!r}'s handler is a {type(handler).__name__}, not a named function: declare it with def, whose name is the route's"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         object.__setattr__(self, "name", handler.__name__)  # frozen: set once, from the handler
         if self.status not in range(200, 300):
             msg = f"route {self.path!r} succeeds with status {self.status}: give a 2xx, and raise an api.Error for each way it fails"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if converted := [found for found in _PARAMETER.findall(self.path) if ":" in found]:
             alone = converted[0][1:].partition(":")[0]
             msg = (
                 f"route {self.path!r} converts {', '.join(converted)} in its path: name the parameter alone, as {{{alone}}}, and give its type in {self.name}'s parameters, which basis reads strictly"
             )
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         deadline: object = self.deadline_s
         if isinstance(deadline, bool) or not isinstance(deadline, int | float) or not 0 < deadline < math.inf:
             msg = f"{self.name}'s deadline is {deadline!r}: give it deadline_s, the seconds the route has to answer, above 0"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         _check_response(self)
         object.__setattr__(self, "rows", rows(self.response, self.name) if dataset else None)
         object.__setattr__(self, "errors", _declared_errors(self.name, self.errors))
@@ -186,12 +186,12 @@ class Route:
                 f"{self.name}'s dependency {' -> '.join(path)} asks for {asked}: ask for it in {self.name}'s own parameters,"
                 " and pass what it gives to the dependency, so the route shows everything it reaches"
             )
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         asks = tuple(_asks_for(handler))
         for ask in asks:
             if isinstance(ask.given, type) and issubclass(ask.given, User) and (fix := annotation_refusal(ask.given, ask.annotation)) is not None:
                 msg = f"{self.name}'s parameter {ask.parameter} asks for the user: {fix}"
-                raise ServiceError(msg)
+                raise DeclarationError(msg)
         object.__setattr__(self, "asks", asks)
         object.__setattr__(self, "writes", _written(self, asks))
         object.__setattr__(self, "answers", (*self.errors, *_met(asks)))
@@ -229,38 +229,38 @@ def _check_response(route: Route) -> None:
     declared = route.response
     if returns is inspect.Signature.empty:
         msg = f"{route.name} has no return annotation: annotate it `-> {strict.named(declared)}`, the response its route declares"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     if returns != declared:
         msg = f"{route.name} returns {strict.named(returns)}, and its route declares response={strict.named(declared)}: declare the one it returns"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     strict.aware(route.name, "response", declared)
     if (declared is None) != (route.status == HTTPStatus.NO_CONTENT):
         fix = "give it status=HTTPStatus.NO_CONTENT" if declared is None else "declare the response it has, or response=None with no content"
         msg = f"{route.name} answers {route.status} with response={strict.named(declared)}: a route answers no body exactly when its status is 204, so {fix}"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
 
 
 def _declared_errors(name: str, declared: object) -> tuple[type[Error], ...]:
     if isinstance(declared, str | bytes) or not isinstance(declared, Sequence):
         msg = f"{name}'s errors are {declared!r}: give errors=[...], each api.Error its handler may raise, or errors=[] for none"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     found: list[type[Error]] = []
     for error in declared:
         if not (isinstance(error, type) and issubclass(error, Error)):
             msg = f"{name} declares {error!r} among its errors: give each api.Error subclass its handler may raise"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if error in BASIS_ERRORS:
             msg = f"{name} declares {error.__qualname__}, which basis raises itself and adds to each route that can meet it: remove it from errors=[...]"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if error is SignInRequiredError:
             msg = f"{name} declares SignInRequiredError, which basis adds to each route whose parameters ask for the user: remove it from errors=[...]"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if vars(error).get("_abstract", False):
             msg = f"{name} declares {error.__qualname__}, a base that is never raised itself: declare each of its subclasses the handler raises"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if error in found:
             msg = f"{name} declares {error.__qualname__} twice: declare each error once"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         found.append(error)
     return tuple(found)
 
@@ -302,13 +302,13 @@ class Service:
     def __post_init__(self) -> None:
         if not NAME.fullmatch(self.name):
             msg = f"service name {self.name!r}: a service's name is lower-case letters, digits and hyphens, starting with a letter"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if self.fakes is not None and not _REFERENCE.fullmatch(self.fakes):
             msg = f"service {self.name}'s fakes are {self.fakes!r}: give fakes='module:function', the function that makes them, as 'accruals.dev:fakes'"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if not (isinstance(self.settings, type) and issubclass(self.settings, Settings)):
             msg = f"service {self.name}'s settings are {self.settings!r}, not a subclass of api.Settings: declare `class Settings(api.Settings)`, or pass api.Settings itself"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         routes = tuple(self.routes)
         object.__setattr__(self, "routes", routes)  # frozen: a list given here can no longer change the service
         resources = tuple(self.resources)
@@ -316,20 +316,20 @@ class Service:
         _check_resources(self.name, resources)
         if not routes:
             msg = f"service {self.name} declares no routes: give it routes=[api.get(path, handler), ...]"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         for route in routes:
             if not isinstance(route, Route):
                 msg = f"service {self.name} has a {type(route).__name__} among its routes: declare each with api.get(path, handler) or api.post, api.put, api.patch, api.delete"
-                raise ServiceError(msg)
+                raise DeclarationError(msg)
             for ask in route.asks:
                 if isinstance(ask.given, ComputeFunction):
                     continue  # a function, which the service runs and never configures
                 if isinstance(ask.given, type) and issubclass(ask.given, Settings) and not issubclass(self.settings, ask.given):
                     msg = f"{route.name} asks for {ask.given.__qualname__}, which service {self.name} does not give: its settings are {self.settings.__qualname__}"
-                    raise ServiceError(msg)
+                    raise DeclarationError(msg)
                 if not isinstance(ask.given, type) and ask.given not in resources:
                     msg = f"{route.name} asks for {ask.given.name}, which service {self.name} does not declare: add it to the service's resources=[...]"
-                    raise ServiceError(msg)
+                    raise DeclarationError(msg)
         _check_user(self.name, self.user, routes)
         check_outboxes(self.name, [(route.name, route.deadline_s, route.writes) for route in routes if route.writes is not None])
         seen: dict[tuple[Method, str], Route] = {}
@@ -337,7 +337,7 @@ class Service:
             if (first := seen.get(route.shape)) is not None:
                 same = route.path if route.path == first.path else f"{first.path} and {route.path}, which match the same paths,"
                 msg = f"service {self.name} declares {route.method} {same} twice: give each method and path one handler"
-                raise ServiceError(msg)
+                raise DeclarationError(msg)
             seen[route.shape] = route
         _check_names(self.name, routes)
 
@@ -432,7 +432,7 @@ def given(kind: type[Settings | User] | Resource | ComputeFunction[..., object])
         f"api.given({kind!r}): basis gives a handler its service's settings, a subclass of api.Settings, the request's user,"
         " a subclass of api.User, one of its resources, as api.database(...) declares, or a compute function, as api.compute(...) declares"
     )
-    raise ServiceError(msg)
+    raise DeclarationError(msg)
 
 
 def _asks_for(handler: FunctionType) -> Iterator[Ask]:
@@ -496,22 +496,22 @@ def _written(route: Route, asks: Sequence[Ask]) -> DatabaseResource | None:
         resource = ask.given
         if resource.name in seen:
             msg = f"{route.name} asks for {resource.name} twice: ask once, and pass what it gives to whatever else needs it"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         seen.add(resource.name)
         if not _annotated_as_given(resource, ask.annotation):
             msg = f"{route.name}'s parameter {ask.parameter} asks for {resource.name}, {_annotate(resource)}"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if not isinstance(resource, ClockResource | IdsResource) and not inspect.iscoroutinefunction(route.handler):
             msg = f"{route.name} asks for {resource.name}, whose calls are awaited: declare it `async def {route.name}`"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if ask.annotation is Writer and isinstance(resource, DatabaseResource):
             written.append(resource)
     if written and route.method == "GET":
         msg = f"{route.name} writes {written[0].name}, and a GET only reads: declare the route with api.post, api.put, api.patch or api.delete, or ask for an api.Reader"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     if len(written) > 1:
         msg = f"{route.name} writes {' and '.join(found.name for found in written)}, and a request commits one transaction: write one database per route"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     return written[0] if written else None
 
 
@@ -526,7 +526,7 @@ def _check_compute(route: Route, ask: Ask, declared: ComputeFunction[..., object
         kind = strict.bare(parameter)
         if kind in _HANDLES or get_origin(kind) is Cache or (isinstance(kind, type) and issubclass(kind, Settings)):
             msg = f"compute function {declared.name} takes {strict.named(kind)}, and a compute function reaches no resource or setting: give it the values it computes from"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
     expected = f"api.Compute[[{', '.join(strict.named(parameter) for parameter in declared.parameters)}], {strict.named(declared.result)}]"
     if (
         get_origin(ask.annotation) is not Compute
@@ -534,10 +534,10 @@ def _check_compute(route: Route, ask: Ask, declared: ComputeFunction[..., object
         or strict.bare(get_args(ask.annotation)[1]) != strict.bare(declared.result)
     ):
         msg = f"{route.name}'s parameter {ask.parameter} asks for the compute function {declared.name}: annotate it Annotated[{expected}, api.given(...)], its parameters and its result"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     if not inspect.iscoroutinefunction(route.handler):
         msg = f"{route.name} asks for the compute function {declared.name}, whose calls are awaited: declare it `async def {route.name}`"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
 
 
 def _annotated_as_given(resource: Resource, annotation: object) -> bool:
@@ -578,13 +578,13 @@ def _check_user(service: str, user: object, routes: Sequence[Route]) -> None:
     of it."""
     if user is not None and not (isinstance(user, type) and issubclass(user, User)):
         msg = f"service {service}'s user is {user!r}, not a subclass of api.User: declare `class User(api.User)` with the claims it needs, or pass api.User itself"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     for route in routes:
         for ask in route.asks:
             if isinstance(ask.given, type) and issubclass(ask.given, User) and (user is None or not issubclass(user, ask.given)):
                 given = f"its user is {user.__qualname__}" if user is not None else "it declares no user=..."
                 msg = f"{route.name} asks for {ask.given.__qualname__}, which service {service} does not give: {given}"
-                raise ServiceError(msg)
+                raise DeclarationError(msg)
 
 
 def _check_names(service: str, routes: Sequence[Route]) -> None:
@@ -593,7 +593,7 @@ def _check_names(service: str, routes: Sequence[Route]) -> None:
     for route in routes:
         if route.name in names:
             msg = f"service {service} has two routes named {route.name}: a route's name is its handler's, and its operation's id in the OpenAPI document, so give each handler a name of its own"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         names.add(route.name)
 
 
@@ -602,10 +602,10 @@ def _check_resources(service: str, resources: Sequence[object]) -> None:
     for resource in resources:
         if not isinstance(resource, _RESOURCES):
             msg = f"service {service} has a {type(resource).__name__} among its resources: declare each with api.database, api.http, api.cache, api.clock or api.ids"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if resource.name in names:
             msg = f"service {service} declares {resource.name} twice: give each resource a name of its own"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         names.add(resource.name)
 
 
@@ -618,7 +618,7 @@ def load(reference: str | None = None, *, listed: Iterable[EntryPoint] | None = 
         if len(entries) != 1:
             listing = f'[project.entry-points."{GROUP}"]'
             msg = f"the installed packages list {sorted(entries) or 'no services'} in the {GROUP} entry points: name the service to serve, or list the repo's one under {listing} in its pyproject.toml"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         reference = next(iter(entries))
     entry = entries.get(reference) or EntryPoint(name=reference, value=reference, group=GROUP)
     try:
@@ -627,7 +627,7 @@ def load(reference: str | None = None, *, listed: Iterable[EntryPoint] | None = 
         if error.name is not None and (entry.module == error.name or entry.module.startswith(f"{error.name}.")):
             reason = f"no service named {reference!r}: the installed packages list {sorted(entries) or 'none'} in the {GROUP} entry points, and no module has that path"
             msg = f'{reason}: give its module path, as basis.api.example.service, or list it under [project.entry-points."{GROUP}"]'
-            raise ServiceError(msg) from error
+            raise DeclarationError(msg) from error
         raise  # the module exists, and something it imports does not
     attribute = entry.attr or "service"
     found: object = module
@@ -638,6 +638,6 @@ def load(reference: str | None = None, *, listed: Iterable[EntryPoint] | None = 
     where = f"{entry.module}:{attribute}"
     if isinstance(found, Starlette):
         msg = f"{where} is an app the service made itself, which basis does not serve: declare `service = api.Service(name=..., settings=..., routes=[...])`, and basis builds its app"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     msg = f"{where} is not an api.Service: declare `service = api.Service(name=..., settings=..., routes=[...])` there"
-    raise ServiceError(msg)
+    raise DeclarationError(msg)
