@@ -234,19 +234,24 @@ Parquet file at `objects/HASH.parquet`. The morning's holdings, loaded by twenty
 There is one store per environment, a path or URL read through `pyarrow.fs` as optim's and etl-framework's snapshot
 roots are, and DuckDB reads the manifests and the Parquet directly when someone wants to query across runs.
 
-A dataset's hash is the SHA-256 of its Arrow table written as Parquet with fixed settings that are basis's own, not
-the stored object's: no compression, dictionaries or statistics, and the Arrow schema kept. Parquet writes no bytes
-under a null and keeps none of a table's chunking, both of which Arrow's IPC stream does, so equal data gets one
-hash however it sits in memory, and the stored objects' compression can change without renaming any of them. A
-column's name, order and type are part of the hash, so two datasets share an object only when it reads back as each
-of them. The hash holds for one pyarrow version, whose name the file records; a new version may store a dataset once
-more, which costs space and never reads wrong data. An object is written once, and every file in the store goes to a
-hidden name that is renamed into place, the objects before the manifest that names them, so a reader never sees half
-a file or a manifest whose objects are missing.
+A dataset's hash is the SHA-256 of its object, the Parquet file itself, which is written once with fixed settings
+(zstd, statistics, the Arrow schema kept, and no dictionaries) and hashed as it is written, so storing a dataset
+copies nothing and holds only the writer's buffers. Parquet writes no bytes under a null, and without dictionaries
+pyarrow's writer writes the same bytes however a table is chunked or sliced, so equal data gets one hash however it
+sits in memory. With dictionaries the bytes follow the chunks, which is why they are off; a test holds the writer to
+this on a table of many pages. A column's name, order and type are part of the hash, so two datasets share an object
+only when it reads back as each of them, and `sha256sum` checks an object against its name. The hash depends on the
+settings and on pyarrow's version, whose name the file records: a change to either may store a dataset once more
+after it, which costs space and never reads wrong data. Hashing a separate canonical encoding instead would keep the
+hash apart from the settings, at the cost of encoding every dataset twice and, to stay apart from chunking, copying
+it whole first: measured on a dataset of 200 MB in four chunks, 236 MB at peak against 36 MB. An object is written
+once, and every file in the store goes to a hidden name that is renamed into place, the objects before the manifest
+that names them, so a reader never sees half a file or a manifest whose objects are missing.
 
 A manifest with a label, such as a regress set, keeps its objects. Deleting old runs is garbage collection, as in git:
 delete the manifests a retention policy no longer keeps, then delete every object that no remaining manifest names.
-Writing that policy is out of scope here.
+An object that no manifest names may belong to a run still writing, whose manifest comes last, so the collector
+spares every object younger than a grace period longer than any run. Writing that policy is out of scope here.
 
 Fixtures are small, synthetic and in git, as a CSV per dataset with a manifest, so they diff and an agent can read them.
 Client data never goes in git. A test that needs real data names a run by id and runs only where the store is reachable,

@@ -1,7 +1,9 @@
+import hashlib
 import struct
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from functools import cache
 from pathlib import Path
 
 import pyarrow as pa
@@ -65,6 +67,35 @@ def test_equal_data_gets_one_hash_however_it_is_laid_out_or_was_stored(layout: C
     assert digest(layout()) == digest(table())
 
 
+ROWS = 300_000
+
+
+@cache
+def many() -> pa.Table:
+    """Rows enough for several pages, and a column whose dictionary would outgrow its page, as a large input's would."""
+    return pa.table(
+        {
+            "id": pa.array(range(ROWS), pa.int64()),
+            "security_id": pa.array([f"SEC{row * 7919 % 200_003:07d}" for row in range(ROWS)], pa.large_string()),
+            "quantity": pa.array([None if row % 11 == 0 else row * 31 % 1_000_003 for row in range(ROWS)], pa.int64()),
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [
+        lambda: pa.concat_tables([many().slice(start, 777) for start in range(0, ROWS, 777)]),
+        lambda: pa.concat_tables([many().slice(0, 1), many().slice(1, 99_998), many().slice(99_999)]),
+        lambda: pa.concat_tables([many()] * 2).combine_chunks().slice(ROWS, ROWS),
+    ],
+    ids=["777-row chunks", "uneven chunks", "sliced"],
+)
+def test_a_dataset_of_many_pages_gets_one_hash_however_it_is_chunked(layout: Callable[[], pa.Table]) -> None:
+    assert layout().equals(many())
+    assert digest(layout()) == digest(many())
+
+
 @pytest.mark.parametrize(
     "other",
     [
@@ -87,6 +118,7 @@ def test_a_dataset_is_stored_once_under_its_hash_and_never_written_again(tmp_pat
     name = store.put(table())
     assert store.object(name).read_table().equals(table())
     assert digest(store.object(name).read_table()) == name
+    assert hashlib.sha256((tmp_path / "objects" / f"{name}.parquet").read_bytes()).hexdigest() == name
     (tmp_path / "objects" / f"{name}.parquet").write_bytes(b"left alone")
     assert store.put(chunked()) == name
     assert [path.name for path in (tmp_path / "objects").iterdir()] == [f"{name}.parquet"]
@@ -103,6 +135,8 @@ def test_a_run_is_found_by_its_id_and_a_parts_runs_are_listed_newest_first(tmp_p
     assert store.find("04-other", "rates").path == store.manifest("job", "rates", "04-other").path
     with pytest.raises(LookupError, match="no run 04-other under"):
         store.find("04-other", "prices")
+    with pytest.raises(LookupError, match=r"no run \.\./prices/02-newer under"):
+        store.find("../prices/02-newer")
 
 
 @pytest.mark.parametrize("name", ["", "..", ".hidden", "jobs/prices", "jobs\\prices"])

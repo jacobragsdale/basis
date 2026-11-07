@@ -126,9 +126,9 @@ def run(job: Job, settings: Settings, request: Request, *, snapshot_root: Root, 
     publication = publish.Publication(run_id, job.name, request.interval, VERSION, request.again, clock)
     publishes = publish.publish(publication, targets, changes, databases)
     final = record.done(core_runs.status_of(publishes, len({target.database for target in targets.values()})), reasons=[], finished_at=clock(), publishes=publishes)
-    result.snapshot.save_record(final)
+    snapshot = result.snapshot.save_record(final)
     _summary(final)
-    return Result(final, result.snapshot, frames, planned)
+    return Result(final, snapshot, frames, planned)
 
 
 def _check_destinations(targets: Mapping[str, Target], settings: Settings, databases: Callable[[str], Database], *, publishing: bool) -> tuple[dict[str, TableSpec], list[str]]:

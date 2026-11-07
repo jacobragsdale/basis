@@ -84,15 +84,14 @@ class Root:
             raise TypeError(msg)
         return frame
 
-    def write_table(self, table: pa.Table) -> None:
-        with _replacing(self) as temporary:
-            pq.write_table(table, temporary.path, filesystem=self.fs)
-
     def make_dir(self) -> None:
         self.fs.create_dir(self.path, recursive=True)
 
     def move_to(self, other: Root) -> None:
         self.fs.move(self.path, other.path)
+
+    def delete(self) -> None:
+        self.fs.delete_file(self.path)
 
 
 @contextmanager
@@ -104,7 +103,7 @@ def _replacing(target: Root) -> Generator[Root]:
         yield temporary
     except BaseException:
         if temporary.exists():
-            temporary.fs.delete_file(temporary.path)
+            temporary.delete()
         raise
     temporary.move_to(target)
 
@@ -113,23 +112,37 @@ def _replacing(target: Root) -> Generator[Root]:
 class Store:
     """The run store, one per environment:
 
-        objects/HASH.parquet               each dataset, once, named by `digest`
+        objects/HASH.parquet               each dataset, once, named by the SHA-256 of the file (see `digest`)
         runs/PACKAGE/NAME/RUN_ID.json      each run's manifest, which names its datasets by hash
 
-    An object is written once: one the store holds is never written again, so a dataset that twenty runs load is
-    stored once. A manifest is written after the objects it names, and like every file here under a hidden name renamed
-    into place, so a reader never sees half of one, nor a manifest whose objects are missing. Each part writes its
-    own manifests, under its own `PACKAGE`; every manifest is a JSON object whose `run_id` is its id, whose `labels`
-    (such as a regress set's) are strings by key, and whose `datasets` maps each dataset's name to its object's hash,
-    so a collector can keep the objects that any manifest it keeps names. Names starting with `.` are temporary."""
+    An object is written once: one the store holds is never replaced, so a dataset that twenty runs load is stored
+    once. A manifest is written after the objects it names, and like every file here under a hidden name renamed into
+    place, so a reader never sees half of one, nor a manifest whose objects are missing. Each part writes its own
+    manifests, under its own `PACKAGE`; every manifest is a JSON object whose `run_id` is its id, whose `labels` (such
+    as a regress set's) are strings by key, and whose `datasets` maps each dataset's name to its object's hash, so a
+    collector can keep the objects that any manifest it keeps names. Names starting with `.` are temporary."""
 
     root: Root
 
     def put(self, table: pa.Table) -> str:
-        """Store `table`, unless the store holds it already, and return its hash."""
-        name = digest(table)
-        if not (target := self.object(name)).exists():
-            target.write_table(table)
+        """Store `table` and return its hash. The table is written once, under a temporary name, and hashed as it is
+        written; the file is then renamed to its hash, or deleted if the store holds that hash already."""
+        folder = self.root / "objects"
+        folder.make_dir()
+        temporary = folder / f".{uuid.uuid4().hex}.tmp"
+        try:
+            with temporary.fs.open_output_stream(temporary.path) as stream:
+                sink = _Hashing(stream)
+                _write(table, sink)
+            name = sink.hash.hexdigest()
+            if (target := self.object(name)).exists():
+                temporary.delete()
+            else:
+                temporary.move_to(target)
+        except BaseException:
+            if temporary.exists():
+                temporary.delete()
+            raise
         return name
 
     def object(self, name: str) -> Root:
@@ -147,52 +160,65 @@ class Store:
         return sorted(found, key=lambda manifest: manifest.name, reverse=True)
 
     def find(self, run_id: str, name: str | None = None) -> Root:
-        """A run's manifest by its id, whichever part made it, and of `name` alone if given."""
-        for package in (self.root / "runs").children():
-            folders = [package / _segment(name)] if name is not None else package.children()
-            for folder in folders:
-                if not folder.name.startswith(".") and (candidate := folder / f"{_segment(run_id)}.json").exists():
-                    return candidate
+        """A run's manifest by its id, whichever part made it, and of `name` alone if given. An id or a name that
+        cannot name a file in the store, such as one with a slash, names no run."""
+        if _is_segment(run_id) and (name is None or _is_segment(name)):
+            for package in (self.root / "runs").children():
+                folders = [package / name] if name is not None else package.children()
+                for folder in folders:
+                    if not folder.name.startswith(".") and (candidate := folder / f"{run_id}.json").exists():
+                        return candidate
         msg = f"no run {run_id} under {self.root.location}: is it the right snapshot root?"
         raise LookupError(msg)
 
 
 def digest(table: pa.Table) -> str:
-    """A dataset's hash: the SHA-256 of `table` written as Parquet with `_CANONICAL`'s settings, which are not the
-    stored object's. Equal data then gets one hash however it is laid out or stored. Parquet writes a column's values
-    without its nulls, beside a level for each row that says which rows are null, so neither the bytes under a null
-    nor how the table is chunked or sliced in memory reach the hash, as they would in Arrow's IPC stream; no codec,
-    dictionary or statistic is written, so no encoder's choices reach it either; and the Arrow schema the file carries
-    makes each column's name, order and type part of it, a decimal's scale and a datetime's zone included. The stored
-    object's own settings, such as its compression, can change without renaming anything. The hash holds for one
-    pyarrow version, whose writer the file records: another may encode the same data differently, and so store it
-    once more, which costs space and never reads wrong data."""
-    sink = _Hashing()
-    pq.write_table(table.combine_chunks(), sink, **_CANONICAL)
+    """The hash `Store.put` names `table` by: the SHA-256 of the Parquet file it writes, with `_OBJECT`'s settings.
+
+    Equal data gets one hash however it is laid out in memory. Parquet writes a column's values without its nulls,
+    beside a level for each row that says which rows are null, so the bytes under a null never reach the file, as
+    they would in Arrow's IPC stream. Without dictionaries, pyarrow's writer writes the same bytes however the table
+    is chunked or sliced; with them, as measured with pyarrow 26, the bytes follow the chunks, so they are off. The
+    tests hold a table of many pages to this, in odd chunks. The file carries the Arrow schema, which makes each
+    column's name, order and type part of the hash, a decimal's scale and a datetime's zone included, so two datasets
+    share an object only when it reads back as each of them.
+
+    The table is written once, and hashed as it is written: no copy of it is made, and nothing is held but the
+    writer's own buffers. The hash depends on `_OBJECT` and on pyarrow's version, whose writer the file records: a
+    change to either may store a dataset once more after it, which costs space and never reads wrong data."""
+    sink = _Hashing(None)
+    _write(table, sink)
     return sink.hash.hexdigest()
 
 
-_CANONICAL: dict[str, object] = {
+_OBJECT: dict[str, object] = {
     "version": "2.6",
     "data_page_version": "1.0",
-    "compression": "none",
+    "compression": "zstd",
+    "compression_level": 1,
     "use_dictionary": False,
     "use_byte_stream_split": False,
-    "write_statistics": False,
+    "write_statistics": True,
     "write_page_index": False,
     "store_schema": True,
     "store_decimal_as_integer": False,
     "use_compliant_nested_type": True,
     "row_group_size": 1 << 20,
 }
-"""How `digest` writes a table: each setting that decides what it writes, pinned where a new default could change it.
-The hash depends on pyarrow's version for the rest."""
+"""How every object is written, so what its name is the hash of: each setting that decides the bytes, pinned where a
+new default could change it. zstd at level 1 makes smaller files than pyarrow's default snappy with dictionaries, and
+as fast; statistics let a reader such as DuckDB skip row groups."""
+
+
+def _write(table: pa.Table, sink: _Hashing) -> None:
+    pq.write_table(table, sink, **_OBJECT)
 
 
 class _Hashing:
-    """A file that pyarrow writes to, which keeps only the hash of what it is given."""
+    """A file that pyarrow writes to, which hashes what it is given and passes it on to `stream`, if any."""
 
-    def __init__(self) -> None:
+    def __init__(self, stream: pa.NativeFile | None) -> None:
+        self.stream = stream
         self.hash = hashlib.sha256()
         self.size = 0
         self.closed = False
@@ -200,6 +226,8 @@ class _Hashing:
     def write(self, data: Buffer) -> int:
         view = memoryview(data)
         self.hash.update(view)
+        if self.stream is not None:
+            self.stream.write(view)
         self.size += view.nbytes
         return view.nbytes
 
@@ -216,9 +244,13 @@ class _Hashing:
         return True
 
 
+def _is_segment(name: str) -> bool:
+    return bool(name) and not name.startswith(".") and "/" not in name and "\\" not in name
+
+
 def _segment(name: str) -> str:
     """`name` as one segment of a path in the store: a part's, a run's or a run id's name."""
-    if not name or name.startswith(".") or "/" in name or "\\" in name:
+    if not _is_segment(name):
         msg = f"{name!r} cannot name a folder or file in the run store: it is empty, starts with '.', or holds a slash"
         raise ValueError(msg)
     return name

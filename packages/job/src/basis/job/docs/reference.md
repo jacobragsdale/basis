@@ -215,7 +215,7 @@ the seconds before the run began, which a `TRUNCATE` does.
 Snapshots are kept in a run store, at `ETL_SNAPSHOT_ROOT`, or in the repo's `snapshots/` for a run from Python:
 
 ```text
-objects/HASH.parquet         each dataset, once, named by the SHA-256 of its content
+objects/HASH.parquet         each dataset, once, named by the SHA-256 of the file
 runs/job/JOB/RUN_ID.json     each run's manifest
 ```
 
@@ -225,12 +225,12 @@ into place, all before anything is published; the manifest is rewritten after pu
 they sort by start time.
 
 The manifest holds the run's `run_id`, `job`, `module`, `version`, `git_sha`, `started_at`, `finished_at`,
-`interval`, `params_path`, `params_sha256`, `labels`, `data`, `replay_of`, `status`, `inputs` (each dataset's source,
-rows and read time), `outputs` (each table's database, table, write mode, delete and rows by operation), `reasons`,
-`error`, `publishes` (each database's status, time, counts and error), `params` (the params file's text, as the run
-read it), and `datasets`: the hash of each input, as `inputs/NAME`, and of each table's frames, as
-`outputs/NAME/upsert`, `insert_new`, `insert` and `delete_matching`. The params and datasets never change after the
-run saves them.
+`interval`, `params_path` (the params file, or `run RUN_ID` for a replay with that run's params), `params_sha256`,
+`labels`, `data`, `replay_of`, `status`, `inputs` (each dataset's source, rows and read time), `outputs` (each
+table's database, table, write mode, delete and rows by operation), `reasons`, `error`, `publishes` (each database's
+status, time, counts and error), `params` (the params file's text, as the run read it), and `datasets`: the hash of
+each input, as `inputs/NAME`, and of each table's frames, as `outputs/NAME/upsert`, `insert_new`, `insert` and
+`delete_matching`. The params and datasets never change after the run saves them.
 
 | `status` | Meaning |
 |---|---|

@@ -12,7 +12,7 @@ runs the transform again on them, with the code of the day."""
 
 import hashlib
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Literal
@@ -75,6 +75,7 @@ class RunRecord(Model):
     interval: str | None = None
     """`START..END`, or None for a run without one."""
     params_path: str
+    """The params file the run read, or `run RUN_ID` for a replay with the params of the run it replays."""
     params_sha256: str
     labels: dict[str, str] = Field(default_factory=dict)
     data: str | None = None
@@ -108,35 +109,33 @@ class Manifest(RunRecord):
 
 @dataclass(frozen=True)
 class Snapshot:
+    """A saved run, its manifest read once."""
+
     store: Store
     path: Root
-    """The run's manifest."""
+    """Where its manifest is."""
+    manifest: Manifest
 
     @property
     def run_id(self) -> str:
-        return self.path.name.removesuffix(".json")
-
-    def manifest(self) -> Manifest:
-        return Manifest.model_validate_json(self.path.read_bytes())
+        return self.manifest.run_id
 
     def record(self) -> RunRecord:
-        return _record(self.manifest())
+        return RunRecord.model_validate(self.manifest.model_dump(include=set(RunRecord.model_fields)))
 
     def params_json(self) -> str:
-        return self.manifest().params
+        return self.manifest.params
 
     def inputs(self) -> dict[str, pl.DataFrame]:
-        manifest = self.manifest()
-        return {key.removeprefix("inputs/"): self._dataset(manifest, key) for key in manifest.datasets if key.startswith("inputs/")}
+        return {key.removeprefix("inputs/"): self._dataset(key) for key in self.manifest.datasets if key.startswith("inputs/")}
 
     def changes(self) -> dict[str, Changes]:
         """Each table's changes, as the run computed them."""
-        manifest = self.manifest()
-        return {name: self._changes(manifest, name, output) for name, output in manifest.outputs.items() if output.rows or output.delete is not None}
+        return {name: self._changes(name, output) for name, output in self.manifest.outputs.items() if output.rows or output.delete is not None}
 
-    def _changes(self, manifest: Manifest, name: str, output: OutputRecord) -> Changes:
+    def _changes(self, name: str, output: OutputRecord) -> Changes:
         def frame(operation: str) -> pl.DataFrame | None:
-            return self._dataset(manifest, f"outputs/{name}/{operation}") if operation in output.rows else None
+            return self._dataset(f"outputs/{name}/{operation}") if operation in output.rows else None
 
         delete = None
         if (record := output.delete) is not None:
@@ -144,39 +143,49 @@ class Snapshot:
             delete = Delete(within, frame("delete_matching") if record.matching else None)
         return Changes(delete, frame("upsert"), frame("insert_new"), frame("insert"))
 
-    def _dataset(self, manifest: Manifest, key: str) -> pl.DataFrame:
-        if (found := manifest.datasets.get(key)) is None:
-            msg = f"run {manifest.run_id}'s manifest {self.path.location} names no dataset {key}, which its record says it saved"
+    def _dataset(self, key: str) -> pl.DataFrame:
+        if (found := self.manifest.datasets.get(key)) is None:
+            msg = f"run {self.run_id}'s manifest {self.path.location} names no dataset {key}, which its record says it saved"
             raise LookupError(msg)
         return self.store.object(found).read_frame()
 
-    def save_record(self, record: RunRecord) -> None:
-        """Save the run's record again, as after publishing, with the params and datasets it was saved with."""
-        saved = self.manifest()
-        if record.run_id != saved.run_id:
-            msg = f"the record of run {record.run_id} cannot replace run {saved.run_id}'s"
+    def save_record(self, record: RunRecord) -> Snapshot:
+        """Save the run's record again, as after publishing, with the params and datasets it was saved with, which
+        never change; and return the run as saved."""
+        if record.run_id != self.run_id:
+            msg = f"the record of run {record.run_id} cannot replace run {self.run_id}'s"
             raise ValueError(msg)
-        self.path.write_bytes(_manifest(record, saved.params, saved.datasets).model_dump_json(indent=2).encode())
-
-
-def _record(manifest: Manifest) -> RunRecord:
-    return RunRecord.model_validate(manifest.model_dump(exclude=set(Manifest.model_fields) - set(RunRecord.model_fields)))
+        manifest = _manifest(record, self.manifest.params, self.manifest.datasets)
+        self.path.write_bytes(manifest.model_dump_json(indent=2).encode())
+        return Snapshot(self.store, self.path, manifest)
 
 
 def _manifest(record: RunRecord, params_json: str, datasets: Mapping[str, str]) -> Manifest:
     return Manifest.model_validate(record.model_dump() | {"params": params_json, "datasets": dict(datasets)})
 
 
+def _read(store: Store, path: Root) -> Snapshot:
+    try:
+        manifest = Manifest.model_validate_json(path.read_bytes())
+    except ValueError as error:
+        error.add_note(f"while reading the manifest {path.location}")
+        raise
+    return Snapshot(store, path, manifest)
+
+
 def write(root: Root, record: RunRecord, params_json: str, inputs: Mapping[str, pl.DataFrame], changes: Mapping[str, Changes], *, package: str) -> Snapshot:  # noqa: PLR0913 -- the run, and the part whose run it is, by keyword
-    """Save a run in the store at `root`, under the part `package`: each dataset the store does not hold yet, then the
-    run's manifest."""
+    """Save a new run in the store at `root`, under the part `package`: each dataset the store does not hold yet, then
+    the run's manifest. A run id the store holds already is refused: only `Snapshot.save_record` saves a run again."""
     store = Store(root)
+    path = store.manifest(package, record.job, record.run_id)
+    if path.exists():
+        msg = f"run {record.run_id} is in the store already, at {path.location}: a new run takes a new id"
+        raise FileExistsError(msg)
     frames = {f"inputs/{name}": frame for name, frame in inputs.items()}
     frames |= {f"outputs/{name}/{operation}": frame for name, table in changes.items() for operation, frame in table.frames().items()}
-    datasets = {key: store.put(frame.to_arrow()) for key, frame in frames.items()}
-    path = store.manifest(package, record.job, record.run_id)
-    path.write_bytes(_manifest(record, params_json, datasets).model_dump_json(indent=2).encode())
-    return Snapshot(store, path)
+    manifest = _manifest(record, params_json, {key: store.put(frame.to_arrow()) for key, frame in frames.items()})
+    path.write_bytes(manifest.model_dump_json(indent=2).encode())
+    return Snapshot(store, path, manifest)
 
 
 def output_record(database: str, table: str, write_mode: str, changes: Changes | None) -> OutputRecord:
@@ -197,13 +206,13 @@ def output_record(database: str, table: str, write_mode: str, changes: Changes |
 def find(root: Root, run_id: str, name: str | None = None) -> Snapshot:
     """A run by its id, in the store at `root`, of any part and name unless `name` is given."""
     store = Store(root)
-    return Snapshot(store, store.find(run_id, name))
+    return _read(store, store.find(run_id, name))
 
 
-def runs_of(root: Root, name: str, *, package: str) -> list[Snapshot]:
-    """The runs of `package`'s `name`, newest first."""
+def runs_of(root: Root, name: str, *, package: str) -> Iterator[Snapshot]:
+    """The runs of `package`'s `name`, newest first, each manifest read only when its run is reached."""
     store = Store(root)
-    return [Snapshot(store, path) for path in store.manifests(package, name)]
+    return (_read(store, path) for path in store.manifests(package, name))
 
 
 def params_digest(text: str) -> str:

@@ -108,12 +108,12 @@ def test_a_run_that_loads_the_same_input_twice_stores_it_once_as_does_a_second_r
     prices({}, {"security_id": "S2"}).write_parquet(tmp_path / "data" / "again.parquet")
     first = run_on_files(tmp_path, job, prices({}, {"security_id": "S2"}))
     assert first.snapshot is not None
-    saved = first.snapshot.manifest().datasets
+    saved = first.snapshot.manifest.datasets
     assert saved["inputs/prices"] == saved["inputs/again"]
     assert objects(tmp_path) == set(saved.values())
     second = run_on_files(tmp_path, job, prices({}, {"security_id": "S2"}))
     assert second.snapshot is not None
-    assert second.snapshot.manifest().datasets == saved
+    assert second.snapshot.manifest.datasets == saved
     assert objects(tmp_path) == set(saved.values())
 
 
@@ -124,7 +124,7 @@ def test_a_replay_saved_beside_its_run_stores_only_the_outputs_that_changed(tmp_
     before = objects(tmp_path)
     replayed, _ = runs.replay(job, original.snapshot, params=params_file(tmp_path / "data", '{"scale": 2}'), snapshot_root=Root.at(tmp_path / "snapshots"))
     assert replayed.snapshot is not None
-    saved = replayed.snapshot.manifest().datasets
-    assert saved["inputs/prices"] == original.snapshot.manifest().datasets["inputs/prices"]
+    saved = replayed.snapshot.manifest.datasets
+    assert saved["inputs/prices"] == original.snapshot.manifest.datasets["inputs/prices"]
     assert saved["outputs/prices/upsert"] not in before
     assert objects(tmp_path) == before | {saved["outputs/prices/upsert"]}

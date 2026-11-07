@@ -29,3 +29,11 @@ def test_a_record_cannot_replace_another_runs(tmp_path: Path) -> None:
     snapshot = snapshots.write(Root.at(tmp_path), record(), "{}", {}, {}, package="job")
     with pytest.raises(ValueError, match="cannot replace run 01-run"):
         snapshot.save_record(record(run_id="02-other"))
+
+
+def test_a_new_run_cannot_take_an_id_the_store_holds(tmp_path: Path) -> None:
+    snapshots.write(Root.at(tmp_path), record(), '{"scale": 1}', {"prices": PRICES}, {}, package="job")
+    with pytest.raises(FileExistsError, match="run 01-run is in the store already"):
+        snapshots.write(Root.at(tmp_path), record(status="failed"), '{"scale": 2}', {}, {}, package="job")
+    saved = snapshots.find(Root.at(tmp_path), "01-run")
+    assert (saved.record().status, saved.params_json(), list(saved.manifest.datasets)) == ("checked", '{"scale": 1}', ["inputs/prices"])

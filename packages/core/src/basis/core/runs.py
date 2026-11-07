@@ -62,7 +62,7 @@ class Replay[P]:
     params: P
     params_text: str
     params_path: str
-    """Where the params came from: the file given, or the run's manifest."""
+    """Where the params came from: the file given, or `run RUN_ID` for the run's own."""
     saved: dict[str, pl.DataFrame]
     """Every input the run saved, by name."""
 
@@ -83,7 +83,7 @@ def replaying[P](source: Snapshot, *, name: str, module: str, params: Path | Non
     if missing := sorted(set(reads) - set(saved)):
         msg = f"run {original.run_id} did not read {missing}, which the job reads now: a replay runs on what the run read"
         raise ValueError(msg)
-    params_path = str(params) if params is not None else source.path.location
+    params_path = str(params) if params is not None else f"run {original.run_id}"
     return Replay(original, run_id, parsed, params_text, params_path, saved)
 
 
@@ -122,6 +122,9 @@ def regress[D](  # noqa: PLR0913 -- the part says what it is and how it replays,
 ) -> list[Regression[D]]:
     """Replay the last `last` published runs of `package`'s `name` whose labels include `labels`, with `replay`, the
     part's own, and how each one's outputs differ. Writes nothing, and reads manifests only until it has `last`."""
+    if last < 1:
+        msg = f"regress replays the last N published runs, and N must be at least 1, not {last}"
+        raise ValueError(msg)
     published = (snapshot for snapshot in snapshots.runs_of(root, name, package=package) if (record := snapshot.record()).status == "published" and labels.items() <= record.labels.items())
     chosen = list(itertools.islice(published, last))
     start = time.perf_counter()
