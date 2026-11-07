@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from basis.core import command, sync
+from basis.core.ddl import ledger
 from basis.core.errors import BasisError, deliberate
 from basis.core.settings import Settings
 from basis.core.sync import AgentFiles
@@ -294,15 +295,17 @@ def test_where_several_parts_share_a_verb_its_name_must_be_one_of_theirs(tmp_pat
     assert error_line(capsys) == f"ERROR: {problem}"
 
 
-def test_without_a_name_describe_lists_every_part_and_regress_replays_every_part_and_ddl_asks_the_first(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_without_a_name_describe_lists_every_part_and_regress_replays_every_part_and_ddl_prints_the_ledger(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     installed = {"alpha": lambda: Part(runs=runs("alpha", "prices")), "beta": lambda: Part(runs=runs("beta", "income", noun="model"))}
     folder = repo(tmp_path, BOTH)
     assert basis(folder, "describe", installed=installed) == 0
     assert json.loads(capsys.readouterr().out) == {"prices": "alpha.prices", "income": "beta.income"}
     assert basis(folder, "regress", "--last", "5", installed=installed) == 0
     assert json.loads(capsys.readouterr().out) == {"alpha": {"last": "5"}, "beta": {"last": "5"}}  # one JSON document, by part
-    assert basis(folder, "ddl", installed=installed) == 0
-    assert capsys.readouterr().out == "alpha prints \n"
+    assert basis(folder, "ddl", "--ledger", "etl.publishes", "--dialect", "oracle", installed=installed) == 0
+    assert capsys.readouterr().out == ledger("etl.publishes", "oracle")  # core's, not a part's
+    assert basis(folder, "ddl", "--dialect", "oracle", installed=installed) == 2
+    assert error_line(capsys).startswith("ERROR: basis ddl: the following arguments are required: --ledger")
 
 
 def test_without_a_name_regress_takes_only_the_options_every_part_takes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

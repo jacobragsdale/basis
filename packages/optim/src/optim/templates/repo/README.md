@@ -24,7 +24,7 @@ business terms.
    Add `data="tests/fixture"` to its `run(...)` to run on the model's fixture instead, with no database.
 
 Each run from `main.py` saves its snapshot in `snapshots/`, which git ignores; delete it whenever you like. A run from
-`main.py` never writes orders: only `basis run`, in production, does.
+`main.py` never writes orders: only `basis run --publish`, in production, does.
 
 The repo's command is `basis`, and `uv run basis --help` lists every verb it has; `optim` is the same command, under
 the name optim had before it ran on basis. Every commit runs `basis check`, through the hooks in `.githooks/`.

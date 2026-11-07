@@ -8,7 +8,8 @@ takes the model's module first, `from models.income import model`, and runs as `
   files do not mix, and logs are text unless the settings say otherwise.
 - The run is saved in the repo's `snapshots/`, a run store of its own, unless `snapshots` says elsewhere; delete the
   folder whenever you like.
-- No orders are written, whatever the settings file configures: only `basis run` writes them.
+- No orders are written, whatever the settings file configures: only `basis run --publish` and `basis resume` write
+  them.
 
 An error raises, with its traceback, so a debugger stops where it surfaced; a hook's error rejects its portfolio alone,
 and its reason names the line of model code that raised."""
@@ -68,7 +69,7 @@ def run(
     as_of_date = date.fromisoformat(as_of) if isinstance(as_of, str) else as_of or fixture_date(data_dir) or today()
     with _environment(settings_file):
         settings = Settings()
-        with open_context(settings, cache=cache, orders_table=False) as ctx:
+        with open_context(settings, cache=cache) as ctx:
             ran = run_model(
                 ctx.loader,
                 _snapshot_root(loaded.directory, snapshots),

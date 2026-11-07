@@ -116,15 +116,15 @@ model defines no `prepare_market`. Loading is I/O-bound and batched, so the pare
 
 ## One path from main.py and the command line
 
-`main.py` calls `optim.run`, and Airflow calls `basis run`; both reach the same code, from loading to saving, so a
-laptop run behaves as production does. They differ only where an analyst's machine and production differ. A call from
-Python takes its paths from the model's folder, because an editor runs a file from wherever it likes. It names its
+`main.py` calls `optim.run`, and Airflow calls `basis run --publish`; both reach the same code, from loading to saving,
+so a laptop run behaves as production does. They differ only where an analyst's machine and production differ. A call
+from Python takes its paths from the model's folder, because an editor runs a file from wherever it likes. It names its
 settings file, `.env`, `.env.qa` or `.env.prod`, and sets that file's variables for the call alone, so a notebook that
 reads QA and then production does not mix them. It saves its snapshot in the repo's `snapshots/`, where the analyst
 finds it, whichever settings file it read, so research runs never land in production's store. And it never writes
-orders: only `basis run` does, where production's environment configures the orders table. A laptop with read-only
-production credentials can then decide real portfolios, or replay production's runs, and write nothing to a shared
-system.
+orders: only `basis run --publish` and `basis resume` do, where production's environment configures the orders table,
+which needs a write login. A laptop with read-only production credentials can then decide real portfolios, or replay
+production's runs, and write nothing to a shared system.
 
 An error raises from Python, with its traceback, so a debugger stops where it surfaced. A hook's error still rejects
 only its portfolio, in both, since one bad portfolio must not stop the rest of a production run; its reason names the
@@ -232,6 +232,16 @@ desk wants beyond the problem.
 
 A rejected portfolio writes no orders, its decision and reasons stay in the snapshot, and `basis run` exits non-zero.
 `optim` never submits orders: they are released elsewhere.
+
+## Orders are written once
+
+`basis run --publish` writes a run's orders through basis-core's publishing, as a basis job writes its tables: every
+order in one transaction with a row in the database's ledger, after the snapshot is saved. A trading system must never
+see a run's orders twice, and a scheduler retries a task that failed, so the ledger, not the scheduler, decides whether
+a run's orders are written. A run the ledger holds is not written again, by a retry of its publish or by `basis resume`,
+which writes the same rows from the snapshot rather than deciding again. A retry that starts a new run would decide
+again and write a second set of orders for the same portfolios, so a run of a model for a date another run published is
+refused unless it is given `--again`, which a person passes on purpose, with the portfolios that still need orders.
 
 ## Solving through optim.cvxpy
 

@@ -6,6 +6,9 @@ variables; choose the settings file explicitly:
 uv run --env-file .env basis run income --params models/income/params/default.json
 uv run --env-file .env basis run income --params models/income/params/default.json --portfolios P1 P2 --as-of 2026-10-16
 uv run --env-file .env basis run income --params models/income/params/default.json --data models/income/tests/fixture
+uv run --env-file .env.prod basis run income --params models/income/params/default.json --publish
+uv run --env-file .env.prod basis resume income RUN_ID
+uv run --env-file .env.prod basis ddl income --dialect mssql
 uv run --env-file .env basis replay RUN_ID --params models/income/params/wider.json --portfolios P1
 uv run --env-file .env basis sweep RUN_ID models/income/params/sweep --out sweep.csv
 uv run --env-file .env basis regress income --snapshots //share/optim/snapshots --label purpose=production
@@ -14,10 +17,11 @@ uv run basis describe income
 uvx --index INDEX_URL optim new repo sma-optimizer income --index INDEX_URL
 uv run basis new model ladder
 
-`run`, `describe`, `replay` and `regress` are the verbs core shares with jobs: core parses the model's NAME and the
-RUN_ID, and these add the rest. `sweep` and `warm` are optim's own. Each handler reads its arguments as a frozen
-dataclass. `run` exits 0 only when every portfolio was accepted, and is the only thing that writes orders; `regress`
-exits 1 when anything changed. A failure prints one `ERROR` line after the logs; results are on stdout."""
+`run`, `describe`, `resume`, `replay`, `regress` and `ddl` are the verbs core shares with jobs: core parses the model's
+NAME and the RUN_ID, and these add the rest. `sweep` and `warm` are optim's own. Each handler reads its arguments as a
+frozen dataclass. `run` exits 0 only when every portfolio was accepted and its publish, if asked for, committed; with
+`--publish`, it and `resume` are the only things that write orders. `regress` exits 1 when anything changed. A failure
+prints one `ERROR` line after the logs; results are on stdout."""
 
 import argparse
 import json
@@ -25,7 +29,7 @@ import logging
 import os
 import signal
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -33,13 +37,18 @@ from pathlib import Path
 import pandas as pd
 
 from basis.core import command, logs
+from basis.core.ddl import create_table, ledger
+from basis.core.destination import Dialect
 from basis.core.errors import BasisError, deliberate
+from basis.core.publish import refused_overlap
+from basis.core.snapshots import PublishRecord
 from basis.core.storage import Root
 from basis.core.verbs import Part, Runs, Shared, Verb, fail
 from optim import models, new, research, snapshots, sync
-from optim.context import open_context
+from optim.context import open_context, open_orders, orders_settings
 from optim.contract import LISTING, declared
-from optim.runs import Run, fixture_date, read_snapshot, replay_run, run_model, today
+from optim.orders import Table
+from optim.runs import Run, fixture_date, published, read_snapshot, replay_run, resume_run, run_model, today
 from optim.settings import Settings, refuse_renamed
 from optim.snapshots import Saved
 
@@ -59,6 +68,24 @@ class RunArgs:
     labels: dict[str, str]
     workers: int | None
     cache: bool
+    publish: bool
+    again: bool
+    """Publish even though another run of the model published orders for the as-of date."""
+
+
+@dataclass(frozen=True)
+class ResumeArgs:
+    model: str | None
+    run: str
+    """A run's id, or the path or URL of its manifest."""
+    again: bool
+
+
+@dataclass(frozen=True)
+class DdlArgs:
+    model: str | None
+    ledger: str | None
+    dialect: Dialect
 
 
 @dataclass(frozen=True)
@@ -120,10 +147,12 @@ def part() -> Part:
         runs=Runs(
             "model",
             models.installed,
-            run=Shared("decide portfolios with a model, and save the run", _optim(_run_from), _run_arguments),
+            run=Shared("decide portfolios with a model, save the run, and with --publish write its orders", _optim(_run_from), _run_arguments),
             describe=Shared("print a model's params schema, datasets and metrics as JSON, or every model's name", _describe_from),
+            resume=Shared("publish a run's orders that it did not commit, from the run", _optim(_resume_from), _resume_arguments),
             replay=Shared("decide a saved run again with today's code, and other params if given; reads only the run", _optim(_replay_from), _replay_arguments),
             regress=Shared("replay a model's recent runs with today's code, and list every trade that changed", _optim(_regress_from), _regress_arguments),
+            ddl=Shared("print the CREATE TABLE for the orders table the settings name, or for the ledger", _ddl_from, _ddl_arguments),
         ),
         renamed=refuse_renamed,
     )
@@ -167,6 +196,8 @@ def _run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--data", type=command.existing_folder, help="read each dataset that has a file here, NAME.parquet or NAME.csv, instead of its source")
     _deciding(parser)
     parser.add_argument("--no-cache", action="store_true", help="read every dataset live")
+    parser.add_argument("--publish", action="store_true", help="write the accepted portfolios' orders to the orders table BASIS_OPTIM__ORDERS__* configures")
+    parser.add_argument("--again", action="store_true", help="with --publish: publish even though another run of the model published orders for the as-of date")
 
 
 def _deciding(parser: argparse.ArgumentParser) -> None:
@@ -176,18 +207,82 @@ def _deciding(parser: argparse.ArgumentParser) -> None:
 
 
 def _run_from(n: argparse.Namespace) -> int:
-    return _run(RunArgs(n.name, n.params, _portfolios(n.portfolios), n.as_of, n.data, dict(n.labels), n.workers, cache=not n.no_cache))
+    return _run(RunArgs(n.name, n.params, _portfolios(n.portfolios), n.as_of, n.data, dict(n.labels), n.workers, cache=not n.no_cache, publish=n.publish, again=n.again))
 
 
 def _run(args: RunArgs) -> int:
-    """The only thing that writes orders, where the environment configures a table."""
+    """With `--publish`, one of the two things that write orders, to the table the environment configures. Without it,
+    where a table is configured, a line says that no orders were written, so a scheduled run that leaves `--publish`
+    out cannot go unnoticed."""
+    if args.again and not args.publish:
+        return fail("--again publishes a run's orders even though another run published the date's, and the run was not given --publish", "add --publish, or leave --again out")
     settings, model = Settings(), _model(args.model)
-    with open_context(settings, cache=args.cache) as ctx:
+    with open_context(settings, cache=args.cache, publish=args.publish) as ctx:
         as_of_date, workers = args.as_of or fixture_date(args.data) or today(), args.workers or settings.optim.workers
         ran = run_model(
-            ctx.loader, settings.snapshots(), model, args.params, as_of_date=as_of_date, portfolio_ids=args.portfolios, data_dir=args.data, workers=workers, labels=args.labels, orders=ctx.orders
+            ctx.loader,
+            settings.snapshots(),
+            model,
+            args.params,
+            as_of_date=as_of_date,
+            portfolio_ids=args.portfolios,
+            data_dir=args.data,
+            workers=workers,
+            labels=args.labels,
+            orders=ctx.orders,
+            again=args.again,
         )
-    return _report(ran, model.name)
+    code = _report(ran, model.name, again=args.again)
+    if not args.publish and (configured := settings.optim.orders) is not None:
+        sys.stdout.write(f"orders: none written to {configured.table}, since the run was not given --publish: run it with --publish to write them\n")
+    return code
+
+
+def _resume_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--again", action="store_true", help="publish even though another run of the model published orders for its as-of date, as a run given --again does")
+
+
+def _resume_from(n: argparse.Namespace) -> int:
+    return _resume(ResumeArgs(n.name, n.run_id, again=n.again))
+
+
+def _resume(args: ResumeArgs) -> int:
+    """The other: a run's orders from the run, to the table it publishes to."""
+    settings = Settings()
+    saved = _snapshot(args.run, args.model)
+    resumed = resume_run(saved, open_orders(settings), again=args.again)
+    sys.stdout.write(published(resumed.records, earlier=resumed.earlier) or "orders: none to publish\n")
+    if all(record.status == "committed" for record in resumed.records.values()):
+        return 0
+    told = args.again or (saved.info.publishing is not None and saved.info.publishing.again)
+    command = _resume_command(saved.info.model.name, saved.info.run_id, resumed.records, again=told)
+    return fail(f"run {saved.info.run_id}'s orders are still not published", f"fix what the orders line above says, then `{command}` again")
+
+
+def _ddl_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--ledger", metavar="TABLE", help="print the ledger's CREATE TABLE instead, for TABLE, as BASIS_DATABASES__NAME__WRITE__LEDGER names it")
+    parser.add_argument("--dialect", choices=["mssql", "oracle"], required=True)
+
+
+def _ddl_from(n: argparse.Namespace) -> int:
+    return _ddl(DdlArgs(n.name, n.ledger, "mssql" if n.dialect == "mssql" else "oracle"))
+
+
+def _ddl(args: DdlArgs) -> int:
+    """The orders table, as the environment names it, or the ledger, for whoever may create them. A model is found by
+    its name or module path among those the environment lists, and its code is not imported: every model publishes to
+    the one table."""
+    if args.ledger is not None:
+        sys.stdout.write(ledger(args.ledger, args.dialect))
+        return 0
+    if args.model is None:
+        return fail("basis ddl prints the orders table or the ledger, and was given neither", "give a model, as `basis ddl income --dialect mssql`, or --ledger TABLE")
+    listed = models.installed()
+    if args.model not in listed and args.model not in listed.values():
+        return fail(f"no model {args.model!r} is an entry point in {models.GROUP}", f"give one of {sorted(listed)}, or its module path")
+    configured = orders_settings(Settings())
+    sys.stdout.write(create_table(Table(configured.database, configured.table), args.dialect))
+    return 0
 
 
 def _replay_arguments(parser: argparse.ArgumentParser) -> None:
@@ -350,11 +445,22 @@ def _write(table: pd.DataFrame, out: Path | None) -> None:
         table.to_csv(out, index=False)
 
 
-def _report(ran: Run, model: str) -> int:
-    """`ran`'s summary, and a failure, naming `model`, as the run named it, if a portfolio was rejected."""
+def _report(ran: Run, model: str, *, again: bool = False) -> int:
+    """`ran`'s summary, and a failure, naming `model`, as the run named it, if a portfolio was rejected or its orders'
+    publish did not commit."""
     sys.stdout.write(ran.summary())
-    if ran.ok:
-        return 0
-    rejected = sum(not outcome.accepted for outcome in ran.outcomes)
-    fix = f"fix what each says; `basis replay {model} {ran.run_id}` decides them again on what the run read"
-    return fail(f"run {ran.run_id} rejected {rejected} of its {len(ran.outcomes)} portfolios, for the reasons above", fix)
+    code = 0
+    if not ran.ok:
+        rejected = sum(not outcome.accepted for outcome in ran.outcomes)
+        fix = f"fix what each says; `basis replay {model} {ran.run_id}` decides them again on what the run read"
+        code = fail(f"run {ran.run_id} rejected {rejected} of its {len(ran.outcomes)} portfolios, for the reasons above", fix)
+    if not ran.committed:
+        fix = f"fix what the orders line above says, then `{_resume_command(model, ran.run_id, ran.publishes, again=again)}`"
+        code = fail(f"run {ran.run_id} saved its orders and did not publish them", fix)
+    return code
+
+
+def _resume_command(model: str, run_id: str, publishes: Mapping[str, PublishRecord], *, again: bool) -> str:
+    """The command that finishes a run's publish: told `--again` as the run was, or where the database refused it for
+    an as-of date its ledger has, since the next attempt needs it then."""
+    return f"basis resume {model} {run_id}{' --again' if again or refused_overlap(publishes) else ''}"

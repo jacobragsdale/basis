@@ -34,7 +34,7 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
 | `runs.py` | `run`, `replay`, `resume` and `regress`, which `cli.py` and `api.py` share. |
 | core `runs.py` | The halves of `replay`, `resume` and `regress` every part shares: finding and opening a saved run, finishing its publish, and choosing the runs to regress. |
 | `diff.py` | How two runs' changes to a table differ. |
-| `ddl.py` | `CREATE TABLE` for a job's tables and for the ledger. |
+| `ddl.py` | `CREATE TABLE` for a job's tables and for the ledger, from basis-core's `basis.core.ddl`, which optim's orders table shares. |
 | core `logs.py` | JSON lines, run fields on every record, and the exception record. |
 | `testing.py` | `ContractTests`, the import check's `FORBIDDEN`, and the builders `frame` and `inputs`. |
 | core `testing.py` | What every part's contract tests share: the import chains, with basis's portions named. |
@@ -67,7 +67,7 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
 ## Changing the framework
 
 - A database dialect is a module in core's `databases/` with a reader, a writer, its settings in core's
-  `settings.py`, its types in core's `destination._TYPES` and in `ddl._FIXED`, and its ledger columns in
+  `settings.py`, its types in core's `destination._TYPES` and `ddl._FIXED`, and its ledger columns in core's
   `ddl._LEDGER`; add its driver to the import contract and to core's `testing.FORBIDDEN`, and its container to the
   integration tier and CI.
 - A write mode is a frozen dataclass in `outputs.py`, a case in `changes.build`, and a row in the reference's table.

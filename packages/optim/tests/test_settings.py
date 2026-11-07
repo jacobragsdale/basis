@@ -54,11 +54,15 @@ def test_a_database_is_a_source_once_optims_block_gives_its_limits() -> None:
         ({"databases": {"books": BOOKS}, "optim": {"orders": {"database": "trading", "table": "trading.orders"}}}, "BASIS_OPTIM__ORDERS__DATABASE is trading, which is not configured"),
         (
             {"databases": {"trading": BOOKS}, "optim": {"orders": {"database": "trading", "table": "trading.orders"}}},
-            "trading, which has no write login to insert the orders with: set BASIS_DATABASES__TRADING__WRITE__CONNECTION_STRING",
+            "trading, which has no write settings: set BASIS_DATABASES__TRADING__WRITE__CONNECTION_STRING and BASIS_DATABASES__TRADING__WRITE__LEDGER",
         ),
         (
             {"databases": {"trading": ANALYTICS}, "optim": {"orders": {"database": "trading", "table": "trading.orders"}}},
-            "set BASIS_DATABASES__TRADING__WRITE__USER and BASIS_DATABASES__TRADING__WRITE__PASSWORD",
+            "set BASIS_DATABASES__TRADING__WRITE__USER, BASIS_DATABASES__TRADING__WRITE__PASSWORD and BASIS_DATABASES__TRADING__WRITE__LEDGER",
+        ),
+        (
+            {"databases": {"trading": BOOKS | {"write": {"connection_string": "Server=sql;Database=Trading"}}}, "optim": {"orders": {"database": "trading", "table": "trading.orders"}}},
+            "trading, which has a write login but no ledger, which a publish writes in its transaction: set BASIS_DATABASES__TRADING__WRITE__LEDGER",
         ),
         (
             {"databases": {"books": BOOKS | {"isolation": "read_committed"}}, "optim": {"databases": {"books": {"max_concurrent": 4}}}},
@@ -75,6 +79,7 @@ def test_a_database_is_a_source_once_optims_block_gives_its_limits() -> None:
         "orders-in-no-database",
         "orders-without-a-sql-server-write-login",
         "orders-without-an-oracle-write-login",
+        "orders-without-a-ledger",
         "sql-server-read-at-no-one-moment",
         "oracle-read-at-no-one-moment",
     ],

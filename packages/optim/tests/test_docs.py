@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 from fakes import Basis
 
+from optim import sync
+
 PACKAGE = Path(__file__).parent.parent / "src" / "optim"
 PAGES = sorted((PACKAGE / "docs").rglob("*.md"))
 LINKED = [*PAGES, Path(__file__).parent.parent / "README.md", Path(__file__).parent.parent / "docs" / "design.md"]
@@ -37,3 +39,18 @@ def test_every_relative_link_and_anchor_resolves(page: Path) -> None:
         assert linked.exists(), f"{page.name} links to {target}"
         if anchor:
             assert anchor in anchors(linked), f"{page.name} links to {target}#{anchor}"
+
+
+SCHEDULED = re.compile(r"(?:Airflow|schedule|production)[^\n`]*`((?:basis|optim) run[^`]*)`", re.IGNORECASE)
+"""A command a line says Airflow, a schedule or production runs, as `basis run ...` in backticks after it."""
+
+
+def test_every_run_the_docs_and_templates_say_production_makes_publishes() -> None:
+    """Only `--publish` writes orders, so a production command without it would write none."""
+    root = Path(__file__).parent.parent
+    files = [*PAGES, *(PACKAGE / "skills").rglob("*.md"), *(path for path in (PACKAGE / "templates").rglob("*") if path.is_file()), root / "README.md", *(root / "docs").glob("*.md")]
+    commands = [(file.name, command) for file in files for command in SCHEDULED.findall(file.read_text(encoding="utf-8"))]
+
+    assert {"port-a-legacy-model.md", "design.md"} <= {name for name, _ in commands}
+    assert [(name, command) for name, command in commands if "--publish" not in command] == []
+    assert "--publish" in sync.IMAGE, "the Dockerfile's line for the command a scheduler gives a model's container"

@@ -77,20 +77,26 @@ Airflow runs the repo's image, which runs `optim`, under `tini`, with the argume
 environment's variables:
 
 ```sh
-basis run income --params models/income/params/default.json --as-of 2026-10-16
+basis run income --params models/income/params/default.json --as-of 2026-10-16 --publish
 ```
 
 `basis run` decides as a run from `main.py` does, through the same code, with these differences: it reads the process's
 environment, which `uv run --env-file .env basis run ...` sets on a machine; its paths are the working directory's; it
-saves its snapshot under `BASIS_SNAPSHOT_ROOT`, which it requires; it writes the accepted portfolios' orders where
-`BASIS_OPTIM__ORDERS__DATABASE` and `BASIS_OPTIM__ORDERS__TABLE` configure a table, through that database's write login;
-and it exits 0 only when every portfolio was accepted. `--portfolios P1 P2`, or `--portfolios @FILE` with one id per
-line, names the portfolios; without it, it decides every portfolio the model lists.
+saves its snapshot under `BASIS_SNAPSHOT_ROOT`, which it requires; with `--publish`, it writes the accepted portfolios'
+orders to the table `BASIS_OPTIM__ORDERS__DATABASE` and `BASIS_OPTIM__ORDERS__TABLE` configure, through that database's
+write login, with a row in its ledger; and it exits 0 only when every portfolio was accepted and the orders, if it
+published them, committed. `--portfolios P1 P2`, or `--portfolios @FILE` with one id per line, names the portfolios;
+without it, it decides every portfolio the model lists.
+
+The ledger keeps a retried run from writing its orders twice: a run of the model for a date that another run published
+orders for stops before it loads, unless it is given `--again`. If a run's publish fails, as when the database is down,
+its snapshot is kept: fix the cause, then publish the same orders with `basis resume income RUN_ID`. The
+[reference](../reference.md#basis-run) says what each refuses.
 
 > [!WARNING]
-> `basis run` writes orders wherever its environment configures an orders table. Keep `BASIS_OPTIM__ORDERS__*`, and
-> every database's `WRITE` block, out of the settings files on your machine, `.env.prod` included, which hold read-only
-> credentials alone.
+> `basis run --publish` writes orders wherever its environment configures an orders table. Keep
+> `BASIS_OPTIM__ORDERS__*`, and every database's `WRITE` block, out of the settings files on your machine, `.env.prod`
+> included, which hold read-only credentials alone.
 
 For QA, see [how to run the QA suite](run-the-qa-suite.md). To find out why a live run rejected a portfolio, see
 [how to find out why a portfolio was rejected](find-out-why-a-portfolio-was-rejected.md).

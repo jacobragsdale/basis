@@ -31,9 +31,9 @@ A shared verb reaches the only declared part that has it, whatever NAME is, so a
 there too. Where several do, NAME comes first, and is a name one of them lists in `Runs.names`; two of them listing the
 same name is refused, with the fix. Without NAME, there, `describe` prints what every part runs; `regress` replays
 every part's runs, taking only the options every part's takes, and prints one JSON object of what each part printed,
-by part, so a part's `regress` without NAME prints JSON; `ddl` asks the first part, which prints only the ledger
-without NAME; and `run`, `resume` and `replay` are refused, with the fix. `basis VERB NAME --help` gives the arguments
-of NAME's part.
+by part, so a part's `regress` without NAME prints JSON; `ddl` prints the ledger's CREATE TABLE itself, from
+`--ledger TABLE --dialect DIALECT`, since every part's ledger is core's; and `run`, `resume` and `replay` are refused,
+with the fix. `basis VERB NAME --help` gives the arguments of NAME's part.
 
 `renamed` refuses, before any verb runs, the variables an earlier version of the part read under names it no longer
 reads, as `basis` refuses its own `ETL_*`.

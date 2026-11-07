@@ -106,8 +106,8 @@ Paths are in the model's folder, `models/NAME/`.
 | Sets values for a group of portfolios | Fields of `Params`, in one params file per group |
 | Sets values that differ for every portfolio | A per-portfolio dataset, read in a rule as `portfolio.data.NAME` |
 | Lets portfolios compete for a bond's supply | `reserve` and `order` ([how to decide portfolios one at a time](decide-portfolios-in-turn.md)) |
-| Sends orders | Nothing: `basis run` writes accepted orders to the orders table in production |
-| Runs on a schedule | An Airflow task that runs the repo's image: `basis run NAME --params models/NAME/params/default.json --as-of DATE` |
+| Sends orders | Nothing: `basis run --publish` writes accepted orders to the orders table in production |
+| Runs on a schedule | An Airflow task that runs the repo's image: `basis run NAME --params models/NAME/params/default.json --as-of DATE --publish` |
 
 A rule reads only the portfolio, the market and the params it is given. If it needs data the model lacks, add a
 dataset first.

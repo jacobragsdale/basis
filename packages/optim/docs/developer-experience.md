@@ -180,10 +180,11 @@ if __name__ == "__main__":
 
 ## Production
 
-`basis run MODEL --params FILE [--portfolios ...] [--as-of DATE] [--data DIR]` reads the process's environment, saves
-the snapshot under `BASIS_SNAPSHOT_ROOT`, which it requires, and writes accepted portfolios' orders where
-`BASIS_OPTIM__ORDERS__*` configures a table. It is the only thing that writes orders. Its paths are the working
-directory's, as any command's are. It and `optim.run` share everything from loading to saving.
+`basis run MODEL --params FILE [--portfolios ...] [--as-of DATE] [--data DIR] [--publish]` reads the process's
+environment, saves the snapshot under `BASIS_SNAPSHOT_ROOT`, which it requires, and with `--publish` writes accepted
+portfolios' orders to the table `BASIS_OPTIM__ORDERS__*` configures, with a ledger row; `basis resume MODEL RUN_ID`
+finishes a publish that failed. They are the only things that write orders. Its paths are the working directory's, as
+any command's are. It and `optim.run` share everything from loading to saving.
 
 ## Settings files
 
