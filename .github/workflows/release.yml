@@ -116,7 +116,7 @@ jobs:
         working-directory: ${{ runner.temp }}
         run: |
           if uvx --default-index "$FEED" basis-job new repo refused 2> refused.log; then echo "a repo was made with no --index" >&2; exit 1; fi
-          tail -n 1 refused.log | grep --quiet "^ERROR: basis-job came from an index.*: pass --index with the feed's URL"
+          tail -n 1 refused.log | grep --quiet '^ERROR: basis-job was installed from an index or a --find-links folder, .*: rerun the same command with `--index URL`'
           uvx --default-index "$FEED" basis-job new repo from-feed --index "$FEED"
           cd from-feed && uv run basis check
       - name: Show the feed's log
