@@ -15,16 +15,17 @@ Actions.
 | Lane | Builds | Phases |
 |---|---|---|
 | A. Core and jobs | `basis-core`, `basis-job` | 1, 4, 5 |
-| B. APIs | `basis-api` | 2, and 5.1's move |
+| B. APIs | `basis-api` | 2, and basis-api's side of 5.1 and 5.8 |
 | C. Optim (provisional) | `optim` | 3 |
 | D. Eval | `evals/` | 0, then every phase |
 
 The critical path runs through lanes A and B: the namespace spike, the workspace, etl-framework's move, `basis-core`'s
 extraction, the `basis` command, the repo files, the desktop gates, then the API, its resources' move into `basis-core`
-(step 5.1), and the pilot, which confirms spikes 0.5 to 0.8 at the firm; no step waits for those spikes. Steps 5.2 to
-5.7 are off it, and run at once after 5.1. Optim is off the critical path, and runs alongside phase 2. Its design is
-provisional until the maintainer meets the firm's quant team, and nothing in lanes A and B may depend on it (see [the
-design](design.md#the-packages)).
+(step 5.1), the service errors (5.8), the contract tests and gates (2.6), and the pilot, which confirms spikes 0.5 to
+0.8 at the firm; no step waits for those spikes. Steps 5.0b and 5.2 to 5.7 are off it: pandas (5.0b) follows 5.1, and
+5.2 to 5.7 run at once after it. So is `basis smoke` (2.10), which needs 5.6, and which the pilot runs. Optim is off
+the critical path, and runs alongside phase 2. Its design is provisional until the maintainer meets the firm's quant
+team, and nothing in lanes A and B may depend on it (see [the design](design.md#the-packages)).
 
 ```mermaid
 flowchart TD
@@ -41,22 +42,26 @@ flowchart TD
   r3 --> r5[1.5 basis command] --> r6[1.6 repo files and sync] --> r7[1.7 desktop gates]
   r4 --> r7
   r7 --> r8
-  r3 --> a1[2.1 API app] --> a2[2.2 resources] --> a3[2.3 routes] --> a5 --> c1[5.1 resources in core] --> a6[2.6 API contract tests] --> a7[2.7 new app] --> a8
+  r3 --> a1[2.1 API app] --> a2[2.2 resources] --> a3[2.3 routes] --> a5 --> c1[5.1 resources in core] --> c8[5.8 service errors] --> a6[2.6 contract tests and gates] --> a7[2.7 new app] --> a8
   a2 --> a4[2.4 identity]
   a3 --> a9[2.9 after-commit calls]
   r7 --> a7
   r8 --> a8
+  a7 --> a10[2.10 basis smoke]
+  c6 --> a10
+  a10 -. runs .-> a8
   r4 --> o2[3.2 move optim]
   r6 --> o2
   o1[3.1 oracle snapshot] --> o2 --> o3[3.3 port the plumbing] --> o4[3.4 orders through the ledger] --> o6[3.6 proof and release, on hold]
   a2 --> o3
   o3 --> o5[3.5 verbs, sync and docs] --> o6
   a8 --> g[4 records and upkeep]
-  c1 --> c2[5.2 calendars]
-  c1 --> c3[5.3 messages]
-  c1 --> c4[5.4 folders and Excel]
-  c1 --> c5[5.5 Mongo and SQL Server JSON]
-  c1 --> c6[5.6 environments] --> c7[5.7 Data Lake]
+  c1 --> c0[5.0b pandas]
+  c0 --> c2[5.2 calendars]
+  c0 --> c3[5.3 messages]
+  c0 --> c4[5.4 folders and Excel]
+  c0 --> c5[5.5 Mongo and SQL Server JSON]
+  c0 --> c6[5.6 environments] --> c7[5.7 Data Lake]
 ```
 
 ## Rules for working in parallel
@@ -197,12 +202,24 @@ Lane B. Needs step 1.3. Steps 2.3 and 2.4 run at once, and so do 2.5 and 2.9.
    `application/vnd.apache.arrow.stream`, and the allowed-origins setting, whose need spike 0.4 decides. Write the
    contract page in this repo's docs, and publish the example API's `openapi.json` as the sample basis-ui tests against.
    Needs 2.3 and spike 0.4.
-6. **2.6 Contract tests.** The app builds on fakes; every route declares what it must; `openapi.json` is current;
-   Schemathesis runs on fakes; the import check passes; the agent files match. `basis review` adds the API contract's
-   diff. Needs 2.5 and 5.1.
-7. **2.7 New app.** `basis-api new app NAME` writes the API part, adds jobs through `basis.job`'s generator, and writes
-   `basis.core`'s repo files. Needs 1.7, 2.6 and 5.1. Done when a generated repo with an API and a job passes `basis
-   check --full`, and its image serves the API and runs the job.
+6. **2.6 Contract tests and gates.** The app builds on fakes; every route declares what it must; `openapi.json` is
+   current; Schemathesis runs on fakes; the agent files match. `basis review` adds the API contract's diff. `basis
+   check` adds the gates [the design](design.md) gives:
+   - an API's layers, known by module name at any depth: imports go downward only, which grimp checks with no
+     configuration file; domain modules stay pure, as compute modules are; and a handler passes a resource on and never
+     calls its methods;
+   - every generated repo's tests: branch coverage from unit tests at the floor `[tool.basis] coverage` gives, with
+     repository modules left out; no `unittest.mock` or pytest-mock, but in a file whose one-line comment gives its
+     reason; and no sockets in unit tests;
+   - mutmut on the domain functions a change touches, in `basis check --full`, reported in `basis review` and never
+     blocking, in WSL or on Linux only.
+
+   Needs 2.5, 5.1 and 5.8. Done when the example API passes them all, a copy of it that breaks any one fails `basis
+   check` with that rule's fix, and `basis review` lists a mutant that survived.
+7. **2.7 New app.** `basis-api new app NAME` writes the API part in its layers (`service.py`, `handlers.py`,
+   `repository.py` and `domain.py`, with `resources.py` and `errors.py`) and `[tool.basis] coverage = 90`, adds jobs
+   through `basis.job`'s generator, and writes `basis.core`'s repo files. Needs 1.7, 2.6 and 5.1. Done when a
+   generated repo with an API and a job passes `basis check --full`, and its image serves the API and runs the job.
 8. **2.8 Pilot (work).** Create a pilot API repo with `uvx basis-api new app pilot`, beside basis-ui's pilot UI repo,
    from the internal feed. Deploy both to QA through their generated pipelines, behind one host if spike 0.4 allows it.
    Lane D adds API tasks to the eval and runs them against the pilot. Needs 2.7, 1.8, 5.1 and spike 0.3, so it reports
@@ -216,6 +233,18 @@ Lane B. Needs step 1.3. Steps 2.3 and 2.4 run at once, and so do 2.5 and 2.9.
    2.3, and runs alongside 2.5; the pilot (2.8) does not wait for it. Done when, against the SQL Server and Oracle
    containers and a fake service, a route whose writes roll back makes no call, and a call that fails after its commit
    reaches the service through the relay, with its key, once the service answers again.
+10. **2.10 `basis smoke`.** `basis smoke --env ENV` checks an environment after each deploy, and from a desktop:
+    - the served `openapi.json` equals the committed one;
+    - the API is ready;
+    - each route that declares a read-only example, `smoke=`, answers it, and its response validates;
+    - a job dry-runs on that environment's inputs for a recent interval, running its transform and checks and
+      publishing nothing.
+
+    A failure blocks promotion to prod. It makes no journeys across services, and needs no test tenancy, Pact, chaos
+    testing or canary analysis, for the reasons [the design](design.md#gates-without-ci) gives. Needs 2.7 and 5.6, and
+    the pilot (2.8) runs it. Done when it passes on a generated repo with an API and a job, against the containers
+    standing in for QA, and fails, with its fix, when the served document differs from the committed one, an example's
+    response does not validate, or a job's checks fail; and the generated pipeline runs it before promotion to prod.
 
 ## Phase 3: optim on basis-core
 
@@ -260,10 +289,10 @@ Lanes A, B and D. Needs step 2.8.
 
 ## Phase 5: resources
 
-Lane A, with basis-api's side of 5.1 in lane B. Jobs and APIs share one set of tools: today basis-api alone has the
-HTTP client, the clock, ids and OpenTelemetry tracing, and jobs get only databases and logs. Steps 5.2 to 5.7 need 5.1,
-and 5.7 needs 5.6 too. They run in parallel, and their pull requests to `basis-core` merge one at a time (rule 2). The
-reasons are in [the design](design.md#what-jobs-and-apis-share).
+Lane A, with basis-api's side of 5.1 and 5.8 in lane B. Jobs and APIs share one set of tools: today basis-api alone has
+the HTTP client, the clock, ids and OpenTelemetry tracing, and jobs get only databases and logs. Steps 5.0b and 5.8
+need 5.1, steps 5.2 to 5.7 need 5.0b, and 5.7 needs 5.6 too. They run in parallel, and their pull requests to
+`basis-core` merge one at a time (rule 2). The reasons are in [the design](design.md#what-jobs-and-apis-share).
 
 1. **5.1 Resources in core.** Move basis-api's resource model into `basis.core`: a declared resource, with a deadline,
    a trace span and a fake. The HTTP client (httpx2, with its proxy and CA bundle), the clock, ids and OpenTelemetry
@@ -277,24 +306,31 @@ reasons are in [the design](design.md#what-jobs-and-apis-share).
    OpenTelemetry collector container or an in-process exporter. Steps 2.6 and 2.7 build on it. Done when a job's run and
    an API's request each make one trace, with a span for each SQL statement and HTTP call, and each of their log records
    carries its trace's and span's ids, in the format `docs/spikes/datadog.md` gives, which the pilot confirms.
-2. **5.2 Calendars.** Ship `sifma-us`, with its full and early closes, and `target2` in `basis.core`, as data built from
+2. **5.0b pandas.** `basis.core` and `basis.job` hand frames to job code as pandas DataFrames, not polars ones. Each
+   column's dtype is chosen from the job's declared row type, among pandas' nullable and Arrow-backed dtypes, so an
+   integer with nulls stays an integer, a decimal stays exact, and a time keeps its zone. polars leaves the lock, and
+   pyarrow stays the I/O layer, for Parquet, the run store, Arrow responses and the lake. Needs 5.1, and steps 5.2 to
+   5.7 need it, so Excel, Mongo and the lake are written once, in pandas. Done when basis-job's unit and integration
+   tests pass on pandas frames, polars is gone from the lock, and an integer with nulls, a decimal and a zone-aware
+   time each reach SQL Server, Oracle and the run store, and come back, as they left.
+3. **5.2 Calendars.** Ship `sifma-us`, with its full and early closes, and `target2` in `basis.core`, as data built from
    SIFMA's and the ECB's published schedules, with no pandas. Each states the last date it covers. A job names its
    calendar, which says whether a date is a business day, adds business days, and gives the previous business day and a
-   day's early-close time. Needs 5.1. Done when each function agrees with both published schedules, and a date after a
+   day's early-close time. Needs 5.0b. Done when each function agrees with both published schedules, and a date after a
    calendar's last is an error, never a business day.
-3. **5.3 Messages.** Add Slack, through a channel's webhook, and email, through the firm's SMTP relay, each with a fake.
-   Needs 5.1. Done when a job's tests send both through the fakes, and its replay, regress and QA runs send nothing.
-4. **5.4 Folders and Excel.** Add folders, each a named path, which each machine's settings give: `\\server\share` on
-   Windows, and a mount path in WSL and in pods. Read and write Excel with polars' own `read_excel` (calamine) and
-   `write_excel` (xlsxwriter), in an optional extra, `basis-core[excel]`. Each write goes to a temporary file, which is
-   then renamed into place. Needs 5.1. Done when a job reads a workbook from a folder and writes one to it, and a reader
-   of the folder never sees a half-written file.
-5. **5.5 Mongo and SQL Server JSON.** Add Mongo, in an optional extra, `basis-core[mongo]`: reads, and writes as upserts
+4. **5.3 Messages.** Add Slack, through a channel's webhook, and email, through the firm's SMTP relay, each with a fake.
+   Needs 5.0b. Done when a job's tests send both through the fakes, and its replay, regress and QA runs send nothing.
+5. **5.4 Folders and Excel.** Add folders, each a named path, which each machine's settings give: `\\server\share` on
+   Windows, and a mount path in WSL and in pods. Read and write Excel with pandas' `read_excel` (calamine) and
+   `to_excel` (xlsxwriter), in an optional extra, `basis-core[excel]`. Each write goes to a temporary file, which is
+   then renamed into place. Needs 5.0b. Done when a job reads a workbook from a folder and writes one to it, and a
+   reader of the folder never sees a half-written file.
+6. **5.5 Mongo and SQL Server JSON.** Add Mongo, in an optional extra, `basis-core[mongo]`: reads, and writes as upserts
    by a declared key, with no transactions and no ledger. Make SQL Server's native `json` columns work in reads,
-   publishing and `basis ddl`. Needs 5.1, and builds to `docs/spikes/sqlserver-json.md`. Done when a job that reads
+   publishing and `basis ddl`. Needs 5.0b, and builds to `docs/spikes/sqlserver-json.md`. Done when a job that reads
    Mongo and publishes to a `json` column passes against a Mongo container and a SQL Server one whose version has the
    type, and a second upsert of the same documents changes nothing in Mongo.
-6. **5.6 Environments.** Every command that touches the firm's systems takes `--env dev|qa|prod`, or `BASIS_ENV`, with
+7. **5.6 Environments.** Every command that touches the firm's systems takes `--env dev|qa|prod`, or `BASIS_ENV`, with
    no default. A desktop reads the user's file for that environment, `basis/ENV.env` in their own configuration folder
    (`~/.config/basis/ENV.env`, or `%APPDATA%\basis\ENV.env` on Windows), which holds its hosts, paths and secrets, and
    which every repo the user works in shares. A pod reads what its deployment sets, `BASIS_ENV` among it. A repo's
@@ -307,18 +343,26 @@ reasons are in [the design](design.md#what-jobs-and-apis-share).
    In prod, a run whose plan publishes or writes anything is refused at the start, with one `ERROR` line, unless the
    deployment sets one flag. That stops accidents, not malice, and the docs say the real control is a read-only prod
    login for desktops. Desktops write in dev and QA. Database logins stay as the settings have them. `basis doctor --env
-   ENV` checks that each login works and each folder is reachable. Needs 5.1, and builds to `docs/spikes/kerberos.md`.
+   ENV` checks that each login works and each folder is reachable. Needs 5.0b, and builds to `docs/spikes/kerberos.md`.
    Done when a command that touches the firm's systems with no environment is refused with its fix, a prod run that
    would write is refused without the flag, and `basis doctor --env qa` reports on each login and folder.
-7. **5.7 Azure Data Lake.** Add a lake destination: a job publishes an output as Parquet to a declared ADLS Gen2 path,
+8. **5.7 Azure Data Lake.** Add a lake destination: a job publishes an output as Parquet to a declared ADLS Gen2 path,
    partitioned by its run's interval, such as `CONTAINER/TABLE/date=2026-11-07/`, through `pyarrow.fs`. The
    environment's settings declare how it signs in: an account key or a SAS token, as a secret, or Entra ID, through
    workload identity in a pod and `az login` on a desktop. Each partition goes to a temporary path and is renamed into
    place, and the archive is done only when its files read back with the row count written. The job's database ledger
-   records it like any publish, with the interval, the path, the row count and the files' hashes. Needs 5.1 and 5.6,
+   records it like any publish, with the interval, the path, the row count and the files' hashes. Needs 5.0b and 5.6,
    builds to `docs/spikes/data-lake.md`, and runs alongside the other steps. Done when an interval's archive is in the
    lake with its row count checked and its ledger row written, a retry archives nothing, and `resume` and `--again` work
    on it as they do on a table.
+9. **5.8 Service errors and failing fakes.** In `basis-core` and `basis-api`: one hierarchy of service errors, as [the
+   design](design.md#what-jobs-and-apis-share) has it, `ServiceError`, with the resource, the status and the detail, and
+   `Timeout`, `Unavailable`, `NotFound`, `Conflict`, `Rejected`, `Denied`, `BadReply` and `Failed`, which every
+   resource and its fake raise alike, with the design's retries and responses, in place of `CallFailedError` and
+   `DeadlineExceededError`. A fake fails on demand, as `pricing.fails("/prices/X", Unavailable)`, and basis ships a
+   contract suite per resource, which its CI runs against the fake and the real resource. Needs 5.1, which has merged,
+   and step 2.6 needs it. Done when each resource's suite passes against its fake and the real resource, and a test
+   makes each kind of failure through a fake, with no mock, and sees the route answer with the design's status.
 
 Later, and not yet stepped:
 

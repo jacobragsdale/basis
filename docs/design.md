@@ -63,8 +63,9 @@ same verbs (`check`, `dev`, `test`, `sync`, `doctor`, `docs`) through Vite+'s ow
 | Verb | What it does | In repos with |
 |---|---|---|
 | `basis check` | Lints, type checks, unit and contract tests, and the agent-files and drift checks, with no network and no Docker | Every part |
-| `basis check --full` | `check`, plus `regress` where the run store is reachable, and the QA tier where QA settings exist | Every part |
-| `basis review` | Writes a pull request's summary: what `regress` changed, the API contract's diff, the versions, and the commit that was checked | Every part |
+| `basis check --full` | `check`, plus `regress` where the run store is reachable, the QA tier where QA settings exist, and a mutation report in WSL or Linux | Every part |
+| `basis review` | Writes a pull request's summary: what `regress` changed, the API contract's diff, the mutation report, the versions, and the commit that was checked | Every part |
+| `basis smoke --env ENV` | Checks a deployed environment: the API's contract and readiness, each route's read-only example, and a dry run of a job | An API or jobs |
 | `basis replay RUN`, `basis regress` | Rerun one saved run or recorded request with today's code; rerun recent ones and list what changed | Every part |
 | `basis new PART NAME` | Adds an API, a job or, provisionally, a model to the repo | Every part |
 | `basis sync`, `basis upgrade` | Rewrite the framework's files from the installed version; relock basis, sync, check and regress in one step | Every part |
@@ -220,13 +221,32 @@ handlers, health endpoints and shutdown in every repo.
 A resource is anything a handler reaches outside the process: a database, another HTTP service, a cache, the clock, new
 ids. Each is declared by name, and the core opens it in the app's lifespan, puts a deadline on every call that can wait,
 traces every call, and provides a fake of it for tests. The clock and new ids never wait, so they have no deadline, and
-their spans record each value, so that a recorded request replays them. Handler code reaches the outside only through
-its resources, and an import contract, as basis-job's keeps job code pure, keeps handlers away from database drivers,
-HTTP clients and environment variables. "Pure" cannot mean "no I/O" for a handler that reads, decides, and reads again; it
+their spans record each value, so that a recorded request replays them. An API's code reaches the outside only through
+its resources, and an import contract, as basis-job's keeps job code pure, keeps it away from database drivers, HTTP
+clients and environment variables. "Pure" cannot mean "no I/O" for a handler that reads, decides, and reads again; it
 means "I/O only through the core", which lets the core bound, observe and record every call. Another service, the
 clock, ids and tracing are `basis.core`'s, which jobs declare too, and `basis.api` builds on them: see [What jobs and
 APIs share](#what-jobs-and-apis-share). A request's transaction, its outbox, the cache, the compute pool and identity
 are the API's own.
+
+An API's code sits in layers, each a module that basis knows by its name, at any depth, so `bonds/handlers.py` is a
+handlers module too:
+
+| Module | Holds |
+|---|---|
+| `service.py` | The controller: its routes |
+| `handlers.py` | One function per route, and the only place resources arrive |
+| `repository.py` | All the SQL and every call to another service, each function taking the resource it needs and returning domain types |
+| `domain.py` | Pure types and rules, with no I/O, no FastAPI and no `basis.api` |
+
+Beside them, two modules declare: `resources.py` the resources and settings, and `errors.py` the errors. `basis check`
+holds the layers with grimp, which core already uses, and no configuration file to keep: imports go down the table
+only; a domain module stays pure, as a compute module is today; and a handler passes a resource on and never calls its
+methods itself, so the SQL stays in repositories. Every API repo then has the same shape, and the checks keep it.
+
+A domain's errors are plain Python exceptions, defined in its domain module, because the same domain code runs in jobs,
+which have no HTTP. The API gives each its HTTP meaning once, in `errors.py`, as
+`MATURED = api.error(domain.Matured, status=422, title="The bond has matured")`, and its routes list those.
 
 Request bodies and settings are strict models: an unknown key is refused and no value is coerced, so a misspelled field
 fails at the boundary instead of being silently ignored. A decimal in a request body is a JSON string, as it is in a
@@ -284,8 +304,8 @@ read the store. How long records are kept is out of scope for this design.
 
 The contract tests check that the app builds on fakes, that every route declares what it must, that `openapi.json`
 matches the code and that a breaking change to it is flagged, that the API survives property-based requests generated
-from its own schema (Schemathesis, run on fakes), that handler modules import nothing they may not, and that the agent
-files match the installed version.
+from its own schema (Schemathesis, run on fakes), that the layers hold, and that the agent files match the installed
+version.
 
 ## Jobs: basis.job
 
@@ -293,8 +313,20 @@ files match the installed version.
 the framework's checks and the job's own before any write, all-or-nothing publishing with a ledger row in the same
 transaction, `resume` from the snapshot, and `regress`. [etl-framework's
 design](https://github.com/jacobragsdale/etl-framework/blob/main/docs/design.md) holds its decisions and the reasons for
-them, and they stand. What changes is that its plumbing moves into `basis.core`, its command becomes `basis` (`etl run`
-becomes `basis run`), and its jobs can live in a repo beside an API.
+them, and they stand, but for polars. What changes is that its plumbing moves into `basis.core`, its command becomes
+`basis` (`etl run` becomes `basis run`), its jobs can live in a repo beside an API, and its frames are pandas.
+
+A job keeps its declarative shape, which has an API's layers already: its `Inputs` and `Outputs`, with their SQL in
+`sql/` files, are its repository, and its `transform` and `check` its pure domain. A repo's `domain.py` can serve its
+API's handlers and its jobs' transforms alike, under the same purity check.
+
+`basis.core` and `basis.job` hand job code its frames as pandas DataFrames, decided on 2026-11-07 in place of polars.
+Each column's dtype is chosen from the job's declared row type, among pandas' nullable and Arrow-backed dtypes, so an
+integer with nulls stays an integer, a decimal stays exact, and a time keeps its zone. polars leaves the lock, and
+pyarrow stays the I/O layer, for Parquet, the run store, Arrow responses and the lake. The firm's team, its Excel
+habits, optim and the code to port are all pandas, and polars' gains matter little here: frame work was about 5% of a
+measured optim run, and bulk movement goes through pyarrow. A job with a huge in-memory transform can convert to
+polars itself.
 
 ## What jobs and APIs share
 
@@ -311,6 +343,23 @@ declares them as it declares its datasets, so its transform stays pure and every
 a job reaches another service; a `Clock` or `Ids` gives the transform values that the run's record keeps, so that a
 replay is given them again. basis-api keeps what is a request's own, a route's deadline, which caps its calls, its
 transaction, the outbox, the compute pool and identity, and the cache.
+
+**Service errors.** Every resource and its fake raise one hierarchy of `basis.core`'s, so a failure means the same
+whatever was called. `ServiceError` carries the resource, the status and the detail, and each kind has its rule for
+retries and the response a route gives when nothing handles it:
+
+| Error | Raised for | Retried by basis | Unhandled, a route answers |
+|---|---|---|---|
+| `Timeout` | The deadline passing, or a 504 | Never on a write | 504 |
+| `Unavailable` | A connection refused or reset, or a 502, 503 or 429 | On a GET only, within the deadline | 503 |
+| `NotFound`, `Conflict`, `Rejected`, `Denied`, `BadReply`, `Failed` | A 404; a 409; a 400 or 422; a 401 or 403; a reply that does not match its declared model; a 500 and anything else | No | 502 |
+
+A repository turns the ones that mean something into domain results, and anything else becomes the route's response,
+so a handler needs no `try`. They replace `CallFailedError` and `DeadlineExceededError`. A fake fails on demand, as
+`pricing.fails("/prices/X", Unavailable)`, so every error path is tested without mocks, and basis ships a contract
+suite per resource, which its CI runs against the fake and the real resource, so a fake stays faithful. The set
+follows Google's AIP-193 and AIP-194, Uber's YARPC codes and Meta's fbthrift, which all use a small, gRPC-like set and
+retry only unavailable, idempotent calls.
 
 **Traces and logs.** Traces go to Datadog. The OpenTelemetry SDK makes them, and basis posts them over OTLP/HTTP to the
 Datadog Agent on each AKS node, at the full URL `BASIS_TRACES__ENDPOINT` names, `http://$(HOST_IP):4318/v1/traces` in a
@@ -335,7 +384,7 @@ the firm's SMTP relay. Both have fakes, and nothing is sent in tests, `replay`, 
 
 **Folders and Excel.** Portfolio managers live in Excel, and the files sit on NFS. A folder is a named path, which each
 machine's settings give: `\\server\share` on Windows, and a mount path in WSL and in a pod. basis reads and writes Excel
-with polars' own `read_excel` (calamine) and `write_excel` (xlsxwriter), in an optional extra, `basis-core[excel]`.
+with pandas' `read_excel` (calamine) and `to_excel` (xlsxwriter), in an optional extra, `basis-core[excel]`.
 Every write goes to a temporary file that is then renamed into place, so a portfolio manager never opens a half-written
 file.
 
@@ -402,8 +451,8 @@ Fixtures are small, synthetic and in git, as a CSV per dataset with a manifest, 
 Client data never goes in git. A test that needs real data names a run by id and runs only where the store is reachable,
 and basis has no tool for scrubbing client data out of a snapshot, because a generic scrubber is where leaks come from.
 
-`basis.core` hands each package its data as Arrow. `basis.job` works in polars, which keeps nullable integers, decimals
-at their scale and zone-aware datetimes exact. optim, provisionally, works in pandas. `basis.api` works in pydantic models, and in
+pyarrow is the I/O layer, for Parquet, the run store, Arrow responses and the lake. Job code works in pandas, as
+[Jobs](#jobs-basisjob) says, and optim, provisionally, in pandas too. `basis.api` works in pydantic models, and in
 pyarrow for its Arrow responses.
 
 ## Agents
@@ -448,12 +497,34 @@ settings "exist" where the repo declares the tier and the machine has that file;
 it. From phase 5, that file is the user's `qa.env`, which every repo shares, and the repo no longer names it (see
 [What jobs and APIs share](#what-jobs-and-apis-share)).
 
+`basis check` holds every generated repo's tests to the same gates:
+
+- **Coverage.** Unit tests must cover a floor of the branches, `[tool.basis] coverage = 90` in the repo's
+  `pyproject.toml`. Generators write 90, and a repo may change it, where its diff shows it. The floor counts unit tests
+  alone, and leaves out repository modules, which the integration tests cover. It is not 100%: Google calls 90%
+  exemplary, and finds that chasing 100% has diminishing returns.
+- **No mocks.** `unittest.mock` and pytest-mock are refused in a repo's tests, and fakes are the only test double. A
+  file may opt out with a one-line comment that gives its reason.
+- **No network.** Unit tests cannot open sockets, so none can go flaky by reaching QA.
+- **Mutation testing, as a report.** `basis check --full`, which the push hook runs, runs mutmut on the domain
+  functions a change touches, and `basis review` reports what it found. It never blocks, and it runs in WSL or on
+  Linux only, since mutmut needs `fork`. Coverage alone cannot tell an agent's empty test from a real one: Meta's ACH
+  found that 49% of the tests that caught mutants added no coverage.
+
+After each deploy, and from a desktop, `basis smoke --env ENV` checks the environment: the served `openapi.json` equals
+the committed one; the API is ready; each route that declares a read-only example, `smoke=`, answers it, and its
+response validates; and a job dry-runs on that environment's inputs for a recent interval, running its transform and
+checks and publishing nothing. A failure blocks promotion to prod. That is all the end-to-end testing basis does for
+now, with no journeys across services, test tenancy, Pact, chaos testing or canary analysis: Uber's end-to-end setup,
+which works, needed tenancy in every service and still passed about 90% of attempts, and Google measured 14% of its
+large tests as flaky.
+
 A reviewer judges what a change does. `basis review` writes the pull request's summary: the outputs `regress` saw
-change, the API contract's diff, the versions, and the commit that was checked, so the reviewer reads a summary of
-behaviour rather than lines of agent-written code. `basis check --full` records what it found on each commit it checks
-with nothing uncommitted, in the git folder the clone's worktrees share, and `basis review` prints that record. An
-output `regress` sees change fails no check, since a change may be meant: the summary shows it, and the pull request
-says why.
+change, the API contract's diff, the mutation report, the versions, and the commit that was checked, so the reviewer
+reads a summary of behaviour rather than lines of agent-written code. `basis check --full` records what it found on
+each commit it checks with nothing uncommitted, in the git folder the clone's worktrees share, and `basis review` prints
+that record. An output `regress` sees change fails no check, since a change may be meant: the summary shows it, and the
+pull request says why.
 
 A hook can be skipped with `--no-verify`, and agents do skip it. `AGENTS.md` says never to, and the synced Claude Code
 settings deny `--no-verify`, but until CI exists the gates are only as strong as the hooks, and the commit `basis
