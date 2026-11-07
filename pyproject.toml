@@ -160,8 +160,9 @@ name = "A service's declarations, and the example's, load no server, exporter or
 type = "forbidden"
 source_modules = ["basis.api.service", "basis.api.errors", "basis.api.settings", "basis.api.example.service"]
 forbidden_modules = [
-    "basis.api.app", "basis.api.requests", "basis.api.server", "basis.api.traces", "uvicorn",
-    "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "mssql_python", "oracledb",
+    "basis.api.app", "basis.api.requests", "basis.api.server", "basis.api.traces", "basis.api.cli", "basis.api.sync", "uvicorn",
+    "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.command", "basis.core.check",
+    "basis.core.hooks", "basis.core.hygiene", "basis.core.sync", "mssql_python", "oracledb",
 ]
 ignore_imports = [
     "basis.api -> basis.api.app",  # `api.build` loads on first use, which a service's modules never make

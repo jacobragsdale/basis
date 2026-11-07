@@ -21,7 +21,8 @@ Paths are under `src/basis/api/`.
 | `requests.py` | The request boundary: the request id, log fields, `X-Request-Id` and `traceparent` out, one log line per request, and the 500 for an exception nothing expected. |
 | `traces.py` | The app's own tracer provider, which FastAPI's telemetry makes server spans with, and the exporter the settings name. |
 | `server.py` | `serve`: uvicorn, with JSON logs through basis-core, a drain on SIGTERM before the graceful shutdown, and a second signal that stops at once. |
-| `cli.py` | `part`, which the `basis.verbs` entry point named `api` gives the `basis` command: `basis serve [SERVICE]`. |
+| `cli.py` | `part`, which the `basis.verbs` entry point named `api` gives the `basis` command: `basis serve [SERVICE]`, and the files below. |
+| `sync.py`, `templates/agents.md` | What `basis sync` writes for an API: its block of `AGENTS.md`, and its Dockerfile line, the image's `serve` command. |
 | `example/` | The example service, accrued interest on a bond, with its tests. |
 
 ## Rules to keep

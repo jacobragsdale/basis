@@ -1,11 +1,12 @@
 """basis-api's part of the `basis` command, in a repo whose `[tool.basis] parts` include `api`: `basis serve`, which
-runs the repo's API as `api.serve` does, until SIGTERM. A failure prints as one line, as every `basis` failure does:
+runs the repo's API as `api.serve` does, until SIGTERM, and is its image's command; it never touches git. A failure prints as one line, as every `basis` failure does:
 a service that declares too little, or settings that name no value the API needs. uvicorn loads when the verb runs,
 not for every `basis --help`."""
 
 import argparse
 from dataclasses import dataclass
 
+from basis.api import sync
 from basis.core.verbs import Part, Verb
 
 
@@ -16,8 +17,9 @@ class ServeArgs:
 
 
 def part() -> Part:
-    """basis-api's verbs, which the `basis.verbs` entry point named `api` gives the `basis` command."""
-    return Part(verbs=(Verb("serve", "serve the API with uvicorn until SIGTERM, which drains it first", _serve_arguments, lambda n: _serve(ServeArgs(n.service))),))
+    """basis-api's verbs, which the `basis.verbs` entry point named `api` gives the `basis` command, and its files:
+    its block of `AGENTS.md` and its line of the Dockerfile."""
+    return Part(verbs=(Verb("serve", "serve the API with uvicorn until SIGTERM, which drains it first", _serve_arguments, lambda n: _serve(ServeArgs(n.service))),), files=sync.agent_files)
 
 
 def _serve_arguments(parser: argparse.ArgumentParser) -> None:
