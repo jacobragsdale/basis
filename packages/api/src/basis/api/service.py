@@ -78,7 +78,7 @@ from basis.api.errors import Answerable, DeclarationError, Error, NotReadyError
 from basis.api.identity import GivenUser, SignInRequiredError, User, annotation_refusal
 from basis.api.resources import Cache, CacheResource, Client, Clock, ClockResource, DatabaseResource, HttpResource, Ids, IdsResource, Opened, Reader, Resource, Session, Writer, check_outboxes
 from basis.api.settings import Settings
-from basis.core.errors import KINDS, Conflict, Denied, Failed, Rejected, ServiceError, Timeout, Unavailable
+from basis.core.errors import DATABASE_KINDS, KINDS, ServiceError, Timeout
 
 GROUP = "basis.apis"
 STATE = "basis"
@@ -89,10 +89,9 @@ NAME = re.compile(r"[a-z][a-z0-9-]{0,62}")
 _PARAMETER = re.compile(r"\{[^}]*\}")
 _REFERENCE = re.compile(r"[A-Za-z_][\w.]*:[A-Za-z_]\w*")
 BASIS_ERRORS: tuple[Answerable, ...] = (*KINDS, NotReadyError)
-"""The errors basis raises itself, which a route never declares: `Route.answers` adds each where the route can meet it."""
-_DATABASE_KINDS: tuple[type[ServiceError], ...] = (Timeout, Unavailable, Conflict, Rejected, Denied, Failed)
-"""What a database's statements can raise; another service's calls can raise every kind, and a cache's read or a
-compute call only its `Timeout`."""
+"""The errors basis raises itself, which a route never declares: `Route.answers` adds each where the route can meet it:
+every kind another service's calls can raise, those a database's statements can (`DATABASE_KINDS`), and a cache's
+read's or a compute call's `Timeout`."""
 
 type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
 _RESOURCES = (DatabaseResource, HttpResource, CacheResource, ClockResource, IdsResource)
@@ -268,7 +267,7 @@ def _met(asks: Sequence[Ask]) -> Iterator[Answerable]:
             case HttpResource():
                 met.update(KINDS)
             case DatabaseResource():
-                met.update(_DATABASE_KINDS)
+                met.update(DATABASE_KINDS)
             case CacheResource() | ComputeFunction():
                 met.add(Timeout)
             case _:  # the settings, the user, the clock and the ids, which never fail

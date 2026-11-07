@@ -178,8 +178,8 @@ def _logging_in(connection_string: str) -> Mapping[str, object]:
 @pytest.mark.parametrize("case", list(KIND))
 def test_each_kind_a_database_raises_is_the_same_from_the_fake_and_the_real_one(contract: Contract, case: Case) -> None:
     kind, sql = KIND[case], contract.sql(case)
-    if contract.dialect == "fake":
-        contract.fake.fails(kind, statement=sql)
+    if contract.dialect == "fake":  # a login's failure is every statement's, and fails the login itself, as a real database's does
+        contract.fake.fails(kind, statement=None if case in {"login", "unreachable"} else sql)
     port = contract.port(**_changed(contract, case))
     with pytest.raises(ServiceError) as raised, port.statements(writes=True) as statements:
         statements.execute(sql, {}, timeout_s=1 if case == "timeout" else 10)

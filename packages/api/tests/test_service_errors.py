@@ -3,6 +3,7 @@ the problem the design gives it, unless the handler handles it; a route lists th
 kind nothing it asks for raises is a defect; and the outbox makes again, or refuses, a call by the kind it failed with,
 as its statuses say."""
 
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -158,8 +159,8 @@ def test_each_kind_another_service_fails_with_answers_the_designs_status(kind: t
 @pytest.mark.parametrize("kind", fakes.DATABASE_KINDS, ids=[kind.__name__ for kind in fakes.DATABASE_KINDS])
 def test_each_kind_a_database_fails_with_answers_the_designs_status_and_never_its_drivers_words(kind: type[api.ServiceError]) -> None:
     warehouse = fakes.Database(answers={SELECT: [PRICE]})
-    warehouse.fails(kind)
     with _client(warehouse=warehouse) as client:
+        warehouse.fails(kind)  # once the app has started, which its check of the database would fail
         response = client.get(f"/stored/{SECURITY}")
     found = response.json()
     assert (response.status_code, found["type"]) == (STATUSES[kind], TYPES[kind])
@@ -196,12 +197,42 @@ def test_a_get_unavailable_once_is_made_again_and_the_route_answers() -> None:
     assert (response.status_code, response.json()) == (HTTPStatus.OK, {"security": SECURITY, "price": "99.50"})
 
 
+def test_a_get_unavailable_every_time_is_made_again_as_often_as_its_deadline_allows_and_at_once() -> None:
+    """The fake service's client waits no time, and each wait is all of its backoff: 50ms, then 100ms, which 0.3s fits."""
+    pricing = _pricing()
+    pricing.fails(f"/prices/{SECURITY}", api.Unavailable)
+    started = time.monotonic()
+    with _client(pricing=pricing) as client:
+        response = client.get(f"/quotes/{SECURITY}")
+    assert (response.status_code, pricing.waits.waited, time.monotonic() - started < 0.3) == (HTTPStatus.SERVICE_UNAVAILABLE, [0.05, 0.1], True)
+
+
 def test_a_database_failure_once_fails_only_the_next_statement() -> None:
     warehouse = fakes.Database(answers={SELECT: [PRICE]})
-    warehouse.fails(api.Unavailable, times=1)
     with _client(warehouse=warehouse) as client:
+        warehouse.fails(api.Unavailable, times=1)
         first, second = client.get(f"/stored/{SECURITY}"), client.get(f"/stored/{SECURITY}")
     assert (first.status_code, second.status_code) == (HTTPStatus.SERVICE_UNAVAILABLE, HTTPStatus.OK)
+
+
+@pytest.mark.parametrize("kind", [api.Unavailable, api.Denied], ids=["unreachable", "login-refused"])
+def test_a_database_that_fails_its_logins_stops_the_app_at_startup(kind: type[api.ServiceError]) -> None:
+    """As a real database that cannot be reached, or refuses the login, does: the app checks each at startup."""
+    warehouse = fakes.Database()
+    warehouse.fails(kind)
+    with pytest.raises(kind, match="database warehouse"), _client(warehouse=warehouse):
+        pass
+
+
+def test_a_failure_of_the_outboxs_statements_is_one_a_test_can_make() -> None:
+    probing, adding = fakes.Database(), fakes.Database(answers={INSERT: 1})
+    probing.fails(api.Denied, statement=fakes.OUTBOX_PROBE)
+    with pytest.raises(api.DeclarationError, match="outbox prices_outbox cannot be read through its write login"), _client(warehouse=probing):
+        pass
+    with _client(warehouse=adding) as client:
+        adding.fails(api.Conflict, statement=fakes.OUTBOX_ADD)
+        response = client.post("/book", json=PRICE)
+    assert (response.status_code, response.json()["type"], adding.committed, adding.outbox) == (HTTPStatus.BAD_GATEWAY, "service-conflict", [], [])
 
 
 def test_a_kind_nothing_the_route_asks_for_raises_is_a_defect() -> None:
@@ -241,7 +272,10 @@ def test_a_call_after_its_commit_is_made_again_or_refused_by_the_kind_it_fails_w
 @pytest.mark.parametrize(
     ("fails", "message"),
     [
-        (lambda database: database.fails(api.NotFound), "fails with one of the kinds of ServiceError a database raises, Timeout, Unavailable, Conflict, Rejected, Denied, Failed, not 'NotFound'"),
+        (
+            lambda database: database.fails(api.NotFound),
+            "a fake database fails with one of Timeout, Unavailable, Conflict, Rejected, Denied, Failed, the kinds of ServiceError it can raise, not 'NotFound'",
+        ),
         (lambda database: database.fails(api.BadReply), "not 'BadReply'"),
         (lambda database: database.fails(ValueError), "not 'ValueError'"),
         (lambda database: database.fails(api.Unavailable, times=0), "a whole number of times, 1 or more"),

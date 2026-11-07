@@ -119,7 +119,7 @@ async def _relay_all(planned: Plan, tracer: Tracer, now: Callable[[], datetime])
                 fake = planned.fakes.get(resource.name)
                 reaching = fake.client(resource.name) if isinstance(fake, fakes.Http) else client(resource.name, planned.settings.http[resource.name])
                 made.append(reaching)
-                clients[resource.name] = HttpClient(opened.HttpClient(resource, reaching, tracer))
+                clients[resource.name] = HttpClient(opened.HttpClient(resource, reaching, tracer, waits=fake.waits if isinstance(fake, fakes.Http) else opened.SYSTEM_WAITS))
         found: list[Relayed] = []
         for resource in planned.outboxed:
             database = open_one(resource, planned.settings, planned.fakes.get(resource.name), tracer, set())
