@@ -12,7 +12,7 @@ from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter, SimpleSpanProcessor
 from opentelemetry.sdk.trace.sampling import ALWAYS_ON, ParentBased
 
-from basis.api.settings import Traces
+from basis.core.settings import Traces
 
 
 def provider(service: str) -> TracerProvider:

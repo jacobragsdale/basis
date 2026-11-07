@@ -171,7 +171,8 @@ forbidden_modules = [
     "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.storage",
     "basis.core.settings", "basis.core.new", "basis.core.sync", "basis.core.testing", "basis.core.command",
     "basis.core.check", "basis.core.verbs", "basis.core.hooks", "basis.core.hygiene", "basis.core.clone", "basis.core.full", "basis.core.invalid",
-    "basis.core.qa", "basis.core.review", "basis.core.doctor", "basis.core.upgrade", "mssql_python", "oracledb",
+    "basis.core.qa", "basis.core.review", "basis.core.doctor", "basis.core.upgrade", "basis.core.opened", "basis.core.fakes", "basis.core.traces",
+    "mssql_python", "oracledb", "httpx2",
 ]
 ignore_imports = [
     "basis.job -> basis.job.api",  # `etl.run` and `etl.replay` load on first use, which job code never makes
@@ -190,7 +191,8 @@ forbidden_modules = [
     "jwt", "cryptography", "uvicorn",
     "basis.api.openapi", "basis.api.contract", "basis.api.arrow",
     "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.command", "basis.core.check", "basis.core.hooks",
-    "basis.core.hygiene", "basis.core.sync", "mssql_python", "oracledb", "httpx", "httpx2", "requests", "urllib3", "aiohttp",
+    "basis.core.hygiene", "basis.core.sync", "basis.core.opened", "basis.core.fakes", "basis.core.traces",
+    "mssql_python", "oracledb", "httpx", "httpx2", "requests", "urllib3", "aiohttp",
 ]
 ignore_imports = [
     "basis.api -> basis.api.app",  # `api.build` loads on first use, which a service's modules never make

@@ -11,6 +11,7 @@ from typing import override
 
 import polars as pl
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
 
 from basis.core import logs
 from basis.core.interval import Interval
@@ -148,3 +149,34 @@ def test_a_record_for_a_person_is_the_message_then_its_fields_as_json(monkeypatc
     record = logging.makeLogRecord({"name": "basis.job", "levelname": "INFO", "msg": "loaded %s", "args": ("prices",), "rows": 3})
     line = logs.TextFormatter().format(record)
     assert line.endswith(' INFO basis.job: loaded prices {"rows":3}')
+
+
+def test_a_json_record_logged_in_a_span_carries_its_trace_and_span_ids_and_one_logged_outside_none() -> None:
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logs.JsonFormatter())
+    logger = logging.getLogger("basis.core.tests.traced")
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    tracer = TracerProvider().get_tracer("test")
+    try:
+        with tracer.start_as_current_span("run") as run:
+            logger.info("in the run")
+            with tracer.start_as_current_span("warehouse SELECT") as statement:
+                logger.info("in its statement")
+                bound = logs.bound()
+        logger.info("after it")
+    finally:
+        logger.removeHandler(handler)
+    records = [json.loads(line) for line in stream.getvalue().splitlines()]
+    ids = [(record.get("trace_id"), record.get("span_id")) for record in records]
+    trace_id = f"{run.get_span_context().trace_id:032x}"
+    assert ids == [(trace_id, f"{run.get_span_context().span_id:016x}"), (trace_id, f"{statement.get_span_context().span_id:016x}"), (None, None)]
+    assert (bound["trace_id"], bound["span_id"]) == ids[1]  # what a worker process binds, so its records link to the span that called it
+
+
+def test_a_record_for_a_person_carries_no_trace_ids() -> None:
+    record = logging.LogRecord("basis.test", logging.INFO, __file__, 1, "in the run", None, None)
+    with TracerProvider().get_tracer("test").start_as_current_span("run"):
+        line = logs.TextFormatter().format(record)
+    assert "trace_id" not in line

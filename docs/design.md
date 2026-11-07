@@ -305,11 +305,17 @@ stay simple.
 wait has a deadline, every call has a trace span, and every resource has a fake. The HTTP client (httpx2, with a proxy
 and a CA bundle), the clock, ids and tracing move with it, so jobs get them too, and basis-api builds on core's.
 
-**Traces and logs.** Traces go to Datadog. The OpenTelemetry SDK, which basis-api already traces with, sends them over
-OTLP to the Datadog Agent on each AKS node, so basis needs no Datadog library. Every run and every request is a trace,
-and every SQL statement and HTTP call is a span. Logs stay JSON on stderr, as they are now, never files on NFS, and
-each record carries its trace's and span's ids, so Datadog links a log to its trace. There are no custom metrics:
-Datadog's APM derives request counts, errors and latency from the traces.
+**Traces and logs.** Traces go to Datadog. The OpenTelemetry SDK makes them, and basis posts them over OTLP/HTTP to the
+Datadog Agent on each AKS node, at the full URL `BASIS_TRACES__ENDPOINT` names, `http://$(HOST_IP):4318/v1/traces` in a
+pod, the node's IP from the downward API's `status.hostIP`, so basis needs no Datadog library. It posts them with
+httpx2 itself, rather than through the SDK's OTLP exporter, which reads `OTEL_*` variables whatever it is given and
+sends through `HTTP_PROXY`: basis's settings are the only configuration. Each run and each app has its own tracer
+provider, and nothing sets OpenTelemetry's global one. Every run and every request is a trace, and every SQL statement
+and HTTP call is a span; with no endpoint set, as on a desktop, spans are made and go nowhere, and nothing fails. Logs
+stay JSON on stderr, as they are now, never files on NFS, and each record logged in a trace carries its `trace_id` and
+`span_id` in OpenTelemetry's hexadecimal, which Datadog reads as they are ([the spike](spikes/datadog.md)), and a
+`service` field, so Datadog links a log to its trace and its service. There are no custom metrics: Datadog's APM
+derives request counts, errors and latency from the traces.
 
 **Calendars.** The firm has no official business-day calendar, only several implementations, mostly of SIFMA's. basis
 ships two, `sifma-us`, with its full and early closes, and `target2`, as data in `basis.core` built from SIFMA's and the

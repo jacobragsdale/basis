@@ -113,7 +113,11 @@ version = "0.0.0"
 source = { editable = "packages/core" }
 dependencies = [
     { name = "grimp" },
+    { name = "httpx2" },
     { name = "mssql-python" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-common" },
+    { name = "opentelemetry-sdk" },
     { name = "oracledb" },
     { name = "polars" },
     { name = "pyarrow" },
@@ -126,7 +130,11 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "grimp", specifier = ">=3.19" },
+    { name = "httpx2", specifier = ">=2.16.0" },
     { name = "mssql-python", specifier = ">=1.17.0" },
+    { name = "opentelemetry-api", specifier = ">=1.45.2" },
+    { name = "opentelemetry-exporter-otlp-proto-common", specifier = ">=1.45.2" },
+    { name = "opentelemetry-sdk", specifier = ">=1.45.2" },
     { name = "oracledb", specifier = ">=26.1.0" },
     { name = "polars", specifier = ">=2.1.0" },
     { name = "pyarrow", specifier = ">=26.0.1" },

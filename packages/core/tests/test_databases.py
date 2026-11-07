@@ -7,12 +7,18 @@ from typing import Annotated, Literal
 
 import mssql_python
 import oracledb
+import pyarrow as pa
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import Field, ValidationError
 
+from basis.core import traces
 from basis.core.databases import open_database
 from basis.core.databases.base import end_reading
-from basis.core.databases.oracle import connect
+from basis.core.databases.mssql import MssqlReader, MssqlWriter
+from basis.core.databases.oracle import OracleReader, connect
 from basis.core.model import Model
 from basis.core.settings import GivenSettings, OracleSettings, publish_refusal, variable
 
@@ -132,3 +138,67 @@ def test_a_variable_is_named_without_the_tag_of_any_discriminated_union(settings
     with pytest.raises(ValidationError) as raised:
         settings.model_validate(values)
     assert [variable(error["loc"], settings) for error in raised.value.errors()] == variables
+
+
+class _Cursor:
+    """A driver's cursor, as SQL Server's reader and writer use it: each statement it executes, and its rows as Arrow."""
+
+    def __init__(self, executed: list[str]) -> None:
+        self.executed = executed
+        self.rowcount = 1
+
+    def execute(self, sql: str, binds: object = None) -> None:
+        del binds
+        self.executed.append(sql)
+
+    def executemany(self, sql: str, rows: object) -> None:
+        del rows
+        self.executed.append(sql)
+
+    def arrow_reader(self, *, batch_size: int) -> pa.RecordBatchReader:
+        del batch_size
+        batch = pa.record_batch({"price": [1, 2]})
+        return pa.RecordBatchReader.from_batches(batch.schema, [batch])
+
+    def fetchone(self) -> tuple[int]:
+        return (0,)
+
+    def close(self) -> None:
+        pass
+
+
+class _Connection:
+    def __init__(self) -> None:
+        self.executed: list[str] = []
+
+    def cursor(self) -> _Cursor:
+        return _Cursor(self.executed)
+
+    def commit(self) -> None:
+        self.executed.append("commit")
+
+    def fetch_df_batches(self, sql: str, binds: object, *, size: int, fetch_decimals: bool) -> list[pa.Table]:
+        del binds, size, fetch_decimals
+        self.executed.append(sql)
+        return [pa.table({"PRICE": [1, 2, 3]})]
+
+
+def test_each_statement_a_reader_or_a_writer_runs_has_a_span_on_the_runs_tracer() -> None:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    mssql, oracle = _Connection(), _Connection()
+    with traces.tracing(provider.get_tracer("test")):
+        MssqlReader("source", mssql, 10).fetch("SELECT price FROM prices", None, what="prices")  # ty: ignore[invalid-argument-type] -- a fake connection
+        writer = MssqlWriter("warehouse", mssql, 10, "etl.publishes")  # ty: ignore[invalid-argument-type] -- a fake connection
+        assert writer.published("r1") is False
+        writer.commit()
+        OracleReader("ledger", oracle, 10).fetch("SELECT price FROM prices", None, what="prices")  # ty: ignore[invalid-argument-type] -- a fake connection
+    MssqlReader("outside", mssql, 10).fetch("SELECT 1", None, what="outside a run")  # ty: ignore[invalid-argument-type] -- a fake connection
+    spans = [(span.name, dict(span.attributes or {})) for span in exporter.get_finished_spans()]
+    assert spans == [
+        ("source SELECT", {"db.system.name": "microsoft.sql_server", "basis.resource": "source", "db.query.text": "SELECT price FROM prices", "db.response.returned_rows": 2}),
+        ("warehouse SELECT", {"db.system.name": "microsoft.sql_server", "basis.resource": "warehouse", "db.query.text": "SELECT COUNT(*) FROM etl.publishes WHERE run_id = %(run_id)s"}),
+        ("warehouse commit", {"db.system.name": "microsoft.sql_server", "basis.resource": "warehouse"}),
+        ("ledger SELECT", {"db.system.name": "oracle.db", "basis.resource": "ledger", "db.query.text": "SELECT price FROM prices", "db.response.returned_rows": 3}),
+    ]

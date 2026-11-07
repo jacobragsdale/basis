@@ -66,11 +66,11 @@ from basis.api.resources import (
     SendMethod,
 )
 from basis.api.service import Service, ServiceError
-from basis.api.settings import HttpService, Settings
+from basis.api.settings import Settings
 from basis.core import logs
 from basis.core.databases import Statements, open_database
 from basis.core.destination import Dialect
-from basis.core.settings import MssqlSettings, SettingsError, variable
+from basis.core.settings import HttpService, MssqlSettings, SettingsError, variable
 
 log = logging.getLogger(__name__)
 _PROPAGATOR = TraceContextTextMapPropagator()

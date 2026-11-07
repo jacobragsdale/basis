@@ -15,6 +15,9 @@ platforms split long lines, so bulk data belongs in the run's snapshot, which th
 Work that shares its process with other work, such as an API's request, adds its fields with `fields(request_id=...)`
 instead of `bind`: they hold in its own context alone, so two requests served at once each log their own.
 
+Every JSON record logged inside a trace, a run's or a request's, carries the trace's id and its current span's, from
+`trace_fields`, so that Datadog links the record to the span it was logged in.
+
 A run binds its id and its job first, with `bind(run_id=..., job=...)`, so every record carries them and filtering on
 `run_id` finds a whole run. A job logs with `logging.getLogger(__name__)`; `include` gives its package's loggers the
 configured level, as basis's have.
@@ -38,6 +41,8 @@ from pathlib import Path
 from typing import Literal, override
 
 import polars as pl
+from opentelemetry import trace
+from opentelemetry.trace import SpanContext
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -100,9 +105,21 @@ def bind(**fields: object) -> None:
 
 
 def bound() -> dict[str, object]:
-    """The fields a record logged here now carries, `bind`'s and those of every `fields` block it is in, for a worker
-    process to bind in its own: a spawned process starts with none."""
-    return _bound | dict(_scoped.get({}))
+    """The fields a record logged here now carries, `bind`'s, those of every `fields` block it is in and the current
+    span's, for a worker process to bind in its own: a spawned process starts with none."""
+    return _bound | dict(_scoped.get({})) | _current()
+
+
+def trace_fields(context: SpanContext) -> dict[str, str]:
+    """The fields that link a record to the span it was logged in, as Datadog reads them in a JSON record: the trace's
+    id as 32 lower-case hexadecimal digits, and the span's as 16 (docs/spikes/datadog.md)."""
+    return {"trace_id": trace.format_trace_id(context.trace_id), "span_id": trace.format_span_id(context.span_id)}
+
+
+def _current() -> dict[str, str]:
+    """The current span's `trace_fields`, or none outside every trace."""
+    context = trace.get_current_span().get_span_context()
+    return trace_fields(context) if context.is_valid else {}
 
 
 def included() -> list[str]:
@@ -157,7 +174,7 @@ class JsonFormatter(logging.Formatter):
             "level": record.levelname.lower(),
             "logger": record.name,
             "message": record.getMessage(),
-            **_extras(record),
+            **_extras(record, traced=True),
         }
         if isinstance(record.exc_info, tuple) and (error := record.exc_info[1]) is not None:
             entry |= describe(error)
@@ -198,8 +215,11 @@ def to_json(value: object) -> str:
 _JSON = TypeAdapter(object, config=ConfigDict(ser_json_inf_nan="null"))  # NaN is not JSON: it logs as null
 
 
-def _extras(record: logging.LogRecord) -> dict[str, object]:
-    return _bound | dict(_scoped.get({})) | {key: value for key, value in vars(record).items() if key not in _STANDARD}
+def _extras(record: logging.LogRecord, *, traced: bool = False) -> dict[str, object]:
+    """A record's fields: `bind`'s, those of each `fields` block, where `traced` the current span's, and its own `extra`.
+    The span is the one current where the record is formatted, which is where it was logged, since a handler formats
+    it in the thread that logs it."""
+    return _bound | dict(_scoped.get({})) | (_current() if traced else {}) | {key: value for key, value in vars(record).items() if key not in _STANDARD}
 
 
 def _fallback(value: object) -> object:

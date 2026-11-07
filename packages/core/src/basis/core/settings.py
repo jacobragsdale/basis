@@ -1,15 +1,17 @@
 """Process configuration, read once from `BASIS_*` environment variables and nothing else: no job repo holds a connection
 string. Each database a job names is configured by that name, as `BASIS_DATABASES__WAREHOUSE__KIND=mssql`, with nested
-fields under a double underscore. A database without a `WRITE` block can be read, and never written: a laptop with
-read-only credentials runs a job, and writes nothing. A job's `main.py` names the settings file it reads, such as
-`.env.prod`; the command line reads the process's environment, as `uv run --env-file .env` sets it."""
+fields under a double underscore, and so is each other service a part calls, as `BASIS_HTTP__PRICING__URL`. A database
+without a `WRITE` block can be read, and never written: a laptop with read-only credentials runs a job, and writes
+nothing. Where spans go is `BASIS_TRACES__*` (`Traces`), and nowhere when it is not set. A job's `main.py` names the
+settings file it reads, such as `.env.prod`; the command line reads the process's environment, as `uv run --env-file
+.env` sets it."""
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import NoneType, UnionType
-from typing import Annotated, Literal, TypeAliasType, Union, get_args, get_origin, override
+from typing import Annotated, Literal, Self, TypeAliasType, Union, get_args, get_origin, override
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, FilePath, HttpUrl, SecretStr, model_validator
 from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
@@ -94,6 +96,40 @@ class OracleSettings(Limits):
 type DatabaseSettings = Annotated[MssqlSettings | OracleSettings, Field(discriminator="kind")]
 
 
+class HttpService(Model):
+    """Another service, and how to reach it: from these settings alone, never `SSL_CERT_FILE`, `HTTP_PROXY` or the
+    like, which configure nothing basis decides."""
+
+    url: HttpUrl
+    """The service's base URL, which each call's path follows, such as `https://pricing.internal.example/api`."""
+    ca_bundle: FilePath | None = None
+    """A PEM file of the certificate authorities the service's certificate must chain to, such as the firm's own,
+    in place of the operating system's trusted ones. Without it, the operating system's are trusted."""
+    proxy: HttpUrl | None = None
+    """The proxy each call goes through, such as `http://proxy.internal.example:8080`. Without it, calls go direct."""
+
+
+class Traces(Model):
+    """Where spans go (`basis.core.traces`): from these settings alone, never an `OTEL_*` variable."""
+
+    exporter: Literal["otlp", "console"]
+    """`otlp` posts spans over OTLP/HTTP to `endpoint`, the Datadog Agent on the node in a pod; `console` writes them
+    to stderr, to see them on a desktop, never to stdout, which carries a command's results."""
+    endpoint: HttpUrl | None = None
+    """For `otlp` only: the full URL spans are posted to, path and all, since basis posts to exactly the URL it is
+    given, such as `http://10.0.0.5:4318/v1/traces`. In a pod, the host is the node's IP, which the downward API gives
+    as `status.hostIP`: `http://$(HOST_IP):4318/v1/traces`."""
+    timeout_s: Annotated[float, Field(gt=0)] = 5
+    """Seconds each export may take, its retries included."""
+
+    @model_validator(mode="after")
+    def _endpoint_for_otlp(self) -> Self:
+        if (self.exporter == "otlp") != (self.endpoint is not None):
+            msg = "the otlp exporter needs an endpoint, BASIS_TRACES__ENDPOINT, and the console exporter takes none"
+            raise ValueError(msg)
+        return self
+
+
 def publish_refusal(name: str, database: MssqlSettings | OracleSettings) -> tuple[str, str] | None:
     """Why a run cannot publish to the database the settings name `name`, and the fix, which names each variable to
     set; or None when it can: a publish needs a write login, and a ledger to write in the same transaction."""
@@ -128,6 +164,13 @@ class Settings(BaseSettings):
     `abfs://runs@account.dfs.core.windows.net/etl`. A run from Python saves in its repo's `snapshots/` instead."""
     databases: dict[str, DatabaseSettings] = Field(default_factory=dict)
     """Each database a job reads or writes, by the name its datasets and tables give."""
+    http: dict[str, HttpService] = Field(default_factory=dict)
+    """Each other service a part calls, by the name its declaration gives."""
+    traces: Traces | None = None
+    """Where spans go. Without it they are made, so every record logged in a trace carries its ids, and go nowhere:
+    a desktop or a test needs no Agent."""
+    git_sha: str | None = None
+    """The repo's commit, which basis's Dockerfile sets in the image as `BASIS_GIT_SHA`: the version spans carry."""
 
     def snapshots(self) -> Root:
         if self.snapshot_root is None:
