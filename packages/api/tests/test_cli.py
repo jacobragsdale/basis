@@ -51,7 +51,7 @@ def test_basis_lists_dev_and_call_in_a_repo_with_an_api(repo: Path, capsys: pyte
 
 def test_sync_writes_the_apis_image_command_and_agent_block(repo: Path) -> None:
     assert basis(repo, "sync") == 0
-    assert "#   an API: serve\nENTRYPOINT" in (repo / "Dockerfile").read_text(encoding="utf-8")
+    assert "#   an API: serve, and relay on a schedule where its databases declare an outbox\nENTRYPOINT" in (repo / "Dockerfile").read_text(encoding="utf-8")
     assert "## basis-api\n" in (repo / "AGENTS.md").read_text(encoding="utf-8")
 
 

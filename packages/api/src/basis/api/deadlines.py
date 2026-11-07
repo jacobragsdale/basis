@@ -36,6 +36,11 @@ def route(name: str, seconds: float) -> Generator[Deadline]:
         _CURRENT.reset(token)
 
 
+def serving() -> Deadline | None:
+    """The deadline of the route serving the request this runs in, or None outside one."""
+    return _CURRENT.get()
+
+
 @dataclass(frozen=True)
 class Limit:
     """How long one call may take, and whose deadline sets it."""

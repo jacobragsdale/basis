@@ -9,8 +9,9 @@ from basis.core.sync import AgentFiles
 
 _PACKAGE = Path(__file__).parent
 
-IMAGE = "#   an API: serve\n"
-"""The Dockerfile's line for the API: the command its container runs, as the cluster's deployment gives it."""
+IMAGE = "#   an API: serve, and relay on a schedule where its databases declare an outbox\n"
+"""The Dockerfile's line for the API: the command its container runs, as the cluster's deployment gives it, and the
+command a scheduler gives the container that makes the calls its outboxes still hold."""
 
 
 def agent_files() -> AgentFiles:

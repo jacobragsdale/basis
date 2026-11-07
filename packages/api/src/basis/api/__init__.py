@@ -36,7 +36,8 @@ one exception map, health and readiness endpoints, and a graceful shutdown. A se
 Each route declares its deadline, its response and its errors (`service.py`), and reads its request strictly
 (`strict.py`). A resource is anything a handler reaches outside the process: a database, another HTTP service, a cache,
 the clock and new ids. `resources.py` says how each is declared, and what a handler gets for it; `basis.api.fakes`
-holds their fakes. CPU-bound work a handler hands to the service's process pool is a compute function (`compute.py`).
+holds their fakes. A call that changes another service's state goes after the commit, through the outbox the written
+database declares with `api.outbox` (`outboxes.py`). CPU-bound work a handler hands to the service's process pool is a compute function (`compute.py`).
 A service that declares `user=User` has each request's bearer token verified, and its handlers ask for `User | None`:
 `identity.py` says how.
 
@@ -48,7 +49,7 @@ from typing import TYPE_CHECKING
 from basis.api.compute import Compute, ComputeFunction, compute
 from basis.api.errors import Error, FieldError, Problem, ServiceError
 from basis.api.identity import SignInRequiredError, User
-from basis.api.resources import Bind, Cache, CallFailedError, Client, Clock, DeadlineExceededError, Ids, Reader, Resource, Writer, cache, clock, database, http, ids
+from basis.api.resources import Bind, Cache, CallFailedError, Client, Clock, DeadlineExceededError, Ids, Outbox, Reader, Resource, Writer, cache, clock, database, http, ids, outbox
 from basis.api.service import Route, Service, delete, get, given, load, patch, post, put
 from basis.api.settings import Serve, Settings, SettingsError, Traces
 
@@ -69,6 +70,7 @@ __all__ = [
     "Error",
     "FieldError",
     "Ids",
+    "Outbox",
     "Problem",
     "Reader",
     "Resource",
@@ -93,6 +95,7 @@ __all__ = [
     "http",
     "ids",
     "load",
+    "outbox",
     "patch",
     "post",
     "put",

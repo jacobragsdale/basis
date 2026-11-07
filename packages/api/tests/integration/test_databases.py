@@ -2,32 +2,42 @@
 `BASIS_TEST_*` variables and scratch databases as basis-job's (packages/job/tests/integration/README.md). A write
 commits once the response validates, and rolls back when the handler raises or the response does not validate; a
 request's reads see its own writes; a statement past its deadline is stopped on the server, and its request's writes
-are rolled back; and the example's SQL runs on SQL Server. Every test makes its own tables and drops them after."""
+are rolled back; and the example's SQL runs on SQL Server. The outbox `basis ddl` prints is created in each: a call
+whose writes roll back is never made, and one its service refuses after the commit reaches it through `basis relay`,
+with its key, once the service answers again. Every test makes its own tables and drops them after."""
 
 import contextlib
+import json
+import os
+import sys
+import textwrap
 import time
 import uuid
 from collections.abc import Callable, Generator, Iterator, Mapping
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from http import HTTPStatus
+from pathlib import Path
 from typing import Annotated, Literal, override
 from uuid import UUID
 
 import mssql_python
 import oracledb
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import NoOpTracer
 from pydantic import BaseModel, ConfigDict, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from basis import api
-from basis.api import fakes
+from basis.api import fakes, outboxes, relay
 from basis.api.example import service as example
+from basis.api.outboxes import Row
+from basis.core import command
 from basis.core.databases import Statements, open_database
 from basis.core.settings import GivenSettings
 
@@ -399,3 +409,192 @@ def test_the_examples_reads_and_writes_run_on_sql_server(mssql: Scratch) -> None
     assert (UUID(str(settlement_id)), security, face, settle, accrued) == (UUID("00000000-0000-7000-8000-000000000001"), "US912810TM64", Decimal("1000000.00"), date(2026, 11, 6), Decimal("21375.00"))
     assert isinstance(recorded_at, datetime)
     assert recorded_at == at
+
+
+# The outbox
+
+
+NOTE = "n" * 40_000
+"""A call's body this long passes the sizes a driver binds inline, a VARCHAR2's 32,767 bytes and an NVARCHAR's 4,000
+characters, so that it is written to and read from the outbox's CLOB or NVARCHAR(MAX) as a large value."""
+LEDGER = api.http("ledger", deadline_s=5)
+
+
+class Ledger:
+    """The ledger service, as a fake in this process: each call it is sent, with its `Idempotency-Key`, and the status
+    it answers, which a test changes."""
+
+    def __init__(self, *, status: int) -> None:
+        self.status = status
+        self.seen: list[tuple[str | None, object]] = []
+        self.app = FastAPI()
+
+        @self.app.post("/bookings")
+        async def bookings(request: Request) -> Response:
+            self.seen.append((request.headers.get("idempotency-key"), json.loads(await request.body())))
+            return Response(status_code=self.status)
+
+
+@dataclass(frozen=True)
+class Outboxed:
+    """A scratch database with an outbox table, as `basis ddl` prints it, and a service whose routes send calls
+    through it."""
+
+    scratch: Scratch
+    table: str
+    service: api.Service
+
+    def app(self, ledger: Ledger) -> api.App:
+        return api.build(self.service, settings=self.settings, fakes={LEDGER: fakes.Http(ledger.app)})
+
+    @property
+    def settings(self) -> api.Settings:
+        return api.Settings.given(databases={"warehouse": self.scratch.settings})
+
+    def run_relay(self, ledger: Ledger, *, after: timedelta) -> list[relay.Relayed]:
+        """A run of `basis relay`, `after` from now: as far on as the next attempt of a call."""
+        later = datetime.now(UTC) + after
+        return relay.relay(relay.plan(self.service, self.settings, {LEDGER: fakes.Http(ledger.app)}), NoOpTracer(), now=lambda: later)
+
+    def rows(self) -> list[Row]:
+        columns = ", ".join(outboxes.COLUMNS)
+        with open_database(GivenSettings(databases={"warehouse": self.scratch.settings}), "warehouse").statements(writes=False) as statements:
+            found = statements.query(f"SELECT {columns} FROM {self.table} ORDER BY created_at", {}, timeout_s=10)
+        return [Row.model_validate(values) for values in found.to_pylist()]
+
+
+def _outboxed_service(scratch: Scratch, table: str) -> api.Service:
+    warehouse = api.database("warehouse", deadline_s=10, max_concurrent=4, outbox=api.outbox(table, max_age_s=3600, backoff_s=60, max_backoff_s=600))
+    insert = f"INSERT INTO {scratch.table} (security, price) VALUES ({scratch.bind('security')}, {scratch.bind('price')})"
+
+    async def book(price: Price, warehouse_: Annotated[api.Writer, api.given(warehouse)], ledger: Annotated[api.Client, api.given(LEDGER)]) -> Price:
+        await warehouse_.execute(insert, security=price.security, price=price.price)
+        await ledger.send("POST", "/bookings", {"security": price.security, "price": str(price.price), "note": NOTE}, key=f"booking-{price.security}")
+        return price
+
+    async def book_then_refuse(price: Price, warehouse_: Annotated[api.Writer, api.given(warehouse)], ledger: Annotated[api.Client, api.given(LEDGER)]) -> Price:
+        await book(price, warehouse_, ledger)
+        msg = f"{price.security} is refused after all"
+        raise Refused(msg)
+
+    routes = [api.post("/book", book, deadline_s=30, response=Price, errors=[]), api.post("/refused", book_then_refuse, deadline_s=30, response=Price, errors=[Refused])]
+    return api.Service(name="booking", settings=api.Settings, resources=[warehouse, LEDGER], routes=routes)
+
+
+@pytest.fixture
+def outboxed(scratch: Scratch) -> Iterator[Outboxed]:
+    table = f"{scratch.table}_outbox"
+    scratch.execute(*(statement for statement in outboxes.ddl("warehouse", table, scratch.dialect).split(";\n") if statement.strip()))
+    yield Outboxed(scratch, table, _outboxed_service(scratch, table))
+    scratch.drop(table)
+
+
+BOOKED = {"security": "US912810TM64", "price": "101.25", "note": NOTE}
+KEY = "booking-US912810TM64"
+
+
+def test_a_route_whose_writes_roll_back_makes_no_call(outboxed: Outboxed) -> None:
+    ledger = Ledger(status=HTTPStatus.CREATED)
+    with TestClient(outboxed.app(ledger).asgi) as client:
+        assert client.post("/refused", json=PRICE).status_code == HTTPStatus.CONFLICT
+    [relayed] = outboxed.run_relay(ledger, after=timedelta(hours=2))
+    assert (ledger.seen, outboxed.rows(), _stored(outboxed.scratch), relayed.accepted) == ([], [], [], 0)
+
+
+def test_a_call_accepted_after_its_commit_is_done(outboxed: Outboxed) -> None:
+    ledger = Ledger(status=HTTPStatus.CREATED)
+    with TestClient(outboxed.app(ledger).asgi) as client:
+        assert client.post("/book", json=PRICE).status_code == HTTPStatus.OK
+    [row] = outboxed.rows()
+    assert (ledger.seen, row.status, row.attempts, row.next_at, row.body) == ([(KEY, BOOKED)], "done", 1, None, json.dumps(BOOKED, separators=(",", ":")))
+
+
+def test_a_call_that_fails_after_its_commit_reaches_the_service_through_the_relay_once_it_answers_again(outboxed: Outboxed) -> None:
+    ledger = Ledger(status=HTTPStatus.SERVICE_UNAVAILABLE)
+    with TestClient(outboxed.app(ledger).asgi) as client:
+        response = client.post("/book", json=PRICE)
+    assert (response.status_code, response.json()) == (HTTPStatus.OK, PRICE)  # the writes committed, whatever the ledger said
+    assert _stored(outboxed.scratch) == [("US912810TM64", Decimal("101.250000"))]
+    [after_commit] = outboxed.rows()
+    assert (after_commit.status, after_commit.attempts, after_commit.last_error) == ("pending", 1, "ledger answered 503 to POST /bookings")
+
+    [still_down] = outboxed.run_relay(ledger, after=timedelta(seconds=61))
+    ledger.status = HTTPStatus.CREATED
+    [answered] = outboxed.run_relay(ledger, after=timedelta(seconds=61 + 121))
+    [row] = outboxed.rows()
+    assert ((still_down.refused, still_down.accepted), (answered.refused, answered.accepted)) == ((1, 0), (0, 1))
+    assert ledger.seen == [(KEY, BOOKED)] * 3  # after the commit, then the relay's two attempts, each with its key
+    assert (row.status, row.attempts, row.next_at, row.idempotency_key) == ("done", 3, None, KEY)
+
+
+def test_a_call_that_ages_out_is_made_no_more_and_fails_the_relay(outboxed: Outboxed) -> None:
+    ledger = Ledger(status=HTTPStatus.SERVICE_UNAVAILABLE)
+    with TestClient(outboxed.app(ledger).asgi) as client:
+        assert client.post("/book", json=PRICE).status_code == HTTPStatus.OK
+    found = outboxed.run_relay(ledger, after=timedelta(hours=1, seconds=1))
+    [row] = outboxed.rows()
+    assert (len(ledger.seen), row.status, row.next_at) == (1, "expired", None)
+    failed = relay.failure(found, "booking")
+    assert failed is not None
+    assert f"POST /bookings to ledger with Idempotency-Key {KEY}" in failed[0]
+
+
+def test_two_relays_claim_a_call_once(outboxed: Outboxed) -> None:
+    with TestClient(outboxed.app(Ledger(status=HTTPStatus.SERVICE_UNAVAILABLE)).asgi) as client:
+        assert client.post("/book", json=PRICE).status_code == HTTPStatus.OK
+    database = open_database(GivenSettings(databases={"warehouse": outboxed.scratch.settings}), "warehouse")
+    later = datetime.now(UTC) + timedelta(seconds=61)
+    claimed: list[bool] = []
+    with database.statements(writes=True) as first, database.statements(writes=True) as second:
+        tables = [outboxes.Sql(statements, outboxed.table, outboxed.scratch.dialect) for statements in (first, second)]
+        [due], [seen_too] = (table.due(later, 10, timeout_s=10) for table in tables)
+        claimed.append(tables[0].claim(due, later + timedelta(seconds=30), timeout_s=10))
+        first.commit()
+        claimed.append(tables[1].claim(seen_too, later + timedelta(seconds=30), timeout_s=10))
+        second.commit()
+    [row] = outboxed.rows()
+    assert (claimed, row.attempts) == ([True, False], 2)
+
+
+def test_an_app_whose_outbox_table_is_missing_does_not_start(scratch: Scratch) -> None:
+    service = _outboxed_service(scratch, f"{scratch.table}_nowhere")
+    app = api.build(service, settings=api.Settings.given(databases={"warehouse": scratch.settings}), fakes={LEDGER: fakes.Http(FastAPI())})
+    with pytest.raises(api.ServiceError, match=f"database warehouse's outbox {scratch.table}_nowhere cannot be read through its write login"), TestClient(app.asgi):
+        pass
+
+
+def test_relay_fails_with_one_error_line_naming_a_call_that_aged_out(outboxed: Outboxed, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """`basis relay` as the scheduler runs it: from the repo, with the API's settings in the environment."""
+    with TestClient(outboxed.app(Ledger(status=HTTPStatus.SERVICE_UNAVAILABLE)).asgi) as client:
+        assert client.post("/book", json=PRICE).status_code == HTTPStatus.OK
+    outboxed.scratch.execute(f"UPDATE {outboxed.table} SET expires_at = created_at")  # aged out, as an hour on would leave it
+    module = f"booking_{uuid.uuid4().hex[:8]}"
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "booking-api"\nversion = "0.1.0"\n\n[tool.basis]\nparts = ["api"]\n', encoding="utf-8")
+    (tmp_path / f"{module}.py").write_text(
+        textwrap.dedent(f"""
+            from basis import api
+
+            WAREHOUSE = api.database("warehouse", deadline_s=10, max_concurrent=4, outbox=api.outbox("{outboxed.table}", max_age_s=3600, backoff_s=60, max_backoff_s=600))
+            LEDGER = api.http("ledger", deadline_s=5)
+
+
+            def health() -> None: ...
+
+
+            service = api.Service(name="booking", settings=api.Settings, resources=[WAREHOUSE, LEDGER], routes=[api.get("/up", health, deadline_s=1, response=None, errors=[], status=204)])
+        """),
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    for name in [name for name in os.environ if name.startswith("BASIS_")]:
+        monkeypatch.delenv(name)
+    monkeypatch.setenv("BASIS_DATABASES", json.dumps({"warehouse": outboxed.scratch.settings}))
+    monkeypatch.setenv("BASIS_HTTP", json.dumps({"ledger": {"url": "http://127.0.0.1:9"}}))  # the discard port: an aged-out call is never made
+    assert command.run(["relay", module], cwd=tmp_path, installed=command.installed()) == 1
+    out, err = capsys.readouterr()
+    assert json.loads(out)["outboxes"] == [{"database": "warehouse", "table": outboxed.table, "accepted": 0, "refused": 0, "taken": 0, "expired": 1}]
+    lines = err.splitlines()
+    assert json.loads(lines[-2])["message"] == "finished relay"
+    assert lines[-1].startswith(f"ERROR: a call in service booking's outbox aged out before its service accepted it, and is made no more: POST /bookings to ledger with Idempotency-Key {KEY}")
+    assert [row.status for row in outboxed.rows()] == ["expired"]
+    del sys.modules[module]
