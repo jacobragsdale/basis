@@ -16,6 +16,8 @@ basis owns, in a repo:
   whatever its name, and whichever part wrote it, installed or not;
 - the rules `DENY` in `.claude/settings.json`, which keeps every other key and rule it holds;
 - each file whose first lines carry `MARKER`;
+- each file a part makes from the repo's own code, its `made`, such as an API's `openapi.json`, which carries `MARKER`
+  in its first lines too: a JSON file as its first key, `"x-basis"`;
 - each path a part lists as `retired`: what an earlier version of it wrote before the marker existed, such as the
   `etl-*` skills etl-framework wrote, which a repo's first `basis sync` removes.
 
@@ -25,10 +27,12 @@ it is adopted: one without the marker, a skill's `SKILL.md` among them, a `CLAUD
 settings that hold none of basis's rules. So a skill without the marker is basis's only when a part lists it as
 `retired`; anywhere else it is the repo's own, removed never, and replaced only when adopted. `write` replaces it only when told to adopt it, after saving it beside itself as `NAME.before-basis`.
 
-`plan` works out, once, what basis writes in a repo and what stops it: files the repo's own, and files basis cannot
-read, each of which leaves every other file to be checked and written. `stale` lists what differs, whether to rewrite
-or to remove, which `basis check` reports, and `write` makes the repo match, which `basis sync` does. Both take every
-part the repo has at once, since what one part no longer writes may be another's."""
+`plan` works out, once, what basis writes in a repo and what stops it: files the repo's own, files basis cannot read,
+and files a part cannot make, each of which leaves every other file to be checked and written. A part makes a file
+only at a path relative to the repo, outside the folders basis never reads, that neither basis nor another part
+writes. `stale` lists what differs, whether to rewrite or to remove, which `basis check` reports, and `write` makes
+the repo match, which `basis sync` does. Both take every part the repo has at once, since what one part no longer
+writes may be another's."""
 
 import json
 import os
@@ -36,9 +40,10 @@ import re
 import shutil
 import stat
 import tomllib
-from collections.abc import Callable, Iterator, Sequence
+from collections import defaultdict
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from basis.core.errors import BasisError
 from basis.core.hooks import FOLDER, HOOKS
@@ -102,8 +107,8 @@ type Problem = tuple[str, str]
 
 @dataclass(frozen=True)
 class AgentFiles:
-    """What one part writes in a repo, as its installed version writes it: its agent files, and its lines of the
-    repo's Dockerfile."""
+    """What one part writes in a repo, as its installed version writes it: its agent files, its lines of the repo's
+    Dockerfile, and the files it makes from the repo's code."""
 
     part: str
     """The part's distribution, which names its block, such as `basis-job`."""
@@ -120,6 +125,10 @@ class AgentFiles:
     retired: tuple[str, ...] = ()
     """Files and folders, relative to the repo, that an earlier version of the part wrote without `MARKER`, and this
     one does not write: `sync` removes them."""
+    made: Mapping[str, Callable[[], str]] = field(default_factory=dict[str, Callable[[], str]])
+    """Each file the part makes from the repo's own code, such as an API's `openapi.json`, by its path in the repo,
+    `/`-separated, and the function that makes its text, whose first lines carry `MARKER`. Only `plan` calls it, once
+    per call; a `SyncError` it raises is that file's one problem, and every other file is still checked and written."""
 
     @property
     def begin(self) -> str:
@@ -210,9 +219,10 @@ def plan(repo: Path, parts: Sequence[AgentFiles]) -> Plan:
         for name, text in files.skills.items():
             for path in (repo / folder / name / "SKILL.md" for folder in (SKILLS, CLAUDE_SKILLS)):
                 made[path] = lambda path=path, part=files.part, name=name, text=text: (_skill(part, name, text), _carries_marker(path))
+    from_code, unreadable = _from_code(repo, parts, set(made))
+    made.update(from_code)
     written: dict[Path, str] = {}
     unclaimed: dict[Path, str] = {}
-    unreadable: dict[Path, Problem] = {}
     for path, make in made.items():
         try:
             text, claimed = make()
@@ -220,7 +230,7 @@ def plan(repo: Path, parts: Sequence[AgentFiles]) -> Plan:
             unreadable[path] = error.problem
             continue
         (written if claimed or not path.exists() else unclaimed)[path] = text
-    return Plan(repo, written, unclaimed, unreadable, _unwritten(repo, parts, set(made)))
+    return Plan(repo, written, unclaimed, unreadable, _unwritten(repo, parts, set(made) | set(unreadable)))
 
 
 def stale(repo: Path, parts: Sequence[AgentFiles]) -> list[Path]:
@@ -315,6 +325,61 @@ def _skill(part: str, name: str, text: str) -> str:
     except ValueError as error:
         reason = f"{part}'s skill {name} cannot carry basis's marker: {error}"
         raise SyncError(reason, f"a defect in {part}: install it from a basis release, with `uv sync --reinstall`") from error
+
+
+def _from_code(repo: Path, parts: Sequence[AgentFiles], taken: set[Path]) -> tuple[dict[Path, Callable[[], tuple[str, bool]]], dict[Path, Problem]]:
+    """What each part makes from the repo's code, by its path in `repo`, and why no part may make each of the rest: a
+    path outside the repo or in a folder basis never reads, one basis writes itself, which `taken` holds, or one that
+    two parts make. Paths are compared ignoring case, as Windows and macOS compare them."""
+    makers: dict[str, list[tuple[str, str, Callable[[], str]]]] = defaultdict(list)
+    refused: dict[Path, Problem] = {}
+    own = {path.relative_to(repo).as_posix().casefold() for path in taken}
+    for files in parts:
+        for given, make in files.made.items():
+            relative, wrong = _relative(given)
+            if wrong is not None:
+                refused[repo / given] = (f"the {files.part} part makes {given!r}, {wrong}", _DEFECT)
+            elif relative.casefold() in own:
+                refused[repo / relative] = (f"the {files.part} part makes {relative}, which basis writes itself", _DEFECT)
+            else:
+                makers[relative.casefold()].append((relative, files.part, make))
+    making: dict[Path, Callable[[], tuple[str, bool]]] = {}
+    for found in makers.values():
+        relative = found[0][0]
+        if len(found) > 1:
+            refused[repo / relative] = (f"the {' and '.join(part for _, part, _ in found)} parts each make {relative}", _DEFECT)
+        else:
+            making[repo / relative] = _making(repo / relative, found[0][1], found[0][2])
+    return making, refused
+
+
+_DEFECT = "a defect in basis: install every basis package from one release, with `uv sync --reinstall`"
+
+
+def _relative(given: str) -> tuple[str, str | None]:
+    """`given` as the `/`-separated path relative to the repo that it names, or why no part may make it."""
+    posix = PurePosixPath(given)
+    if not posix.parts or "\\" in given or posix.is_absolute() or PureWindowsPath(given).drive:
+        return given, "which is not a file's path relative to the repo"
+    if ".." in posix.parts:
+        return given, "which leads out of the repo"
+    if any(part in _UNREAD for part in posix.parts[:-1]):
+        return given, "which is in a folder basis never writes in"
+    return posix.as_posix(), None
+
+
+def _making(path: Path, part: str, make: Callable[[], str]) -> Callable[[], tuple[str, bool]]:
+    """`make`, for `plan`: the text `part` makes at `path`, which must carry the marker, and whether the file there, if
+    any, is basis's."""
+
+    def made() -> tuple[str, bool]:
+        text = make()
+        if not any(MARKER in line[:_LINE] for line in text.splitlines()[:_HEAD]):
+            msg = f"the {part} part made {path.name} without basis's marker in its first lines"
+            raise SyncError(msg, _DEFECT)
+        return text, _carries_marker(path)
+
+    return made
 
 
 def _unwritten(repo: Path, parts: Sequence[AgentFiles], wanted: set[Path]) -> list[Path]:

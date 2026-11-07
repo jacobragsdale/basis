@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from basis.core.sync import BEFORE, DENY, MARKER, REPO_FILES, SKILL_KEY, AgentFiles, core, plan, stale, stamped, write
+from basis.core.sync import BEFORE, DENY, MARKER, REPO_FILES, SKILL_KEY, AgentFiles, SyncError, core, plan, stale, stamped, write
 
 SKILL = "---\nname: job-new\ndescription: Make a job, from its tables to its first passing contract tests.\n---\n\n# Make a job\n"
 FILES = AgentFiles("new-part", "the new block\n", {"job-new": SKILL}, image="#   a job: run JOB --publish\n", formerly=("old-part",), retired=("tests/test_agent_files.py",))
@@ -286,3 +286,99 @@ def test_the_deny_rules_refuse_each_common_way_to_skip_the_commit_hook(command: 
 )
 def test_the_deny_rules_allow_a_commit_whose_message_holds_dash_n(command: str) -> None:
     assert not denies(command)
+
+
+DOCUMENT = f'{{\n  "x-basis": "{MARKER}",\n  "openapi": "3.1.0"\n}}\n'
+
+
+def made(text: str = DOCUMENT, path: str = "openapi.json", part: str = "basis-api") -> AgentFiles:
+    """A part that makes `path` from the repo's code, as `text`."""
+    return AgentFiles(part, "the api block\n", {}, made={path: lambda: text})
+
+
+def test_a_file_a_part_makes_from_the_repos_code_is_written_and_checked_like_every_other(tmp_path: Path) -> None:
+    write(tmp_path, [FILES, made()])
+    document = tmp_path / "openapi.json"
+    assert document.read_text(encoding="utf-8") == DOCUMENT
+    assert stale(tmp_path, [FILES, made()]) == []
+    changed = DOCUMENT.replace("3.1.0", "3.2.0")
+    assert stale(tmp_path, [FILES, made(changed)]) == [document]
+    assert write(tmp_path, [FILES, made(changed)]).changed == [document]
+    edited = put(tmp_path, "openapi.json", changed.replace("3.2.0", "3.1.1"))
+    assert stale(tmp_path, [FILES, made(changed)]) == [edited]
+
+
+def test_a_file_no_part_makes_now_is_removed(tmp_path: Path) -> None:
+    write(tmp_path, [FILES, made()])
+    document = tmp_path / "openapi.json"
+    unmade = AgentFiles("basis-api", "the api block\n", {})
+    assert stale(tmp_path, [FILES, unmade]) == [document]
+    write(tmp_path, [FILES, unmade])
+    assert not document.exists()
+
+
+def test_a_file_of_the_repos_own_where_a_part_makes_one_is_left_alone_until_adopted(tmp_path: Path) -> None:
+    own = put(tmp_path, "openapi.json", '{"openapi": "3.0.0"}\n')
+    found = plan(tmp_path, [FILES, made()])
+    assert [reason for reason, _ in found.problems()] == ["openapi.json is the repo's own, at a path basis writes, so basis leaves it alone"]
+    assert write(tmp_path, [FILES, made()]).refused == [own]
+    assert write(tmp_path, [FILES, made()], adopt=True).adopted == [own]
+    assert own.read_text(encoding="utf-8") == DOCUMENT
+    assert own.with_name("openapi.json.before-basis").read_text(encoding="utf-8") == '{"openapi": "3.0.0"}\n'
+
+
+def test_a_file_a_part_cannot_make_is_one_problem_and_is_kept_while_every_other_is_written(tmp_path: Path) -> None:
+    write(tmp_path, [FILES, made()])
+    document = tmp_path / "openapi.json"
+
+    def fails() -> str:
+        msg = "service accruals does not import (SyntaxError at accruals/service.py:3)"
+        raise SyncError(msg, "fix it, and run `uv run basis sync`")
+
+    broken = AgentFiles("basis-api", "the api block\n", {}, made={"openapi.json": fails})
+    (tmp_path / "AGENTS.md").write_text("# Agent guide\n", encoding="utf-8")
+    found = plan(tmp_path, [FILES, broken])
+    assert found.problems() == [("service accruals does not import (SyntaxError at accruals/service.py:3)", "fix it, and run `uv run basis sync`")]
+    assert found.stale() == [tmp_path / "AGENTS.md"]
+    write(tmp_path, [FILES, broken])
+    assert document.read_text(encoding="utf-8") == DOCUMENT
+
+
+@pytest.mark.parametrize(
+    ("path", "why"),
+    [
+        ("/etc/openapi.json", "the basis-api part makes '/etc/openapi.json', which is not a file's path relative to the repo"),
+        ("C:/openapi.json", "the basis-api part makes 'C:/openapi.json', which is not a file's path relative to the repo"),
+        ("api\\openapi.json", "the basis-api part makes 'api\\\\openapi.json', which is not a file's path relative to the repo"),
+        ("", "the basis-api part makes '', which is not a file's path relative to the repo"),
+        ("api/../../openapi.json", "the basis-api part makes 'api/../../openapi.json', which leads out of the repo"),
+        (".venv/openapi.json", "the basis-api part makes '.venv/openapi.json', which is in a folder basis never writes in"),
+        ("dockerfile", "the basis-api part makes dockerfile, which basis writes itself"),
+        ("./AGENTS.md", "the basis-api part makes AGENTS.md, which basis writes itself"),
+    ],
+    ids=["absolute", "a-drive", "backslashes", "empty", "out-of-the-repo", "unread-folder", "a-framework-file", "agents-md"],
+)
+def test_a_part_makes_only_files_of_its_own_in_the_repo(tmp_path: Path, path: str, why: str) -> None:
+    found = plan(tmp_path, [FILES, made(path=path)])
+    assert found.problems() == [(why, "a defect in basis: install every basis package from one release, with `uv sync --reinstall`")]
+    write(tmp_path, [FILES, made(path=path)])
+    assert (tmp_path / "AGENTS.md").exists()
+    assert not (tmp_path / "openapi.json").exists()
+
+
+def test_no_two_parts_make_one_file_and_neither_removes_the_one_there(tmp_path: Path) -> None:
+    write(tmp_path, [FILES, made()])
+    both = [FILES, made(), made(path="OpenAPI.json", part="basis-job")]
+    assert plan(tmp_path, both).problems() == [
+        ("the basis-api and basis-job parts each make openapi.json", "a defect in basis: install every basis package from one release, with `uv sync --reinstall`")
+    ]
+    assert stale(tmp_path, both) == [tmp_path / "AGENTS.md"]  # the second part's block, and nothing of openapi.json
+    write(tmp_path, both)
+    assert (tmp_path / "openapi.json").read_text(encoding="utf-8") == DOCUMENT
+
+
+def test_a_file_a_part_makes_carries_the_marker(tmp_path: Path) -> None:
+    found = plan(tmp_path, [FILES, made('{"openapi": "3.1.0"}\n')])
+    assert found.problems() == [
+        ("the basis-api part made openapi.json without basis's marker in its first lines", "a defect in basis: install every basis package from one release, with `uv sync --reinstall`")
+    ]

@@ -199,7 +199,9 @@ def find(cwd: Path, installed: Installed) -> Repo:
 
 
 def declared(pyproject: Path) -> list[str]:
-    """The parts `pyproject` declares, as `[tool.basis] parts = ["job"]`. A part is never inferred from a folder."""
+    """The parts `pyproject` declares, as `[tool.basis] parts = ["job"]`. A part is never inferred from a folder. A
+    declared part may have a table of its own, `[tool.basis.PART]`, which the part reads (`verbs.table`); one for a
+    part the repo does not declare is refused."""
     try:
         data: object = tomllib.loads(pyproject.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as error:
@@ -210,10 +212,17 @@ def declared(pyproject: Path) -> list[str]:
     if table is None:
         msg = f"{pyproject} declares no basis parts: add {example}"
         raise CommandError(msg)
-    if unknown := sorted(set(table) - {"parts", sync.APT, qa.KEY}):
-        msg = f"{pyproject}'s [tool.basis] has {', '.join(unknown)}, which basis does not read: remove it; basis reads parts, as {example}, {sync.APT} and {qa.KEY}"
-        raise CommandError(msg)
     names = table.get("parts")
+    listed = {str(name) for name in names} if isinstance(names, list) else set[str]()
+    unknown = sorted(set(table) - {"parts", sync.APT, qa.KEY} - listed)
+    if undeclared := [key for key in unknown if isinstance(table[key], dict)]:
+        part = undeclared[0]
+        msg = f"{pyproject} has [tool.basis.{part}], a part's own table, and its [tool.basis] parts does not declare the {part} part: add {part!r} to its parts, or remove the table"
+        raise CommandError(msg)
+    if unknown:
+        reads = f"parts, as {example}, {sync.APT}, {qa.KEY}, and a table of each declared part's own, as [tool.basis.job]"
+        msg = f"{pyproject}'s [tool.basis] has {', '.join(unknown)}, which basis does not read: remove it; basis reads {reads}"
+        raise CommandError(msg)
     if not isinstance(names, list) or not names or not all(isinstance(name, str) for name in names):
         msg = f"{pyproject}'s [tool.basis] parts is not a list of part names: give {example}"
         raise CommandError(msg)
@@ -221,6 +230,10 @@ def declared(pyproject: Path) -> list[str]:
     if len(set(found)) != len(found):
         msg = f"{pyproject}'s [tool.basis] parts names a part twice: name each once"
         raise CommandError(msg)
+    for part in found:
+        if part in table and not isinstance(table[part], dict):
+            msg = f"{pyproject}'s [tool.basis] {part} is not a table: give the {part} part's own as [tool.basis.{part}], or remove it"
+            raise CommandError(msg)
     return found
 
 

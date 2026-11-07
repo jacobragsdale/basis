@@ -14,7 +14,7 @@ from basis.core.ddl import ledger
 from basis.core.errors import BasisError, deliberate
 from basis.core.settings import Settings
 from basis.core.sync import AgentFiles, stamped
-from basis.core.verbs import Part, Runs, Shared, Verb, fail
+from basis.core.verbs import Part, Runs, Shared, Verb, fail, table
 
 ALPHA = '[project]\nname = "repo"\n\n[tool.basis]\nparts = ["alpha"]\n'
 
@@ -154,7 +154,14 @@ def test_a_declared_part_that_no_package_provides_says_to_add_the_package_its_en
         ('[tool.basis]\nparts = ["alpha", "alpha"]\n', "names a part twice"),
         ('[tool.basis]\npart = ["alpha"]\n', "has part, which basis does not read"),
         ("[tool.basis\n", "is not TOML"),
+        (
+            '[tool.basis]\nparts = ["alpha"]\n\n[tool.basis.api]\nreleases = "v*"\n',
+            "has [tool.basis.api], a part's own table, and its [tool.basis] parts does not declare the api part: add 'api' to its parts, or remove the table",
+        ),
+        ('[tool.basis]\nparts = ["alpha"]\nbeta = "v*"\n', "has beta, which basis does not read"),
+        ('[tool.basis]\nparts = ["alpha"]\nalpha = "v*"\n', "[tool.basis] alpha is not a table: give the alpha part's own as [tool.basis.alpha]"),
     ],
+    ids=["no-parts", "none", "not-a-list", "twice", "an-unknown-key", "not-toml", "an-undeclared-parts-table", "an-unknown-key-beside-the-parts", "a-parts-table-that-is-not-one"],
 )
 def test_a_repo_declares_its_parts_in_pyproject_and_nowhere_else(tmp_path: Path, capsys: pytest.CaptureFixture[str], pyproject: str, problem: str) -> None:
     assert basis(repo(tmp_path, pyproject), "check") == 1
@@ -534,3 +541,25 @@ def test_a_parts_verb_is_given_the_repo_basis_found(tmp_path: Path) -> None:
     root = repo(tmp_path)
     assert basis(root / "jobs", "serve", installed={"alpha": lambda: Part(verbs=(verb("serve", handle),))}) == 0
     assert seen == [root]
+
+
+def test_a_declared_part_reads_its_own_table(tmp_path: Path) -> None:
+    folder = repo(tmp_path, '[tool.basis]\nparts = ["alpha"]\n\n[tool.basis.alpha]\nreleases = "v*"\n')
+    read: list[Mapping[str, object]] = []
+
+    def reads(_: argparse.Namespace) -> int:
+        read.append(table(folder, "alpha"))
+        return 0
+
+    assert basis(folder, "serve", installed={"alpha": lambda: Part(verbs=(verb("serve", reads),))}) == 0
+    assert read == [{"releases": "v*"}]
+    (folder / "pyproject.toml").write_text(ALPHA, encoding="utf-8")
+    assert table(folder, "alpha") == {}
+
+
+def test_sync_writes_the_files_a_declared_part_makes(tmp_path: Path) -> None:
+    document = f'{{\n  "x-basis": "{sync.MARKER}",\n  "openapi": "3.1.0"\n}}\n'
+    files = AgentFiles("basis-alpha", "the alpha block\n", {}, made={"openapi.json": lambda: document})
+    folder = repo(tmp_path)
+    assert basis(folder, "sync", installed={"alpha": lambda: Part(files=lambda: files)}) == 0
+    assert (folder / "openapi.json").read_text(encoding="utf-8") == document

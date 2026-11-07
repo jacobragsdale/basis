@@ -41,6 +41,10 @@ with the fix. `basis VERB NAME --help` gives the arguments of NAME's part.
 `renamed` refuses, before any verb runs, the variables an earlier version of the part read under names it no longer
 reads, as `basis` refuses its own `ETL_*`.
 
+What a repo declares to a part beyond its code goes in the part's own table of its `pyproject.toml`, such as
+`[tool.basis.api]`, which `table` reads; `basis` refuses the table of a part the repo does not declare. The part reads
+its table strictly: a key it does not read is refused, with the fix, so a misspelled one fails.
+
 A handler reads its `argparse.Namespace` into a frozen dataclass before anything else reads it, and returns the exit
 code: 0 when the verb did what it says, and 1 when it did not. `basis` logs `finished VERB`, with the exit code, after
 it. A handler reports a failure the caller can fix as one line, with `fail`, which `basis` holds back until that
@@ -53,6 +57,7 @@ A result that a caller reads, such as `describe`'s, is JSON on stdout, and logs 
 
 import argparse
 import sys
+import tomllib
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -60,6 +65,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from basis.core.databases import Database
+from basis.core.errors import BasisError
 from basis.core.settings import Settings
 from basis.core.storage import Root
 from basis.core.sync import AgentFiles, Problem
@@ -236,8 +242,8 @@ class Part:
     verbs: tuple[Verb, ...] = ()
     """The part's own verbs, such as basis-api's `serve`."""
     files: Callable[[], AgentFiles] | None = None
-    """The part's block of `AGENTS.md`, its skills and its lines of the Dockerfile, as the installed version writes
-    them; read only by the verbs that use them."""
+    """The part's block of `AGENTS.md`, its skills, its lines of the Dockerfile and the files it makes from the repo's
+    code, as the installed version writes them; read only by the verbs that use them."""
     docs: Path | None = None
     """A folder of Markdown pages, each `PAGE.md`, for the installed version."""
     new: Mapping[str, Callable[[Path, str], Path]] = field(default_factory=dict[str, Callable[[Path, str], Path]])
@@ -286,3 +292,23 @@ def holding() -> Generator[list[str]]:
         yield held
     finally:
         _held.reset(token)
+
+
+def table(repo: Path, part: str) -> Mapping[str, object]:
+    """The repo's own table for the part `part`, `[tool.basis.PART]` of its `pyproject.toml`, as TOML reads it, or empty
+    when it gives none: the part checks each key."""
+    pyproject = repo / "pyproject.toml"
+    try:
+        data: object = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as error:
+        msg = f"{pyproject} is not TOML: {error}: fix it"
+        raise BasisError(msg) from error
+    found: object = data
+    for key in ("tool", "basis", part):
+        found = found.get(key) if isinstance(found, dict) else None
+    if found is None:
+        return {}
+    if not isinstance(found, dict):
+        msg = f"{pyproject}'s [tool.basis] {part} is not a table: give the {part} part's own as [tool.basis.{part}], or remove it"
+        raise BasisError(msg)
+    return {str(key): value for key, value in found.items()}
