@@ -392,7 +392,7 @@ def _new_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("name", metavar="NAME", help="the repo's folder")
     parser.add_argument("model", metavar="MODEL", help="its first model, a copy of the example, which names its folder in models/ and its entry point")
     parser.add_argument("--dir", type=Path, default=Path(), help="where to make the repo")
-    parser.add_argument("--index", help="the package index optim is published to, written into the repo")
+    parser.add_argument("--index", help="a package index that proxies PyPI and holds optim, which no basis release publishes yet; written into the repo")
     parser.add_argument("--framework-path", type=Path, help="a checkout of basis, whose packages the repo installs editable")
 
 

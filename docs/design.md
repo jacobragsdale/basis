@@ -146,6 +146,9 @@ nightly-loads`, or, once optim is released, `uvx optim new repo sma income` (the
 rights. Each developer's user-level `uv.toml` names the internal feed as the default index, not an extra one: under uv's
 default first-index strategy, a name the feed holds is then never looked up on public PyPI, where a package of the same
 name can be another's entirely, as public PyPI's `optim` is. The feed proxies public PyPI for everything else.
+A generator takes the feed's URL as `--index`, and writes it as the new repo's default index: uv does not record which
+index a package came from, so a part installed from one and given no `--index` refuses, with that fix, rather than take
+basis from public GitHub.
 
 Repos pull new versions; nothing pushes them. `basis upgrade` relocks basis-core and each installed part's package with
 uv, runs `basis sync`,
