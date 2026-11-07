@@ -1,0 +1,5 @@
+security_id,isin,name,currency,coupon,maturity_date,active
+XS0001,XS0000000011,Alpha 4.25% 2031,USD,4.250000,2031-06-15,true
+XS0002,XS0000000029,Beta FRN 2029,EUR,,2029-03-01,true
+XS0003,XS0000000037,Gamma Perpetual,GBP,6.000000,,true
+XS0004,XS0000000045,Delta 2.5% 2026,USD,2.500000,2026-10-01,false

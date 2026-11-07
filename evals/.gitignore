@@ -1,0 +1,2 @@
+# Harbor writes every trial here: logs, trajectories and the verifier's output. results/ keeps the report.
+jobs/
