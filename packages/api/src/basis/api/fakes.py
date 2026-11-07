@@ -9,7 +9,7 @@ expiry. A resource a test gives no fake opens as its settings say, so a test tha
 when its settings configure nothing."""
 
 import threading
-from collections.abc import Callable, Generator, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -20,6 +20,7 @@ import pyarrow as pa
 from starlette.types import ASGIApp
 
 from basis.api.compute import ComputeFunction
+from basis.api.outboxes import Row
 from basis.api.resources import Bind, Resource
 from basis.core.databases.base import Statements
 
@@ -49,13 +50,47 @@ class Statement:
 class Database:
     """A database whose every statement the test answers, by its SQL exactly, with `answers`; a statement it has no
     answer for fails. Each request's statements that change rows end in `committed`, when the app commits its
-    transaction, or in `rolled_back`, when it does not."""
+    transaction, or in `rolled_back`, when it does not.
 
-    def __init__(self, *, answers: Mapping[str, Answer] | None = None) -> None:
+    Its outbox, where a database declares one, is in memory, and needs no answers: `outbox` holds its rows, which a
+    test may start with rows of its own, as `basis relay` finds them. A row a transaction adds is there once the
+    transaction commits; a change to a row is there at once, as a compare-and-set, as the databases' own `UPDATE`
+    makes it, and is undone if its transaction rolls back."""
+
+    def __init__(self, *, answers: Mapping[str, Answer] | None = None, outbox: Iterable[Row] = ()) -> None:
         self.answers: dict[str, Answer] = dict(answers or {})
         self.committed: list[Statement] = []
         self.rolled_back: list[Statement] = []
         self._lock = threading.Lock()
+        self._outbox: dict[str, Row] = {row.id: row for row in outbox}
+
+    @property
+    def outbox(self) -> list[Row]:
+        """The outbox's rows, as committed, in the order they were sent."""
+        with self._lock:
+            return sorted(self._outbox.values(), key=lambda row: (row.created_at, row.id))
+
+    def keep(self, rows: Iterable[Row]) -> None:
+        """Commit the outbox's rows a transaction added."""
+        with self._lock:
+            self._outbox.update({row.id: row for row in rows})
+
+    def swap(self, row_id: str, *, was: str, seen: int, to: Mapping[str, object]) -> tuple[Row, Row] | None:
+        """Change the outbox's row to `to`, at once and as one step, only while its status is `was` and its attempts
+        `seen`: the row before and after, or None where it changed nothing."""
+        with self._lock:
+            found = self._outbox.get(row_id)
+            if found is None or found.status != was or found.attempts != seen:
+                return None
+            changed = Row.model_validate(found.model_dump() | dict(to))
+            self._outbox[row_id] = changed
+            return found, changed
+
+    def unswap(self, before: Row, after: Row) -> None:
+        """Undo a change of a transaction that rolled back, unless the row has changed again since."""
+        with self._lock:
+            if self._outbox.get(before.id) == after:
+                self._outbox[before.id] = before
 
     @contextmanager
     def statements(self, *, writes: bool) -> Generator[Statements]:
@@ -88,6 +123,14 @@ class Transaction:
     writes: bool
     changed: list[Statement] = field(default_factory=list[Statement])
     committed: bool = False
+    added: dict[str, Row] = field(default_factory=dict[str, Row])
+    """The outbox's rows this transaction has added since it last committed, which only it sees until it commits."""
+    swapped: list[tuple[Row, Row]] = field(default_factory=list[tuple[Row, Row]])
+    """Each change of an outbox's row this transaction has made since it last committed, before and after."""
+
+    def outbox(self) -> Outbox:
+        """The database's outbox, as this transaction reaches it."""
+        return Outbox(self)
 
     def query(self, sql: str, binds: Mapping[str, Bind], *, timeout_s: float) -> pa.Table:
         del timeout_s  # the app's deadline bounds a fake's answer, as it does a database's
@@ -110,14 +153,62 @@ class Transaction:
     def commit(self) -> None:
         self._refuse_reads("commit")
         self.committed = True
+        self.database.keep(self.added.values())
+        self.added.clear()
+        self.swapped.clear()
 
     def roll_back(self) -> None:
-        """What ending the transaction without committing takes, which is nothing here."""
+        """What ending the transaction without committing takes: forgetting the outbox's rows it added, and undoing
+        its changes of others."""
+        self.added.clear()
+        for before, after in reversed(self.swapped):
+            self.database.unswap(before, after)
+        self.swapped.clear()
 
     def _refuse_reads(self, what: str) -> None:
         if not self.writes:
             msg = f"the transaction only reads, so it cannot {what}"
             raise RuntimeError(msg)
+
+
+@dataclass(frozen=True)
+class Outbox:
+    """A fake database's outbox, as one transaction reaches it: `basis.api.outboxes.Table`, in memory. Its reads see
+    the rows other transactions committed and the ones this one added."""
+
+    transaction: Transaction
+
+    def _writes(self) -> None:
+        if not self.transaction.writes:
+            msg = "the transaction only reads, so it cannot change the outbox's rows"
+            raise RuntimeError(msg)
+
+    def probe(self, *, timeout_s: float) -> None:
+        del timeout_s
+
+    def add(self, row: Row, *, timeout_s: float) -> None:
+        del timeout_s
+        self._writes()
+        self.transaction.added[row.id] = row
+
+    def due(self, now: datetime, limit: int, *, timeout_s: float) -> list[Row]:
+        del timeout_s
+        seen = [*self.transaction.database.outbox, *self.transaction.added.values()]
+        due = [row for row in seen if row.status in {"pending", "refused"} and row.next_at is not None and row.next_at <= now]
+        return sorted(due, key=lambda row: (row.next_at, row.id))[:limit]
+
+    def update(self, row_id: str, *, was: str, seen: int, to: Mapping[str, object], timeout_s: float) -> bool:
+        del timeout_s
+        self._writes()
+        if (added := self.transaction.added.get(row_id)) is not None:  # its own, which no other transaction sees yet
+            if added.status != was or added.attempts != seen:
+                return False
+            self.transaction.added[row_id] = Row.model_validate(added.model_dump() | dict(to))
+            return True
+        if (swapped := self.transaction.database.swap(row_id, was=was, seen=seen, to=to)) is None:
+            return False
+        self.transaction.swapped.append(swapped)
+        return True
 
 
 class Http:

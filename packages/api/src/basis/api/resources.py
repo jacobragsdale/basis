@@ -30,13 +30,19 @@ handler carries on, and a request whose writes were rolled back never answers 2x
 so a route writes one database at most, and a GET route writes none. The clock and the ids are resources so that a
 recorded request replays the times and ids it saw; they never wait, so they have no deadline.
 
+A call that changes another service's state goes after the commit, through the outbox of the database the route writes
+(`Client.send`, and `basis.api.outboxes`), which the database declares with its table and how long its calls are retried:
+
+    WAREHOUSE = api.database("warehouse", deadline_s=5, max_concurrent=8, outbox=api.outbox("accruals_outbox", max_age_s=86_400, backoff_s=60, max_backoff_s=3_600))
+
 Database, HTTP and cache calls are awaited, so a handler that asks for one is `async def`."""
 
 import dataclasses
+import math
 import re
 import types
 import typing
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -49,6 +55,7 @@ from pydantic import BaseModel, JsonValue
 
 from basis.api.compute import ComputeFunction
 from basis.api.errors import Error, ServiceError
+from basis.core.settings import LEDGER as TABLE
 
 NAME = re.compile(r"[a-z][a-z0-9_]{0,62}")
 """Lower-case letters, digits and underscores, so that a resource's settings are variables every shell can set."""
@@ -56,8 +63,32 @@ NAME = re.compile(r"[a-z][a-z0-9_]{0,62}")
 type Bind = str | int | float | Decimal | bool | date | datetime | UUID | bytes | None
 """A value a statement binds by name, as basis-core's `databases.Bind`, which a service's modules do not import."""
 type HttpMethod = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
+type SendMethod = Literal["POST", "PUT", "PATCH", "DELETE"]
+"""The methods of a call that changes another service's state, which `Client.send` makes."""
+TABLE_LENGTH = 125
+"""The longest name of an outbox's table, after its schema, so that its key's constraint, `pk_NAME`, has the 128
+characters SQL Server and Oracle allow a name."""
 type QueryValue = str | int | float | Decimal | bool | date | datetime | UUID
 type Body = BaseModel | JsonValue
+
+
+@dataclass(frozen=True)
+class Outbox:
+    """A database's outbox: the table where each call a route that writes the database sends to another service waits,
+    from the request's commit until the service accepts it (see `Client.send` and `basis.api.outboxes`)."""
+
+    table: str
+    """The table, `name` or `schema.name`, as `basis ddl SERVICE --dialect DIALECT` creates it: the service's own,
+    in the database, which the routes' write login writes."""
+    max_age_s: float
+    """Seconds from a call's commit in which it is still made: one its service has not accepted by then ages out, and
+    `basis relay` makes it no more, and fails, naming the call and its key. It must be longer than the deadline of each
+    route that writes the database, and a backoff after it, which the service checks."""
+    backoff_s: float
+    """Seconds after a call's first failed attempt before `basis relay` makes it again; each failure after doubles the
+    wait, up to `max_backoff_s`."""
+    max_backoff_s: float
+    """The longest wait between two attempts at one call."""
 
 
 @dataclass(frozen=True)
@@ -70,6 +101,9 @@ class DatabaseResource:
     max_concurrent: int
     """The most of its statements that run at once, each on a thread of the database's own pool: what the database can
     take from one replica of the API. A statement that waits for a thread waits within its deadline."""
+    outbox: Outbox | None = None
+    """Where the calls its routes send to other services wait for their commit and their service, or None for a
+    database whose routes send none."""
 
 
 @dataclass(frozen=True)
@@ -109,13 +143,51 @@ class IdsResource:
 type Resource = DatabaseResource | HttpResource | CacheResource[object] | ClockResource | IdsResource
 
 
-def database(name: str, *, deadline_s: float, max_concurrent: int) -> DatabaseResource:
+def database(name: str, *, deadline_s: float, max_concurrent: int, outbox: Outbox | None = None) -> DatabaseResource:
     """A database basis-core's settings configure under `name`, SQL Server or Oracle, whose statements a handler
-    writes in that database's SQL."""
+    writes in that database's SQL; with `outbox`, where the calls its routes send wait (`api.outbox`)."""
     if isinstance(max_concurrent, bool) or not isinstance(max_concurrent, int) or max_concurrent < 1:
         msg = f"database {name} runs at most {max_concurrent!r} statements at once: give it max_concurrent, a whole number of 1 or more"
         raise ServiceError(msg)
-    return DatabaseResource(_named(name, "database"), _deadline(name, deadline_s), max_concurrent)
+    if outbox is not None and not isinstance(outbox, Outbox):
+        msg = f"database {name}'s outbox is {outbox!r}: declare it with api.outbox(TABLE, max_age_s=..., backoff_s=..., max_backoff_s=...)"
+        raise ServiceError(msg)
+    return DatabaseResource(_named(name, "database"), _deadline(name, deadline_s), max_concurrent, outbox)
+
+
+def outbox(table: str, *, max_age_s: float, backoff_s: float, max_backoff_s: float) -> Outbox:
+    """A database's outbox, in `table`, whose calls are made until their service accepts them, for `max_age_s`
+    seconds from their commit at most: again `backoff_s` seconds after a first failure, and each time after waiting
+    twice as long as before, up to `max_backoff_s`."""
+    if not isinstance(table, str) or not re.fullmatch(TABLE, table):
+        msg = f"api.outbox({table!r}): an outbox's table is a name, or schema.name, of letters, digits, underscores and $, which its SQL names unquoted"
+        raise ServiceError(msg)
+    if len(bare := table.rpartition(".")[2]) > TABLE_LENGTH:
+        msg = f"outbox {table}'s name is {len(bare)} characters: give it {TABLE_LENGTH} at most, after its schema, so its key's constraint, pk_NAME, fits the 128 both databases allow"
+        raise ServiceError(msg)
+    for field, seconds in (("max_age_s", max_age_s), ("backoff_s", backoff_s), ("max_backoff_s", max_backoff_s)):
+        if isinstance(seconds, bool) or not isinstance(seconds, int | float) or not 0 < seconds < math.inf:
+            msg = f"outbox {table}'s {field} is {seconds!r}: give it the seconds, above 0"
+            raise ServiceError(msg)
+    if backoff_s > max_backoff_s:
+        msg = f"outbox {table} waits {backoff_s:g}s after a first failure, longer than its max_backoff_s of {max_backoff_s:g}s: give max_backoff_s at least backoff_s"
+        raise ServiceError(msg)
+    return Outbox(table, max_age_s, backoff_s, max_backoff_s)
+
+
+def check_outboxes(service: str, written: Iterable[tuple[str, float, DatabaseResource]]) -> None:
+    """That each outbox leaves room past the deadline of every route that writes its database, each `(route, deadline,
+    database)`: a call whose request could not make it is due to `basis relay` when the route's deadline passes, and
+    again a backoff after a failed attempt, so an outbox whose calls age out before then would have none made by the
+    relay."""
+    for route, deadline_s, database in written:
+        if (declared := database.outbox) is not None and declared.max_age_s <= deadline_s + declared.backoff_s:
+            msg = (
+                f"service {service}'s outbox {declared.table} ages its calls out after {declared.max_age_s:g}s, and route {route}, which writes {database.name},"
+                f" has {deadline_s:g}s to answer, after which a call it sent waits a backoff of {declared.backoff_s:g}s for basis relay:"
+                f" give the outbox a max_age_s above {deadline_s + declared.backoff_s:g}s"
+            )
+            raise ServiceError(msg)
 
 
 def http(name: str, *, deadline_s: float) -> HttpResource:
@@ -229,6 +301,19 @@ class Client(Protocol):
     async def get[T](self, path: str, reply: type[T], /, *, query: Mapping[str, QueryValue | Sequence[QueryValue]] | None = None) -> T: ...
 
     async def post[T](self, path: str, reply: type[T], /, *, query: Mapping[str, QueryValue | Sequence[QueryValue]] | None = None, body: Body = None) -> T: ...
+
+    async def send(self, method: SendMethod, path: str, body: Body = None, /, *, key: str) -> None:
+        """A call that changes the other service's state, with `key` as its `Idempotency-Key`: the service drops a call
+        whose key it has seen, so the call is safe to make more than once. `key` is one to 255 visible ASCII characters,
+        such as the id of what the call is about.
+
+        In a route that writes a database, the call is a row of that database's outbox, written in the request's
+        transaction, so it commits or rolls back with the writes: once they commit, the call is made, still within the
+        route's deadline, and if the service does not accept it then, `basis relay` makes it again until the service
+        does, until it ages out, or until a 4xx but 408, 409, 425 or 429 refuses it for good. The request answers as if
+        the call was made either way, and a call whose writes roll back is never made. In a route that writes no
+        database, the call is made at once, and fails as `call` does. The reply's body is never read."""
+        ...
 
 
 class Cache[V](Protocol):

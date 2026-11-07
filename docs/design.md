@@ -229,15 +229,22 @@ CPU-bound quant code inside an `async def` stalls every request on that worker. 
 its traceback.
 
 A call that changes another service's state cannot be rolled back if it goes before the request's writes commit, nor
-undone if it fails after, so such a call goes through an outbox. In a route that writes, the handler sends it through
-its `api.Client` with an idempotency key, and basis writes it as a row of the outbox table in the route's one
-transaction, so the call commits or rolls back with the writes. After the commit, basis makes the call once, within the
-route's deadline, with the key as `Idempotency-Key`, and marks the row done. If that attempt fails, the request still
-succeeds, since its writes committed, and its response says nothing of the call still pending. A relay, which runs as a
-scheduled basis job and not in the API's replicas, retries the row with backoff until the other service accepts it, or
-until the row ages out, which alerts. Delivery is therefore at least once, and the firm's services drop a duplicate by
-its `Idempotency-Key`. basis provides the outbox table's DDL, as it does the ledger's. A route that writes no database
-calls the other service directly, since it has nothing to undo, and a failure there answers 502.
+undone if it fails after, so such a call goes through an outbox. In a route that writes, the handler sends it with
+`send` on its `api.Client`, with an idempotency key, and basis writes it as a row of the outbox table that the written
+database declares, with how long its calls are retried, in the route's one transaction, so the call commits or rolls
+back with the writes. After the commit, basis makes the call once, within the route's deadline, with the key as
+`Idempotency-Key`, and marks the row done. If that attempt fails, the request still succeeds, since its writes
+committed, and its response says nothing of the call still pending. A relay, `basis relay`, a verb of the API's part
+that the repo's scheduler runs on a schedule and never in the API's replicas, retries the row with backoff until the
+other service accepts it, or until the row ages out: the row is then marked expired and retried no more, and the
+relay's run fails, its one ERROR line naming the call and its key, so that the scheduler's alert fires. A 4xx refuses
+the call for good, but for a 408, a 409, a 425 or a 429, which are retried as a 5xx is: a 409 under the
+Idempotency-Key draft means a call with the same key is still being processed. A refused row is marked refused at
+once, whether the request or the relay made the call, and retried no more, and the relay's run fails with the same
+ERROR line, naming the call, its key and the status. Delivery is therefore at least once, and the firm's services drop
+a duplicate by its `Idempotency-Key`. basis provides the outbox table's DDL, as it does the ledger's, through `basis
+ddl`. A route that writes no database makes the call at once, since it has nothing to undo, and a failure there
+answers 502.
 
 Identity is optional. A request with a token has it verified (signature, expiry, issuer and audience), and an invalid or
 expired token is refused rather than treated as anonymous, so a broken sign-in in a UI fails loudly. A handler sees the
@@ -426,8 +433,8 @@ Each fact was checked on 2026-11-06 against the source named, unless it says sec
 
 ## Not yet verified
 
-Each item but the last is a spike in [Phase 0 of the roadmap](roadmap.md#phase-0-spikes), and the last is a
-**(work)** question for the firm; each needs a written yes or no before the step that depends on it:
+Each item but the last two is a spike in [Phase 0 of the roadmap](roadmap.md#phase-0-spikes), and the last two are
+**(work)** questions for the firm; each needs a written yes or no before the step that depends on it:
 
 - that uv installs on a Citrix desktop without admin rights, on Windows and in WSL, and reaches the Azure Artifacts feed
   from both;
@@ -435,4 +442,7 @@ Each item but the last is a spike in [Phase 0 of the roadmap](roadmap.md#phase-0
 - that the AKS cluster's ingress can route `/api` on a UI's host to the API's service;
 - which agents the Harbor setup can drive;
 - which algorithm the sign-in system signs its tokens with, how it distributes its keys, its issuer and audience, and
-  the names of its claims. HMAC stays refused whatever the answer.
+  the names of its claims. HMAC stays refused whatever the answer;
+- whether the firm's services read `Idempotency-Key` as the bare token basis sends, or as a structured-field string
+  in quotes, as the IETF draft has it. A service drops a duplicate either way, since every attempt at a call carries
+  the same key.

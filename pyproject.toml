@@ -68,6 +68,8 @@ ignore = [
 # Statements name tables and columns, which a part's declarations restrict to letters, digits, underscores and $, so
 # they can only be built as strings; every value is bound. The rule cannot tell an identifier from a value.
 "packages/core/src/basis/core/databases/*.py" = ["S608"]
+# The same of the outbox's statements, whose table `api.outbox` restricts as a ledger's name is.
+"packages/api/src/basis/api/outboxes.py" = ["S608"]
 # A generated repo's files, which `new` copies; they are not part of the package.
 "packages/*/src/basis/*/templates/**" = ["INP001"]
 
@@ -182,7 +184,8 @@ source_modules = [
 ]
 forbidden_modules = [
     "basis.api.app", "basis.api.requests", "basis.api.server", "basis.api.traces", "basis.api.cli", "basis.api.sync", "basis.api.opened",
-    "basis.api.fakes", "basis.api.routes", "basis.api.pool", "basis.api.call", "basis.api.dev", "basis.api.tokens", "jwt", "cryptography", "uvicorn",
+    "basis.api.fakes", "basis.api.routes", "basis.api.pool", "basis.api.call", "basis.api.dev", "basis.api.tokens", "basis.api.outboxes", "basis.api.relay",
+    "jwt", "cryptography", "uvicorn",
     "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.command", "basis.core.check", "basis.core.hooks",
     "basis.core.hygiene", "basis.core.sync", "mssql_python", "oracledb", "httpx", "httpx2", "requests", "urllib3", "aiohttp",
 ]
@@ -197,7 +200,7 @@ type = "forbidden"
 source_modules = ["basis.api.example.compute"]
 forbidden_modules = [
     "basis.api.app", "basis.api.call", "basis.api.cli", "basis.api.compute", "basis.api.deadlines", "basis.api.dev", "basis.api.errors", "basis.api.fakes",
-    "basis.api.identity", "basis.api.opened", "basis.api.pool", "basis.api.requests", "basis.api.resources", "basis.api.routes", "basis.api.server",
+    "basis.api.identity", "basis.api.opened", "basis.api.outboxes", "basis.api.pool", "basis.api.relay", "basis.api.requests", "basis.api.resources", "basis.api.routes", "basis.api.server",
     "basis.api.service", "basis.api.settings", "basis.api.strict", "basis.api.sync", "basis.api.tokens", "basis.api.traces", "basis.api.example.service",
     "basis.api.example.dev", "basis.core",
     "fastapi", "starlette", "uvicorn", "pydantic_settings", "mssql_python", "oracledb", "httpx", "httpx2", "requests", "urllib3", "aiohttp",

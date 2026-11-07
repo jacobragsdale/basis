@@ -32,6 +32,14 @@ Rules to keep:
 - A route's statements share one transaction, which commits after the handler returns and its response validates, and
   rolls back when either fails, or when a statement fails or misses its deadline, even if the handler carries on. A
   route writes one database at most, and a GET none.
+- A call that changes another service's state goes through `send`, as
+  `await ledger.send("POST", "/bookings", body, key=str(settlement.settlement_id))`, with an idempotency key the other
+  service drops a duplicate by. In a route that writes, it waits in the outbox of the database the route writes,
+  declared as `api.database(..., outbox=api.outbox(TABLE, max_age_s=..., backoff_s=..., max_backoff_s=...))`, and is
+  made only once the writes commit; if it fails then, the request still answers as it would, and `basis relay`, which
+  the repo's scheduler runs, makes it again until it is accepted or ages out. A 4xx but 408, 409, 425 or 429 refuses
+  it for good, and fails the next relay, as an aged-out call does. Never make such a call with `post` in a route that
+  writes: one made before the commit cannot be rolled back. `basis ddl` prints the outbox's table.
 - Another service's URL, CA bundle and proxy are its settings, `BASIS_HTTP__NAME__URL`, `__CA_BUNDLE` and `__PROXY`;
   basis reads no `SSL_CERT_FILE` or `HTTP_PROXY`.
 - A service whose callers sign in declares `user=User`, its subclass of `api.User` with a field for each claim it
@@ -57,4 +65,6 @@ Commands, all through `basis`, whose `--help` lists every verb this repo has:
 uv run basis serve [SERVICE]    # serve the API until SIGTERM, which drains it first; a second signal stops it at once
 uv run basis dev [SERVICE]      # serve it on its fakes, on 127.0.0.1, until Ctrl+C
 uv run basis call ROUTE '{"path": {...}, "query": {...}, "body": ...}' --fake   # one route in-process, its response as JSON; --real for the real resources
+uv run basis ddl [SERVICE] --dialect mssql   # the CREATE TABLE of each outbox, for whoever has the rights to run it
+uv run basis relay [SERVICE]    # make the calls the outboxes still hold; the scheduler runs it, and it fails when one ages out
 ```

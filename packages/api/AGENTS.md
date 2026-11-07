@@ -4,8 +4,7 @@ This package is basis-api, which API repos depend on. A service declares its nam
 its routes as an `api.Service`, and basis builds the FastAPI app around them, the same in every repo; a service never
 makes the app itself. The plumbing it runs on is basis-core's, in `packages/core`, which imports nothing from here.
 [The design](../../docs/design.md#apis-basisapi) holds the decisions, and [the roadmap](../../docs/roadmap.md#phase-2-apis)
-the steps still to come: the UI contract (2.5), contract tests (2.6), `basis-api new app` (2.7) and after-commit calls
-(2.9).
+the steps still to come: the UI contract (2.5), contract tests (2.6) and `basis-api new app` (2.7).
 
 ## Where things are
 
@@ -17,12 +16,14 @@ Paths are under `src/basis/api/`.
 | `service.py` | `Service`, `Route` and `get`/`post`/`put`/`patch`/`delete`, with what each route declares (its deadline, its response and its errors) and `Route.answers`; `given`, what a handler asks basis for, and the checks of what it asks for; `load`, a service by entry point (`basis.apis`) or module. |
 | `strict.py` | How a request is read, strictly: a JSON body in pydantic's strict mode, with decimals as strings and times with offsets, and query and path text by each type's grammar. Its docstring is the reference. |
 | `compute.py` | `compute`, which declares a pure function a route runs in the process pool, and `Compute`, what a handler gets for it. Its docstring is the reference. |
-| `resources.py` | The resources a service declares (`database`, `http`, `cache`, `clock`, `ids`), what a handler gets for each (`Reader`, `Writer`, `Client`, `Cache`, `Clock`, `Ids`), and `DeadlineExceededError` and `CallFailedError`. Its docstring is the reference. |
-| `opened.py` | Each resource as the app opens it, through basis-core's databases, httpx2, memory and the system's clock, or a fake: every call's deadline and span, a request's transaction, and the checks at build and startup. |
+| `resources.py` | The resources a service declares (`database`, `http`, `cache`, `clock`, `ids`), a database's `outbox`, what a handler gets for each (`Reader`, `Writer`, `Client`, `Cache`, `Clock`, `Ids`), with `Client.send`, and `DeadlineExceededError` and `CallFailedError`. Its docstring is the reference. |
+| `opened.py` | Each resource as the app opens it, through basis-core's databases, httpx2, memory and the system's clock, or a fake: every call's deadline and span, a request's transaction with its outbox rows, the calls made after its commit, and the checks at build and startup. |
+| `outboxes.py` | The outbox: a row's life from `send` to `done`, `refused` or `expired`, the 4xx a call is retried after, its backoff, its one compare-and-set change (`Table.update`) and the transitions built on it, its statements in each dialect (`Sql`), and its table's DDL. Its docstring is the reference. |
+| `relay.py` | `basis relay`: one run over a service's outboxes, which claims each due row, makes its call and records it, and reports each refused one, each statement with a span and a deadline, a failure stopping only its row; it fails, naming each call refused or expired, and each row a failure stopped. |
 | `deadlines.py` | A route's deadline, which caps each call its request makes: `limit`, how long one call may take, and whose deadline sets it. |
 | `pool.py` | The process pool, spawned at startup: each compute call's deadline, span and log fields, and the in-process runs of `fakes.Compute`. |
 | `routes.py` | Each route as the app serves it: its deadline, its request read strictly before FastAPI's handler, its undeclared errors refused, and its errors in the OpenAPI document as `application/problem+json`. |
-| `fakes.py` | A fake of each kind of resource, and `Compute`, which runs a compute function in the process, which `api.build(..., fakes=...)` takes for tests. |
+| `fakes.py` | A fake of each kind of resource, a fake database's outbox in memory among them, and `Compute`, which runs a compute function in the process, which `api.build(..., fakes=...)` and `relay.plan` take for tests. |
 | `settings.py` | `Settings`, basis-core's with `serve`, `traces`, `http`, `compute` and `identity`; `Settings.given`, settings from arguments alone, for tests; `read`, which names each variable to set, and refuses the development key off a declared desktop. |
 | `identity.py` | Who makes a request: `User`, which a service subclasses with the claims it needs; `SignInRequiredError` and the other identity errors; the `Identity` settings and their keys (`Jwks`, `PublicKey`, `Development`); `Machine`, how a desktop is declared, and the development key's refusal. Its docstring is the reference. |
 | `tokens.py` | Verifying bearer tokens with PyJWT: `plan`, the checks at build; `Verifier` and `KeySet`, the JWK set's fetches and cache; `Bearer`, the middleware inside the request boundary; `DEVELOPMENT_KEY` and `sign`, for tests and `basis dev`. |
@@ -31,10 +32,10 @@ Paths are under `src/basis/api/`.
 | `requests.py` | The request boundary: the request id, log fields, `X-Request-Id` and `traceparent` out, one log line per request, and the 500 for an exception nothing expected. |
 | `traces.py` | The app's own tracer provider, which FastAPI's telemetry makes server spans with, and the exporter the settings name. |
 | `server.py` | `serve`: uvicorn, with JSON logs through basis-core, a drain on SIGTERM before the graceful shutdown, and a second signal that stops at once; on the service's fakes and 127.0.0.1 alone for `basis dev`. |
-| `cli.py` | `part`, which the `basis.verbs` entry point named `api` gives the `basis` command: `basis serve [SERVICE]`, `basis dev [SERVICE]` and `basis call ROUTE [REQUEST] --fake\|--real`, and the files below. |
+| `cli.py` | `part`, which the `basis.verbs` entry point named `api` gives the `basis` command: `basis serve [SERVICE]`, `basis dev [SERVICE]`, `basis call ROUTE [REQUEST] --fake\|--real` and `basis relay [SERVICE]`, its side of core's `basis ddl [SERVICE] --dialect DIALECT`, and the files below. |
 | `call.py` | `basis call`: one request to one route, in this process, through FastAPI's `TestClient`, its response printed as JSON. |
 | `dev.py` | The fakes a service declares with `Service(fakes="module:function")`, for `basis dev` and `basis call --fake`, checked to fake every database and other service. |
-| `sync.py`, `templates/agents.md` | What `basis sync` writes for an API: its block of `AGENTS.md`, and its Dockerfile line, the image's `serve` command. |
+| `sync.py`, `templates/agents.md` | What `basis sync` writes for an API: its block of `AGENTS.md`, and its Dockerfile line, the image's `serve` and `relay` commands. |
 | `example/` | The example service, accrued interest on a bond, which reads and writes a database, calls a pricing service, uses a cache, the clock and ids, and solves for a yield in its process pool (`compute.py`), with its fakes for `basis dev` (`dev.py`) and its tests on fakes. |
 
 ## Rules to keep
@@ -64,6 +65,16 @@ Paths are under `src/basis/api/`.
   response validates, and rolls back otherwise; a route writes one database at most, and a GET none. A statement that
   fails, misses its deadline or is cancelled is never followed by a commit, and the request answers an error, not a
   2xx. Each database's statements run on its own thread pool; the commit and the rollback have its deadline too.
+- A call that changes another service's state, `Client.send` with its `Idempotency-Key`, is a row of the outbox of the
+  database its route writes, in the request's transaction, and is made only once that commits, at once with the
+  request's other calls and within the route's deadline; its failure then changes nothing the request answers, and
+  `basis relay`, run by the repo's scheduler and never in the API, makes it again until it is accepted, refused for
+  good by a 4xx but 408, 409, 425 or 429, or ages out. A route that writes no database makes it at once. Only the
+  route whose transaction it is sends through it (`opened._WRITING`, set with the route's deadline and reset when the
+  transaction ends), so another app reached in the process never does. `outboxes.py`'s docstring says what each row's
+  `status` and `next_at` mean; every change to a row but its insert is one compare-and-set on its status and attempts,
+  in the SQL and in the fake, and an outbox's `max_age_s` outlasts the deadline, and a backoff, of every route that
+  writes its database, which the service checks.
 - How the app reaches another service is its settings' alone: its URL, CA bundle and proxy, never `SSL_CERT_FILE`,
   `HTTP_PROXY` or any other variable of the environment's.
 - Every error a client sees is a problem from `errors.problem`. A new kind of error is a case there, or an `Error`
