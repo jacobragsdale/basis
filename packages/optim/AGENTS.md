@@ -16,20 +16,20 @@ are under `src/optim/`.
 |---|---|
 | `__init__.py` | The model contract's names, and `optim.run`, `optim.replay` and `optim.sweep`, which load `api.py` on first use. |
 | `api.py` | `run`, `replay` and `sweep`, as a model's `main.py` calls them: paths from the model's folder, a settings file set for the call alone, snapshots in the repo's `snapshots/`, and no orders. |
-| `cli.py` | optim's part of the `basis` command (`part`, its `basis.verbs` entry point): its side of the verbs core shares with jobs (`run`, `describe`, `replay`, `regress`), its own (`sweep`, `warm`), `basis new model`, its docs and agent files, and the `OPTIM_*` refusal; and the `optim` console script, which is `basis` itself, except `optim new repo`, which runs outside a repo. `run` exits 0 only when every portfolio was accepted, and is the only thing that writes orders. |
+| `cli.py` | optim's part of the `basis` command (`part`, its `basis.verbs` entry point): its side of the verbs core shares with jobs (`run`, `describe`, `resume`, `replay`, `regress`, `ddl`), its own (`sweep`, `warm`), `basis new model`, its docs and agent files, and the `OPTIM_*` refusal; and the `optim` console script, which is `basis` itself, except `optim new repo`, which runs outside a repo. `run` exits 0 only when every portfolio was accepted and its publish, if asked for, committed; `run --publish` and `resume` are the only things that write orders, and `ddl` prints the orders table. |
 | `settings.py`, `context.py` | basis-core's `BASIS_*` settings with optim's block, `BASIS_OPTIM__*`, the refusal of optim 0.2.0's `OPTIM_*`, and the only place sources, the cache and the orders table open. |
 | `models.py` | Finding a model by its `optim.models` entry point or module path, and reading its hooks. |
 | `contract.py` | `optim.Params` (strict), `optim.Datasets` (typed dataset attributes, `portfolios` among them), `optim.Decision`, `optim.Metrics`. |
 | `datasets/` | The shared datasets every model reads, `HOLDINGS` and `SECURITIES`, with their SQL. |
 | `data/` | `dataset.py` declares a dataset and `frames.py` validates rows, with no I/O; `loader.py` loads a model's datasets, its portfolios listing first, in batches and read-only transactions, and `cache.py` caches them in files. |
 | `sources/` | Databases, through basis-core's dialects (`database.py`, which binds a batch's ids as JSON), REST and files: bounded fetches, transactions that only read. |
-| `runs.py` | `run_model`, `replay_run` and `open_snapshot`, which the command line and `api.py` share, and `Run`, a run's result with its tables. |
+| `runs.py` | `run_model`, `replay_run`, `resume_run` and `open_snapshot`, which the command line and `api.py` share, and `Run`, a run's result with its tables. |
 | `decide.py` | `decide_all`, which calls a model's hooks for every portfolio, at once or in turn when the model reserves; a hook's error rejects its portfolio with a reason that names the model's line. |
 | `engine.py` | One piece of work per portfolio, in this process or a `spawn` process pool. |
 | `acceptance.py` | Rounding each decision to its securities' increments, and the core's checks of whether it may trade, rounding that moved a trade among them. |
 | `cvxpy.py` | `optim.cvxpy`: solving a model's cvxpy problem the same way everywhere, and reading it as a `Decision`. |
-| `snapshots.py` | Runs in basis-core's run store: the manifest, `runs/optim/MODEL/RUN_ID.json`, with the run's record (`RunInfo`) and the hash of each dataset as loaded and each result table. |
-| `orders.py` | Writing accepted portfolios' orders to the orders table, where the environment configures one. |
+| `snapshots.py` | Runs in basis-core's run store: the manifest, `runs/optim/MODEL/RUN_ID.json`, with the run's record (`RunInfo`), each database's outcome of publishing, and the hash of each dataset as loaded, each result table and the orders. |
+| `orders.py` | The accepted portfolios' orders, and publishing them to the orders table through basis-core's publishing, with a ledger row, as `basis run --publish` and `basis resume` do. |
 | `research.py` | `sweep`, `regress`, `describe`, and `trial`, which decides one portfolio of a snapshot from Python. |
 | `testing.py` | What a model repo's tests use: `ContractTests`, which each model's `tests/test_contract.py` subclasses, the import check's `FORBIDDEN`, and builders. |
 | `pytest_plugin.py` | The `pytest11` plugin: the e2e suite's `optim_qa` fixture and its safeguards. It injects no tests. |
@@ -45,7 +45,8 @@ are under `src/optim/`.
   contract tests enforce it in model repos, from `model.py`'s imports: `main.py` and the tests are not model code.
 - `optim/__init__.py` loads `api.py` only on first use of `optim.run`, `optim.replay` or `optim.sweep`, so model code,
   which imports `optim`, imports no source; the import contract and the contract tests' graph both drop that one edge.
-- A run from Python never writes orders; only `basis run` does.
+- A run from Python never writes orders; only `basis run --publish` and `basis resume` do, through basis-core's
+  publishing, so the ledger decides whether a run's orders are written.
 - Snapshots hold each dataset as loaded, never a frame derived from one, so replay reruns the model's hooks.
 - Every query takes only the as-of date and, for a dataset read per portfolio, the portfolio ids. Params never change
   what is loaded, so a sweep can run every variant from one snapshot.

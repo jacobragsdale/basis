@@ -15,7 +15,7 @@ editable mode, so `from models.MODEL import model` works whichever folder a file
 | `.agents/skills/optim-*/`, `.claude/skills/optim-*/` | The skills `basis sync` copies. |
 | `pyproject.toml` | The `optim` version range and its source, `[tool.basis] parts = ["optim"]`, an entry point per model, and the pytest, ruff and ty settings. |
 | `.env.example` | The settings, commented; copied to `.env`, `.env.qa` and `.env.prod`, which git ignores. |
-| `Dockerfile`, `.dockerignore`, `azure-pipelines.yml` | The image Airflow runs, `basis run MODEL ...` under tini, and a stub of the pipeline that checks and builds it. `basis sync` writes the Dockerfile and the pipeline. |
+| `Dockerfile`, `.dockerignore`, `azure-pipelines.yml` | The image Airflow runs, `basis run MODEL ... --publish` under tini, and a stub of the pipeline that checks and builds it. `basis sync` writes the Dockerfile and the pipeline. |
 | `.githooks/`, `.gitattributes` | The commit hook, which fixes and formats with ruff and runs `basis check --staged`, and the push hook, which runs `basis check`; LF line endings. |
 | `snapshots/` | Every run from Python, which git ignores. Safe to delete at any time. |
 | `tests/e2e/test_smoke.py` | The QA suite, marked `e2e`. |
@@ -251,7 +251,7 @@ They run as `basis run`, `basis replay` and `basis sweep` do, through the same c
 | Relative paths | The model's folder's, wherever the process runs | The working directory's |
 | Settings | The settings file `env` names, set in the process for the call alone and restored after it, over the process's environment | The process's environment |
 | Snapshots saved | In the repo's `snapshots/`: the folder beside the nearest `pyproject.toml` above the model's, or `snapshots/` in the working directory without one | Under `BASIS_SNAPSHOT_ROOT`, which it requires |
-| Orders | Never written | Written where `BASIS_OPTIM__ORDERS__*` configures a table |
+| Orders | Never written | Written by `basis run --publish`, to the table `BASIS_OPTIM__ORDERS__*` configures |
 | Logs | Text, unless `BASIS_LOG_FORMAT` says otherwise | JSON lines, unless it says otherwise |
 | Errors | Raise, with their traceback | Logged once, and exit 1 |
 
@@ -317,24 +317,44 @@ finds it. `workers` defaults to `BASIS_OPTIM__WORKERS`, or 1.
 
 ## The command line
 
-A model repo's command is `basis`, and `uv run basis --help` lists every verb it has; `optim` is the same command,
-under its earlier name. `run`, `describe`, `replay` and `regress` are verbs jobs have too: in a repo with both jobs and
-models, the model's name comes first, and `basis VERB NAME --help` gives the model's arguments. Every verb reads its
-settings from the process's environment, as `uv run --env-file .env basis ...` sets them, logs JSON lines on stderr,
-ends its stderr with a log record, `finished VERB`, with its exit code and how long it took, and then prints each
-failure as one line, `ERROR: REASON: FIX`, the last. Paths are the working
-directory's. `--portfolios` takes ids, or `@FILE` with one per line.
+A model repo's command is `basis`, and `uv run basis --help` lists every verb it has; `optim` is the same command, under
+its earlier name. `run`, `describe`, `resume`, `replay`, `regress` and `ddl` are verbs jobs have too: in a repo with
+both jobs and models, the model's name comes first, and `basis VERB NAME --help` gives the model's arguments. Every verb
+reads its settings from the process's environment, as `uv run --env-file .env basis ...` sets them, logs JSON lines on
+stderr, ends its stderr with a log record, `finished VERB`, with its exit code and how long it took, and then prints
+each failure as one line, `ERROR: REASON: FIX`, the last. Paths are the working directory's. `--portfolios` takes ids,
+or `@FILE` with one per line.
 
 ### `basis run`
 
 ```text
-basis run MODEL --params FILE [--as-of DATE] [--portfolios ID ...] [--data DIR] [--label KEY=VALUE] [--workers N] [--no-cache]
+basis run MODEL --params FILE [--as-of DATE] [--portfolios ID ...] [--data DIR] [--label KEY=VALUE] [--workers N] [--no-cache] [--publish [--again]]
 ```
 
-Validates the params, loads the model's data, decides each portfolio, saves the snapshot under `BASIS_SNAPSHOT_ROOT`,
-which it requires, and writes accepted orders where `BASIS_OPTIM__ORDERS__*` configures a table. It is the only thing
-that writes orders. Prints `run RUN_ID`, a row per portfolio, and each reason. Exits 0 only when every portfolio was
-accepted.
+Validates the params, loads the model's data, decides each portfolio, and saves the snapshot under
+`BASIS_SNAPSHOT_ROOT`, which it requires. With `--publish`, it then writes the accepted portfolios' orders to the
+orders table `BASIS_OPTIM__ORDERS__*` configures; it and `basis resume` are the only things that write orders. Prints
+`run RUN_ID`, a row per portfolio, each reason, and, with `--publish`, a line saying what the publish wrote or why it
+failed. Exits 0 only when every portfolio was accepted and the publish, if asked for, committed.
+
+A publish writes every order in one transaction with the run's row in the ledger, `BASIS_DATABASES__NAME__WRITE__LEDGER`
+of the orders database, as basis-core publishes a job's tables: either every order is written, with its ledger row, or
+none is. The ledger keeps a run's orders from being written twice:
+
+- A run the ledger holds is not written again, however often its publish is retried or resumed.
+- A run's interval in the ledger is its as-of date, under its model's module. A run of the same model for a date that
+  another run published orders for stops before it loads, and its publish is refused again as it writes, unless it is
+  given `--again`. To publish the portfolios a published run rejected, decide those alone, with
+  `--portfolios ... --again`.
+- A run with no orders, as when every portfolio was rejected, publishes nothing, not even a ledger row, so running it
+  again for the same date is not refused.
+
+`--publish` stops the run before it loads, naming the fix, when no orders table is configured, when the table does not
+exist or cannot hold the orders' columns (`basis ddl` prints one that can), or when the date's orders are published
+already. `--again` without `--publish` is refused. A run without `--publish` where an orders table is configured writes
+none, and its last line says so, `orders: none written to TABLE, since the run was not given --publish`, so a
+scheduled run that leaves the option out is seen. The orders are written after the snapshot is saved, so a publish
+that fails keeps the run, and `basis resume` writes its orders.
 
 | Option | Default | Description |
 |---|---|---|
@@ -345,6 +365,37 @@ accepted.
 | `--label` | none | `KEY=VALUE`, recorded in the run's manifest; repeat for more. |
 | `--workers` | `BASIS_OPTIM__WORKERS`, or 1 | Worker processes. |
 | `--no-cache` | off | Reads every dataset live. |
+| `--publish` | off | Writes the accepted portfolios' orders to the orders table, through its database's write login. |
+| `--again` | off | With `--publish`: publishes even though another run of the model published orders for the as-of date. |
+
+### `basis resume`
+
+```text
+basis resume [MODEL] RUN_ID [--again]
+```
+
+Publishes the orders of a run of `basis run --publish` whose publish did not commit, from its snapshot: the same rows,
+to the same table, which the settings must still name. `RUN_ID` is found as `basis replay` finds it, and `MODEL`, where
+given, must be the run's. A run whose publish committed is left as it is, and so is one whose publish committed before
+its manifest recorded it, as when the process was stopped between the two: the ledger holds the run, and the resume
+saves and prints what its row says that earlier attempt wrote, and when. `--again` publishes even though another run of
+the model published orders for its as-of date; a run given `--again` resumes with it. Saves the outcome in the run's
+manifest, prints what it wrote or why it failed, and exits 0 when the publish committed or the run had no orders.
+
+### `basis ddl`
+
+```text
+basis ddl MODEL --dialect mssql|oracle
+basis ddl --ledger TABLE --dialect mssql|oracle
+```
+
+Prints the `CREATE TABLE` statement for the orders table `BASIS_OPTIM__ORDERS__TABLE` names, which every model
+publishes to, or with `--ledger`, for the ledger `TABLE`, which the orders database's
+`BASIS_DATABASES__NAME__WRITE__LEDGER` names. `MODEL` is a model's name in the `optim.models` entry points, or its
+module path there; its code is not imported. A run never creates or alters a table: these are for whoever may create
+them. The orders table holds `run_id`, `portfolio_id`, `security_id`, `side` and `quantity`, with the primary key
+`(run_id, portfolio_id, security_id, side)`; `quantity` is a float column, `FLOAT` or `BINARY_DOUBLE`, as every value
+in optim is. A table a publish writes may differ, as long as its columns can hold the orders' values exactly.
 
 ### `basis replay`
 
@@ -437,19 +488,20 @@ naming the variable that replaced it.
 
 | Variable | Default | Description |
 |---|---|---|
-| `BASIS_SNAPSHOT_ROOT` | none | The run store where `basis run` saves its runs, and where a replay finds a run by its id: a path, or a URL `pyarrow.fs` opens, such as `abfs://...`. Required by `basis run`, `basis replay`, and `basis sweep` and `basis regress` given a run id; a run from Python saves in the repo's `snapshots/` instead. |
+| `BASIS_SNAPSHOT_ROOT` | none | The run store where `basis run` saves its runs, and where a replay finds a run by its id: a path, or a URL `pyarrow.fs` opens, such as `abfs://...`. Required by `basis run`, `basis replay`, and `basis resume`, `basis sweep` and `basis regress` given a run id; a run from Python saves in the repo's `snapshots/` instead. |
 | `BASIS_DATABASES__NAME__KIND` | required with the database | `mssql` or `oracle`. `NAME` is the name a dataset's `source` gives, upper-cased: optim's shared holdings read `mssql`, and its securities `oracle`. |
 | `BASIS_DATABASES__NAME__CONNECTION_STRING` | required with SQL Server | A login that may read. The primary, not a readable secondary: holdings must include the trades just booked. |
 | `BASIS_DATABASES__NAME__DSN`, `__USER`, `__PASSWORD`, `__MODE` | required with Oracle | `MODE` is `thin` (no client libraries) or `thick`, which loads Oracle Instant Client. |
 | `BASIS_DATABASES__NAME__CLIENT_LIB_DIR` | none | Oracle in thick mode: where Oracle Instant Client is, if not on the library path. |
 | `BASIS_DATABASES__NAME__ISOLATION` | required with the database | How a run's reads see it. optim reads each batch of portfolios at one moment, so it requires `snapshot` of a SQL Server database it reads, which the database must allow, and `read_only` of an Oracle one; it refuses `read_committed`, which reads each query at its own, there. A database that only receives the orders may take either. |
 | `BASIS_DATABASES__NAME__TIMEOUT_S`, `__MAX_ROWS` | required with the database | Seconds each statement may take, the login included, which never waits more than 30, and the most rows a query may return; each at least 1. |
-| `BASIS_DATABASES__NAME__WRITE__CONNECTION_STRING` | none | The orders database's write login, apart from the one that reads: a login that may insert into the orders table. |
+| `BASIS_DATABASES__NAME__WRITE__CONNECTION_STRING`, or `__WRITE__USER` and `__WRITE__PASSWORD` | none | The orders database's write login, apart from the one that reads: a login that may insert into the orders table and its ledger, and read both. |
+| `BASIS_DATABASES__NAME__WRITE__LEDGER` | none | The orders database's ledger, as `schema.table`, which `basis ddl --ledger` creates: a row per run that published orders, written in the same transaction. Required with the orders table. |
 | `BASIS_OPTIM__DATABASES__NAME__MAX_CONCURRENT` | required with the database | Reads a run has open to the database at once, each a transaction of its own; at least 1. |
 | `BASIS_OPTIM__REST__URL`, `__MAX_CONCURRENT`, `__TIMEOUT_S`, `__MAX_ROWS` | required with REST | The base URL of a JSON API that answers a GET with a list of records; calls open at once, seconds per call, and the most records a call may return, each at least 1. |
 | `BASIS_OPTIM__CACHE_ROOT` | none | The dataset cache, a path or URL; without it nothing is cached. |
 | `BASIS_OPTIM__WORKERS` | `1` | Worker processes per run, at least 1; `1` decides in the calling process. |
-| `BASIS_OPTIM__ORDERS__DATABASE`, `__TABLE` | none | Production only: the database whose write login inserts the orders, and the table they are inserted into, as `run_id, portfolio_id, security_id, side, quantity`. `TABLE` is `schema.table`. Only `basis run` writes to it, each insert bounded by the database's `TIMEOUT_S`. |
+| `BASIS_OPTIM__ORDERS__DATABASE`, `__TABLE` | none | Production only: the database whose write login inserts the orders, and the table they are inserted into, as `run_id, portfolio_id, security_id, side, quantity`, which `basis ddl` creates. `TABLE` is `schema.table`. The database's block needs a write login and a ledger. Only `basis run --publish` and `basis resume` write to it, each statement bounded by the database's `TIMEOUT_S`. |
 | `BASIS_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR`, for `optim`'s and models' loggers. |
 | `BASIS_LOG_FORMAT` | `json`; `text` from Python | `json` lines, or `text` for a person. |
 | `BASIS_GIT_SHA`, `BASIS_IMAGE` | none | Set in an image: the commit and image a run records. |
@@ -476,6 +528,7 @@ results/decisions    a row per portfolio
 results/trades       a row per trade
 results/reasons      a row per reason a decision was rejected
 results/metrics      a row per portfolio and metric
+outputs/orders       a row per order: each accepted portfolio's rounded trades, as `--publish` writes them
 ```
 
 The manifest's record:
@@ -496,13 +549,16 @@ The manifest's record:
 | `reads` | Per dataset, its `source`, `read` (`live`, `hit`, `miss` or `refresh`) and `fetched_at`; null for a replay. |
 | `order` | For a model that reserves, the order its portfolios decided in; otherwise null. |
 | `replay` | For a replay, `of`, the run it replayed, and `portfolios`, the subset it decided; otherwise null. |
+| `publishing` | For a run of `basis run --publish`, the orders table's `database` and `table`, and `again`; otherwise null. Saved before the orders are written. |
+| `publishes` | Per database the run published its orders to, its `status` (`committed` or `failed`), `at`, the `counts` the database gave, by output, and the `error` of a failure; empty until then, and for a run with no orders. |
 | `datasets` | Each dataset above, by its object's hash. |
 
 `results/decisions` columns: `portfolio_id`, `status` (`accepted` or `rejected`), `trades`, `value` (before trading),
 `cash` (after trading), `turnover`, `solved`, `objective`, `solver`, `solver_status`, `stop`, `gap`, `nodes`,
 `iterations`, `solve_seconds` and `seconds`. `results/trades`: `portfolio_id`, `security_id`, `side`, `quantity`
 (rounded; 0 where rounding left nothing) and `decided` (as the model decided it). `results/reasons`: `portfolio_id`,
-`reason`. `results/metrics`: `portfolio_id`, `metric`, `value`.
+`reason`. `results/metrics`: `portfolio_id`, `metric`, `value`. `outputs/orders`: `portfolio_id`, `security_id`, `side`
+and `quantity`, the table's columns but for the run's id, which the manifest holds.
 
 ## `optim.testing`
 
@@ -565,7 +621,7 @@ and `MARKET`.
 | Option | Default | Description |
 |---|---|---|
 | `optim_qa_markers` | `["qa"]` | Text, matched without case, that every configured source and destination must contain. |
-| `optim_e2e_writes` | `[]` | The only snapshot roots, cache roots and orders tables the e2e suite may write to, as the environment sets them. |
+| `optim_e2e_writes` | `[]` | The only snapshot roots, cache roots, orders tables and ledgers the e2e suite may write to, as the environment sets them. The orders database's ledger is checked, for its marker and on this list, only for a run given `--publish`, which writes it. |
 | `optim_e2e_command` | this interpreter's `-m optim` | The command that runs the deployed `optim`. |
 
 The session fixture `optim_qa` reads the settings from the process's environment and fails, naming each problem, unless

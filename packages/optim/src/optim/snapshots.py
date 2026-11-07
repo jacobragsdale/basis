@@ -5,10 +5,13 @@ it saved by the hash of its object, `objects/HASH.parquet`, which the store hold
 
     inputs/NAME       each dataset exactly as loaded
     results/NAME      the result tables: decisions, trades, reasons and metrics
+    outputs/orders    the accepted portfolios' orders, as `basis run --publish` writes them (`optim.orders`)
 
 `MODEL` is the model's name as the run gave it. What a model derived from its inputs is not saved: replay derives it
 again with the same code. The objects are written first and the manifest last, so a reader never sees a run whose
-datasets are missing. The result tables' row models are below."""
+datasets are missing. A run that publishes is saved before it writes, and its manifest saved again with each
+database's outcome, its datasets unchanged, so `basis resume` writes the same orders. The result tables' row models
+are below."""
 
 import logging
 import subprocess
@@ -23,11 +26,13 @@ import pyarrow as pa
 from pydantic import AwareDatetime, Field, JsonValue
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from basis.core.snapshots import PublishRecord
 from basis.core.storage import DIGEST, Root, Store
 from optim.data.dataset import Dataset
 from optim.data.frames import conform, to_columns
 from optim.data.loader import DatasetRead
 from optim.decide import Outcome
+from optim.orders import OUTPUT, OrderRow, Publishing
 from optim.schema import Id, Model, Row
 
 log = logging.getLogger(__name__)
@@ -122,6 +127,11 @@ class RunInfo(Model):
     """For a model that reserves, the order its portfolios decided in, one at a time; null when they decided at once."""
     replay: Replayed | None
     """A replay only: the run it replayed, and the portfolios it decided."""
+    publishing: Publishing | None = None
+    """Where the run publishes its orders, as `basis run --publish` asked; null for a run that does not publish."""
+    publishes: dict[str, PublishRecord] = Field(default_factory=dict)
+    """Each database the run published its orders to, once it has: `committed`, with what the database counted, or
+    `failed`, with the error, which `basis resume` finishes. Empty before then, and for a run with no orders."""
 
 
 class DecisionRow(Row):
@@ -211,13 +221,14 @@ def result_frames(outcomes: Sequence[Outcome]) -> dict[str, pd.DataFrame]:
 
 
 RESULTS: dict[str, type[Row]] = {"decisions": DecisionRow, "trades": TradeRow, "reasons": ReasonRow, "metrics": MetricRow}
+ORDERS = f"outputs/{OUTPUT}"
 
 
 class Manifest(RunInfo):
     """A run as the store keeps it: its record, and the datasets it saved."""
 
     datasets: dict[str, Annotated[str, Field(pattern=f"^{DIGEST.pattern}$")]]
-    """Each dataset the run saved, `inputs/NAME` and `results/NAME`, by its object's hash."""
+    """Each dataset the run saved, `inputs/NAME`, `results/NAME` and `outputs/orders`, by its object's hash."""
 
 
 @dataclass(frozen=True)
@@ -248,19 +259,34 @@ class Saved:
         """The run's result tables, by name, `decisions`, `trades`, `reasons` and `metrics`, typed as the run wrote them."""
         return {name: conform(row, [self._frame(self.info.datasets[f"results/{name}"])], name=name) for name, row in RESULTS.items()}
 
+    def orders(self) -> pd.DataFrame:
+        """The accepted portfolios' orders, as the run saved them to publish: `optim.orders.OrderRow`s."""
+        if (found := self.info.datasets.get(ORDERS)) is None:
+            msg = f"run {self.info.run_id} has no orders: it was saved before optim saved them, and cannot publish"
+            raise LookupError(msg)
+        return conform(OrderRow, [self._frame(found)], name=OUTPUT)
+
+    def save_publishes(self, publishes: Mapping[str, PublishRecord]) -> Saved:
+        """Save the run's manifest again with each database's outcome of publishing its orders, and nothing else
+        changed; and return the run as saved."""
+        manifest = Manifest.model_validate(self.info.model_dump() | {"publishes": dict(publishes)})
+        self.path.write_bytes(manifest.model_dump_json(indent=2).encode())
+        return Saved(self.store, self.path, manifest)
+
     def _frame(self, digest: str) -> pd.DataFrame:
         return cast("pd.DataFrame", self.store.object(digest).read_table().to_pandas())  # pyarrow is untyped
 
 
-def save(root: Root, info: RunInfo, inputs: Mapping[str, pd.DataFrame], outcomes: Sequence[Outcome]) -> Saved:
+def save(root: Root, info: RunInfo, inputs: Mapping[str, pd.DataFrame], outcomes: Sequence[Outcome], orders: pd.DataFrame) -> Saved:
     """Save a new run in the store at `root`: each dataset the store does not hold yet, then its manifest. `inputs` are
-    the datasets the run loaded, by name."""
+    the datasets the run loaded, by name, and `orders` its outcomes' orders, as `optim.orders.orders_of` builds them."""
     store = Store(root)
     path = store.manifest(PACKAGE, info.model.name, info.run_id)
     if path.exists():
         msg = f"run {info.run_id} is in the store already, at {path.location}: a new run takes a new id"
         raise FileExistsError(msg)
     frames = {f"inputs/{name}": frame for name, frame in inputs.items()} | {f"results/{name}": frame for name, frame in result_frames(outcomes).items()}
+    frames[ORDERS] = orders
     manifest = Manifest.model_validate(info.model_dump() | {"datasets": {key: store.put(_table(frame)) for key, frame in frames.items()}})
     path.write_bytes(manifest.model_dump_json(indent=2).encode())
     log.info("saved run %s", path.location)

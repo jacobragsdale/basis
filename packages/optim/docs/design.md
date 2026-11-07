@@ -36,10 +36,10 @@ design's intent:
 | `basis regress` | Takes `--snapshots ROOT`, `--last N` and `--label KEY=VALUE`, such as `purpose=production`, and exits 1 when anything changed. | Production runs are found by their labels, and a non-zero exit lets a pipeline gate an upgrade on it. |
 | `basis sweep` | Writes the table as CSV on stdout, or to `--out`. | Agents read CSV; a file suits a person. |
 | `basis docs` | Prints a page of the docs that ship with the installed `optim`, which the skills point at. | A model repo's agents read the docs for the version the repo installed, without a copy in each repo. |
-| Python API | `optim.run(model, ...)`, `optim.replay(model, run, ...)` and `optim.sweep(model, run, params=...)`, which a model's `main.py` calls, share `optim.runs` with the command line. Their paths are the model's folder's, their settings file is set for the call alone, they save in the repo's `snapshots/`, and they never write orders. `optim.runs.open_snapshot(run)` and `optim.research.trial(snapshot, portfolio_id, params=None)` return what a portfolio was prepared with, the market, the cvxpy problem and the outcome. | Analysts run and debug models from their IDEs by running a file, which must spell out what it runs; production keeps one `basis run` for every repo. |
+| Python API | `optim.run(model, ...)`, `optim.replay(model, run, ...)` and `optim.sweep(model, run, params=...)`, which a model's `main.py` calls, share `optim.runs` with the command line. Their paths are the model's folder's, their settings file is set for the call alone, they save in the repo's `snapshots/`, and they never write orders. `optim.runs.open_snapshot(run)` and `optim.research.trial(snapshot, portfolio_id, params=None)` return what a portfolio was prepared with, the market, the cvxpy problem and the outcome. | Analysts run and debug models from their IDEs by running a file, which must spell out what it runs; production keeps one `basis run --publish` for every repo. |
 | Contract tests | Each model's `tests/test_contract.py` subclasses `optim.testing.ContractTests`: its params, its fixture and its imports, from `model.py`'s. `basis check` checks the agent files. The plugin injects no tests. | Tests an analyst can see and run from the IDE's test panel, like any other. |
 | e2e | The plugin's `optim_qa` fixture checks the markers (`optim_qa_markers`) and the allowlist (`optim_e2e_writes`), picks each model's first listed portfolios (`QA.listed`), or portfolios with a `SELECT` alone, and runs `optim_e2e_command` from the repo's root with repo-relative params paths, such as `docker run ... IMAGE`; `QA.smoke` is each model's smoke case, in the generated `tests/e2e/test_smoke.py`. | The page named the safeguards; these are where they live. Relative paths resolve both in a checkout and in the image, whose workdir holds the repo, and the image holds no pytest. |
-| Orders | Written as `run_id, portfolio_id, security_id, side, quantity`, in one transaction, through the write login of the database `BASIS_OPTIM__ORDERS__DATABASE` names, a login that may insert, into `BASIS_OPTIM__ORDERS__TABLE`. | The read-only credentials that load data must not write. The real table's columns are still to confirm. |
+| Orders | Since basis's roadmap step 3.4, written only by `basis run --publish` and `basis resume`, as `run_id, portfolio_id, security_id, side, quantity`, into `BASIS_OPTIM__ORDERS__TABLE`, through basis-core's publishing: one batched insert, through the write login of the database `BASIS_OPTIM__ORDERS__DATABASE` names, in one transaction with a row in that database's ledger. A run the ledger holds is not written again; a run of a model for an as-of date another run published is refused unless given `--again`; a run with no orders publishes nothing. The run saves its orders in its snapshot, `outputs/orders`, before it writes, and `basis resume` writes those. `basis ddl MODEL` prints the table, with the primary key `(run_id, portfolio_id, security_id, side)`, and the ledger. | The read-only credentials that load data must not write. A trading system must never see a run's orders twice, however the scheduler retries, and one that failed to write must be finishable without deciding again; basis-job's publishing already does both. The real table's columns are still to confirm. |
 | `optim.testing` | `ContractTests`, and builders for behaviour tests: `frame(dataset, *rows)` and `data(Data, frames, **more)`, with default shared rows. Each model's own `tests/builders.py` builds its portfolio and params. | The page names the core's builders. |
 | Example | One example, a taxable SMA rebalance laid out as a model's folder, with a `ruff.toml` that sorts imports as a model repo does and that `optim new repo` and `basis new model` leave out. The `plain` example is gone. | Copied code must pass the generated repo's own ruff; one example means one variant of the layout to keep. |
 | `optim new repo` | `optim new repo REPO MODEL` runs outside any repo and writes, through `basis.core.new`, the source the repo takes `optim` from into its `pyproject.toml`: `--index`, every package's; `--framework-path`, a checkout of basis, editable; or the commit or tag optim came from. `--from` is gone. | PyPI has an unrelated package named `optim`, which a repo with no source would install. A repo and its first model are named apart. |
@@ -166,7 +166,7 @@ Every run, in Airflow or on a laptop, takes the same steps:
 6. Round each decision's quantities to each security's trading increment, from the shared securities dataset.
 7. Check each rounded decision for acceptance, as described after these steps.
 8. Write the snapshot.
-9. Write the accepted portfolios' orders, with the run id, to the SQL Server orders table.
+9. With `--publish`, write the accepted portfolios' orders, with the run id, to the orders table, with a ledger row.
 
 Acceptance rejects a decision unless every trade is in a known security, every quantity is positive, no sale exceeds
 the holding, and cash after the trades is not negative. One tolerance applies, in weights of the portfolio's value. The
@@ -174,8 +174,9 @@ model's `check` then adds its own reasons, because the core cannot see the const
 solver's status alone never makes a result acceptable. A rejected portfolio writes no orders, its decision and reasons
 stay in the snapshot, and the run exits non-zero; the exit code is 0 only when every portfolio was accepted.
 
-Only production writes orders. A run writes them to the table that its environment configures, and only the
-production environment configures one, so a laptop's orders stay in its snapshot. `optim` never submits orders.
+Only production writes orders. A run given `--publish` writes them to the table that its environment configures, and
+only the production environment configures one, so a laptop's orders stay in its snapshot. `optim` never submits
+orders.
 
 Models log with the standard library's `logging.getLogger(__name__)`. The core's handler adds the run id, the model and
 the portfolio id to every record, worker processes included, and writes JSON lines. Ruff rejects `print` in model code.
@@ -212,8 +213,8 @@ another backend can be added if files prove too slow for some dataset.
 
 ## Where runs happen
 
-Airflow runs `basis run MODEL --params FILE --as-of DATE [--portfolios ...]` in the model repo's image. A repo lists
-its models as entry points, and `MODEL` is one of their names:
+Airflow runs `basis run MODEL --params FILE --as-of DATE --publish [--portfolios ...]` in the model repo's image. A
+repo lists its models as entry points, and `MODEL` is one of their names:
 
 ```toml
 [project.entry-points."optim.models"]

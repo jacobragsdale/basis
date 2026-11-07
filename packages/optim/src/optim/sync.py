@@ -11,8 +11,9 @@ from basis.core.sync import AgentFiles
 
 PACKAGE = Path(__file__).parent
 SKILLS = PACKAGE / "skills"
-IMAGE = "#   a model: run MODEL --params models/MODEL/params/default.json --as-of DATE\n"
-"""The Dockerfile's line for models: the command a scheduler gives a model's container."""
+IMAGE = "#   a model: run MODEL --params models/MODEL/params/default.json --as-of DATE --publish\n"
+"""The Dockerfile's line for models: the command a scheduler gives a model's container, which writes the accepted
+orders only with `--publish`."""
 
 
 def agent_files() -> AgentFiles:

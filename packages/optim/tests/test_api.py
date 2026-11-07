@@ -66,7 +66,7 @@ def test_the_settings_file_above_the_models_folder_is_set_for_the_run_alone_and_
     database = "BASIS_DATABASES__TRADING__"
     (repo / ".env").write_text(
         f"BASIS_OPTIM__WORKERS=2\n{database}KIND=mssql\n{database}CONNECTION_STRING=Server=nowhere.invalid\n{database}ISOLATION=snapshot\n{database}TIMEOUT_S=1\n"
-        f"{database}MAX_ROWS=1\n{database}WRITE__CONNECTION_STRING=Server=nowhere.invalid\nBASIS_OPTIM__ORDERS__DATABASE=trading\nBASIS_OPTIM__ORDERS__TABLE=trading.orders\n"
+        f"{database}MAX_ROWS=1\n{database}WRITE__CONNECTION_STRING=Server=nowhere.invalid\n{database}WRITE__LEDGER=trading.publishes\nBASIS_OPTIM__ORDERS__DATABASE=trading\nBASIS_OPTIM__ORDERS__TABLE=trading.orders\n"
     )
 
     results = optim.run(income(), data="tests/fixture")

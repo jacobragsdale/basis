@@ -14,13 +14,14 @@ Prerequisites:
 To run the e2e suite:
 
 1. In `pyproject.toml`'s `[tool.pytest.ini_options]`, which the repo already has, list what the suite may write to,
-   exactly as `.env.qa` sets them: `BASIS_SNAPSHOT_ROOT`, and `BASIS_OPTIM__ORDERS__TABLE` and
-   `BASIS_OPTIM__CACHE_ROOT` where it sets them.
+   exactly as `.env.qa` sets them: `BASIS_SNAPSHOT_ROOT`, and `BASIS_OPTIM__CACHE_ROOT` and `BASIS_OPTIM__ORDERS__TABLE`
+   where it sets them. A case that passes `--publish` writes the orders database's ledger too,
+   `BASIS_DATABASES__NAME__WRITE__LEDGER`, which must then be listed.
 
    ```toml
    [tool.pytest.ini_options]
    optim_qa_markers = ["qa"]
-   optim_e2e_writes = ["//qa-share/optim/snapshots", "qa.orders"]
+   optim_e2e_writes = ["//qa-share/optim/snapshots", "qa.orders", "qa.publishes"]
    ```
 
    `optim_qa_markers` is text, not a pytest marker: every QA host, connection string, URL and root must contain one of

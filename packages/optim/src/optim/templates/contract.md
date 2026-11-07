@@ -48,7 +48,7 @@ no solver returns `optim.Decision(buy={...}, sell={...})`.
 - Log with `logging.getLogger(__name__)`, never `print`. Document every field with a docstring under it, and open every
   file with a docstring that says what it holds.
 - Keep each model's `README.md` true: what it maximizes, its constraints, its data and its known limits.
-- Never write orders from Python: a run from `main.py` cannot, and only `basis run` in production does.
+- Never write orders from Python: a run from `main.py` cannot, and only `basis run --publish` in production does.
 
 ### Where things are
 

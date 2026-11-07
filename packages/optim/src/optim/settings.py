@@ -80,8 +80,8 @@ class OptimSettings(Model):
     rest: ApiSettings | None = None
     """The REST API that datasets with `source="rest"` read."""
     orders: OrdersSettings | None = None
-    """The orders table accepted portfolios' orders are written to. Only production configures one, and only
-    `basis run` writes to it."""
+    """The orders table accepted portfolios' orders are published to. Only production configures one, and only
+    `basis run --publish` and `basis resume` write to it."""
 
 
 CONSISTENT = {"mssql": "snapshot", "oracle": "read_only"}
@@ -95,7 +95,7 @@ class Settings(core.Settings):
     @model_validator(mode="after")
     def _databases_are_configured(self) -> Self:
         """Every database optim's block names is one basis-core's settings configure, which reads at one moment and
-        takes no name of optim's own sources; and the orders database has a write login."""
+        takes no name of optim's own sources; and the orders database has a write login and a ledger."""
         for name in self.optim.databases:
             if name in OWN:
                 msg = f"{PREFIX}DATABASES__{name.upper()}__MAX_CONCURRENT is set, and {name} names optim's own source, never a database: give the database another name"
@@ -110,9 +110,8 @@ class Settings(core.Settings):
             if (database := self.databases.get(orders.database)) is None:
                 msg = f"{PREFIX}ORDERS__DATABASE is {orders.database}, which is not configured: set BASIS_DATABASES__{orders.database.upper()}__KIND and the rest of its block, WRITE included"
                 raise ValueError(msg)
-            if database.write is None:
-                logins = ("connection_string",) if isinstance(database, core.MssqlSettings) else ("user", "password")
-                missing = " and ".join(core.variable(("databases", orders.database, "write", login)) for login in logins)
-                msg = f"{PREFIX}ORDERS__DATABASE is {orders.database}, which has no write login to insert the orders with: set {missing}"
+            if (refused := core.publish_refusal(orders.database, database)) is not None:
+                reason, fix = refused
+                msg = f"{PREFIX}ORDERS__DATABASE is {orders.database}, which {reason}: {fix}"
                 raise ValueError(msg)
         return self

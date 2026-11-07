@@ -1,16 +1,17 @@
 """Running a model, as the command line and a model's `main.py` (`optim.api`) both do. `run_model` validates the
-params, loads the model's data, decides every portfolio and saves the snapshot; `replay_run` decides a saved run again,
-with the code you have now and, if given, other params. Both decide through `decide_all`, which calls the model's
-hooks: `prepare_market` once in this process, then for each portfolio, in worker processes, `prepare_portfolio` and
-`decide`; the core rounds the decision and reviews it (`optim.acceptance`), and the model's `check` adds its own
-reasons."""
+params, loads the model's data, decides every portfolio, saves the snapshot and, if asked, publishes the accepted
+portfolios' orders; `replay_run` decides a saved run again, with the code you have now and, if given, other params;
+`resume_run` publishes a saved run's orders that it did not commit. The first two decide through `decide_all`, which
+calls the model's hooks: `prepare_market` once in this process, then for each portfolio, in worker processes,
+`prepare_portfolio` and `decide`; the core rounds the decision and reviews it (`optim.acceptance`), and the model's
+`check` adds its own reasons."""
 
 import hashlib
 import json
 import logging
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from functools import cached_property
 from pathlib import Path
@@ -21,6 +22,8 @@ import pandas as pd
 
 import optim
 from basis.core import logs
+from basis.core.errors import BasisError
+from basis.core.snapshots import PublishRecord
 from basis.core.storage import Root
 from optim import models
 from optim.contract import LISTING, Datasets, Params, declared
@@ -28,7 +31,7 @@ from optim.data.dataset import Dataset
 from optim.data.loader import Loader, load_data
 from optim.decide import Outcome, decide_all
 from optim.models import LoadedModel
-from optim.orders import Orders
+from optim.orders import Orders, OrdersRefusedError, Published, Publishing, orders_of
 from optim.snapshots import Code, ModelInfo, ParamsFile, Replayed, RunInfo, Saved, checkout, result_frames, save
 from optim.snapshots import find as find_run
 from optim.snapshots import read as read_run
@@ -44,11 +47,19 @@ class Run:
 
     run_id: str
     outcomes: list[Outcome]
+    publishes: dict[str, PublishRecord] = field(default_factory=dict[str, PublishRecord])
+    """Each database the run published its orders to, and how it went; empty for a run that did not publish, or had no
+    orders to."""
 
     @property
     def ok(self) -> bool:
         """Every portfolio was accepted: the run may trade."""
         return all(outcome.accepted for outcome in self.outcomes)
+
+    @property
+    def committed(self) -> bool:
+        """Every publish the run made committed, which a run that made none did too."""
+        return all(record.status == "committed" for record in self.publishes.values())
 
     @cached_property
     def _tables(self) -> dict[str, pd.DataFrame]:
@@ -78,7 +89,22 @@ class Run:
         """What `optim run` prints: the run's id, a row per portfolio, and each reason a portfolio was rejected."""
         decisions = self.decisions[["portfolio_id", "status", "trades", "solved", "objective", "stop", "seconds"]]
         reasons = "".join(f"{outcome.portfolio_id}: {reason}\n" for outcome in self.outcomes for reason in outcome.reasons)
-        return f"run {self.run_id}\n{decisions.to_string(index=False)}\n{reasons}"
+        return f"run {self.run_id}\n{decisions.to_string(index=False)}\n{reasons}{published(self.publishes)}"
+
+
+def published(publishes: Mapping[str, PublishRecord], *, earlier: bool = False) -> str:
+    """A line per database a run published its orders to: what it wrote, or what an earlier attempt that committed them
+    wrote, or why it failed."""
+    lines = []
+    for database, record in publishes.items():
+        written = sum(counts.get("inserted", 0) for counts in record.counts.values())
+        if record.status == "committed" and earlier:
+            lines.append(f"orders: committed to {database} by an earlier attempt, at {record.at.isoformat()}, which wrote {written} orders\n")
+        elif record.status == "committed":
+            lines.append(f"orders: committed to {database}, {written} orders written\n")
+        else:
+            lines.append(f"orders: failed on {database}: {record.error}\n")
+    return "".join(lines)
 
 
 def today() -> date:
@@ -125,17 +151,22 @@ def run_model(
     workers: int = 1,
     labels: Mapping[str, str] = NO_LABELS,
     orders: Orders | None = None,
+    again: bool = False,
     clock: Callable[[], datetime] = logs.utc_now,
 ) -> Run:
     """Load the model's data for `as_of_date` and the portfolios, decide each one, save the snapshot under
-    `snapshot_root`, and then write the accepted portfolios' orders to `orders`, if given. `data_dir` reads each dataset
-    that has a file there instead of its source. Without `portfolio_ids`, the run decides every portfolio the model
-    lists, or, for a model that lists none, every portfolio in a holdings file."""
+    `snapshot_root`, and then publish the accepted portfolios' orders to `orders`, if given; `again` publishes them even
+    though another run of the model published orders for the date. `data_dir` reads each dataset that has a file there
+    instead of its source. Without `portfolio_ids`, the run decides every portfolio the model lists, or, for a model
+    that lists none, every portfolio in a holdings file."""
     params, params_file_info = read_params(model, params_file)
     snapshot_root.make_dir()  # storage that cannot be written fails the run before it loads, not after it decides
     run_id = str(uuid.uuid7())
     logs.bind(run_id=run_id, model=model.name)
     log.info("starting run", extra={"optim_version": optim.__version__, "model_module": model.module, "params": str(params_file), "as_of_date": as_of_date})
+    if orders is not None and (refused := orders.refusals(model.module, as_of_date, again=again)):
+        msg = f"the run cannot publish its orders to {orders.table.table} in database {orders.table.database}, so it stops before it loads: {'; '.join(refused)}"
+        raise OrdersRefusedError(msg)
     started_at = clock()
     datasets = datasets_of(model, data_dir)
     if portfolio_ids is None and LISTING not in datasets:
@@ -160,12 +191,40 @@ def run_model(
         reads=reads,
         order=decided.order,
         replay=None,
+        publishing=Publishing(database=orders.table.database, table=orders.table.table, again=again) if orders is not None else None,
     )
-    save(snapshot_root, info, frames, decided.outcomes)
-    if orders is not None:
-        with logs.timed(log, "wrote orders", table=orders.table) as fields:
-            fields["orders"] = orders.write(run_id, decided.outcomes)
-    return Run(run_id, decided.outcomes)
+    to_publish = orders_of(decided.outcomes)
+    saved = save(snapshot_root, info, frames, decided.outcomes, to_publish)
+    if orders is None:
+        return Run(run_id, decided.outcomes)
+    outcome = orders.publish(run_id, model.module, as_of_date, to_publish, again=again, clock=clock)
+    saved.save_publishes(outcome.records)
+    return Run(run_id, decided.outcomes, outcome.records)
+
+
+def resume_run(saved: Saved, orders: Orders, *, again: bool = False, clock: Callable[[], datetime] = logs.utc_now) -> Published:
+    """Publish a saved run's orders that it did not commit, from its snapshot, to the table it publishes to, and save
+    its record with the outcome, which is returned; a run that committed already is left as it is. The ledger refuses
+    a run it holds, so a run whose publish committed before its record was saved writes nothing more, and its record
+    is the ledger's. `again` publishes even though another run of the model published orders for its date, as a run
+    given `--again` does."""
+    info = saved.info
+    logs.bind(run_id=info.run_id, model=info.model.name)
+    if (publishing := info.publishing) is None:
+        msg = f"run {info.run_id} was not asked to publish its orders, so it has none to resume: run the model again, as `basis run {info.model.name} --publish`"
+        raise BasisError(msg)
+    if any(record.status == "committed" for record in info.publishes.values()):
+        log.info("already published")
+        return Published(info.publishes, earlier=True)
+    if (publishing.database, publishing.table) != (orders.table.database, orders.table.table):
+        msg = (
+            f"run {info.run_id} publishes its orders to {publishing.table} in database {publishing.database}, and the settings name {orders.table.table} in {orders.table.database}:"
+            " resume it with the settings it ran with"
+        )
+        raise BasisError(msg)
+    outcome = orders.publish(info.run_id, info.model.module, info.as_of_date, saved.orders(), again=publishing.again or again, clock=clock)
+    saved.save_publishes(outcome.records)
+    return outcome
 
 
 @dataclass(frozen=True)
@@ -246,7 +305,7 @@ def replay_run(
         order=decided.order,
         replay=Replayed(of=saved.info.run_id, portfolios=only),
     )
-    save(snapshot_root, info, saved.data.frames, decided.outcomes)
+    save(snapshot_root, info, saved.data.frames, decided.outcomes, orders_of(decided.outcomes))
     return Run(run_id, decided.outcomes)
 
 
