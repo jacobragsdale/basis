@@ -30,6 +30,7 @@ from fastapi import params
 from starlette.applications import Starlette
 from starlette.requests import Request
 
+from basis.api.errors import ServiceError
 from basis.api.settings import Settings
 
 GROUP = "basis.apis"
@@ -41,10 +42,6 @@ NAME = re.compile(r"[a-z][a-z0-9-]{0,62}")
 _PARAMETER = re.compile(r"\{[^}]*\}")
 
 type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
-
-
-class ServiceError(TypeError):
-    """A service that does not declare what basis needs; the message says what to declare."""
 
 
 @dataclass(frozen=True)
@@ -192,7 +189,8 @@ def load(reference: str | None = None, *, listed: Iterable[EntryPoint] | None = 
         module = importlib.import_module(entry.module)
     except ModuleNotFoundError as error:
         if error.name is not None and (entry.module == error.name or entry.module.startswith(f"{error.name}.")):
-            msg = f"no service named {reference!r}: the installed packages list {sorted(entries) or 'none'}, and it is not a module path"
+            reason = f"no service named {reference!r}: the installed packages list {sorted(entries) or 'none'} in the {GROUP} entry points, and no module has that path"
+            msg = f'{reason}: give its module path, as basis.api.example.service, or list it under [project.entry-points."{GROUP}"]'
             raise ServiceError(msg) from error
         raise  # the module exists, and something it imports does not
     attribute = entry.attr or "service"

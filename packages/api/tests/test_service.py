@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from basis import api
 from basis.api.example import service as example
-from basis.api.settings import read, variable
+from basis.api.settings import read
 from basis.core.settings import Settings as CoreSettings
 
 
@@ -131,31 +131,22 @@ def test_a_missing_setting_names_its_variable(monkeypatch: pytest.MonkeyPatch) -
     class Needs(api.Settings):
         desk: str
 
-    prefix = str(api.Settings.model_config.get("env_prefix") or "")  # whatever basis-core's prefix is
-    for name in (f"{prefix}DESK", f"{prefix}TRACES__EXPORTER"):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv(f"{prefix}TRACES__EXPORTER", "otlp")
+    monkeypatch.delenv("BASIS_DESK", raising=False)
+    monkeypatch.setenv("BASIS_TRACES__EXPORTER", "otlp")
     with pytest.raises(api.SettingsError) as raised:
         read(Needs)
-    assert f"{prefix}DESK: Field required" in str(raised.value)
-    assert f"{prefix}TRACES: Value error, the otlp exporter needs an endpoint" in str(raised.value)
+    assert "BASIS_DESK: Field required" in str(raised.value)
+    assert "BASIS_TRACES: Value error, the otlp exporter needs an endpoint" in str(raised.value)
 
 
 def test_a_value_that_does_not_parse_names_its_variable(monkeypatch: pytest.MonkeyPatch) -> None:
-    prefix = str(api.Settings.model_config.get("env_prefix") or "")
-    monkeypatch.setenv(f"{prefix}DATABASES", '{"warehouse": ')
-    with pytest.raises(api.SettingsError, match=f"set {prefix}DATABASES, whose value does not parse: Expecting value"):
+    monkeypatch.setenv("BASIS_DATABASES", '{"warehouse": ')
+    with pytest.raises(api.SettingsError, match="set BASIS_DATABASES, whose value does not parse: Expecting value"):
         read(api.Settings)
 
 
-def test_a_variable_is_named_by_the_settings_own_prefix() -> None:
-    prefix = str(api.Settings.model_config.get("env_prefix") or "")
-    assert variable(api.Settings, ("serve", "port")) == f"{prefix}SERVE__PORT"
-
-
 def test_given_settings_ignore_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    prefix = str(api.Settings.model_config.get("env_prefix") or "")
-    monkeypatch.setenv(f"{prefix}MARKUP_BP", "25")
+    monkeypatch.setenv("BASIS_MARKUP_BP", "25")
     assert (Pricing().markup_bp, Pricing.given().markup_bp, Pricing.given(markup_bp=5).markup_bp) == (25, 0, 5)
 
 

@@ -13,6 +13,9 @@ dependencies = [
     "uvicorn>=0.54.0",
 ]
 
+[project.entry-points."basis.verbs"]
+api = "basis.api.cli:part"  # basis-api's verbs, in a repo whose [tool.basis] parts include "api"
+
 [tool.uv.sources]
 basis-core = { workspace = true }
 

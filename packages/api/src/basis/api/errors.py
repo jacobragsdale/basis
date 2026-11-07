@@ -39,6 +39,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from starlette.exceptions import HTTPException
 from starlette.responses import Response
 
+from basis.core.errors import BasisError
 from basis.core.model import Model
 
 MEDIA_TYPE = "application/problem+json"
@@ -47,6 +48,11 @@ FIRST_SERVER_ERROR = 500
 _STATUSES = range(FIRST_ERROR, 600)
 _NO_HEADERS: Mapping[str, str] = MappingProxyType({})
 _JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
+
+
+class ServiceError(BasisError, TypeError):
+    """A service that does not declare what basis needs; the message says what to declare, and `basis` prints it as
+    one line."""
 
 
 class Error(Exception):
@@ -70,11 +76,11 @@ class Error(Exception):
         status = getattr(cls, "status", None)
         if not isinstance(status, int) or status not in _STATUSES:
             msg = f"{cls.__qualname__} declares no error status: give it `status = HTTPStatus.NOT_FOUND`, or another 4xx or 5xx, or declare it `abstract=True`, a base for errors that do"
-            raise TypeError(msg)
+            raise ServiceError(msg)
         title = getattr(cls, "title", None)
         if not isinstance(title, str) or not title.strip():
             msg = f'{cls.__qualname__} declares no title: give it `title = "..."`, what kind of problem it is, in the same words every time'
-            raise TypeError(msg)
+            raise ServiceError(msg)
         if "type" not in vars(cls):
             cls.type = re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "-", cls.__name__.removesuffix("Error") or cls.__name__).lower()
 

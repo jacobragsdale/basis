@@ -17,8 +17,6 @@ from http import HTTPStatus
 import httpx2
 import pytest
 
-from basis import api
-
 SERVICE = """
 import sys
 import time
@@ -80,10 +78,9 @@ def test_a_second_signal_stops_at_once() -> None:
 
 @contextmanager
 def _serving(*, slow_s: float, drain_s: float) -> Generator[Server]:
-    prefix = str(api.Settings.model_config.get("env_prefix") or "")  # whatever basis-core's prefix is
     port = _free_port()
     settings = {"SERVE__HOST": "127.0.0.1", "SERVE__PORT": str(port), "SERVE__DRAIN_S": str(drain_s), "SERVE__SHUTDOWN_S": "10"}
-    environment = {key: value for key, value in os.environ.items() if not key.startswith(prefix)} | {f"{prefix}{key}": value for key, value in settings.items()}
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("BASIS_")} | {f"BASIS_{key}": value for key, value in settings.items()}
     process = subprocess.Popen([sys.executable, "-c", SERVICE, str(slow_s)], env=environment, stderr=subprocess.PIPE, text=True)
     server = Server(process, f"http://127.0.0.1:{port}", port)
     try:

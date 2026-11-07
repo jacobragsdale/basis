@@ -1,7 +1,7 @@
 """An API's settings: basis-core's, which name each database, with how the API serves and where its spans go. A
-service subclasses `Settings` with fields of its own, which read from the same variables, under basis-core's prefix:
-`SERVE__PORT` after the prefix sets `serve.port`, and a service's `max_days` is `MAX_DAYS` after it. The settings
-are read once, when the app is built, and a missing or invalid one stops it there, naming the variable to set."""
+service subclasses `Settings` with fields of its own, which read from `BASIS_*` variables too: `BASIS_SERVE__PORT`
+sets `serve.port`, and a service's `max_days` is `BASIS_MAX_DAYS`. The settings are read once, when the app is built,
+and a missing or invalid one stops it there, with one line that names the variable to set."""
 
 import re
 from contextvars import ContextVar
@@ -13,6 +13,7 @@ from pydantic_settings import SettingsError as SourceError
 
 from basis.core import settings as core
 from basis.core.model import Model
+from basis.core.settings import SettingsError, variable
 
 
 class Serve(Model):
@@ -37,7 +38,7 @@ class Traces(Model):
     @model_validator(mode="after")
     def _endpoint_for_otlp(self) -> Self:
         if (self.exporter == "otlp") != (self.endpoint is not None):
-            msg = "the otlp exporter needs an endpoint, TRACES__ENDPOINT after the prefix, and the console exporter takes none"
+            msg = "the otlp exporter needs an endpoint, BASIS_TRACES__ENDPOINT, and the console exporter takes none"
             raise ValueError(msg)
         return self
 
@@ -76,28 +77,17 @@ _ARGUMENTS_ONLY = ContextVar("basis.api.settings.arguments_only", default=False)
 """Set by `Settings.given` while it validates, so that no source but its arguments is read."""
 
 
-class SettingsError(ValueError):
-    """Settings the environment does not give, or gives wrong; the message names each variable to set."""
-
-
 def read[S: Settings](settings: type[S]) -> S:
     """`settings` from the environment, or an error that names each variable to set."""
     try:
         return settings()
     except ValidationError as error:
-        problems = "; ".join(f"{variable(settings, entry['loc'])}: {entry['msg']}" for entry in error.errors(include_url=False, include_input=False))
+        problems = "; ".join(f"{variable(entry['loc'])}: {entry['msg']}" for entry in error.errors(include_url=False, include_input=False))
         msg = f"the settings are not valid, so the API cannot start: set {problems}"
         raise SettingsError(msg) from None  # the validation error would print every value beside the field it names
     except SourceError as error:  # a value that does not parse before it is validated, such as a block's JSON
         field = re.search(r'field "([^"]+)"', str(error))  # pydantic-settings names the field in its message alone
-        name = variable(settings, (field.group(1),)) if field is not None else f"the variable that starts {variable(settings, ())}"
+        name = variable((field.group(1),)) if field is not None else f"the variable that starts {core.PREFIX}"
         reason = f": {error.__cause__}" if error.__cause__ is not None else ""
         msg = f"the settings are not valid, so the API cannot start: set {name}, whose value does not parse{reason}"
         raise SettingsError(msg) from None
-
-
-def variable(settings: type[BaseSettings], location: tuple[str | int, ...]) -> str:
-    """The environment variable that sets the field at `location`, with whatever prefix the settings read."""
-    config = settings.model_config
-    delimiter = config.get("env_nested_delimiter") or "__"
-    return f"{config.get('env_prefix') or ''}{delimiter.join(str(part) for part in location)}".upper()
