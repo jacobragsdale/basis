@@ -154,7 +154,7 @@ def _regress(found: RegressRecord) -> list[str]:
         f"| {_cell(run.name)} | `{run.run_id}` | {_cell('; '.join([*(f'{entry.output}: {entry.summary}' for entry in run.differences), *(f'would not write: {reason}' for reason in run.reasons)]))} |"
         for run in changed
     ]
-    return [*lines, f"{replayed}, and {len(changed)} {'differs' if len(changed) == 1 else 'differ'}:", "", "| Job or model | Run | What differs |", "|---|---|---|", *rows]
+    return [*lines, f"{replayed}, and {len(changed)} {'differs' if len(changed) == 1 else 'differ'}:", "", "| Name | Run | What differs |", "|---|---|---|", *rows]
 
 
 def _qa(found: QaRecord) -> list[str]:

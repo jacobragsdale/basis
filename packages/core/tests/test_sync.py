@@ -4,10 +4,12 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
-from basis.core.sync import BEFORE, DENY, MARKER, REPO_FILES, AgentFiles, core, plan, stale, write
+from basis.core.sync import BEFORE, DENY, MARKER, REPO_FILES, SKILL_KEY, AgentFiles, core, plan, stale, stamped, write
 
-FILES = AgentFiles("new-part", "the new block\n", {"job-new": "# Make a job\n"}, image="#   a job: run JOB --publish\n", formerly=("old-part",), retired=("tests/test_agent_files.py",))
+SKILL = "---\nname: job-new\ndescription: Make a job, from its tables to its first passing contract tests.\n---\n\n# Make a job\n"
+FILES = AgentFiles("new-part", "the new block\n", {"job-new": SKILL}, image="#   a job: run JOB --publish\n", formerly=("old-part",), retired=("tests/test_agent_files.py",))
 NEW = "<!-- new-part:begin (written by `basis sync`; edit outside the markers) -->\nthe new block\n<!-- new-part:end -->"
 OLD = "<!-- old-part:begin (written by `basis sync`; edit outside the markers) -->\nthe old block\n<!-- old-part:end -->"
 GONE = "<!-- gone-part:begin (written by `etl sync`; edit outside the markers) -->\na part no longer installed\n<!-- gone-part:end -->"
@@ -60,8 +62,9 @@ def test_a_repo_has_the_framework_files_each_opening_with_the_marker_and_the_doc
 
 def test_sync_removes_what_basis_owns_and_no_part_writes_now(tmp_path: Path) -> None:
     write(tmp_path, [FILES])
-    skill = put(tmp_path, ".agents/skills/job-port/SKILL.md")
-    copy = put(tmp_path, ".claude/skills/job-port/SKILL.md")
+    written = stamped("---\nname: report-port\ndescription: Port a report.\n---\n")  # by a part that is gone, whatever its name
+    skill = put(tmp_path, ".agents/skills/report-port/SKILL.md", written)
+    copy = put(tmp_path, ".claude/skills/report-port/SKILL.md", written)
     marked = put(tmp_path, "deploy/cronjob.yaml", f"# This file is {MARKER} from the installed version.\nkind: CronJob\n")
     retired = put(tmp_path, "tests/test_agent_files.py")
     assert stale(tmp_path, [FILES]) == [skill.parent, copy.parent, marked, retired]
@@ -74,13 +77,37 @@ def test_sync_leaves_what_basis_does_not_own(tmp_path: Path) -> None:
     write(tmp_path, [FILES])
     own_skill = put(tmp_path, ".agents/skills/release-notes/SKILL.md")
     own_claude_skill = put(tmp_path, ".claude/skills/release-notes/SKILL.md")
+    own_named_like_a_part = put(tmp_path, ".agents/skills/job-notes/SKILL.md", "---\nname: job-notes\ndescription: Our notes on the jobs.\n---\n")
     mentioned = put(tmp_path, "README.md", f"# Pricing\n\nA repo of jobs.\n\nIts Dockerfile is {MARKER}.\n")
     in_venv = put(tmp_path, ".venv/lib/notes.txt", f"{MARKER}\n")
     binary = tmp_path / "data.parquet"
     binary.write_bytes(b"PAR1\xff\xfe\x00" * 100)
     assert stale(tmp_path, [FILES]) == []
     assert write(tmp_path, [FILES]).changed == []
-    assert all(path.exists() for path in (own_skill, own_claude_skill, mentioned, in_venv, binary))
+    assert all(path.exists() for path in (own_skill, own_claude_skill, own_named_like_a_part, mentioned, in_venv, binary))
+
+
+def test_a_skill_is_written_with_basiss_marker_first_in_its_front_matter_metadata_and_the_rest_as_the_part_wrote_it(tmp_path: Path) -> None:
+    write(tmp_path, [FILES])
+    written = (tmp_path / ".agents/skills/job-new/SKILL.md").read_text(encoding="utf-8")
+    front, _, body = written.removeprefix("---\n").partition("---\n")
+    assert any(MARKER in line for line in written.splitlines()[:3])
+    assert yaml.safe_load(front) == {"metadata": {SKILL_KEY: MARKER}, "name": "job-new", "description": "Make a job, from its tables to its first passing contract tests."}
+    assert body == "\n# Make a job\n"
+
+
+@pytest.mark.parametrize(
+    ("text", "why"),
+    [("# Make a job\n", "it has no front matter"), ("---\nname: job-new\nmetadata:\n  team: rates\n---\n", "it has a metadata map of its own")],
+    ids=["no-front-matter", "metadata-of-its-own"],
+)
+def test_a_parts_skill_that_cannot_carry_the_marker_is_one_problem_and_every_other_file_is_still_written(tmp_path: Path, text: str, why: str) -> None:
+    files = AgentFiles("basis-alpha", "the alpha block\n", {"alpha-new": text})
+    [(reason, fix)] = plan(tmp_path, [files]).problems()
+    assert reason.startswith(f"basis-alpha's skill alpha-new cannot carry basis's marker: {why}")
+    assert fix == "a defect in basis-alpha: install it from a basis release, with `uv sync --reinstall`"
+    assert (tmp_path / "Dockerfile") in write(tmp_path, [files]).changed
+    assert not (tmp_path / ".agents/skills/alpha-new").exists()
 
 
 @pytest.mark.parametrize("relative", [".agents/skills/job-new/SKILL.md", ".claude/skills/job-new/SKILL.md", "Dockerfile", ".githooks/pre-push"])
@@ -153,6 +180,8 @@ def test_claude_settings_of_another_shape_say_how_to_fix_them(tmp_path: Path, te
         (".githooks/pre-commit", "#!/bin/sh\nmake lint\n"),
         ("CLAUDE.md", "@AGENTS.md\n\nAlways run the tests.\n"),
         (".claude/settings.json", '{"permissions": {"allow": ["Bash(make *)"]}}\n'),
+        (".agents/skills/job-new/SKILL.md", "---\nname: job-new\ndescription: How this team makes a job.\n---\n"),
+        (".claude/skills/job-new/SKILL.md", "---\nname: job-new\ndescription: How this team makes a job.\n---\n"),
     ],
 )
 def test_a_file_of_the_repos_own_at_a_path_basis_writes_is_left_alone_until_adopted(tmp_path: Path, relative: str, text: str) -> None:

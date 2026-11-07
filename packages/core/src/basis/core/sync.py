@@ -10,16 +10,20 @@ basis owns, in a repo:
 - each block of `AGENTS.md` whose begin marker says `sync` writes it: basis's own, `CORE`, and each part's; what is
   outside the blocks is the repo's own;
 - `CLAUDE.md`, which holds only `@AGENTS.md`: Claude Code reads `AGENTS.md` only through it;
-- each folder of `.agents/skills/` whose name starts with a part's name and a dash, such as `job-new`, and its copy in
-  `.claude/skills/`, the one skills folder Claude Code reads;
+- each skill in `.agents/skills/` that carries `MARKER`, and its copy in `.claude/skills/`, the one skills folder
+  Claude Code reads: `sync` writes the marker first in the front matter of each `SKILL.md`, in the `metadata` map that
+  the Agent Skills spec keeps for a client's own data (`SKILL_KEY`), so that a skill is basis's by what it holds,
+  whatever its name, and whichever part wrote it, installed or not;
 - the rules `DENY` in `.claude/settings.json`, which keeps every other key and rule it holds;
 - each file whose first lines carry `MARKER`;
-- each path a part lists as `retired`: what an earlier version of it wrote before the marker existed.
+- each path a part lists as `retired`: what an earlier version of it wrote before the marker existed, such as the
+  `etl-*` skills etl-framework wrote, which a repo's first `basis sync` removes.
 
 `CLAUDE.md` and `.claude/settings.json` carry no marker: the one holds a single line, and the other is JSON, which has
 no comments. A file the repo already holds at one of these paths, which basis did not write, is the repo's own until
-it is adopted: one without the marker, a `CLAUDE.md` that holds anything else, or settings that hold none of basis's
-rules. `write` replaces it only when told to adopt it, after saving it beside itself as `NAME.before-basis`.
+it is adopted: one without the marker, a skill's `SKILL.md` among them, a `CLAUDE.md` that holds anything else, or
+settings that hold none of basis's rules. So a skill without the marker is basis's only when a part lists it as
+`retired`; anywhere else it is the repo's own, removed never, and replaced only when adopted. `write` replaces it only when told to adopt it, after saving it beside itself as `NAME.before-basis`.
 
 `plan` works out, once, what basis writes in a repo and what stops it: files the repo's own, and files basis cannot
 read, each of which leaves every other file to be checked and written. `stale` lists what differs, whether to rewrite
@@ -39,10 +43,12 @@ from pathlib import Path
 from basis.core.errors import BasisError
 from basis.core.hooks import FOLDER, HOOKS
 
-PARTS = ("job", "api", "optim")
-"""basis's parts, by name: each owns the skill folders its name and a dash begin."""
 MARKER = "managed by basis: `basis sync` rewrites it"
-"""What a file basis writes carries in its first lines, in a comment of the file's own syntax."""
+"""What a file basis writes carries in its first lines, in a comment of the file's own syntax, or for a skill, in its
+front matter's `metadata`."""
+SKILL_KEY = "basis"
+"""The key, in a skill's front matter `metadata`, whose value is `MARKER`. Claude Code and the other agents leave
+`metadata` alone, as the Agent Skills spec says clients do."""
 CORE = "basis"
 """The name of basis's own block of `AGENTS.md`."""
 TEMPLATES = Path(__file__).parent / "templates" / "sync"
@@ -104,7 +110,8 @@ class AgentFiles:
     block: str
     """The part's block of `AGENTS.md`, without its markers."""
     skills: dict[str, str]
-    """Each skill's `SKILL.md`, by its folder's name, which starts with the part's name and a dash."""
+    """Each skill's `SKILL.md`, by its folder's name, which starts with the part's name and a dash, so that no two
+    parts' skills share a folder; `sync` adds the marker to its front matter (`stamped`)."""
     image: str = ""
     """The part's lines of the Dockerfile, before its entry point: a comment giving the command a container of the
     part runs, such as a job's `run JOB --publish`, and any instruction the part needs."""
@@ -156,8 +163,8 @@ class Plan:
 
     def problems(self) -> list[Problem]:
         """What stops basis writing some of its files: one line for the files of the repo's own, and one for each it
-        cannot read."""
-        return [*self.unreadable.values(), *_unclaimed(self.repo, list(self.unclaimed))]
+        cannot read, once however many files it stops."""
+        return list(dict.fromkeys([*self.unreadable.values(), *_unclaimed(self.repo, list(self.unclaimed))]))
 
 
 @dataclass(frozen=True)
@@ -175,7 +182,7 @@ class Synced:
     """Each file left alone because basis cannot read it, or cannot keep what it holds now."""
 
     def problems(self) -> list[Problem]:
-        return [*self.unwritable.values(), *_unclaimed(self.repo, self.refused)]
+        return list(dict.fromkeys([*self.unwritable.values(), *_unclaimed(self.repo, self.refused)]))
 
 
 def core() -> AgentFiles:
@@ -201,7 +208,8 @@ def plan(repo: Path, parts: Sequence[AgentFiles]) -> Plan:
     }
     for files in parts:
         for name, text in files.skills.items():
-            made.update({repo / folder / name / "SKILL.md": (lambda text=text: (text, True)) for folder in (SKILLS, CLAUDE_SKILLS)})
+            for path in (repo / folder / name / "SKILL.md" for folder in (SKILLS, CLAUDE_SKILLS)):
+                made[path] = lambda path=path, part=files.part, name=name, text=text: (_skill(part, name, text), _carries_marker(path))
     written: dict[Path, str] = {}
     unclaimed: dict[Path, str] = {}
     unreadable: dict[Path, Problem] = {}
@@ -288,12 +296,32 @@ def _template(repo: Path, path: Path, template: str, image: str) -> Callable[[],
     return make
 
 
+def stamped(text: str) -> str:
+    """A skill's `SKILL.md` as `sync` writes it: `text`, with `MARKER` first in its front matter, as the `metadata`
+    entry `SKILL_KEY`, so that the marker is in the file's first lines. A `SKILL.md` without front matter, or with a
+    `metadata` map of its own, is refused, with a ValueError."""
+    if not text.startswith("---\n"):
+        msg = "it has no front matter, from which an agent reads its name and description"
+        raise ValueError(msg)
+    if re.search(r"^metadata:", text.partition("\n---")[0], re.MULTILINE):
+        msg = "it has a metadata map of its own, where basis writes its marker"
+        raise ValueError(msg)
+    return f'---\nmetadata:\n  {SKILL_KEY}: "{MARKER}"\n{text.removeprefix("---\n")}'
+
+
+def _skill(part: str, name: str, text: str) -> str:
+    try:
+        return stamped(text)
+    except ValueError as error:
+        reason = f"{part}'s skill {name} cannot carry basis's marker: {error}"
+        raise SyncError(reason, f"a defect in {part}: install it from a basis release, with `uv sync --reinstall`") from error
+
+
 def _unwritten(repo: Path, parts: Sequence[AgentFiles], wanted: set[Path]) -> list[Path]:
-    """What basis owns in `repo` that neither it nor any of `parts` writes now: none of `wanted`."""
-    prefixes = tuple(f"{part}-" for part in PARTS)
-    folders = [folder for skills in (SKILLS, CLAUDE_SKILLS) for folder in _children(repo / skills) if folder.is_dir() and folder.name.startswith(prefixes)]
-    found = {folder for folder in folders if folder / "SKILL.md" not in wanted}
-    found |= {path for path in _marked(repo) if path not in wanted}
+    """What basis owns in `repo` that neither it nor any of `parts` writes now: none of `wanted`. A skill is its
+    folder."""
+    skills = {repo / SKILLS, repo / CLAUDE_SKILLS}
+    found = {path.parent if path.name == "SKILL.md" and path.parent.parent in skills else path for path in _marked(repo) if path not in wanted}
     found |= {repo / path for files in parts for path in files.retired if (repo / path).exists()}
     return sorted(found)
 
@@ -394,10 +422,6 @@ def _agents(current: str, parts: Sequence[AgentFiles]) -> str:
         if files.part not in placed:
             updated = updated.rstrip("\n") + "\n\n" + files.marked()
     return updated.rstrip("\n") + "\n"
-
-
-def _children(folder: Path) -> list[Path]:
-    return sorted(folder.iterdir()) if folder.is_dir() else []
 
 
 def _marked(repo: Path) -> Iterator[Path]:

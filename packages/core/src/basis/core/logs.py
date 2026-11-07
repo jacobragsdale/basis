@@ -33,6 +33,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from functools import cache
+from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Literal, override
 
@@ -41,7 +42,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _FRAMEWORK = "basis"  # the namespace every basis package is a portion of, whose logger is each one's parent
-_PARTS = ("basis.job", "basis.api", "optim")  # the parts whose frames an error's `where` names, as basis-core's; each joins as it arrives
+_GROUP = "basis.verbs"  # the entry points of the parts whose frames an error's `where` names, as basis-core's (`basis.core.verbs.GROUP`)
 _PREFIX = "BASIS_LOG_"
 _STANDARD = {*vars(logging.makeLogRecord({})), "message", "asctime"}  # LogRecord's own attributes, not `extra` fields
 _bound: dict[str, object] = {}  # fields on every record this process logs; see `bind`
@@ -232,7 +233,7 @@ def _headline(error: BaseException) -> str:
 
 def _where(error: BaseException) -> str | None:
     """The deepest frame of `error` in basis, in whichever of its packages, as `basis/job/module.py:line in function`,
-    or `optim/module.py:line in function` for a part outside the namespace."""
+    or `PACKAGE/module.py:line in function` for a part with a package of its own, outside the namespace."""
     folders = _folders()
     ours = [(frame, path, base) for frame in traceback.extract_tb(error.__traceback__) for folder, base in folders if (path := Path(frame.filename).resolve()).is_relative_to(folder)]
     if not ours:
@@ -245,11 +246,25 @@ def _where(error: BaseException) -> str | None:
 def _folders() -> tuple[tuple[Path, Path], ...]:
     """The folder of each installed basis package, such as `.../basis/core`, with the folder its import name starts
     in: the packages themselves, rather than every `basis` folder on the path, which the namespace holds, the working
-    directory's among them."""
+    directory's among them. A part is any package that lists an entry point in the `basis.verbs` group, whatever its
+    name."""
     core = Path(__file__).resolve().parent
     found = [(core, core.parents[1])]
-    for name in _PARTS:
+    for name in _parts():
         spec = importlib.util.find_spec(name)  # finds the package without importing it, so basis-core imports no part
         if spec is not None and spec.submodule_search_locations is not None:
             found.extend((folder, folder.parents[name.count(".")]) for folder in (Path(location).resolve() for location in spec.submodule_search_locations))
     return tuple(found)
+
+
+def _parts() -> list[str]:
+    """Each installed part's package, from the module its entry point names: its portion of the namespace, such as
+    `basis.job` for `basis.job.cli:part`, or for a part outside the namespace its own package, such as `quant` for
+    `quant.cli:part`."""
+    found: list[str] = []
+    for entry in entry_points(group=_GROUP):
+        top, _, rest = entry.module.partition(".")
+        package = f"{top}.{rest.partition('.')[0]}" if top == _FRAMEWORK and rest else top
+        if package not in found and package != f"{_FRAMEWORK}.core":
+            found.append(package)
+    return found

@@ -8,6 +8,7 @@ It starts from a folder with no uncommitted change, so what it changed is a diff
 started the upgrade. The check leaves the QA tier out, since the relock is not yet a commit, and QA would publish a
 run of it that no record names, then publish again when it is pushed: the push hook runs QA once it is committed."""
 
+import re
 import tomllib
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
@@ -35,15 +36,23 @@ class Locked:
 
 
 def locked(lockfile: Path, names: Collection[str]) -> dict[str, Locked]:
-    """Each of `names` that `lockfile` locks, by name."""
+    """Each of `names` that `lockfile` locks, by its name in the lock. A name matches as PEP 503 normalizes it, so a
+    distribution named `Quant_Parts` matches the lock's `quant-parts`."""
     packages: object = tomllib.loads(lockfile.read_text(encoding="utf-8")).get("package")
+    wanted = {normalized(name) for name in names}
     found: dict[str, Locked] = {}
     for entry in packages if isinstance(packages, list) else []:
-        if isinstance(entry, dict) and (name := entry.get("name")) in names and isinstance(name, str):
+        if isinstance(entry, dict) and isinstance(name := entry.get("name"), str) and normalized(name) in wanted:
             source = entry.get("source")
             where = next((f"{kind} {value}" for kind, value in source.items()) if isinstance(source, dict) else iter(()), "unknown source")
             found[name] = Locked(str(entry.get("version", "unknown")), where)
     return found
+
+
+def normalized(name: str) -> str:
+    """A distribution's name as PEP 503 normalizes it, and as uv.lock spells it: lower case, with each run of `-`, `_`
+    and `.` one `-`, as `packaging.utils.canonicalize_name` gives it, which basis-core does not depend on for this."""
+    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def changed_files(repo: Path) -> list[str] | None:

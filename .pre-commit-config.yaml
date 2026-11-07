@@ -39,3 +39,10 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
+
+      - id: lint-imports-optim   # optim's own contracts, run from its pyproject.toml; skipped once packages/optim is gone
+        name: lint-imports (optim)
+        entry: uv run lint-imports --no-cache --config packages/optim/pyproject.toml
+        language: system
+        files: ^packages/optim/   # what optim imports changes only with its files; the root's contract keeps it out of the rest
+        pass_filenames: false

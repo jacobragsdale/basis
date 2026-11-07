@@ -1,6 +1,6 @@
 """`CREATE TABLE` statements for the tables a part writes, from their columns, and for the ledger, which every part
 that publishes writes beside them. A run never creates or alters a table: these are printed for whoever has the rights
-to run them, by `basis ddl`: a job's tables, optim's orders table, and the ledger. A string column without a
+to run them, by `basis ddl`: a part's tables, such as a job's, and the ledger. A string column without a
 maximum length is unbounded, and says so in a comment beside it. Pure: these only build text."""
 
 from basis.core.destination import Dialect

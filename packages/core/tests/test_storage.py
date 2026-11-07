@@ -127,11 +127,11 @@ def test_a_dataset_is_stored_once_under_its_hash_and_never_written_again(tmp_pat
 
 def test_a_run_is_found_by_its_id_and_a_parts_runs_are_listed_newest_first(tmp_path: Path) -> None:
     store = Store(Root.at(tmp_path))
-    for package, name, run_id in [("job", "prices", "01-older"), ("job", "prices", "02-newer"), ("optim", "prices", "03-model"), ("job", "rates", "04-other")]:
+    for package, name, run_id in [("job", "prices", "01-older"), ("job", "prices", "02-newer"), ("report", "prices", "03-report"), ("job", "rates", "04-other")]:
         store.manifest(package, name, run_id).write_bytes(b"{}")
     (tmp_path / "runs" / "job" / "prices" / ".05-unfinished.json.tmp").write_bytes(b"{")
     assert [path.name for path in store.manifests("job", "prices")] == ["02-newer.json", "01-older.json"]
-    assert store.find("03-model").path == store.manifest("optim", "prices", "03-model").path
+    assert store.find("03-report").path == store.manifest("report", "prices", "03-report").path
     assert store.find("04-other", "rates").path == store.manifest("job", "rates", "04-other").path
     with pytest.raises(LookupError, match="no run 04-other under"):
         store.find("04-other", "prices")

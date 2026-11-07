@@ -54,11 +54,13 @@ and `uv run basis docs optim/PAGE` prints one.
 optim is a package of the basis workspace. From its root:
 
 ```sh
-uv sync
-uv run pre-commit run --all-files   # ruff, ty, the lockfile and the import contracts
+uv sync --all-packages
+uv run pre-commit run --all-files   # ruff, ty, the lockfile and the import contracts, optim's among them
 uv run pytest                        # every package's tests, optim's and its example's among them
 ```
 
-`uv sync` also installs COPT, which the tests run without a license, size-limited. [AGENTS.md](AGENTS.md) maps every
-module and lists the rules to keep. optim releases with basis, under basis's version, and depends on basis-core at
-exactly that version.
+`uv sync --all-packages` installs optim and its dev group, with COPT, which the tests run without a license,
+size-limited; a plain `uv sync` installs only what basis releases. [AGENTS.md](AGENTS.md) maps every module and lists
+the rules to keep. optim keeps basis's version, and depends on basis-core at exactly that version, but basis does not
+release it until its design is settled with the firm's quant team. Nothing outside optim depends on it:
+`uv run scripts/without_optim.py`, from the root, checks the workspace without it.

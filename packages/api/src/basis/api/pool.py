@@ -1,9 +1,9 @@
 """The process pool a service's compute functions run in, and what a handler awaits to run one (see `compute.py`).
 
-The pool's processes start with the `spawn` method, as optim's do, so a desktop behaves as production does, and the
-app's lifespan starts every one of them, each importing the compute modules, before the app reports ready. A call
-crosses to a process by pickling: the function by its name, its arguments and its result by value. The request's log
-fields cross with it, so what the function logs carries the request's id.
+The pool's processes start with the `spawn` method, so a desktop behaves as production does, and the app's lifespan
+starts every one of them, each importing the compute modules, before the app reports ready. A call crosses to a process
+by pickling: the function by its name, its arguments and its result by value. The request's log fields cross with it,
+so what the function logs carries the request's id.
 
 A call has what is left of its route's deadline, its wait for a free process included. One that misses it answers 504:
 a call still waiting is taken off the queue, and one that has started runs on in its process until it returns, its

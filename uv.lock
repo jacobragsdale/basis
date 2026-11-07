@@ -163,20 +163,16 @@ dependencies = [
     { name = "basis-api" },
     { name = "basis-core" },
     { name = "basis-job" },
-    { name = "optim" },
 ]
 
 [package.dev-dependencies]
 dev = [
-    { name = "coptpy" },
     { name = "import-linter" },
-    { name = "pandas-stubs" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "pytest-randomly" },
     { name = "ruff" },
-    { name = "scipy-stubs" },
     { name = "ty" },
 ]
 
@@ -185,20 +181,16 @@ requires-dist = [
     { name = "basis-api", editable = "packages/api" },
     { name = "basis-core", editable = "packages/core" },
     { name = "basis-job", editable = "packages/job" },
-    { name = "optim", editable = "packages/optim" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "coptpy", specifier = ">=8.0.7" },
     { name = "import-linter", specifier = ">=2.16" },
-    { name = "pandas-stubs", specifier = ">=3.0.5.260914" },
     { name = "pre-commit", specifier = ">=4.7.0" },
     { name = "pytest", specifier = ">=9.2.0" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "pytest-randomly", specifier = ">=5.0.0" },
     { name = "ruff", specifier = "==0.17.4" },
-    { name = "scipy-stubs", specifier = ">=1.18.1.1" },
     { name = "ty", specifier = "==0.0.99" },
 ]
 
@@ -1252,6 +1244,13 @@ copt = [
     { name = "coptpy" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "coptpy" },
+    { name = "pandas-stubs" },
+    { name = "scipy-stubs" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "basis-core", editable = "packages/core" },
@@ -1270,6 +1269,13 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.18.1" },
 ]
 provides-extras = ["copt"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "coptpy", specifier = ">=8.0.7" },
+    { name = "pandas-stubs", specifier = ">=3.0.5.260914" },
+    { name = "scipy-stubs", specifier = ">=1.18.1.1" },
+]
 
 [[package]]
 name = "optype"

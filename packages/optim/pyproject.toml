@@ -33,6 +33,11 @@ optim = "optim.pytest_plugin"
 [project.optional-dependencies]
 copt = ["coptpy>=8.0.7"]  # the licensed COPT solver; tests run it size-limited, without a license
 
+[dependency-groups]
+# What ty needs to check optim from the workspace's root, where `uv sync --all-packages` installs it: the COPT solver its
+# reader imports, and the stubs of pandas and scipy.
+dev = ["coptpy>=8.0.7", "pandas-stubs>=3.0.5.260914", "scipy-stubs>=1.18.1.1"]
+
 [tool.uv.sources]
 basis-core = { workspace = true }
 
@@ -79,3 +84,35 @@ max-complexity = 15
 [tool.ruff.format]
 docstring-code-format = true
 skip-magic-trailing-comma = true
+
+# optim's import contracts, apart from the workspace root's so that those hold with optim gone. From the root, the commit
+# hook runs them as `uv run lint-imports --no-cache --config packages/optim/pyproject.toml`. That no other part imports
+# optim is the root's contract, which the hook runs on any change to them.
+[tool.importlinter]
+root_packages = ["optim", "basis.core", "basis.job", "basis.api"]  # basis's are portions of one namespace, each named
+include_external_packages = true  # so a contract can forbid a database driver
+exclude_type_checking_imports = true
+
+[[tool.importlinter.contracts]]
+name = "optim imports basis-core and no other part, so a change to one cannot break another"
+type = "forbidden"
+source_modules = ["optim"]
+forbidden_modules = ["basis.job", "basis.api"]
+
+# With basis-core's I/O forbidden beside optim's own, since optim's plumbing became basis-core's (roadmap step 3.3).
+[[tool.importlinter.contracts]]
+name = "Model code and what workers run do no I/O: the parent loads and saves"
+type = "forbidden"
+source_modules = [
+    "optim.contract", "optim.cvxpy", "optim.models", "optim.decide", "optim.engine", "optim.acceptance", "optim.datasets",
+    "optim.example.model", "optim.data.dataset", "optim.data.frames", "optim.schema",
+]
+forbidden_modules = [
+    "optim.data.loader", "optim.data.cache", "optim.sources.database", "optim.sources.rest", "optim.sources.file",
+    "optim.context", "optim.settings", "optim.snapshots", "optim.runs", "optim.api", "optim.orders", "optim.research",
+    "optim.cli", "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.storage",
+    "basis.core.settings", "basis.core.new", "basis.core.sync", "basis.core.testing", "basis.core.command",
+    "basis.core.check", "basis.core.verbs", "basis.core.hooks", "basis.core.hygiene", "httpx", "oracledb", "mssql_python",
+    "pyarrow",
+]
+ignore_imports = ["optim -> optim.api"]  # `optim.run` and friends load on first use, which model code never makes

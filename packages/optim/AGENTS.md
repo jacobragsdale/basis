@@ -68,9 +68,8 @@ are under `src/optim/`.
 - A database is basis-core's: a dataset names it, and it reads through `sources/database.py`. A source of another kind
   is a module in `sources/` with a settings model and a `fetch(query, params)` and `read_only()`, a name in `OWN`, a
   field in `OptimSettings`, a line in `open_context`, and a line in `qa_problems` in `pytest_plugin.py`, so the e2e
-  suite checks it for the QA marker. Add its module, and its client, to optim's import contract in the basis
-  workspace's root `pyproject.toml` and to `FORBIDDEN` in `testing.py`. Bound every call with a deadline and
-  `max_rows`.
+  suite checks it for the QA marker. Add its module, and its client, to optim's import contract in its own
+  `pyproject.toml` and to `FORBIDDEN` in `testing.py`. Bound every call with a deadline and `max_rows`.
 - Plumbing another basis part needs too belongs in basis-core. A small change to it may ride in optim's pull request,
   in a commit of its own that the pull request names; a larger one gets a pull request of its own. Changes to
   basis-core land one pull request at a time.
@@ -85,8 +84,10 @@ are under `src/optim/`.
 From the basis workspace's root:
 
 ```sh
-uv run pre-commit run --all-files   # ruff, ty, lockfile, import contracts
+uv sync --all-packages              # every member, optim and its dev group among them
+uv run pre-commit run --all-files   # ruff, ty, lockfile, import contracts: the root's, and optim's in its pyproject.toml
 uv run pytest                        # every package's tests, optim's and its example's among them
+uv run scripts/without_optim.py      # nothing outside packages/optim may need optim: the workspace's checks without it
 ```
 
 To check what `optim new repo` generates, make a repo in a scratch directory that takes optim from this checkout of
