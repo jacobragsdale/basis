@@ -3,7 +3,7 @@ a block makes, where that is shorter, as an API's route bounds the calls its req
 only ever shortens the one around it.
 
 `within` sets the deadline around a block's calls, `limit` says how long one call may take now, and `Limit.exceeded`
-is the `DeadlineExceededError` of a call that takes longer."""
+is the `Timeout` of a call that takes longer."""
 
 import time
 from collections.abc import Generator
@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 
-from basis.core.resources import DeadlineExceededError
+from basis.core.errors import Timeout
 
 
 @dataclass(frozen=True)
@@ -64,11 +64,11 @@ class Limit:
     enclosing: Deadline | None
     """The deadline around the call, where it is the shorter, or None where the resource's own is."""
 
-    def exceeded(self) -> DeadlineExceededError:
+    def exceeded(self) -> Timeout:
         if self.enclosing is not None:
             detail = f"{self.resource} did not answer within what was left of {self.enclosing.whose}'s deadline of {self.enclosing.seconds:g}s"
-            return DeadlineExceededError(self.resource, self.enclosing.seconds, detail=detail)
-        return DeadlineExceededError(self.resource, self.own_s if self.own_s is not None else 0)
+            return Timeout(detail, resource=self.resource)
+        return Timeout(f"{self.resource} did not answer within its deadline of {self.own_s if self.own_s is not None else 0:g}s", resource=self.resource)
 
 
 def limit(resource: str, own_s: float | None) -> Limit:

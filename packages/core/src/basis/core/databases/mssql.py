@@ -10,11 +10,18 @@ is long; the INSERT locks the keys it checks, so two writers never insert one ke
 
 Each statement a reader or a writer runs has a span, and so does each commit and rollback (`base.span`). `statements`
 runs a caller's own SQL, binding `%(name)s` by name: each statement's deadline is the driver's query timeout, in whole
-seconds, which SQL Server enforces by cancelling the statement on the server too."""
+seconds, which SQL Server enforces by cancelling the statement on the server too.
+
+A failure of the driver's is the kind of `basis.core.errors.ServiceError` its SQLSTATE says (`kind_of`). The driver
+keeps no SQLSTATE and no SQL Server error number on its errors, only the phrase it gives each SQLSTATE, so the phrase
+names it; and two SQLSTATEs hold more than one kind, which only SQL Server's message, in English, tells apart: a
+`23000` is a `Conflict` where it is a duplicate key and `Rejected` otherwise, and a `42000` is `Denied` where a
+permission was denied and `Failed` otherwise."""
 
 import locale
 import logging
 import math
+import re
 import sys
 import time
 from collections.abc import Generator, Mapping, Sequence
@@ -24,6 +31,7 @@ from dataclasses import dataclass
 import mssql_python
 import polars as pl
 import pyarrow as pa
+from mssql_python.exceptions import sqlstate_to_exception
 
 from basis.core.databases.base import (
     FETCH_ROWS,
@@ -43,7 +51,9 @@ from basis.core.databases.base import (
     span,
     statement,
 )
+from basis.core.databases.failures import failures
 from basis.core.destination import DestColumn, TableSpec
+from basis.core.errors import Conflict, Denied, Failed, Rejected, ServiceError, Timeout, Unavailable
 from basis.core.interval import Interval
 from basis.core.logs import ms_since
 from basis.core.settings import MssqlSettings, publish_refusal, unpublishable
@@ -86,6 +96,42 @@ def fetches_char_as_utf8(platform: str, encoding: str) -> bool:
     return platform == "linux" and (encoding.replace("-", "").lower() == "utf8" or encoding == "ANSI_X3.4-1968")
 
 
+_KINDS: dict[str, type[ServiceError]] = {
+    "HYT00": Timeout,  # a statement's timeout
+    "HY008": Timeout,  # a statement cancelled, as its timeout cancels it
+    "08001": Unavailable,  # no connection could be made
+    "08003": Unavailable,  # the connection is gone
+    "08004": Unavailable,  # the server refused the connection
+    "08007": Unavailable,  # the connection failed in a transaction
+    "08S01": Unavailable,  # the connection was lost
+    "HYT01": Unavailable,  # the login's timeout
+    "28000": Denied,  # the login failed
+    "40001": Conflict,  # the deadlock's victim
+    "23000": Rejected,  # a constraint, which a duplicate key makes a Conflict
+    "42000": Failed,  # a syntax error or a denied permission, which is Denied
+}
+"""The kind each SQLSTATE the driver raises is, but as the message tells apart. Any other is `Failed`."""
+_PHRASES: dict[str, str] = {found.driver_error: state for state in _KINDS if (found := sqlstate_to_exception(state, "")) is not None}
+"""Each SQLSTATE by the phrase the driver gives it, which is all its errors keep of it."""
+_DUPLICATE = re.compile(r"duplicate key", re.IGNORECASE)
+_PERMISSION = re.compile(r"permission (?:was )?denied", re.IGNORECASE)
+
+
+def kind_of(error: BaseException) -> type[ServiceError]:
+    """The kind of failure a driver's error is, by its SQLSTATE and, for those that hold two kinds, its message."""
+    if not isinstance(error, mssql_python.Error):
+        return Failed
+    state, message = _PHRASES.get(error.driver_error), error.ddbc_error
+    if state == "23000" and _DUPLICATE.search(message):
+        return Conflict
+    if state == "42000" and _PERMISSION.search(message):
+        return Denied
+    return _KINDS.get(state, Failed) if state is not None else Failed
+
+
+_DRIVER = (mssql_python.Error,)
+
+
 def target_of(connection_string: str) -> str:
     """The server and database a connection string names, for errors: never its credentials."""
     parts = {key.strip().lower(): value.strip() for key, _, value in (part.partition("=") for part in connection_string.split(";"))}
@@ -103,7 +149,7 @@ class MssqlDatabase:
 
     @contextmanager
     def reading(self) -> Generator[MssqlReader]:
-        with self._read_transaction(level=logging.INFO) as connection:
+        with failures(self.name, _DRIVER, kind_of), self._read_transaction(level=logging.INFO) as connection:
             yield MssqlReader(self.name, connection, self.settings.max_rows)
 
     @contextmanager
@@ -114,7 +160,7 @@ class MssqlDatabase:
             msg = f"database {self.name!r} {reason}: {fix}"
             raise LookupError(msg)
         start = time.perf_counter()
-        with closing(connect_to(write.connection_string.get_secret_value(), self.settings.timeout_s, autocommit=False)) as connection:
+        with failures(self.name, _DRIVER, kind_of), closing(connect_to(write.connection_string.get_secret_value(), self.settings.timeout_s, autocommit=False)) as connection:
             log.info("connected", extra={"database": self.name, "access": "write", "connect_ms": ms_since(start)})
             writer = MssqlWriter(self.name, connection, self.settings.max_rows, write.ledger)
             try:
@@ -127,14 +173,14 @@ class MssqlDatabase:
     @contextmanager
     def statements(self, *, writes: bool) -> Generator[MssqlStatements]:
         if not writes:
-            with self._read_transaction(level=logging.DEBUG) as connection:
+            with failures(self.name, _DRIVER, kind_of), self._read_transaction(level=logging.DEBUG) as connection:
                 yield MssqlStatements(self.name, connection, self.settings.timeout_s, self.settings.max_rows, writes=False)
             return
         if (write := self.settings.write) is None:
             msg = f"database {self.name!r} has no write settings: set BASIS_DATABASES__{self.name.upper()}__WRITE__CONNECTION_STRING"
             raise LookupError(msg)
         start = time.perf_counter()
-        with closing(connect_to(write.connection_string.get_secret_value(), self.settings.timeout_s, autocommit=False)) as connection:
+        with failures(self.name, _DRIVER, kind_of), closing(connect_to(write.connection_string.get_secret_value(), self.settings.timeout_s, autocommit=False)) as connection:
             log.debug("connected", extra={"database": self.name, "access": "write", "connect_ms": ms_since(start)})
             statements = MssqlStatements(self.name, connection, self.settings.timeout_s, self.settings.max_rows, writes=True)
             try:
@@ -361,7 +407,7 @@ class MssqlStatements:
     committed: bool = False
 
     def query(self, sql: str, binds: Mapping[str, Bind], *, timeout_s: float) -> pa.Table:
-        with closing(self._cursor(timeout_s)) as cursor:
+        with failures(self.database, _DRIVER, kind_of), closing(self._cursor(timeout_s)) as cursor:
             _execute(cursor, sql, binds)
             reader = cursor.arrow_reader(batch_size=FETCH_ROWS)
             batches: list[pa.RecordBatch] = []
@@ -377,13 +423,14 @@ class MssqlStatements:
 
     def execute(self, sql: str, binds: Mapping[str, Bind], *, timeout_s: float) -> int:
         self._refuse_reads("change rows")
-        with closing(self._cursor(timeout_s)) as cursor:
+        with failures(self.database, _DRIVER, kind_of), closing(self._cursor(timeout_s)) as cursor:
             _execute(cursor, sql, binds)
             return max(cursor.rowcount, 0)
 
     def commit(self) -> None:
         self._refuse_reads("commit")
-        self.connection.commit()
+        with failures(self.database, _DRIVER, kind_of):
+            self.connection.commit()
         self.committed = True
 
     def _cursor(self, timeout_s: float) -> mssql_python.Cursor:
