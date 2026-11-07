@@ -52,9 +52,33 @@ def test_a_database_is_a_source_once_optims_block_gives_its_limits() -> None:
         ({"optim": {"databases": {"books": {"max_concurrent": 4}}}}, "no database books is configured: set BASIS_DATABASES__BOOKS__KIND"),
         ({"databases": {"file": BOOKS}, "optim": {"databases": {"file": {"max_concurrent": 4}}}}, "file names optim's own source, never a database"),
         ({"databases": {"books": BOOKS}, "optim": {"orders": {"database": "trading", "table": "trading.orders"}}}, "BASIS_OPTIM__ORDERS__DATABASE is trading, which is not configured"),
+        (
+            {"databases": {"trading": BOOKS}, "optim": {"orders": {"database": "trading", "table": "trading.orders"}}},
+            "trading, which has no write login to insert the orders with: set BASIS_DATABASES__TRADING__WRITE__CONNECTION_STRING",
+        ),
+        (
+            {"databases": {"trading": ANALYTICS}, "optim": {"orders": {"database": "trading", "table": "trading.orders"}}},
+            "set BASIS_DATABASES__TRADING__WRITE__USER and BASIS_DATABASES__TRADING__WRITE__PASSWORD",
+        ),
+        (
+            {"databases": {"books": BOOKS | {"isolation": "read_committed"}}, "optim": {"databases": {"books": {"max_concurrent": 4}}}},
+            "BASIS_DATABASES__BOOKS__ISOLATION is read_committed, and optim reads each batch of portfolios from a database at one moment: set it to snapshot",
+        ),
+        (
+            {"databases": {"analytics": ANALYTICS | {"isolation": "read_committed"}}, "optim": {"databases": {"analytics": {"max_concurrent": 4}}}},
+            "BASIS_DATABASES__ANALYTICS__ISOLATION is read_committed, .*: set it to read_only",
+        ),
     ],
-    ids=["limits-of-no-database", "a-database-named-as-optims-own-source", "orders-in-no-database"],
+    ids=[
+        "limits-of-no-database",
+        "a-database-named-as-optims-own-source",
+        "orders-in-no-database",
+        "orders-without-a-sql-server-write-login",
+        "orders-without-an-oracle-write-login",
+        "sql-server-read-at-no-one-moment",
+        "oracle-read-at-no-one-moment",
+    ],
 )
-def test_settings_that_name_a_database_no_block_configures_are_refused(values: dict[str, object], error: str) -> None:
+def test_settings_optim_cannot_read_or_write_with_are_refused_before_anything_loads(values: dict[str, object], error: str) -> None:
     with pytest.raises(ValueError, match=error):
         Settings.model_validate(values)

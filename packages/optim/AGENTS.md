@@ -69,7 +69,10 @@ are under `src/optim/`.
   field in `OptimSettings`, a line in `open_context`, and a line in `qa_problems` in `pytest_plugin.py`, so the e2e
   suite checks it for the QA marker. Add its module, and its client, to optim's import contract in the basis
   workspace's root `pyproject.toml` and to `FORBIDDEN` in `testing.py`. Bound every call with a deadline and
-  `max_rows`. Plumbing another basis part needs too belongs in basis-core, in a pull request of its own.
+  `max_rows`.
+- Plumbing another basis part needs too belongs in basis-core. A small change to it may ride in optim's pull request,
+  in a commit of its own that the pull request names; a larger one gets a pull request of its own. Changes to
+  basis-core land one pull request at a time.
 - A solver is a reader in `optim.cvxpy._READERS` and a name in `SolveSettings.solver`.
 - A command is a handler in `cli.py`, registered with `_command`; its Python twin, if it has one, is in `api.py`.
 - A docs page is a Markdown file in `docs/`, and a link from the README.

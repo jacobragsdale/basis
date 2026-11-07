@@ -80,8 +80,7 @@ def _recent(model: LoadedModel, snapshots: Root, *, last: int, labels: dict[str,
     for saved in runs_of(snapshots, [model.name, model.module]):
         if len(found) == last:
             break
-        info = saved.info
-        if (model.module == info.model.module or model.name == info.model.name) and info.replay is None and labels.items() <= info.labels.items():
+        if saved.info.replay is None and labels.items() <= saved.info.labels.items():
             found.append(saved)
     return found
 

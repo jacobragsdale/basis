@@ -79,7 +79,8 @@ def scratch_database(dialect: Dialect, table: str) -> Scratch:
     if databases.oracle_dsn is None or databases.oracle_user is None or databases.oracle_password is None:
         pytest.fail("set BASIS_TEST_ORACLE_DSN, _USER and _PASSWORD for a scratch Oracle schema (see packages/job/tests/integration/README.md)")
     dsn, user, password = databases.oracle_dsn, databases.oracle_user, databases.oracle_password.get_secret_value()
-    # read_committed: a transaction that only reads refuses a table made seconds before (ORA-01466), as each test's is
+    # read_committed, which optim's settings refuse for a run: a read-only transaction refuses a table made seconds
+    # before (ORA-01466), as each test's is, so this reads Oracle as basis-job's and basis-api's integration tests do
     settings = {"kind": "oracle", "dsn": dsn, "user": user, "password": password, "mode": "thin", "isolation": "read_committed", "timeout_s": 60, "max_rows": 1000}
     return Scratch("oracle", settings, lambda: oracledb.connect(user=user, password=password, dsn=dsn), table)
 

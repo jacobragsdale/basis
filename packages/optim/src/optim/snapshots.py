@@ -116,7 +116,7 @@ class RunInfo(Model):
     """When every dataset had loaded; for a replay, when its snapshot had been read."""
     finished_at: AwareDatetime
     """When the last decision was made, just before the snapshot was written."""
-    reads: dict[str, DatasetRead] | None
+    reads: dict[str, DatasetRead] | None = None
     """Where each dataset was read from, and when. Null for a replay, whose data is the run's it replays."""
     order: list[Id] | None = None
     """For a model that reserves, the order its portfolios decided in, one at a time; null when they decided at once."""

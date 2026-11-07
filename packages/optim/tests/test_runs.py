@@ -177,3 +177,14 @@ def test_two_runs_that_load_the_same_data_store_each_dataset_once(tmp_path: Path
 def test_a_path_that_names_no_manifest_of_optims_is_refused(tmp_path: Path) -> None:
     with pytest.raises(LookupError, match="is not a run of optim's: give a run's id, or the path of its manifest"):
         snapshots.read(Root.at(tmp_path / "runs" / "job" / "positions" / "r1.json"))
+
+
+def test_a_run_saved_before_its_record_had_a_field_still_reads(tmp_path: Path) -> None:
+    """A field added to the record has a default, as `reads` has: a manifest without it reads as a replay's would."""
+    root, run_id = toy_run(tmp_path)
+    found = saved(root, run_id)
+    older = json.loads(found.path.read_bytes())
+    del older["reads"]
+    found.path.write_bytes(json.dumps(older).encode())
+
+    assert saved(root, run_id).info.reads is None

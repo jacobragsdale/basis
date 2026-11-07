@@ -84,21 +84,35 @@ class OptimSettings(Model):
     `optim run` writes to it."""
 
 
+CONSISTENT = {"mssql": "snapshot", "oracle": "read_only"}
+"""The isolation, by kind, at which a transaction sees its database at one moment, as a batch's reads must: a
+portfolio's holdings and the rest of its rows are only consistent from one moment."""
+
+
 class Settings(core.Settings):
     optim: OptimSettings = Field(default_factory=OptimSettings)
 
     @model_validator(mode="after")
     def _databases_are_configured(self) -> Self:
-        """Every database optim's block names is one basis-core's settings configure, and none takes a name of
-        optim's own sources."""
+        """Every database optim's block names is one basis-core's settings configure, which reads at one moment and
+        takes no name of optim's own sources; and the orders database has a write login."""
         for name in self.optim.databases:
             if name in OWN:
                 msg = f"{PREFIX}DATABASES__{name.upper()}__MAX_CONCURRENT is set, and {name} names optim's own source, never a database: give the database another name"
                 raise ValueError(msg)
-            if name not in self.databases:
+            if (database := self.databases.get(name)) is None:
                 msg = f"{PREFIX}DATABASES__{name.upper()}__MAX_CONCURRENT is set, and no database {name} is configured: set BASIS_DATABASES__{name.upper()}__KIND and the rest of its block"
                 raise ValueError(msg)
-        if (orders := self.optim.orders) is not None and orders.database not in self.databases:
-            msg = f"{PREFIX}ORDERS__DATABASE is {orders.database}, which is not configured: set BASIS_DATABASES__{orders.database.upper()}__KIND and the rest of its block, WRITE included"
-            raise ValueError(msg)
+            if database.isolation != (consistent := CONSISTENT[database.kind]):
+                msg = f"{core.variable(('databases', name, 'isolation'))} is {database.isolation}, and optim reads each batch of portfolios from a database at one moment: set it to {consistent}"
+                raise ValueError(msg)
+        if (orders := self.optim.orders) is not None:
+            if (database := self.databases.get(orders.database)) is None:
+                msg = f"{PREFIX}ORDERS__DATABASE is {orders.database}, which is not configured: set BASIS_DATABASES__{orders.database.upper()}__KIND and the rest of its block, WRITE included"
+                raise ValueError(msg)
+            if database.write is None:
+                logins = ("connection_string",) if isinstance(database, core.MssqlSettings) else ("user", "password")
+                missing = " and ".join(core.variable(("databases", orders.database, "write", login)) for login in logins)
+                msg = f"{PREFIX}ORDERS__DATABASE is {orders.database}, which has no write login to insert the orders with: set {missing}"
+                raise ValueError(msg)
         return self

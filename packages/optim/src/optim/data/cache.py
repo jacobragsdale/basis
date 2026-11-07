@@ -1,9 +1,9 @@
-"""The dataset cache: each entry a Parquet file under `BASIS_OPTIM__CACHE_ROOT`, with the time its source was read in the
-file's metadata, so a run can tell how old an entry is and record it. A laptop points the root at a local folder, and
-production at shared storage, so every run shares the entries. Without the setting, nothing is cached. Parquet keeps
-dtypes such as ordered categories and dates. An entry is written whole under a temporary name and renamed into place,
-through basis-core's storage, so no run reads half of one. `Cache` is the interface, so another backend can sit behind
-it if files prove too slow for some dataset."""
+"""The dataset cache: each entry a Parquet file under `BASIS_OPTIM__CACHE_ROOT`, with the time its source was read in
+the file's metadata, so a run can tell how old an entry is and record it. A laptop points the root at a local folder,
+and production at shared storage, so every run shares the entries. Without the setting, nothing is cached. Parquet
+keeps dtypes such as ordered categories and dates. An entry is written as it is made, under a temporary name renamed
+into place, through basis-core's storage, so no run reads half of one. `Cache` is the interface, so another backend
+can sit behind it if files prove too slow for some dataset."""
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -47,6 +47,5 @@ class FileCache:
     def put(self, key: str, frame: pd.DataFrame, fetched_at: datetime) -> None:
         table = pa.Table.from_pandas(frame, preserve_index=False)
         table = table.replace_schema_metadata((table.schema.metadata or {}) | {_FETCHED_AT: fetched_at.isoformat().encode()})
-        written = pa.BufferOutputStream()
-        pq.write_table(table, written)
-        (self.root / f"{key}.parquet").write_bytes(written.getvalue().to_pybytes())
+        with (self.root / f"{key}.parquet").writing() as stream:
+            pq.write_table(table, stream)

@@ -127,13 +127,13 @@ Dataset(name, row, source, query, key, cache=None, check=None)
 uncached.
 
 Every query binds the business date as `as_of_date` (`:as_of_date` for an Oracle database, `%(as_of_date)s` for a SQL
-Server one, a query parameter for REST), and reads in a transaction that only reads, at the database's `ISOLATION`. A
-per-portfolio dataset other than `portfolios` also binds `portfolios`, a JSON array of up to 1,000 ids per query, which
-SQL Server unpacks with `OPENJSON(%(portfolios)s) WITH (id VARCHAR(64) '$')` and Oracle with `JSON_TABLE`. Oracle
-refuses a bind its SQL does not use. A file source filters a per-portfolio file to the batch's `portfolio_id`s; a CSV's
-values are read as text and validated into the row model's types, and an empty field is null. Field types for rows are
-in `optim.schema`: `Id`, `Cusip`, `Isin`, `Currency`, `Price`, `Quantity`, `Weight` and `Rating`, an ordered category
-best first. A `Literal` field becomes an ordered category in its declared order.
+Server one, a query parameter for REST), and reads in a transaction that only reads, which sees the database at one
+moment. A per-portfolio dataset other than `portfolios` also binds `portfolios`, a JSON array of up to 1,000 ids per
+query, which SQL Server unpacks with `OPENJSON(%(portfolios)s) WITH (id VARCHAR(64) '$')` and Oracle with `JSON_TABLE`.
+Oracle refuses a bind its SQL does not use. A file source filters a per-portfolio file to the batch's `portfolio_id`s; a
+CSV's values are read as text and validated into the row model's types, and an empty field is null. Field types for rows
+are in `optim.schema`: `Id`, `Cusip`, `Isin`, `Currency`, `Price`, `Quantity`, `Weight` and `Rating`, an ordered
+category best first. A `Literal` field becomes an ordered category in its declared order.
 
 ## Shared datasets
 
@@ -426,7 +426,7 @@ naming the variable that replaced it.
 | `BASIS_DATABASES__NAME__CONNECTION_STRING` | required with SQL Server | A login that may read. The primary, not a readable secondary: holdings must include the trades just booked. |
 | `BASIS_DATABASES__NAME__DSN`, `__USER`, `__PASSWORD`, `__MODE` | required with Oracle | `MODE` is `thin` (no client libraries) or `thick`, which loads Oracle Instant Client. |
 | `BASIS_DATABASES__NAME__CLIENT_LIB_DIR` | none | Oracle in thick mode: where Oracle Instant Client is, if not on the library path. |
-| `BASIS_DATABASES__NAME__ISOLATION` | required with the database | How a run's reads see it: all at one moment, `snapshot` for SQL Server, which the database must allow, or `read_only` for Oracle; or each query at its own, `read_committed`. |
+| `BASIS_DATABASES__NAME__ISOLATION` | required with the database | How a run's reads see it. optim reads each batch of portfolios at one moment, so it requires `snapshot` of a SQL Server database it reads, which the database must allow, and `read_only` of an Oracle one; it refuses `read_committed`, which reads each query at its own, there. A database that only receives the orders may take either. |
 | `BASIS_DATABASES__NAME__TIMEOUT_S`, `__MAX_ROWS` | required with the database | Seconds each statement may take, the login included, which never waits more than 30, and the most rows a query may return; each at least 1. |
 | `BASIS_DATABASES__NAME__WRITE__CONNECTION_STRING` | none | The orders database's write login, apart from the one that reads: a login that may insert into the orders table. |
 | `BASIS_OPTIM__DATABASES__NAME__MAX_CONCURRENT` | required with the database | Reads a run has open to the database at once, each a transaction of its own; at least 1. |

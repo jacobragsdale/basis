@@ -175,8 +175,9 @@ takes about as long as its slowest source, not the sum of its queries.
 Reads that depend on each other share a read-only transaction. A portfolio's holdings and its controls are only
 consistent if they come from one moment: a trade booked between the two reads would count a sale but not the control
 that came with it. So each batch's per-portfolio datasets from one database are read in one transaction that only reads,
-at the isolation its settings give (snapshot isolation on SQL Server, `SET TRANSACTION READ ONLY` on Oracle), which
-holds one of the database's slots throughout and is rolled back at the end. The databases are read through basis's own
+which holds one of the database's slots throughout and is rolled back at the end. The transaction sees the database at
+one moment: optim requires snapshot isolation of a SQL Server database it reads and `SET TRANSACTION READ ONLY` of an
+Oracle one, and refuses a database set to read each query at its own. The databases are read through basis's own
 dialects, the ones its jobs and APIs read through too, so a fix to how one of them begins a transaction reaches every
 part at once. Consistency matters within a portfolio, not across portfolios, so batches still load concurrently.
 

@@ -45,6 +45,15 @@ def test_an_error_in_optim_is_located_in_its_code() -> None:
 def test_frames_series_and_numpy_values_log_as_json() -> None:
     holdings = frame(HOLDINGS, {}, {"security_id": "A"})
 
-    logged = json.loads(logs.to_json({"holdings": holdings, "quantities": holdings["quantity"], "count": np.int64(2), "weights": np.array([0.5, 0.25])}))
+    by_security = holdings.set_index("security_id")["quantity"]
+    values = {"holdings": holdings, "quantities": by_security, "securities": by_security.index, "count": np.int64(2), "weights": np.array([0.5, 0.25])}
 
-    assert logged == {"holdings": {"rows": 2, "columns": ["portfolio_id", "security_id", "quantity"]}, "quantities": [1_000_000.0, 1_000_000.0], "count": 2, "weights": [0.5, 0.25]}
+    logged = json.loads(logs.to_json(values))
+
+    assert logged == {
+        "holdings": {"rows": 2, "columns": ["portfolio_id", "security_id", "quantity"]},
+        "quantities": {"USD": 1_000_000.0, "A": 1_000_000.0},  # a series keeps its index, which says what each value is
+        "securities": ["USD", "A"],
+        "count": 2,
+        "weights": [0.5, 0.25],
+    }

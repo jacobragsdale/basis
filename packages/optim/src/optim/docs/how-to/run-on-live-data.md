@@ -18,11 +18,11 @@ To run a model on live data:
 
 1. Copy `.env.example`, at the repo's root, to `.env`, and in the copy uncomment the whole block of every source the
    model reads and set its values: where it is, such as `BASIS_DATABASES__MSSQL__CONNECTION_STRING`; how its reads see
-   it, `ISOLATION`; and how hard a run may press it, `TIMEOUT_S`, `MAX_ROWS` and
-   `BASIS_OPTIM__DATABASES__MSSQL__MAX_CONCURRENT`, which every database requires, as Oracle requires `MODE`. A block
-   set in part stops the run, naming the field it lacks, such as `databases.mssql.mssql.isolation Field required`. For
-   QA's data and production's, make `.env.qa` and `.env.prod` the same way, with each environment's read-only
-   credentials. Git ignores all three files.
+   it, `ISOLATION`, which optim requires to be `snapshot` for SQL Server and `read_only` for Oracle; and how hard a run
+   may press it, `TIMEOUT_S`, `MAX_ROWS` and `BASIS_OPTIM__DATABASES__MSSQL__MAX_CONCURRENT`, which every database
+   requires, as Oracle requires `MODE`. A block set in part stops the run, naming the field it lacks, such as
+   `databases.mssql.mssql.isolation Field required`. For QA's data and production's, make `.env.qa` and `.env.prod` the
+   same way, with each environment's read-only credentials. Git ignores all three files.
 2. In `models/MODEL/main.py`, name the settings file with `env`, and the portfolios to decide:
 
    ```python
