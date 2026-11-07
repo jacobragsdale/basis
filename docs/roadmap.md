@@ -36,6 +36,7 @@ flowchart TD
   r7 --> r8
   r3 --> a1[2.1 API app] --> a2[2.2 resources] --> a3[2.3 routes] --> a5 --> a6[2.6 API contract tests] --> a7[2.7 new app] --> a8
   a2 --> a4[2.4 identity]
+  a3 --> a9[2.9 after-commit calls]
   r7 --> a7
   r8 --> a8
   r4 --> o2[3.2 move optim]
@@ -144,7 +145,7 @@ Lane A. Needs spike 0.2.
 
 ## Phase 2: APIs
 
-Lane B. Needs step 1.3. Steps 2.3 and 2.4 run at once.
+Lane B. Needs step 1.3. Steps 2.3 and 2.4 run at once, and so do 2.5 and 2.9.
 
 1. **2.1 The app.** Build the FastAPI app from a service's declarations, with:
    - settings;
@@ -177,6 +178,13 @@ Lane B. Needs step 1.3. Steps 2.3 and 2.4 run at once.
    from the internal feed. Deploy both to QA through their generated pipelines, behind one host if spike 0.4 allows it.
    Lane D adds API tasks to the eval and runs them against the pilot. Needs 2.7, 1.8 and spike 0.3. Done when `new app`
    reaches QA in one pipeline run and the loop time is recorded against the hook's one-minute budget.
+9. **2.9 After-commit calls.** Add the outbox, as the design has it: a state-changing call an `api.Client` sends with
+   an idempotency key, written as a row of the outbox table in the route's transaction and made once after the commit,
+   within the route's deadline, with `Idempotency-Key`; the relay, a scheduled basis job, which retries each row with
+   backoff until the other service accepts it or the row ages out, and alerts then; and the outbox table's DDL. Needs
+   2.3, and runs alongside 2.5; the pilot (2.8) does not wait for it. Done when, against the SQL Server and Oracle
+   containers and a fake service, a route whose writes roll back makes no call, and a call that fails after its commit
+   reaches the service through the relay, with its key, once the service answers again.
 
 ## Phase 3: optim on basis-core
 

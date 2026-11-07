@@ -4,7 +4,8 @@ This package is basis-api, which API repos depend on. A service declares its nam
 its routes as an `api.Service`, and basis builds the FastAPI app around them, the same in every repo; a service never
 makes the app itself. The plumbing it runs on is basis-core's, in `packages/core`, which imports nothing from here.
 [The design](../../docs/design.md#apis-basisapi) holds the decisions, and [the roadmap](../../docs/roadmap.md#phase-2-apis)
-the steps still to come: the UI contract (2.5), contract tests (2.6) and `basis-api new app` (2.7).
+the steps still to come: the UI contract (2.5), contract tests (2.6), `basis-api new app` (2.7) and after-commit calls
+(2.9).
 
 ## Where things are
 
