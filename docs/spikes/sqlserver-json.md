@@ -131,6 +131,30 @@ any `varchar(max)` column with a UTF-8 collation. Three workarounds were verifie
   binding defect in section 3.
 - The defect goes upstream with the repro under "Upstream" below.
 
+**Found by the fix, after the spike.** basis-core's fix, run on 2026-11-07 against SQL Server 2022 (16.0.4305.5) on
+Linux with the same driver, found the default loses more than the above. `fetchall` and `fetchone` drop a 4-byte
+character that straddles the driver's chunks of 4,095 UTF-16 units in a `varchar(max)` UTF-8 value, as in
+`"a" * 4094 + "😀b"`. Arrow dropped `["😀"]`'s emoji from a `varchar(200)` UTF-8 column too, wherever the result had a
+`varchar(max)` or `nvarchar(max)` column beside it. The UTF-8 char fetch read each exactly, and code page 1252 `varchar`
+and `nvarchar` text as well. Under an ISO-8859-1 locale on Linux it does not: Arrow raises `UnicodeDecodeError`, and
+`fetchall` returns `bytes`, with each character Latin-1 lacks replaced. So basis-core sets it on each connection on
+Linux, where the locale is UTF-8 or glibc's C (`fetches_char_as_utf8` in
+`packages/core/src/basis/core/databases/mssql.py`), and keeps the driver's default on Windows and macOS, both
+unverified, and under any other locale. `packages/job/tests/integration/test_text.py` reads and publishes such text, a
+`json` column's on SQL Server 2025, and code page 1252 `varchar(10)` columns filled with `é` and with `€`, whose UTF-8
+is 20 and 30 bytes: through Arrow and `fetchall`, the UTF-8 char fetch cut none of them.
+
+**In basis's image.** A job repo's image, built from the managed Dockerfile on `python:3.14-slim` and run under its
+own environment, has `LANG=C.UTF-8` from that base, so its connections fetch char data as UTF-8, and read `["😀"]`
+exactly. With `LANG` unset, or `LANG=C`, Python's locale coercion (PEP 538) sets `LC_CTYPE=C.UTF-8`, with the same
+result. `LC_ALL=C`, `LC_ALL=POSIX` or `PYTHONCOERCECLOCALE=0` leaves the C locale, whose charset is ASCII
+(`ANSI_X3.4-1968`). The driver does not convert to ASCII, and sends UTF-8 instead: its programming guidelines for
+Linux and macOS say that for a locale whose charset is not in its list, "it defaults to UTF-8" (from docs, read
+2026-11-07). The UTF-8 char fetch read exactly there too, in the image, so the rule takes that charset as well, by
+glibc's name for it alone. With it, each of these six environments read the emoji exactly through basis in the image;
+under a rule of UTF-8 alone, the last three lost it. CI's job-image reads one from a `varchar(max)` through basis in
+the image, under the image's own locale, and fails if the rule is off there or the emoji is lost.
+
 ## 3. Writing
 
 basis writes neither through bulk copy nor through table-valued parameters. `mssql.py` on `main` (6d29ec6) stages a
@@ -362,6 +386,17 @@ print(pa.Table.from_batches(list(reader), schema=reader.schema).to_pylist())  # 
 cursor = connection.cursor()
 cursor.execute("SELECT j, v FROM t")
 print(tuple(cursor.fetchone()))  # ('["😀"]', '["😀"]')
+```
+
+Found by basis-core's fix, after the spike, with the same versions against SQL Server 2022: `fetchone` loses a 4-byte
+character too, where it straddles the driver's chunks of 4,095 UTF-16 units.
+
+```python
+connection.cursor().execute("CREATE TABLE t2 (id int PRIMARY KEY, v varchar(max) COLLATE Latin1_General_100_BIN2_UTF8)")
+connection.cursor().execute("INSERT INTO t2 VALUES (1, ?)", ("a" * 4094 + "\U0001f600b",))
+cursor = connection.cursor()
+cursor.execute("SELECT v FROM t2")
+print(repr(cursor.fetchone()[0][4090:]))  # 'aaaab'
 ```
 
 ## The probe
@@ -1087,11 +1122,13 @@ A short check at the port, which blocks nothing above.
    ```sh
    export SPIKE06_CONNECTION_STRING='Server=...;Database=...;Trusted_Connection=yes;Encrypt=yes'
    uv run --script probe.py > probe-wsl.txt 2>&1
+   uv run --no-project python -c "import locale; print(locale.getencoding())" >> probe-wsl.txt
    ```
 
    ```powershell
    $env:SPIKE06_CONNECTION_STRING = 'Server=...;Database=...;Trusted_Connection=yes;Encrypt=yes'
    uv run --script probe.py > probe-windows.txt 2>&1
+   uv run --no-project python -c "import locale; print(locale.getencoding())" >> probe-windows.txt
    ```
 
 Send back:
@@ -1099,5 +1136,10 @@ Send back:
 - the version row, and the `CREATE TABLE`'s error if it failed;
 - the list of `json` columns;
 - the redacted shape of two migrated documents;
-- both probe outputs. The lines that matter most are each `q2 ... arrow` line, whose "arrow with UTF-8 char fetch equal"
-  says whether that fix holds on Windows, and any `raised` line that is not in this result.
+- both probe outputs, each ending with its locale's encoding. The lines that matter most are each `q2 ... arrow` line,
+  whose "arrow with UTF-8 char fetch equal" says whether that fix holds on Windows, and any `raised` line that is not
+  in this result. basis-core sets the UTF-8 char fetch in WSL, where the encoding is UTF-8, and keeps the driver's
+  default on Windows, unverified, until these lines show it exact there (`fetches_char_as_utf8`).
+
+A note, not a step: macOS keeps the driver's default too, unverified, as developers there are rare. The probe, run on a
+Mac with its `locale.getencoding()`, would say whether `fetches_char_as_utf8` can take macOS as it takes Linux.
