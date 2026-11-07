@@ -53,7 +53,7 @@ docs, and builds that repo's image and publishes its job to SQL Server.
 `basis` is basis-core's console script, and each part adds its verbs to it; `packages/core/src/basis/core/verbs.py`
 holds the interface, and its docstring is the reference.
 
-- A part lists one entry point in the `basis.verbs` group, named after the part (`job`, later `api` and `optim`), that
+- A part lists one entry point in the `basis.verbs` group, named after the part (`job`, `api`, later `optim`), that
   points at a callable returning its `Part`: its own `verbs`, each a `Verb` with a name, a one-line help, a function
   that adds its arguments to an argparse parser, and a handler that returns the exit code; and the fields core's verbs
   use, `files` (`sync`, `check`; read only when used), `docs` (`docs`), `new` (`new KIND NAME`) and `runs` (`replay`,

@@ -213,4 +213,5 @@ def test_a_repo_made_before_basis_has_a_release_fails_with_one_error_line_that_n
 
 def test_basis_job_names_every_installed_parts_version(capsys: pytest.CaptureFixture[str]) -> None:
     assert cli.scaffold(["--version"]) == 0
-    assert capsys.readouterr().out == "basis-core 0.0.0, basis-job 0.0.0\n"
+    core, *parts = capsys.readouterr().out.rstrip("\n").split(", ")  # the parts in the order their packages are found
+    assert (core, sorted(parts)) == ("basis-core 0.0.0", ["basis-api 0.0.0", "basis-job 0.0.0"])

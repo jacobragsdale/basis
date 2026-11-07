@@ -170,7 +170,8 @@ def test_variables_under_the_names_basis_read_before_are_refused_with_their_new_
 
 def test_version_names_basis_core_and_each_installed_part_anywhere(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert basis(tmp_path, "--version") == 0
-    assert capsys.readouterr().out == "basis-core 0.0.0, basis-job 0.0.0\n"
+    core, *parts = capsys.readouterr().out.rstrip("\n").split(", ")  # the parts in the order their packages are found
+    assert (core, sorted(parts)) == ("basis-core 0.0.0", ["basis-api 0.0.0", "basis-job 0.0.0"])
 
 
 def test_settings_that_do_not_validate_name_the_variables_to_set(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:

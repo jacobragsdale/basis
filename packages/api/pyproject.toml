@@ -1,0 +1,27 @@
+[project]
+name = "basis-api"
+version = "0.0.0"
+description = "HTTP APIs on FastAPI: a service declares its routes and settings, and basis builds the same app around them in every repo"
+license = "MIT"
+requires-python = ">=3.14"
+dependencies = [
+    "basis-core==0.0.0",  # every basis package depends on basis-core at exactly its own version
+    "fastapi>=0.162.0",
+    "opentelemetry-api>=1.45.2",
+    "opentelemetry-exporter-otlp-proto-http>=1.45.2",
+    "opentelemetry-sdk>=1.45.2",
+    "uvicorn>=0.54.0",
+]
+
+[project.entry-points."basis.verbs"]
+api = "basis.api.cli:part"  # basis-api's verbs, in a repo whose [tool.basis] parts include "api"
+
+[tool.uv.sources]
+basis-core = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.13.6,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "basis.api"
