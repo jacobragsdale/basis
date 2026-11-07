@@ -2,6 +2,7 @@
 once, a failure anywhere in a database's transaction writes nothing there, a drifted table stops a run before it
 loads, and a run that committed to one database and failed on another resumes from its snapshot."""
 
+import dataclasses
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -67,6 +68,20 @@ def test_publishing_an_interval_twice_leaves_the_table_as_publishing_it_once(scr
     assert contents(scratch, table) == once
     assert len(once) == 2
     assert scratch.rows(f"SELECT COUNT(*) FROM {scratch.ledger()}") == [(2,)]
+
+
+def test_a_publish_to_a_write_login_without_a_ledger_names_the_variable_to_set(scratch: Scratch, tmp_path: Path) -> None:
+    table = f"prices_{scratch.suffix}"
+    create(scratch, table)
+    write = scratch.settings["write"]
+    assert isinstance(write, dict)
+    unledgered = dataclasses.replace(scratch, settings=scratch.settings | {"write": {key: value for key, value in write.items() if key != "ledger"}})
+    result = run(price_job(table, etl.Append()), {"warehouse": unledgered}, TODAY, tmp_path)
+    assert (result.record.status, result.record.reasons) == (
+        "failed",
+        ["database 'warehouse' has a write login but no ledger, which a publish writes in its transaction, and the run publishes to it: set BASIS_DATABASES__WAREHOUSE__WRITE__LEDGER"],
+    )
+    assert contents(scratch, table) == []
 
 
 def test_replacing_an_interval_leaves_every_other_days_rows(scratch: Scratch, tmp_path: Path) -> None:

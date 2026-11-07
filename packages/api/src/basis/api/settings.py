@@ -1,13 +1,14 @@
-"""An API's settings: basis-core's, which name each database, with how the API serves and where its spans go. A
-service subclasses `Settings` with fields of its own, which read from `BASIS_*` variables too: `BASIS_SERVE__PORT`
-sets `serve.port`, and a service's `max_days` is `BASIS_MAX_DAYS`. The settings are read once, when the app is built,
+"""An API's settings: basis-core's, which name each database, with how the API serves, where its spans go, and where
+each other service it calls is. A service subclasses `Settings` with fields of its own, which read from `BASIS_*`
+variables too: `BASIS_SERVE__PORT` sets `serve.port`, `BASIS_HTTP__PRICING__URL` the pricing service's URL, and a
+service's `max_days` is `BASIS_MAX_DAYS`. The settings are read once, when the app is built,
 and a missing or invalid one stops it there, with one line that names the variable to set."""
 
 import re
 from contextvars import ContextVar
 from typing import Annotated, Literal, Self, override
 
-from pydantic import Field, HttpUrl, ValidationError, model_validator
+from pydantic import Field, FilePath, HttpUrl, ValidationError, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from pydantic_settings import SettingsError as SourceError
 
@@ -43,10 +44,25 @@ class Traces(Model):
         return self
 
 
+class HttpService(Model):
+    """Another service, and how to reach it: from these settings alone, never `SSL_CERT_FILE`, `HTTP_PROXY` or the
+    like, which configure nothing basis decides."""
+
+    url: HttpUrl
+    """The service's base URL, which each call's path follows, such as `https://pricing.internal.example/api`."""
+    ca_bundle: FilePath | None = None
+    """A PEM file of the certificate authorities the service's certificate must chain to, such as the firm's own,
+    in place of the operating system's trusted ones. Without it, the operating system's are trusted."""
+    proxy: HttpUrl | None = None
+    """The proxy each call goes through, such as `http://proxy.internal.example:8080`. Without it, calls go direct."""
+
+
 class Settings(core.Settings):
     serve: Serve = Field(default_factory=Serve)
     traces: Traces | None = None
     """Where the API's spans go. Without it they go nowhere, so a test or a desktop needs no collector."""
+    http: dict[str, HttpService] = Field(default_factory=dict)
+    """Each other service the API calls, by the name its `api.http` declaration gives."""
 
     @classmethod
     def given(cls, **values: object) -> Self:

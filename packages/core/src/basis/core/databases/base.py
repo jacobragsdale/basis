@@ -2,17 +2,23 @@
 transaction that only reads, and written through a `Writer`, inside one transaction that commits only when every table
 the run writes there, and the ledger row of each, has been written. Identifiers in statements are a row's column
 names and a table's name, which the part that declares them restricts to letters, digits, underscores and `$`, as
-`basis.job`'s rows and outputs do, so they are never quoted and never come from data; every value is bound."""
+`basis.job`'s rows and outputs do, so they are never quoted and never come from data; every value is bound.
+
+A caller that writes its own SQL, such as an API's request, runs it through `Statements` instead: one connection's
+transaction, whose statements bind their values by name, each under a deadline of its own."""
 
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Protocol
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import polars as pl
+import pyarrow as pa
 
 from basis.core.destination import TableSpec
 from basis.core.interval import Interval
@@ -81,6 +87,28 @@ class Writer(Reader, Protocol):
     def commit(self) -> None: ...
 
 
+type Bind = str | int | float | Decimal | bool | date | datetime | UUID | bytes | None
+"""A value a statement binds by name, as the driver converts it."""
+
+
+class Statements(Protocol):
+    """One connection's transaction, for statements a caller writes itself: queries, and, through the write login,
+    statements that change rows. `timeout_s` bounds each statement, and the settings' `timeout_s` bounds it too."""
+
+    def query(self, sql: str, binds: Mapping[str, Bind], *, timeout_s: float) -> pa.Table:
+        """The rows a query returns, as the driver typed them, with its columns named in lower case, which is how
+        both dialects then name them; more than the settings' `max_rows` fails."""
+        ...
+
+    def execute(self, sql: str, binds: Mapping[str, Bind], *, timeout_s: float) -> int:
+        """The rows a statement changed. A transaction that only reads refuses it."""
+        ...
+
+    def commit(self) -> None:
+        """Commit what the statements changed. A transaction that only reads refuses it."""
+        ...
+
+
 class Database(Protocol):
     @property
     def name(self) -> str: ...
@@ -93,9 +121,15 @@ class Database(Protocol):
         """A writer whose changes commit only on `commit()`, and roll back otherwise."""
         ...
 
+    def statements(self, *, writes: bool) -> AbstractContextManager[Statements]:
+        """A connection for statements of the caller's own, in one transaction: through the write login where
+        `writes`, which commits only on `commit()`; otherwise through the read login, in a transaction that only reads,
+        as `reading`'s does. Either rolls back what it has not committed when it ends."""
+        ...
+
     @property
     def writable(self) -> bool:
-        """Whether this machine's settings let it write the database."""
+        """Whether this machine's settings let a run publish to the database: a write login, and a ledger."""
         ...
 
 
@@ -140,6 +174,12 @@ def for_writing(target: Target, frame: pl.DataFrame) -> pl.DataFrame:
 def naive_in_zone(moment: datetime, zone: str | None) -> datetime:
     """An instant as a naive time in `zone`, as a datetime column stores it; a date column compares with naive UTC."""
     return moment.astimezone(ZoneInfo(zone)).replace(tzinfo=None) if zone is not None else moment.replace(tzinfo=None)
+
+
+def lower_cased(table: pa.Table) -> pa.Table:
+    """`table` with its columns named in lower case: Oracle names an unquoted column in upper case, SQL Server as the
+    query wrote it."""
+    return table.rename_columns([name.lower() for name in table.column_names])
 
 
 def slices(frame: pl.DataFrame) -> Iterator[pl.DataFrame]:

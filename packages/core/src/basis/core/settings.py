@@ -47,8 +47,9 @@ class Limits(Model):
 class MssqlWrite(Model):
     connection_string: SecretStr
     """A login that may insert, update and delete in the job's tables and in the ledger, and nothing else needs."""
-    ledger: Annotated[str, Field(pattern=LEDGER)]
-    """The ledger table, as `basis ddl --ledger TABLE --dialect mssql` creates it, such as `etl.publishes`."""
+    ledger: Annotated[str, Field(pattern=LEDGER)] | None = None
+    """The ledger table, as `basis ddl --ledger TABLE --dialect mssql` creates it, such as `etl.publishes`: where a
+    job or a model publishes, which writes it in the same transaction. An API's requests write no ledger."""
 
 
 class MssqlSettings(Limits):
@@ -65,8 +66,9 @@ class MssqlSettings(Limits):
 class OracleWrite(Model):
     user: str
     password: SecretStr
-    ledger: Annotated[str, Field(pattern=LEDGER)]
-    """The ledger table, as `basis ddl --ledger TABLE --dialect oracle` creates it, such as `ETL.PUBLISHES`."""
+    ledger: Annotated[str, Field(pattern=LEDGER)] | None = None
+    """The ledger table, as `basis ddl --ledger TABLE --dialect oracle` creates it, such as `ETL.PUBLISHES`: where a
+    job or a model publishes. An API's requests write no ledger."""
 
 
 class OracleSettings(Limits):
@@ -88,6 +90,23 @@ class OracleSettings(Limits):
 
 
 type DatabaseSettings = Annotated[MssqlSettings | OracleSettings, Field(discriminator="kind")]
+
+
+def publish_refusal(name: str, database: MssqlSettings | OracleSettings) -> tuple[str, str] | None:
+    """Why a run cannot publish to the database the settings name `name`, and the fix, which names each variable to
+    set; or None when it can: a publish needs a write login, and a ledger to write in the same transaction."""
+    if database.write is not None and database.write.ledger is not None:
+        return None
+    return unpublishable(name, database)
+
+
+def unpublishable(name: str, database: MssqlSettings | OracleSettings) -> tuple[str, str]:
+    """Why a run cannot publish to a database whose settings lack a write login or a ledger, and the fix."""
+    ledger = variable(("databases", name, "write", "ledger"))
+    if database.write is not None:
+        return "has a write login but no ledger, which a publish writes in its transaction", f"set {ledger}"
+    logins = ("connection_string",) if isinstance(database, MssqlSettings) else ("user", "password")
+    return "has no write settings", f"set {', '.join(variable(('databases', name, 'write', part)) for part in logins)} and {ledger}"
 
 
 class Settings(BaseSettings):

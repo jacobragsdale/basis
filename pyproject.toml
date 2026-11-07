@@ -23,7 +23,6 @@ optim = { workspace = true }
 
 [dependency-groups]
 dev = [
-    "httpx2>=2.16.0",
     "import-linter>=2.16",
     "pre-commit>=4.7.0",
     "pytest>=9.2.0",
@@ -64,6 +63,8 @@ ignore = [
 "**/tests/**" = ["S101", "PLR2004", "INP001", "DTZ001"]
 # basis-job's integration tier builds SQL around the scratch tables each test makes and names.
 "packages/job/tests/integration/**" = ["S101", "PLR2004", "INP001", "DTZ001", "S608"]
+# basis-api's integration tier builds SQL around the scratch tables each test makes and names.
+"packages/api/tests/integration/**" = ["S101", "PLR2004", "INP001", "S608"]
 "**/test_*.py" = ["S101", "PLR2004"]
 "**/conftest.py" = ["S101", "PLR2004"]
 # A job's hooks share their signatures, so a hook may leave an argument unused.
@@ -175,13 +176,14 @@ ignore_imports = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "A service's declarations, and the example's, load no server, exporter or database: basis builds and serves the app"
+name = "A service's declarations, and the example's, load no server, exporter, database or HTTP client: basis builds the app and opens its resources"
 type = "forbidden"
-source_modules = ["basis.api.service", "basis.api.errors", "basis.api.settings", "basis.api.example.service"]
+source_modules = ["basis.api.service", "basis.api.errors", "basis.api.settings", "basis.api.resources", "basis.api.example.service"]
 forbidden_modules = [
-    "basis.api.app", "basis.api.requests", "basis.api.server", "basis.api.traces", "basis.api.cli", "basis.api.sync", "uvicorn",
-    "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.command", "basis.core.check",
-    "basis.core.hooks", "basis.core.hygiene", "basis.core.sync", "mssql_python", "oracledb",
+    "basis.api.app", "basis.api.requests", "basis.api.server", "basis.api.traces", "basis.api.cli", "basis.api.sync", "basis.api.opened",
+    "basis.api.fakes", "uvicorn", "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.command",
+    "basis.core.check", "basis.core.hooks", "basis.core.hygiene", "basis.core.sync", "mssql_python", "oracledb", "httpx", "httpx2", "requests",
+    "urllib3", "aiohttp",
 ]
 ignore_imports = [
     "basis.api -> basis.api.app",  # `api.build` loads on first use, which a service's modules never make

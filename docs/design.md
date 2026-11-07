@@ -187,11 +187,12 @@ its resources and its settings, and the core builds the FastAPI app from them, w
 handlers, health endpoints and shutdown in every repo.
 
 A resource is anything a handler reaches outside the process: a database, another HTTP service, a cache, the clock, new
-ids. Each is declared by name, and the core opens it in the app's lifespan, puts a deadline on every call, traces the
-call, and provides a fake of it for tests. Handler code reaches the outside only through its resources, and the import
-contract that keeps optim's models pure keeps handlers away from database drivers, HTTP clients and environment
-variables. "Pure" cannot mean "no I/O" for a handler that reads, decides, and reads again; it means "I/O only through
-the core", which lets the core bound, observe and record every call.
+ids. Each is declared by name, and the core opens it in the app's lifespan, puts a deadline on every call that can wait,
+traces every call, and provides a fake of it for tests. The clock and new ids never wait, so they have no deadline, and
+their spans record each value, so that a recorded request replays them. Handler code reaches the outside only through
+its resources, and the import contract that keeps optim's models pure keeps handlers away from database drivers, HTTP
+clients and environment variables. "Pure" cannot mean "no I/O" for a handler that reads, decides, and reads again; it
+means "I/O only through the core", which lets the core bound, observe and record every call.
 
 Request bodies and settings are strict models: an unknown key is refused and no value is coerced, so a misspelled field
 fails at the boundary instead of being silently ignored. Every route declares its deadline, its response model and its
