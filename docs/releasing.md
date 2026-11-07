@@ -42,7 +42,9 @@ To cut a release:
 
    It prints `basis 0.1.0: every member, each basis-core pin and uv.lock; commit them`. For another bump, pass
    `patch`, or a version such as `0.1.0`. Generated repos cap basis below the next 0.x minor version, so the script
-   refuses a 1.x version, and changes nothing, until those templates change.
+   refuses a 1.x version, and changes nothing, until those templates change. It works out every file's new text
+   before it writes any, and puts every file back, `uv.lock` among them, when `uv lock` fails, so the workspace is
+   never left at two versions.
 2. Commit, push and open a pull request:
 
    ```sh
@@ -61,8 +63,11 @@ To cut a release:
    git push origin v0.1.0
    ```
 
-   The workflow fails at once if the tag's version differs from the tagged commit's `pyproject.toml` version, with
-   `ERROR: the tag v0.1.0 does not name the workspace's version, 0.0.0: ...`, and releases nothing.
+   Before it builds anything, the workflow refuses a tag whose commit is not on `main`, or whose ci.yml run did not
+   pass; while that run is queued or still running, it waits for it, for up to 30 minutes. It then refuses a tag
+   whose version differs from the tagged commit's `pyproject.toml` version, or that names `v0.0.0`, which no release
+   does. Each refusal is one `ERROR` line, such as
+   `ERROR: the tag v0.1.0 does not name the workspace's version, 0.0.0: ...`, and the run releases nothing.
 4. Watch the run the tag started:
 
    ```sh
@@ -107,8 +112,9 @@ with the hash `SHA256SUMS` gives it.
 
 ## What the dry run proves
 
-The release workflow runs without releasing on each pull request that touches a release file (the workflow, the
-script and its tests, any `pyproject.toml`, `uv.lock`, `basis.core.new`, or a generator's `pyproject.toml.in`), and
+The release workflow runs without releasing on each pull request that touches a release file (the workflow,
+`scripts/`, any `pyproject.toml`, `uv.lock`, or any package's code under `packages/*/src`, which is what a release
+ships and all a generator reads), and
 when run by hand from the Actions tab, or with `gh workflow run release.yml --ref BRANCH` once the workflow is on
 `main`. Its token can only read, its `release` job runs only on a tag, and it uploads to no index. What leaves the
 runner is the built files, kept as the run's `dist` artifact for seven days as any workflow's build output is. Its
@@ -116,14 +122,15 @@ jobs:
 
 | Job | What passes |
 |---|---|
-| `build` | `release.py check`. Each published package's wheel and sdist, built with `uv build --no-sources --package NAME`, as an install from an index would build it, and no other file. |
+| `build` | The gate, which passes on `main`'s newest commit that ci.yml passed on, and refuses a commit made on the runner, which is not on `main`. `release.py check`. Each published package's wheel and sdist, built with `uv build --no-sources --package NAME`, as an install from an index would build it, and no other file. |
 | `verify` | With no checkout of the workspace: the wheels in one clean environment and the sdists in another, where `basis --version` names each package at the version and `basis --help` loads every part's verbs. A job repo made with `uvx --from` the basis-job wheel and `--index` naming a stand-in feed on the runner, which serves the files and sends every other name to PyPI, as the firm's feed proxies it: its lock holds basis-job and basis-core at the version, from that feed, and it passes `basis check`. A job repo made with `uvx` installing basis-job from that feed: without `--index` it fails with one `ERROR` line, since uv does not record which index a package came from, and with `--index` it passes `basis check`. |
 | `from-git` | A scratch clone of the commit on the runner, tagged there as the version's release and never pushed: a job repo made with `uvx --from 'git+URL@vX.Y.Z#subdirectory=packages/job'` depends on that tag, and passes `basis check`. |
 | `one-version` | `release.py version minor` moves every member, each pin and the lock, `release.py check` then passes, and so does every unit test, the release script's among them, at the next version. |
 
-Only the tag's run proves three things. `from-git` clones the tag from github.com, not from a scratch clone. A job
-repo made from the basis-job wheel with no `--index` takes the release's tag from GitHub: a wheel's file, unlike an
-index, is no place a new repo could take its packages from. And the `release` job creates the release with its files.
+Only the tag's run proves four things. The gate passes the tag's own commit, waiting for ci.yml's run on it if it
+must. `from-git` clones the tag from github.com, not from a scratch clone. A job repo made from the basis-job wheel
+with no `--index` takes the release's tag from GitHub: a wheel's file, unlike an index, is no place a new repo could
+take its packages from. And the `release` job creates the release with its files.
 
 No run here proves the firm's feed: the stand-in has no authentication and no upstream of its own, and the desktops'
 `uv.toml`, Windows and the feed's upload are spike 0.1's. A tag also leaves optim installable from git

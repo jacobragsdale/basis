@@ -72,6 +72,8 @@ ignore = [
 "packages/api/src/basis/api/outboxes.py" = ["S608"]
 # A generated repo's files, which `new` copies; they are not part of the package.
 "packages/*/src/basis/*/templates/**" = ["INP001"]
+# A module the scripts import from their own folder, which Python puts first on sys.path; scripts/ is no package.
+"scripts/shared.py" = ["INP001"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["basis"]  # every member's portion of the namespace, wherever its src/ is
@@ -91,7 +93,7 @@ all = "error"  # Every rule is an error, including those ty leaves off by defaul
 # As pytest's `pythonpath`, so basis-job's tests can import `builders`. Their names differ, since ty, like Python,
 # resolves a name one way per run. A path that does not exist fails ty, so a member that basis does not release lists
 # none here: ty 0.0.99 finds a test's helper module in the test's folder or a folder above it.
-extra-paths = ["packages/job/tests"]
+extra-paths = ["packages/job/tests", "scripts"]  # and the module the scripts share, which each imports from its own folder
 
 [tool.ty.analysis]
 respect-type-ignore-comments = false  # Require a specific `# ty: ignore[rule]` suppression.

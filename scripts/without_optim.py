@@ -34,6 +34,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+import shared
+
 ROOT = Path(__file__).resolve().parent.parent
 OPTIM = "packages/optim"
 NAMED = r"(^|[^A-Za-z0-9])optim([^A-Za-z]|$)"
@@ -63,8 +65,6 @@ ALLOWED: Mapping[str, tuple[str, ...]] = {
 }
 """The lines outside packages/optim that may name optim, by the file and a text the line holds: each still works, and
 changes nothing, when packages/optim is gone."""
-UNSET = ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "UV_FROZEN", "UV_LOCKED", "UV_EXCLUDE_NEWER", "PYTHONPATH")
-"""Variables that would point the copy at the working tree's environment, its lock or another moment of the index."""
 
 type Problem = tuple[str, str]
 """A reason and its fix, printed as one `ERROR` line."""
@@ -134,7 +134,7 @@ def without_optim(tools: Tools, *, keep: bool) -> list[Problem]:
 
 
 def _checked(tools: Tools, copy: Path) -> list[Problem]:
-    environment = {name: value for name, value in os.environ.items() if name not in UNSET and not name.startswith("GIT_")}  # a hook's GIT_DIR would point git at this clone
+    environment = shared.environment()  # not the working tree's environment, its lock, another moment of the index, or a hook's GIT_DIR
     _copy_working_tree(tools, copy)
     lock = (copy / "uv.lock").read_bytes()
     moment = exclude_newer(lock) or datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")

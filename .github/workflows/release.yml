@@ -1,6 +1,7 @@
 name: release
 
-# A `v*` tag releases basis: it builds each package that says a release publishes it, installs them in clean
+# A `v*` tag of a commit on main that ci.yml passed on releases basis; the build job refuses any other before it
+# builds anything. A release builds each package that says a release publishes it, installs them in clean
 # environments from those files alone, makes job repos from them, and creates the GitHub release with the files
 # attached. A pull request that touches a release file, and a run by hand, do all of that but the release, and also
 # set the next version in its one place and run every unit test at it; they publish nothing. docs/releasing.md says
@@ -12,17 +13,16 @@ on:
   pull_request:
     paths:
       - .github/workflows/release.yml
-      - scripts/release.py
-      - scripts/tests/**
+      - scripts/**  # the release script, its tests, and what the scripts share
       - pyproject.toml
       - packages/*/pyproject.toml
       - uv.lock
-      - packages/core/src/basis/core/new.py  # where a generated repo takes its basis packages from
-      - packages/*/src/**/templates/repo/pyproject.toml.in  # the version of them it takes
+      - packages/*/src/**  # every package's code: what a release ships, and all a generator reads, templates and examples among it
   workflow_dispatch:
 
 permissions:
   contents: read  # the release job alone may write, and only on a tag
+  actions: read  # ci.yml's runs, which the gate reads
 
 jobs:
   build:
@@ -32,9 +32,26 @@ jobs:
       packages: ${{ steps.check.outputs.packages }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # main's history, which the gate reads
       - uses: astral-sh/setup-uv@v7
         with:
           version: "0.13.7"
+      - name: On a tag, refuse before anything is built unless its commit is on main and ci.yml passed on it
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: uv run scripts/release.py gate "$(git rev-parse HEAD)" --repository "$GITHUB_REPOSITORY"  # waits while ci.yml runs
+      - name: Otherwise, pass the gate on main's newest commit ci.yml passed on, and refuse a commit that is not on main
+        if: github.event_name != 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=1" --jq '.workflow_runs[0].head_sha')
+          uv run scripts/release.py gate "$passed" --repository "$GITHUB_REPOSITORY" --attempts 1
+          probe=$(git -c user.name=release -c user.email=release@example.com commit-tree "HEAD^{tree}" -p HEAD -m "A commit on no branch")
+          if uv run scripts/release.py gate "$probe" --repository "$GITHUB_REPOSITORY" --attempts 1 2> refused.log; then echo "the gate let a commit off main through" >&2; exit 1; fi
+          tail -n 1 refused.log | grep --quiet "^ERROR: the tag names commit $probe, which is not on main"
       - name: Check that every member is at one version, pinning basis-core at it, and on a tag that the tag names it
         id: check
         run: |
@@ -167,7 +184,7 @@ jobs:
         working-directory: ${{ runner.temp }}
         run: |
           uvx --from "dist/basis_job-$VERSION-py3-none-any.whl" --with "dist/basis_core-$VERSION-py3-none-any.whl" basis-job new repo from-wheel
-          grep --quiet "^basis-job = { git = \"https://github.com/jacobragsdale/basis\", subdirectory = \"packages/job\", tag = \"v$VERSION\" }$" from-wheel/pyproject.toml
+          grep --quiet "^basis-job = { git = \"https://github.com/$GITHUB_REPOSITORY\", subdirectory = \"packages/job\", tag = \"v$VERSION\" }$" from-wheel/pyproject.toml
           cd from-wheel && uv run basis check
 
   one-version:
