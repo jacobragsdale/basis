@@ -12,7 +12,7 @@ health, transactions, process pool and shutdown, is basis's. `dev.py` makes its 
 
 import calendar
 import logging
-from datetime import date, datetime
+from datetime import date
 from decimal import ROUND_HALF_EVEN, Decimal
 from http import HTTPStatus
 from typing import Annotated, Literal, assert_never, get_args
@@ -20,7 +20,7 @@ from uuid import UUID
 
 from basis import api
 from fastapi import Path, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from basis.api.example import compute
 
@@ -199,7 +199,7 @@ class Settlement(BaseModel):
     face: Decimal
     settle: date
     accrued: Decimal
-    recorded_at: datetime
+    recorded_at: AwareDatetime
 
 
 WAREHOUSE = api.database("warehouse", deadline_s=5, max_concurrent=8, outbox=api.outbox("accruals_outbox", max_age_s=86_400, backoff_s=60, max_backoff_s=3_600))

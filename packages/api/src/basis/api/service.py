@@ -57,7 +57,7 @@ import inspect
 import math
 import re
 from collections.abc import AsyncIterator, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from http import HTTPStatus
 from importlib.metadata import EntryPoint, entry_points
 from types import FunctionType
@@ -136,9 +136,9 @@ class Route:
     """Each `api.Error` the handler may raise, but basis's own, which `answers` adds."""
     status: int = HTTPStatus.OK
     """The status of a response that succeeds."""
-    dataset: bool = False
+    dataset: InitVar[bool] = False
     """Whether it answers a dataset, rows of one model, which it gives as Arrow when the request asks for it: see
-    `dataset.py`."""
+    `dataset.py`. `rows` keeps what it declares."""
     name: str = field(init=False)
     """The handler's name, which is the route's."""
     asks: tuple[Ask, ...] = field(init=False)
@@ -151,9 +151,9 @@ class Route:
     reads: strict.Shape = field(init=False)
     """What it reads from a request, strictly."""
     rows: Rows | None = field(init=False)
-    """The columns of the dataset it answers; None for a route that answers no dataset."""
+    """The columns of the dataset it answers; None for a route that answers no dataset, as its `dataset=` declares."""
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, dataset: bool) -> None:
         if not self.path.startswith("/"):
             msg = f"route {self.path!r} is not a path: start it with /, as /accrued-interest"
             raise ServiceError(msg)
@@ -179,7 +179,7 @@ class Route:
             msg = f"{self.name}'s deadline is {deadline!r}: give it deadline_s, the seconds the route has to answer, above 0"
             raise ServiceError(msg)
         _check_response(self)
-        object.__setattr__(self, "rows", rows(self.response, self.name) if self.dataset else None)
+        object.__setattr__(self, "rows", rows(self.response, self.name) if dataset else None)
         object.__setattr__(self, "errors", _declared_errors(self.name, self.errors))
         for path, asked in _asked_within(handler, (), set()):
             msg = (
@@ -233,6 +233,7 @@ def _check_response(route: Route) -> None:
     if returns != declared:
         msg = f"{route.name} returns {strict.named(returns)}, and its route declares response={strict.named(declared)}: declare the one it returns"
         raise ServiceError(msg)
+    strict.aware(route.name, "response", declared)
     if (declared is None) != (route.status == HTTPStatus.NO_CONTENT):
         fix = "give it status=HTTPStatus.NO_CONTENT" if declared is None else "declare the response it has, or response=None with no content"
         msg = f"{route.name} answers {route.status} with response={strict.named(declared)}: a route answers no body exactly when its status is 204, so {fix}"

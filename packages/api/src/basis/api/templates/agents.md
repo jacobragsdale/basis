@@ -61,7 +61,9 @@ Rules to keep:
   release: a field a response gives removed, renamed or retyped, a field a request takes removed or newly required,
   or an operation removed or renamed. Add beside what a UI relies on; never change it in place. The check reads the
   repo's release tags, so a CI checkout of the repo fetches its whole history and its tags.
-- Every time a response gives carries its offset, as the clock's do: one without is a 500.
+- Every time a request or a response holds is pydantic's `AwareDatetime` (`from pydantic import AwareDatetime`), never
+  a plain `datetime` or a `time` of day, which a route is refused for when it is declared: the clock's times have
+  their offsets.
 - A route that answers rows, as a grid shows them, declares `dataset=True` and answers `list[Row]`, each field of `Row`
   a scalar, a decimal with its `Field(max_digits=..., decimal_places=...)`; it answers Arrow to a request that asks for
   `application/vnd.apache.arrow.stream`, and JSON otherwise.

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 import pytest
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 from basis import api
 from basis.api import cli, contract, openapi
@@ -145,8 +145,8 @@ def rows(security: str, desk: str | None = None) -> list[Row]:
     return []
 
 
-def document(*routes: api.Route) -> dict[str, object]:
-    return {str(key): value for key, value in openapi.document(api.Service(name="bonds", settings=api.Settings, routes=routes)).items()}
+def document(*routes: api.Route) -> dict[str, JsonValue]:
+    return openapi.document(api.Service(name="bonds", settings=api.Settings, routes=routes))
 
 
 def get_bond(response: type[BaseModel] = Bond, path: str = "/bonds/{security}") -> api.Route:
@@ -350,3 +350,83 @@ def test_a_document_that_is_not_json_says_to_sync(released: Path) -> None:
     (released / "openapi.json").write_text("{", encoding="utf-8")
     with pytest.raises(contract.ContractError, match=r"is not JSON .*: run `uv run basis sync`"):
         contract.contract(released)
+
+
+class Sized(BaseModel):
+    size: int
+
+
+class SizedAsNumber(BaseModel):
+    size: float
+
+
+class Dated(BaseModel):
+    on: date
+
+
+class DatedAsText(BaseModel):
+    on: str
+
+
+class Noted(BaseModel):
+    note: str
+
+
+class MaybeNoted(BaseModel):
+    note: str | None = None
+
+
+def _taking(body: type[BaseModel]) -> api.Route:
+    def take(order: Order) -> Bond:
+        del order
+        raise NotImplementedError
+
+    take.__annotations__["order"] = body
+    return api.post("/take", take, deadline_s=1, response=Bond, errors=[])
+
+
+def _giving(response: type[BaseModel]) -> api.Route:
+    def give() -> object:
+        raise NotImplementedError
+
+    give.__annotations__["return"] = response
+    return api.get("/give", give, deadline_s=1, response=response, errors=[])
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "breaking", "compatible"),
+    [
+        (_taking(Sized), _taking(SizedAsNumber), [], ["POST /take (take) takes body.size as number too"]),
+        (_taking(SizedAsNumber), _taking(Sized), ["POST /take (take) no longer takes body.size as number"], []),
+        (_taking(Dated), _taking(DatedAsText), [], ["POST /take (take) takes body.on as string too"]),
+        (_taking(Noted), _taking(MaybeNoted), [], ["POST /take (take) takes body.note as null too", "POST /take (take) no longer requires body.note"]),
+        (_giving(Sized), _giving(SizedAsNumber), ["GET /give (give): the response.size may be number"], []),
+        (_giving(SizedAsNumber), _giving(Sized), [], []),
+        (_giving(DatedAsText), _giving(Dated), [], []),
+    ],
+    ids=[
+        "a-request-integer-taken-as-a-number",
+        "a-request-number-narrowed-to-an-integer",
+        "a-request-date-taken-as-text",
+        "a-request-field-no-longer-required",
+        "a-response-integer-given-as-a-number",
+        "a-response-number-narrowed-to-an-integer",
+        "a-response-text-narrowed-to-a-date",
+    ],
+)
+def test_a_request_breaks_a_ui_only_where_it_refuses_what_it_took_and_a_response_where_it_gives_more(before: api.Route, after: api.Route, breaking: list[str], compatible: list[str]) -> None:
+    found = contract.compare(document(before), document(after))
+    assert (found.breaking, found.compatible) == (breaking, compatible)
+
+
+def test_no_earlier_release_is_known_whatever_language_git_speaks(tmp_path: Path, git: Git, monkeypatch: pytest.MonkeyPatch) -> None:
+    git(tmp_path, "init", "--quiet")
+    git(tmp_path, "config", "user.email", "ci@example.com")
+    git(tmp_path, "config", "user.name", "ci")
+    (tmp_path / "pyproject.toml").write_text('[tool.basis.api]\nreleases = "v*"\n', encoding="utf-8")
+    write(tmp_path, *BEFORE)
+    git(tmp_path, "add", "--all")
+    git(tmp_path, "commit", "--quiet", "--message", "First")
+    monkeypatch.setenv("LANGUAGE", "de")  # a git with its translations then says "Keine Namen gefunden"
+    monkeypatch.setenv("LC_ALL", "de_DE.UTF-8")
+    assert contract.contract(tmp_path) == "No earlier release to compare with: no tag matches `v*` among this commit's ancestors."

@@ -13,7 +13,7 @@ serialization alias, its alias, or its name. A row is flat, so each column has o
 | `bool` | `bool` |
 | `Decimal`, with `max_digits` and `decimal_places` | `decimal128(max_digits, decimal_places)` |
 | `date` | `date32` |
-| `datetime` | `timestamp[us, tz=UTC]`, from a time with its offset |
+| `AwareDatetime` | `timestamp[us, tz=UTC]` |
 
 A column is nullable where its field may be None, and only there. A decimal declares its digits, at most 38, and its
 places, as `Annotated[Decimal, Field(max_digits=18, decimal_places=2)]`, since a column of Arrow's has one precision
@@ -24,14 +24,15 @@ This module only declares: `arrow.py` writes the stream, which a service's decla
 
 import types
 import typing
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 from enum import Enum
-from typing import Annotated, Literal, get_args, get_origin
+from typing import Annotated, Literal, cast, get_args, get_origin
 from uuid import UUID
 
-from pydantic import BaseModel, RootModel
+from pydantic import BaseModel, RootModel, TypeAdapter
 from pydantic.fields import FieldInfo
 
 from basis.api import strict
@@ -57,6 +58,8 @@ class Column:
     """A decimal's places after the point."""
     enum: bool = False
     """Whether its values are an `Enum`'s members, whose values the column holds."""
+    text: bool = False
+    """Whether its values are UUIDs, whose text the column holds."""
 
 
 @dataclass(frozen=True)
@@ -65,6 +68,9 @@ class Rows:
 
     model: type[BaseModel]
     columns: tuple[Column, ...]
+    adapter: TypeAdapter[Sequence[BaseModel]]
+    """The route's response, the list or the tuple of rows, which the rows validate and dump by, as FastAPI's JSON
+    answer does."""
 
 
 _KINDS: tuple[tuple[type, Kind], ...] = (
@@ -73,7 +79,6 @@ _KINDS: tuple[tuple[type, Kind], ...] = (
     (int, "int64"),
     (float, "float64"),
     (Decimal, "decimal"),
-    (datetime, "timestamp"),
     (date, "date32"),
     (UUID, "utf8"),
     (str, "utf8"),
@@ -96,7 +101,7 @@ def rows(response: object, route: str) -> Rows:
         msg = f"{route}'s dataset rows, {model.__qualname__}, compute {', '.join(model.model_computed_fields)}, which no column holds: make each a field"
         raise ServiceError(msg)
     columns = tuple(_column(route, model, name, field) for name, field in model.model_fields.items() if field.exclude is not True)
-    return Rows(model, columns)
+    return Rows(model, columns, TypeAdapter(cast("type[Sequence[BaseModel]]", kind)))  # a value's type, which ty cannot read as one
 
 
 def _column(route: str, model: type[BaseModel], name: str, field: FieldInfo) -> Column:
@@ -106,12 +111,12 @@ def _column(route: str, model: type[BaseModel], name: str, field: FieldInfo) -> 
     if (choice := _choice(annotation)) is not None:
         kind, is_enum = choice
         return Column(key, name, kind, nullable, enum=is_enum)
-    kind = next((found for scalar, found in _KINDS if isinstance(annotation, type) and issubclass(annotation, scalar)), None)
+    kind: Kind | None = "timestamp" if annotation is strict.AWARE else next((found for scalar, found in _KINDS if isinstance(annotation, type) and issubclass(annotation, scalar)), None)
     if kind is None:
-        msg = f"{where} is {strict.named(annotation)}, which Arrow's columns do not hold: give it str, int, float, bool, Decimal, date, datetime, UUID, a Literal or an Enum, or T | None"
+        msg = f"{where} is {strict.named(annotation)}, which Arrow's columns do not hold: give it str, int, float, bool, Decimal, date, AwareDatetime, UUID, a Literal or an Enum, or T | None"
         raise ServiceError(msg)
     if kind != "decimal":
-        return Column(key, name, kind, nullable)
+        return Column(key, name, kind, nullable, text=isinstance(annotation, type) and issubclass(annotation, UUID))
     digits = next((value for found in metadata if isinstance(value := getattr(found, "max_digits", None), int)), None)
     places = next((value for found in metadata if isinstance(value := getattr(found, "decimal_places", None), int)), None)
     if digits is None or places is None or not 0 <= places <= digits <= MAX_DIGITS:

@@ -1,6 +1,7 @@
 """A dataset route: what it declares, its columns, and its answer as Arrow when a request asks for it, or JSON."""
 
 from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import IntEnum, StrEnum
@@ -11,7 +12,7 @@ from uuid import UUID
 import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import BaseModel, ConfigDict, Field, RootModel, computed_field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, RootModel, computed_field
 
 from basis import api
 from basis.api import arrow, dataset, fakes
@@ -43,7 +44,7 @@ class Exposure(BaseModel):
     exposure: Annotated[Decimal, Field(max_digits=18, decimal_places=2)]
     margin: Annotated[Decimal, Field(max_digits=10, decimal_places=4)] | None = None
     as_of: date
-    at: datetime
+    at: AwareDatetime
     position_id: UUID
     note: str | None = Field(default=None, serialization_alias="comment")
 
@@ -63,29 +64,33 @@ async def none_yet() -> tuple[Exposure, ...]:
     return ()
 
 
-class Naive(BaseModel):
-    at: datetime
-
-
-def naive() -> list[Naive]:
-    return [Naive(at=datetime(2026, 11, 6, 14, 30))]
-
-
 class Lot(BaseModel):
     lots: int
+
+
+@dataclass(frozen=True)
+class Held:
+    """What a handler may return in a row's place, as FastAPI reads a response: an object whose attributes are its
+    fields."""
+
+    lots: object
 
 
 def plain() -> list[Lot]:
     return [Lot(lots=7)]
 
 
+def held() -> list[Lot]:
+    return [Held(lots=7), Held(lots=8)]  # ty: ignore[invalid-return-type] -- objects whose attributes the rows read from
+
+
 WAREHOUSE = api.database("warehouse", deadline_s=1, max_concurrent=2)
 INSERT = "INSERT INTO marks (at) VALUES (%(at)s)"
 
 
-async def mark(warehouse: Annotated[api.Writer, api.given(WAREHOUSE)]) -> list[Naive]:
+async def mark(warehouse: Annotated[api.Writer, api.given(WAREHOUSE)]) -> list[Lot]:
     await warehouse.execute(INSERT, at=AT)
-    return [Naive(at=datetime(2026, 11, 6, 14, 30))]
+    return [Held(lots="seven")]  # ty: ignore[invalid-return-type] -- a row that does not validate, after a write
 
 
 SERVICE = api.Service(
@@ -95,8 +100,8 @@ SERVICE = api.Service(
     routes=[
         api.get("/exposures", exposures, deadline_s=1, response=list[Exposure], errors=[], dataset=True),
         api.get("/none-yet", none_yet, deadline_s=1, response=tuple[Exposure, ...], errors=[], dataset=True),
-        api.get("/naive", naive, deadline_s=1, response=list[Naive], errors=[], dataset=True),
-        api.post("/marks", mark, deadline_s=1, response=list[Naive], errors=[], dataset=True),
+        api.get("/held", held, deadline_s=1, response=list[Lot], errors=[], dataset=True),
+        api.post("/marks", mark, deadline_s=1, response=list[Lot], errors=[], dataset=True),
         api.get("/plain", plain, deadline_s=1, response=list[Lot], errors=[]),
     ],
 )
@@ -151,10 +156,15 @@ def test_no_rows_are_a_stream_of_the_schema_alone(client: TestClient) -> None:
     assert (table.num_rows, table.schema.names[:2]) == (0, ["book", "desk"])
 
 
-def test_a_row_no_column_holds_is_a_defect_and_its_writes_roll_back(client: TestClient, warehouse: fakes.Database) -> None:
-    assert client.get("/naive", headers={"accept": ARROW}).status_code == HTTPStatus.INTERNAL_SERVER_ERROR
-    assert client.get("/naive").status_code == HTTPStatus.INTERNAL_SERVER_ERROR  # as JSON too: every time carries its offset
-    assert client.post("/marks", headers={"accept": ARROW}).status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+def test_rows_read_from_objects_attributes_as_arrow_and_as_json_alike(client: TestClient) -> None:
+    as_json = client.get("/held").json()
+    table = pa.ipc.open_stream(client.get("/held", headers={"accept": ARROW}).content).read_all()
+    assert as_json == table.to_pylist() == [{"lots": 7}, {"lots": 8}]
+
+
+@pytest.mark.parametrize("accept", [ARROW, "application/json"], ids=["arrow", "json"])
+def test_a_row_that_does_not_validate_is_a_defect_and_its_writes_roll_back(client: TestClient, warehouse: fakes.Database, accept: str) -> None:
+    assert client.post("/marks", headers={"accept": accept}).status_code == HTTPStatus.INTERNAL_SERVER_ERROR
     assert (warehouse.committed, warehouse.rolled_back) == ([], [fakes.Statement(INSERT, {"at": AT})])
 
 
@@ -205,6 +215,10 @@ class Mixed(BaseModel):
     code: Literal["a", 1]
 
 
+class Naive(BaseModel):
+    at: datetime
+
+
 class Open(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -238,8 +252,9 @@ class Books(RootModel[list[str]]):
         (list[Mixed], "Mixed.code is typing.Literal['a', 1], which Arrow's columns do not hold"),
         (list[Open], "allow keys beyond their fields"),
         (list[Computed], "compute doubled, which no column holds"),
+        (list[Naive], "Naive.at, a datetime, which takes a time without its offset"),
     ],
-    ids=["one-row", "a-mapping", "not-models", "root-models", "a-nested-model", "a-list", "a-decimal-without-its-digits", "too-many-digits", "a-mixed-literal", "open", "computed"],
+    ids=["one-row", "a-mapping", "not-models", "root-models", "a-nested-model", "a-list", "a-decimal-without-its-digits", "too-many-digits", "a-mixed-literal", "open", "computed", "a-naive-time"],
 )
 def test_a_dataset_that_is_not_flat_rows_is_refused_when_its_route_is_declared(response: object, message: str) -> None:
     def handler() -> None: ...

@@ -7,30 +7,24 @@
   validator runs once; a body sent to a route that declares none is refused;
 - an `api.Error` the route does not declare, or an `HTTPException` raised inside it, answers 500 as a defect, logged
   once by the request boundary with what the route should have declared;
-- its response, once FastAPI has validated it, holds no time without its offset, which the contract says every time
-  carries: one that does is a defect, a 500, and the request's writes roll back;
 - a dataset route answers Arrow when the request asks for it (`arrow.py`), the rows validated as its response first;
 - its operation in the OpenAPI document has its handler's name as its id, and lists each error the route answers with
   under its status, a 422 as a `ValidationProblem` and any other as a `Problem`, and a dataset route's Arrow beside its
   JSON (`openapi.py` finishes the document)."""
 
 import asyncio
-import dataclasses
 import functools
 import inspect
-import typing
-from collections.abc import Callable, Coroutine, Iterator
+from collections.abc import Callable, Coroutine
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import datetime
 from http import HTTPStatus
-from typing import Any, ClassVar, Literal, get_args, get_origin, override
+from typing import ClassVar, override
 
 from fastapi import FastAPI
 from fastapi._compat import ModelField  # the field of a parameter, whose `validate` is where FastAPI's handler validates a body
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, RootModel
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import Response
@@ -89,24 +83,6 @@ class _ValidatedOnce(ModelField):
         return found, errors
 
 
-class _Answered(ModelField):
-    """A route's response field, as FastAPI validates what its handler returns: a time in it without its offset is an
-    error of the response's, so FastAPI raises its `ResponseValidationError`, a 500 the request boundary logs, before
-    the request's writes commit. Only a route whose response can hold a time has one."""
-
-    @override
-    def validate(self, value: object, values: dict[str, object] | None = None, *, loc: tuple[int | str, ...] = ()) -> tuple[object, list[dict[str, object]]]:
-        validated, wrong = super().validate(value, values if values is not None else {}, loc=loc)
-        found: object = validated
-        errors: list[dict[str, object]] = [dict(entry) for entry in wrong]
-        if not errors:
-            errors.extend({"type": "timezone_aware", "loc": (*loc, *at), "msg": _NAIVE, "input": None} for at in _naive(found, ()))
-        return found, errors
-
-
-_NAIVE = "A time without its offset, which every time a response gives carries: give it one, as datetime.now(UTC) does"
-
-
 class Served(APIRoute):
     """A route's FastAPI route; `route_class` makes one for each of a service's routes."""
 
@@ -127,8 +103,6 @@ class Served(APIRoute):
             dependant.body_params[0] = once
         if declared.rows is not None and dependant.call is declared.handler:  # the endpoint stays the handler, which `given` finds the route's writes by
             dependant.call = _answering_arrow(declared, declared.rows)
-        if (answered := self.response_field) is not None and not isinstance(answered, _Answered) and _holds_time(declared.response, frozenset()):
-            self.response_field = _Answered(field_info=answered.field_info, name=answered.name, mode=answered.mode, config=answered.config)
         handle = super().get_route_handler()
 
         async def strictly(request: Request) -> Response:
@@ -174,11 +148,9 @@ def _answering_arrow(declared: Route, rows: Rows) -> Callable[..., object]:
     handler = declared.handler
 
     def answer(found: object) -> Response:
-        if not isinstance(found, list | tuple):
-            msg = f"{declared.name} returned a {type(found).__name__}, and its route answers rows of {rows.model.__qualname__}"
-            raise TypeError(msg)  # a defect, which FastAPI's validation of a JSON response refuses too
-        values = [rows.model.model_validate(row) for row in found]  # as FastAPI validates a JSON response
-        return Response(arrow.encode(rows, values), status_code=declared.status, media_type=arrow.MEDIA_TYPE)
+        values = rows.adapter.validate_python(found, from_attributes=True)  # as FastAPI validates a JSON response
+        dumped = rows.adapter.dump_python(values, by_alias=True)
+        return Response(arrow.encode(rows, dumped), status_code=declared.status, media_type=arrow.MEDIA_TYPE)
 
     if inspect.iscoroutinefunction(handler):
 
@@ -195,47 +167,6 @@ def _answering_arrow(declared: Route, rows: Rows) -> Callable[..., object]:
         return answer(found) if _ARROW.get() else found
 
     return answer_sync
-
-
-def _holds_time(kind: object, within: frozenset[type]) -> bool:
-    """Whether a response of `kind` can hold a time: a `datetime`, or a model, a dataclass or a container that can hold
-    one, at any depth; `within` holds the models being walked, for one that refers to itself."""
-    kind = strict.bare(kind)
-    if kind is Any or kind is object:
-        return True
-    if (origin := get_origin(kind)) is not None:
-        return origin is not Literal and any(_holds_time(argument, within) for argument in get_args(kind) if argument is not Ellipsis)
-    if not isinstance(kind, type) or kind in within:
-        return False
-    if issubclass(kind, BaseModel):
-        kinds = [field.annotation for field in kind.model_fields.values()] + [field.return_type for field in kind.model_computed_fields.values()]
-    elif dataclasses.is_dataclass(kind) or typing.is_typeddict(kind):
-        kinds = list(typing.get_type_hints(kind).values())
-    else:
-        return issubclass(kind, datetime)
-    return any(_holds_time(found, within | {kind}) for found in kinds)
-
-
-def _naive(value: object, at: tuple[str | int, ...]) -> Iterator[tuple[str | int, ...]]:
-    """Where in a validated response `value` each time without its offset is, by each field's key in its JSON, index
-    and key."""
-    match value:
-        case datetime() if value.utcoffset() is None:
-            yield at
-        case RootModel():
-            yield from _naive(value.root, at)
-        case BaseModel():
-            fields = type(value).model_fields
-            yield from (found for name, field in fields.items() for found in _naive(getattr(value, name), (*at, field.serialization_alias or field.alias or name)))
-            yield from (found for name in type(value).model_computed_fields for found in _naive(getattr(value, name), (*at, name)))
-        case list() | tuple() | set() | frozenset():
-            yield from (found for index, item in enumerate(value) for found in _naive(item, (*at, index)))
-        case dict():
-            yield from (found for key, item in value.items() for found in _naive(item, (*at, str(key))))
-        case _ if dataclasses.is_dataclass(value) and not isinstance(value, type):
-            yield from (found for field in dataclasses.fields(value) for found in _naive(getattr(value, field.name), (*at, field.name)))
-        case _:
-            return
 
 
 async def _sent_a_body(request: Request) -> bool:

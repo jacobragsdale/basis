@@ -2,9 +2,10 @@
 the errors it declares, each listed in the OpenAPI document."""
 
 import asyncio
+import re
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time
+from datetime import date, datetime, time
 from decimal import Decimal
 from enum import StrEnum
 from http import HTTPStatus
@@ -15,7 +16,7 @@ from uuid import UUID
 import pytest
 from fastapi import BackgroundTasks, Body, FastAPI, Query
 from fastapi.testclient import TestClient
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, RootModel, TypeAdapter, field_validator
+from pydantic import AfterValidator, AliasChoices, AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, RootModel, TypeAdapter, field_validator
 
 from basis import api
 from basis.api import fakes, strict
@@ -37,7 +38,7 @@ class Leg(BaseModel):
     """Lax, as pydantic's default is: basis reads a request strictly whatever a model says."""
 
     rate: Decimal
-    at: datetime
+    at: AwareDatetime
 
 
 class Order(BaseModel):
@@ -70,7 +71,7 @@ SLOW = "SELECT security, price FROM quotes WITH (HOLDLOCK)"
 INSERT = "INSERT INTO orders (security) VALUES (%(security)s)"
 
 
-def quote(security: str, size: int, side: Side, venue: Annotated[tuple[str, ...], Query()] = (), at: datetime | None = None) -> Quote:
+def quote(security: str, size: int, side: Side, venue: Annotated[tuple[str, ...], Query()] = (), at: AwareDatetime | None = None) -> Quote:
     del size, side, venue, at
     return Quote(security=security, price=Decimal("101.25"))
 
@@ -211,7 +212,7 @@ def embedded(security: str, order: Annotated[Order, Body(embed=True)]) -> Quote:
         (_ok(stale, errors=[api.DeadlineExceededError]), "which basis raises itself"),
         (_ok(stale, errors=[Stale, Stale]), "declares Stale twice"),
         (lambda: api.get("/lots/{number:int}", lot, deadline_s=1, response=Quote, errors=[]), r"converts \{number:int\} in its path: name the parameter alone, as \{number\}"),
-        (_ok(by_time), "query parameter at is time, which basis cannot read strictly from text"),
+        (_ok(by_time), "query parameter at holds time, a time of day, whose offset pydantic cannot require"),
         (_ok(by_mixed), r"query parameter pair is tuple\[int, str\]"),
         (lambda: api.post("/q/{security}", two_bodies, deadline_s=1, response=Quote, errors=[]), "takes 2 bodies, order, other"),
         (lambda: api.post("/q/{security}", embedded, deadline_s=1, response=Quote, errors=[]), "drop embed=True"),
@@ -298,7 +299,7 @@ def test_a_body_reaches_the_handler_exactly(client: TestClient) -> None:
         ({"hedged": "true"}, "#/hedged", "Input should be a valid boolean"),
         ({"price": 101.25}, "#/price", 'Input should be a string of the decimal, as "0.045"'),
         ({"legs": [{"rate": 0.045, "at": "2026-11-06T14:30:00Z"}]}, "#/legs/0/rate", 'Input should be a string of the decimal, as "0.045"'),
-        ({"legs": [{"rate": "0.045", "at": "2026-11-06T14:30:00"}]}, "#/legs/0/at", "Input should be a time with its offset"),
+        ({"legs": [{"rate": "0.045", "at": "2026-11-06T14:30:00"}]}, "#/legs/0/at", "Input should have timezone info"),
         ({"side": "buy"}, "#/side", "Extra inputs are not permitted"),
         ({"price": "1e3"}, "#/price", 'Input should be a decimal\'s digits, as "0.045"'),
         ({"price": "+1.5"}, "#/price", 'Input should be a decimal\'s digits, as "0.045"'),
@@ -422,7 +423,7 @@ class Aliased(BaseModel):
     unit_price: Decimal = Field(alias="unitPrice")
     sizes: frozenset[Decimal] = frozenset()
     fills: tuple[Fill, ...] = ()
-    at: frozenset[datetime] = frozenset()
+    at: frozenset[AwareDatetime] = frozenset()
 
 
 @pytest.mark.parametrize(
@@ -431,7 +432,7 @@ class Aliased(BaseModel):
         (b'{"unitPrice": 1.5}', [(("body", "unitPrice"), "decimal_string")]),
         (b'{"unitPrice": "1.5", "sizes": ["1", 2]}', [(("body", "sizes", 1), "decimal_string")]),
         (b'{"unitPrice": "1.5", "fills": [{"price": 1.5}]}', [(("body", "fills", 0, "price"), "decimal_string")]),
-        (b'{"unitPrice": "1.5", "at": ["2026-11-06T14:30:00"]}', [(("body", "at"), "timezone_aware")]),
+        (b'{"unitPrice": "1.5", "at": ["2026-11-06T14:30:00"]}', [(("body", "at", 0), "timezone_aware")]),
         (b'{"unitPrice": "1.5", "sizes": ["1"], "fills": [{"price": "1"}], "at": ["2026-11-06T14:30:00Z"]}', []),
     ],
     ids=["aliased", "in-a-set", "in-a-dataclass", "naive-time-in-a-set", "all-exact"],
@@ -486,7 +487,7 @@ class Plain(BaseModel):
 
 
 @pytest.mark.parametrize(("kind", "precise"), [(Plain, False), (Order, True), (Aliased, True), (RootModel[list[int]], False)], ids=["no-decimal", "a-decimal", "nested", "a-list-of-ints"])
-def test_a_body_is_parsed_again_only_where_it_can_hold_a_decimal_or_a_time(kind: type, precise: bool) -> None:  # noqa: FBT001 -- a table's column
+def test_a_body_is_parsed_again_only_where_it_can_hold_a_decimal(kind: type, precise: bool) -> None:  # noqa: FBT001 -- a table's column
     declared = strict.shape("/a", _taking(kind), "taking").body
     assert declared is not None
     assert declared.precise is precise
@@ -503,73 +504,128 @@ def test_a_route_runs_no_background_tasks() -> None:
 
 
 class Stamp(BaseModel):
-    """Lax, so what a handler returns is validated into it, a time's text included."""
+    at: AwareDatetime
 
+
+class NaiveStamp(BaseModel):
     at: datetime
 
 
-NOON = datetime(2026, 11, 6, 12, 0)  # without its offset, as a defect would give it
-STAMPED = "INSERT INTO stamps (at) VALUES (%(at)s)"
+class Opening(BaseModel):
+    opens: time
 
 
-def at_noon() -> Stamp:
-    return Stamp(at=NOON)
+class Branch(BaseModel):
+    """A model that refers to itself, through a recursive alias."""
+
+    at: AwareDatetime
+    below: Tree
 
 
-def at_noon_utc() -> Stamp:
-    return Stamp(at=NOON.replace(tzinfo=UTC))
+type Tree = int | list[Tree] | Branch
+"""A recursive alias, which the check of a route's times walks once."""
 
 
-def stamps() -> list[Stamp]:
-    return [at_noon_utc(), at_noon()]
+def stamped(stamp: Stamp) -> Stamp:
+    return stamp
 
 
-def parsed() -> Stamp:
-    return Stamp.model_validate({"at": "2026-11-06T12:00:00"})
+def at_noon_naively() -> NaiveStamp:
+    raise NotImplementedError
+
+
+def naive_query(at: datetime) -> Stamp:
+    del at
+    raise NotImplementedError
+
+
+def naive_body(stamp: NaiveStamp) -> Stamp:
+    del stamp
+    raise NotImplementedError
 
 
 def by_desk() -> dict[str, datetime]:
-    return {"rates": NOON}
+    raise NotImplementedError
 
 
-async def stamp(warehouse: Annotated[api.Writer, api.given(WAREHOUSE)]) -> Stamp:
-    await warehouse.execute(STAMPED, at=NOON)
-    return at_noon()
+def opening() -> Opening:
+    raise NotImplementedError
 
 
-STAMPS = _service(
-    api.get("/noon", at_noon, deadline_s=1, response=Stamp, errors=[]),
-    api.get("/noon-utc", at_noon_utc, deadline_s=1, response=Stamp, errors=[]),
-    api.get("/stamps", stamps, deadline_s=1, response=list[Stamp], errors=[]),
-    api.get("/parsed", parsed, deadline_s=1, response=Stamp, errors=[]),
-    api.get("/by-desk", by_desk, deadline_s=1, response=dict[str, datetime], errors=[]),
-    api.post("/stamp", stamp, deadline_s=1, response=Stamp, errors=[]),
+def tree() -> Tree:
+    return 1
+
+
+@pytest.mark.parametrize(
+    ("declare", "message"),
+    [
+        (lambda: api.get("/noon", at_noon_naively, deadline_s=1, response=NaiveStamp, errors=[]), "at_noon_naively's response holds NaiveStamp.at, a datetime, which takes a time without its offset"),
+        (lambda: api.get("/by-desk", by_desk, deadline_s=1, response=dict[str, datetime], errors=[]), "by_desk's response holds dict[str, datetime.datetime], a datetime"),
+        (lambda: api.get("/naive", naive_query, deadline_s=1, response=Stamp, errors=[]), "naive_query's query parameter at holds datetime, a datetime"),
+        (lambda: api.post("/naive", naive_body, deadline_s=1, response=Stamp, errors=[]), "naive_body's body holds NaiveStamp.at, a datetime"),
+        (lambda: api.get("/opening", opening, deadline_s=1, response=Opening, errors=[]), "opening's response holds Opening.opens, a time of day, whose offset pydantic cannot require"),
+    ],
+    ids=["a-response-model", "a-mapping", "a-query-parameter", "a-body", "a-time-of-day"],
 )
+def test_a_route_whose_times_may_lack_their_offsets_is_refused_when_it_is_declared(declare: Callable[[], object], message: str) -> None:
+    with pytest.raises(api.ServiceError, match=re.escape(message)):
+        declare()
 
 
-@pytest.fixture
-def stamping() -> Iterator[tuple[TestClient, fakes.Database]]:
-    warehouse = fakes.Database(answers={STAMPED: 1})
-    given: fakes.Fakes = {WAREHOUSE: warehouse, PRICING: fakes.Http(_pricing()), PRICES: fakes.Cache()}
-    with TestClient(api.build(STAMPS, settings=api.Settings.given(), fakes=given).asgi, raise_server_exceptions=False) as started:
-        yield started, warehouse
+def test_the_fix_names_pydantics_aware_datetime() -> None:
+    with pytest.raises(api.ServiceError, match=re.escape("declare it pydantic's AwareDatetime, which refuses a time without its offset")):
+        api.get("/noon", at_noon_naively, deadline_s=1, response=NaiveStamp, errors=[])
 
 
-@pytest.mark.parametrize("path", ["/noon", "/stamps", "/parsed", "/by-desk"], ids=["a-models", "in-a-list", "from-text", "in-a-map"])
-def test_a_response_whose_time_has_no_offset_is_a_defect(stamping: tuple[TestClient, fakes.Database], path: str, logged: Callable[[], list[dict[str, object]]]) -> None:
-    client, _ = stamping
-    response = client.get(path)
-    assert (response.status_code, response.json()["title"]) == (HTTPStatus.INTERNAL_SERVER_ERROR, "Internal Server Error")
-    [failed] = [record for record in logged() if record["message"] == f"GET {path} failed"]
-    assert "timezone_aware" in str(failed["error"])
+def test_a_recursive_alias_is_walked_once() -> None:
+    assert api.get("/tree", tree, deadline_s=1, response=Tree, errors=[]).name == "tree"
 
 
-def test_a_response_whose_times_carry_their_offsets_is_answered(stamping: tuple[TestClient, fakes.Database]) -> None:
-    client, _ = stamping
-    assert client.get("/noon-utc").json() == {"at": "2026-11-06T12:00:00Z"}
+def test_a_time_without_its_offset_is_refused_as_the_request_is_read() -> None:
+    service = _service(api.post("/stamps", stamped, deadline_s=1, response=Stamp, errors=[]))
+    with TestClient(api.build(service, settings=api.Settings.given(), fakes={WAREHOUSE: fakes.Database(), PRICING: fakes.Http(_pricing())}).asgi) as client:
+        assert client.post("/stamps", json={"at": "2026-11-06T12:00:00Z"}).json() == {"at": "2026-11-06T12:00:00Z"}
+        [error] = client.post("/stamps", json={"at": "2026-11-06T12:00:00"}).json()["errors"]
+    assert (error["pointer"], error["detail"]) == ("#/at", "Input should have timezone info")
 
 
-def test_a_response_whose_time_has_no_offset_rolls_its_writes_back(stamping: tuple[TestClient, fakes.Database]) -> None:
-    client, warehouse = stamping
-    assert client.post("/stamp").status_code == HTTPStatus.INTERNAL_SERVER_ERROR
-    assert (warehouse.committed, warehouse.rolled_back) == ([], [fakes.Statement(STAMPED, {"at": NOON})])
+class Swap(BaseModel):
+    rate: int
+
+
+class Bond(BaseModel):
+    coupon: str
+
+
+def _positive(value: int) -> int:
+    if value <= 0:
+        msg = "must be positive"
+        raise ValueError(msg)
+    return value
+
+
+class Hedged(BaseModel):
+    leg: Swap | Bond
+    legs: list[Swap | Bond] = []
+    size: Annotated[int, AfterValidator(_positive)] | str = 1
+
+
+@pytest.mark.parametrize(
+    ("raw", "pointers"),
+    [
+        (b'{"leg": {"rate": "1"}}', {"#/leg/rate", "#/leg/coupon"}),
+        (b'{"leg": {"coupon": "c"}, "legs": [{"rate": "1"}]}', {"#/legs/0/rate", "#/legs/0/coupon"}),
+        (b'{"leg": {"coupon": "c"}, "size": 1.5}', {"#/size"}),
+    ],
+    ids=["a-union", "a-union-in-a-list", "a-validators-tag"],
+)
+def test_a_body_errors_pointer_names_the_bodys_own_keys_never_a_unions_tags(raw: bytes, pointers: set[str]) -> None:
+    service = _service(api.post("/hedges", hedge, deadline_s=1, response=Quote, errors=[]))
+    with TestClient(api.build(service, settings=api.Settings.given(), fakes={WAREHOUSE: fakes.Database(), PRICING: fakes.Http(_pricing())}).asgi) as client:
+        response = client.post("/hedges", content=raw, headers={"content-type": "application/json"})
+    assert {error["pointer"] for error in response.json()["errors"]} == pointers
+
+
+def hedge(hedged: Hedged) -> Quote:
+    del hedged
+    return Quote(security="X", price=Decimal(1))

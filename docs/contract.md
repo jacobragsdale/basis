@@ -18,16 +18,33 @@ document at `/openapi.json`.
 | Operation ids | The handler's name, such as `bond_yield`; a service gives each handler a name of its own |
 | Paths | The route's path, with no `/api` prefix: see [One origin](#one-origin) |
 | Models | Every model's schema has `additionalProperties: false` |
-| A request's decimal | `{"type": "string", "pattern": "^-?(?:0\|[1-9][0-9]*)(?:\\.[0-9]+)?$"}`, never a number |
+| A request's decimal | A string, never a number, with a `pattern` and `x-basis-decimal`: see [Decimals](#decimals) |
 | A response's decimal | `{"type": "string"}` |
-| A time | `{"type": "string", "format": "date-time"}`, which RFC 3339 gives an offset |
+| A time | `{"type": "string", "format": "date-time"}`, which RFC 3339 gives an offset, and every time has one |
 | A date | `{"type": "string", "format": "date"}` |
 | Each error | Its status, under `application/problem+json`: a 422 as `ValidationProblem`, any other as `Problem` |
 | A dataset route | Its success lists `application/vnd.apache.arrow.stream` as `{"type": "string", "format": "binary"}` beside its JSON |
 
 A model that a request and a response share has one schema, unless the two differ, as they do for a model with a
 decimal or a default: then it has two, `NAME-Input` for requests and `NAME-Output` for responses, as FastAPI names them.
-A request's decimal loses its bounds, such as `exclusiveMinimum`, in the document, and the API still checks them.
+
+### Decimals
+
+A request's decimal is a JSON string of its digits, and the document gives what its type declares of it:
+
+```json
+{"type": "string", "pattern": "^-?(?:0|[1-9][0-9]{0,15})(?:\\.[0-9]{1,2}0*)?$", "x-basis-decimal": {"exclusiveMinimum": "0"}}
+```
+
+- `pattern` is the grammar the API reads it by: digits, a point and digits, with a minus sign only before them, and no
+  exponent, `+`, space or leading zero. Where the type declares `max_digits` or `decimal_places`, the pattern counts
+  them as the API does: a whole part of at most `max_digits - decimal_places` digits, at most `decimal_places` digits
+  after the point before zeros that end it, and with `max_digits` alone, at most that many digits in all.
+- `x-basis-decimal` is on every request's decimal, and holds its bounds, which JSON Schema cannot set for a string, each
+  a string of the decimal: `minimum`, `exclusiveMinimum`, `maximum`, `exclusiveMaximum` and `multipleOf`. A UI reads
+  them to check a value before it sends it; the API checks them either way.
+
+A response's decimal is a string too, with no pattern, since a decimal's text may be in exponent form, as `1E+3`.
 
 ## Requests
 
@@ -51,8 +68,8 @@ and path text is in [`strict.py`](../packages/api/src/basis/api/strict.py)'s doc
 ## Responses
 
 A response that succeeds is JSON, the route's response model: a decimal as a string, a date as `2026-11-06`, and a time
-with its offset. A time without one is the API's defect, which answers 500 instead, and rolls back the request's
-writes. A response holds only the fields its model declares, and a UI drops a field it does not know, so an API adds
+with its offset. Every time a route reads or answers is pydantic's `AwareDatetime`, which refuses one without, so a
+route whose request or response may hold a time without its offset, or a time of day, is refused when it is declared. A response holds only the fields its model declares, and a UI drops a field it does not know, so an API adds
 response fields without breaking one (see [Compatibility](#compatibility)).
 
 Every response carries `X-Request-Id`, the request's id, a UUIDv7, which every log line of the request carries too, and
@@ -170,12 +187,14 @@ instead, with the fix: a shallow one, as a CI checkout is by default, or one who
 |---|---|
 | A response's field added | No |
 | A response's field removed or renamed | Yes |
-| A response's field that may hold another type, `null`, an enum's new value, or be absent where it was required | Yes |
+| A response's field that may hold another type, `null`, an enum's new value, or be absent where it was required, as an integer that becomes a number | Yes |
+| A response's field that holds less, as a number that becomes an integer, or any string that becomes a date | No |
 | A request's optional field added | No |
 | A request's required field added, or a field that becomes required | Yes |
 | A request's field removed or renamed | Yes, since the API refuses a field it does not know |
 | A request's field that no longer takes a type or an enum's value it took | Yes |
-| A request's field that takes another type, or an enum's new value, too | No |
+| A request's field that takes another type, or an enum's new value, too, as an integer that becomes a number, or a date that becomes any string | No |
+| A request's field that is no longer required | No |
 | An operation added | No |
 | An operation removed, or moved to another method or path | Yes |
 | A new operation id, which renames the client's function | Yes |

@@ -24,7 +24,8 @@ Paths are under `src/basis/api/`.
 | `deadlines.py` | A route's deadline, which caps each call its request makes: `limit`, how long one call may take, and whose deadline sets it. |
 | `pool.py` | The process pool, spawned at startup: each compute call's deadline, span and log fields, and the in-process runs of `fakes.Compute`. |
 | `routes.py` | Each route as the app serves it: its deadline, its request read strictly before FastAPI's handler, its undeclared errors refused, a dataset's Arrow when the request asks for it, and `add`, which adds the routes to an app with each operation's id its handler's name and its errors under their statuses. |
-| `openapi.py` | The OpenAPI document, as the app serves it and a repo commits it: `Application`, whose `openapi()` `finish`es FastAPI's (problem media types, strict models, a request's decimals as strings of their digits); `document` and `text`, made without settings. Its docstring is the reference. |
+| `openapi.py` | The OpenAPI document, as the app serves it and a repo commits it: `Application`, whose `openapi()` `finish`es FastAPI's (problem media types, strict models, a request's decimals as strings of their digits); `document` and `text`, made without settings; `operations`, `mapping` and `array`, which `contract.py` reads documents by too. Its docstring is the reference. |
+| `decimals.py` | A request's decimal as the document gives it: its pattern from its digits and places, and its bounds in `x-basis-decimal`, from the types the routes read. Its docstring is the reference. |
 | `contract.py` | The breaking-change check, basis-api's `Part.contract`: `openapi.json` against the one at the last release the repo's `[tool.basis.api] releases` glob matches, and what breaks a UI on each side. Its docstring is the reference. |
 | `dataset.py`, `arrow.py` | A dataset route's rows as Arrow columns, checked when the route is declared, which declarations import; and the stream itself, with pyarrow, and the `Accept` that asks for it. Their docstrings are the reference. |
 | `origins.py` | The `allowed_origins` setting, `BASIS_ALLOWED_ORIGINS`: each origin as a browser sends it, and the CORS middleware, outermost, when there are any. |
@@ -90,8 +91,11 @@ Paths are under `src/basis/api/`.
   commits, but for its first key, the marker. A change to what it holds is a change to the UI contract, and to
   basis-ui's: say so in the pull request, write the example's sample again (`python -m basis.api.example`), and update
   [the contract page](../../docs/contract.md).
-- A time a response gives carries its offset: `routes._Answered`, the response field of a route whose response can
-  hold one, refuses one without, after FastAPI validates the response and before its writes commit, so it is a 500.
+- Every time a route reads or answers carries its offset: it is pydantic's `AwareDatetime`, and `strict.aware` refuses
+  a route whose request or response holds a plain `datetime`, another of pydantic's datetimes, or a time of day,
+  when it is declared, so pydantic refuses a time without its offset in the one validation it makes.
+- A request's decimal in the document has its digits and places in its pattern, and its bounds in `x-basis-decimal`,
+  from its type's declarations (`decimals.py`), never from pydantic's schema of it.
 - A dataset route's rows are flat, each field a column Arrow holds, which `dataset.rows` checks when the route is
   declared; its Arrow is written only after the rows validate, so a request's writes commit after both.
 - No page of another origin calls the API unless the settings name its origin, as a browser sends it.

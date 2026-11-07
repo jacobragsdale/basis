@@ -390,19 +390,28 @@ SETTLEMENTS = (
 
 
 def test_the_examples_reads_and_writes_run_on_sql_server(mssql: Scratch) -> None:
-    for table in ("settlements", "bonds"):
+    """The example's own tables, and its outbox's, as `basis ddl` prints it: a settlement's row and its booking with the
+    ledger commit together, and the booking is made once they have."""
+    tables = ("settlements", "bonds", "accruals_outbox")
+    for table in tables:
         mssql.drop(table)
-    mssql.execute(BONDS, SETTLEMENTS, "INSERT INTO bonds VALUES ('US912810TM64', 0.045, '30/360', 2, '2024-11-15', '2034-11-15')")
+    outbox = [statement for statement in outboxes.ddl("warehouse", "accruals_outbox", "mssql").split(";\n") if statement.strip()]
+    mssql.execute(BONDS, SETTLEMENTS, *outbox, "INSERT INTO bonds VALUES ('US912810TM64', 0.045, '30/360', 2, '2024-11-15', '2034-11-15')")
     at = datetime(2026, 11, 6, 14, 30, tzinfo=UTC)
-    given: fakes.Fakes = {example.SOLVE: fakes.Compute(), example.PRICING: fakes.Http(FastAPI()), example.TERMS: fakes.Cache(), example.CLOCK: fakes.Clock(at=at), example.IDS: fakes.Ids()}
+    ledger = Ledger(status=HTTPStatus.CREATED)
+    given: fakes.Fakes = {
+        example.SOLVE: fakes.Compute(), example.PRICING: fakes.Http(FastAPI()), example.LEDGER: fakes.Http(ledger.app), example.TERMS: fakes.Cache(),
+        example.CLOCK: fakes.Clock(at=at), example.IDS: fakes.Ids(),
+    }  # fmt: skip
     try:
         app = api.build(example.service, settings=example.Settings.given(databases={"warehouse": mssql.settings}), fakes=given)
         with TestClient(app.asgi) as client:
             bond = client.get("/bonds/US912810TM64").json()
             recorded = client.post("/settlements", json={"security_id": "US912810TM64", "face": "1000000.00", "settle": "2026-11-06"})
         stored = mssql.rows("SELECT settlement_id, security_id, face, settle, accrued, recorded_at FROM settlements")
+        booked = mssql.rows("SELECT idempotency_key, status FROM accruals_outbox")
     finally:
-        for table in ("settlements", "bonds"):
+        for table in tables:
             mssql.drop(table)
     assert bond == {"security_id": "US912810TM64", "coupon_rate": "0.045000", "convention": "30/360", "frequency": 2, "issued": "2024-11-15", "maturity": "2034-11-15"}
     assert recorded.status_code == HTTPStatus.CREATED
@@ -410,6 +419,8 @@ def test_the_examples_reads_and_writes_run_on_sql_server(mssql: Scratch) -> None
     assert (UUID(str(settlement_id)), security, face, settle, accrued) == (UUID("00000000-0000-7000-8000-000000000001"), "US912810TM64", Decimal("1000000.00"), date(2026, 11, 6), Decimal("21375.00"))
     assert isinstance(recorded_at, datetime)
     assert recorded_at == at
+    assert booked == [("00000000-0000-7000-8000-000000000001", "done")]
+    assert [key for key, _ in ledger.seen] == ["00000000-0000-7000-8000-000000000001"]
 
 
 # The outbox

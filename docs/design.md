@@ -189,7 +189,8 @@ of the `openapi.json` that this repo's example API produces. [The contract page]
   says so, and in a clone that may lack its releases, a shallow one or one that fetches no tags, it fails with the fix. Adding a response field is never breaking, because basis-ui's
   schemas drop fields they do not know. Requests are the other way round: an API refuses unknown request fields, so an
   API that accepts a new one deploys before the UI that sends it, and it takes a decimal only as a string, as it sends
-  one, and a time only with its offset, as it sends one: a response's time without one is a defect, a 500.
+  one, and a time only with its offset, as it sends one: a route whose request or response may hold a time without
+  its offset is refused when it is declared.
 - **Errors.** Every error is an RFC 9457 problem details response, from one exception map. A 422, whether basis or the
   handler refuses the request, names each field at fault in `errors`, by a JSON Pointer into the body or by a query or
   path parameter's name, as RFC 9457's own example does, so a UI puts each error on its field.

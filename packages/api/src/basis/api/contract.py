@@ -35,16 +35,17 @@ decimal string apart from any other; an error's problem is basis's, the same in 
 pattern or a bound are not compared."""
 
 import json
+import os
 import re
 import subprocess
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from pathlib import Path
 
-from pydantic import ConfigDict, ValidationError
+from pydantic import ConfigDict, JsonValue, ValidationError
 
-from basis.api import arrow, openapi
+from basis.api import arrow, decimals, openapi
 from basis.core.errors import BasisError
 from basis.core.model import Model
 from basis.core.verbs import table
@@ -104,9 +105,13 @@ def check(repo: Path, document: str, releases: str) -> str | None:
     tag = _last_release(repo, releases)
     if tag is None:
         return f"No earlier release to compare with: no tag matches `{releases}` among this commit's ancestors."
+    if not _at(repo, tag, document):
+        return f"No earlier document to compare with: release `{tag}` has no `{document}`."
     shown = _git(repo, "show", f"{tag}:./{document}")
     if shown.returncode != 0:
-        return f"No earlier document to compare with: release `{tag}` has no `{document}`."
+        said = " ".join(shown.stderr.split())
+        msg = f"git cannot read {document} at release {tag}: {said}: check the clone's history and tags, as `git fetch --tags` fetches them"
+        raise ContractError(msg)
     found = compare(_parsed(shown.stdout, f"{tag}:{document}"), after)
     if found.breaking:
         listed = "; ".join(found.breaking)
@@ -135,7 +140,10 @@ class Shape:
     """An enum's values, as JSON writes each; None for a field of any value."""
 
 
-def compare(before: Mapping[str, object], after: Mapping[str, object]) -> Changes:
+type Document = dict[str, JsonValue]
+
+
+def compare(before: Document, after: Document) -> Changes:
     """What changed from the document `before` to `after`, breaking and not."""
     found = Changes()
     old, new = _operations(before), _operations(after)
@@ -150,9 +158,7 @@ def compare(before: Mapping[str, object], after: Mapping[str, object]) -> Change
     return found
 
 
-def _operation(  # noqa: PLR0913 -- both operations, and the documents their references resolve in
-    name: str, old: Mapping[str, object], new: Mapping[str, object], *, before: Mapping[str, object], after: Mapping[str, object], found: Changes
-) -> None:
+def _operation(name: str, old: Document, new: Document, *, before: Document, after: Document, found: Changes) -> None:  # noqa: PLR0913 -- both operations, and the documents their references resolve in
     if old.get("operationId") != new.get("operationId"):
         found.breaking.append(f"{name} has the operation id {new.get('operationId')}, renaming its client's function")
     old_status, new_status = _success(old), _success(new)
@@ -177,21 +183,26 @@ def _operation(  # noqa: PLR0913 -- both operations, and the documents their ref
         found.compatible.append(f"{name} answers Arrow too")
 
 
-def _sent(name: str, old: Mapping[str, Shape], new: Mapping[str, Shape], found: Changes) -> None:
-    """What a UI sends: each field the old operation took that the new one no longer takes as it was."""
+def _sent(name: str, old: dict[str, Shape], new: dict[str, Shape], found: Changes) -> None:
+    """What a UI sends, which the API reads contravariantly: each field the old operation took that the new one no
+    longer takes as it did, a type it narrows, an enum's value it drops, or a field it now requires."""
     for path, shape in old.items():
         if (now := new.get(path)) is None:
             found.breaking.append(f"{name} no longer takes {path}")
             continue
-        if dropped := shape.kinds - now.kinds:
-            found.breaking.append(f"{name} no longer takes {path} as {_kinds(dropped)}")
-        if shape.values is not None and (gone := shape.values - (now.values or shape.values)):
+        if refused := frozenset(kind for kind in shape.kinds if not _covers(now.kinds, kind)):
+            found.breaking.append(f"{name} no longer takes {path} as {_kinds(refused)}")
+        if shape.values is not None and now.values is not None and (gone := shape.values - now.values):
             found.breaking.append(f"{name} no longer takes {path} as {_kinds(gone)}")
         if now.required and not shape.required:
             found.breaking.append(f"{name} requires {path}")
-        added = (now.kinds - shape.kinds) | (now.values - shape.values if now.values is not None and shape.values is not None else frozenset())
-        if added:
-            found.compatible.append(f"{name} takes {path} as {_kinds(added)} too")
+        widened = frozenset(kind for kind in now.kinds if not _covers(shape.kinds, kind))
+        if shape.values is not None:
+            widened |= (now.values - shape.values) if now.values is not None else frozenset({"any value"})
+        if widened:
+            found.compatible.append(f"{name} takes {path} as {_kinds(widened)} too")
+        if shape.required and not now.required:
+            found.compatible.append(f"{name} no longer requires {path}")
     for path, shape in new.items():
         if path not in old:
             if shape.required:
@@ -200,13 +211,14 @@ def _sent(name: str, old: Mapping[str, Shape], new: Mapping[str, Shape], found: 
                 found.compatible.append(f"{name} takes {path}")
 
 
-def _read(name: str, old: Mapping[str, Shape], new: Mapping[str, Shape], found: Changes) -> None:
-    """What a UI reads: each field the old response gave that the new one no longer gives as it was."""
+def _read(name: str, old: dict[str, Shape], new: dict[str, Shape], found: Changes) -> None:
+    """What a UI reads, which it reads covariantly: each field the old response gave that the new one no longer gives
+    as it did, a type or an enum's value it adds, or a field that may be absent."""
     for path, shape in old.items():
         if (now := new.get(path)) is None:
             found.breaking.append(f"{name}: {path} is removed, or renamed")
             continue
-        if added := now.kinds - shape.kinds:
+        if added := frozenset(kind for kind in now.kinds if not _covers(shape.kinds, kind)):
             found.breaking.append(f"{name}: {path} may be {_kinds(added)}")
         if shape.values is not None and (new_values := (now.values or frozenset({"any value"})) - shape.values):
             found.breaking.append(f"{name}: {path} may be {_kinds(new_values)}")
@@ -215,60 +227,65 @@ def _read(name: str, old: Mapping[str, Shape], new: Mapping[str, Shape], found: 
     found.compatible.extend(f"{name}: {path} is added" for path in new if path not in old)
 
 
-def _operations(document: Mapping[str, object]) -> dict[tuple[str, str], Mapping[str, object]]:
+def _covers(kinds: frozenset[str], kind: str) -> bool:
+    """Whether a field of `kinds` takes every value of `kind`: its own, an integer as a number, a string of any format
+    as a string, and anything as `any`."""
+    base = kind.partition(":")[0]
+    return kind in kinds or "any" in kinds or (kind == "integer" and "number" in kinds) or (base == "string" and kind != base and "string" in kinds)
+
+
+def _operations(document: Document) -> dict[tuple[str, str], Document]:
     """Each operation, by its method and its path with its parameters unnamed, as a UI's URL reaches it."""
-    found: dict[tuple[str, str], Mapping[str, object]] = {}
-    for path, item in _object(document.get("paths")).items():
-        for method, operation in _object(item).items():
-            if isinstance(operation, dict):
-                found[method.upper(), _PARAMETER.sub("{}", path)] = _object(operation) | {"x-path": path}
-    return found
+    return {(method.upper(), _PARAMETER.sub("{}", path)): operation | {"x-path": path} for path, method, operation in openapi.operations(document)}
 
 
-def _named(key: tuple[str, str], operation: Mapping[str, object]) -> str:
+def _named(key: tuple[str, str], operation: Document) -> str:
     return f"{key[0]} {operation.get('x-path')} ({operation.get('operationId')})"
 
 
-def _success(operation: Mapping[str, object]) -> str | None:
-    statuses = sorted(status for status in _object(operation.get("responses")) if status.isdigit() and int(status) < HTTPStatus.BAD_REQUEST)
+def _success(operation: Document) -> str | None:
+    statuses = sorted(status for status in openapi.mapping(operation.get("responses")) if status.isdigit() and int(status) < HTTPStatus.BAD_REQUEST)
     return statuses[0] if statuses else None
 
 
-def _answer(operation: Mapping[str, object], status: str | None) -> object:
-    content = _object(_object(_object(operation.get("responses")).get(status or "")).get("content"))
-    return _object(content.get("application/json")).get("schema")
+def _content(operation: Document, status: str | None) -> Document:
+    return openapi.mapping(openapi.mapping(openapi.mapping(operation.get("responses")).get(status or "")).get("content"))
 
 
-def _arrow(operation: Mapping[str, object], status: str | None) -> bool:
-    return arrow.MEDIA_TYPE in _object(_object(_object(operation.get("responses")).get(status or "")).get("content"))
+def _answer(operation: Document, status: str | None) -> JsonValue | None:
+    return openapi.mapping(_content(operation, status).get("application/json")).get("schema")
 
 
-def _body(operation: Mapping[str, object]) -> tuple[object, bool] | None:
-    body = _object(operation.get("requestBody"))
+def _arrow(operation: Document, status: str | None) -> bool:
+    return arrow.MEDIA_TYPE in _content(operation, status)
+
+
+def _body(operation: Document) -> tuple[JsonValue | None, bool] | None:
+    body = openapi.mapping(operation.get("requestBody"))
     if not body:
         return None
-    return _object(_object(body.get("content")).get("application/json")).get("schema"), body.get("required") is True
+    return openapi.mapping(openapi.mapping(body.get("content")).get("application/json")).get("schema"), body.get("required") is True
 
 
-def _parameters(operation: Mapping[str, object], document: Mapping[str, object]) -> Iterator[tuple[str, object, bool]]:
+def _parameters(operation: Document, document: Document) -> Iterator[tuple[str, JsonValue | None, bool]]:
     """Each parameter's place, its schema and whether it is required: a path's by its place in the path."""
     path = str(operation.get("x-path"))
     places = [found[1:-1] for found in _PARAMETER.findall(path)]
-    for given in _list(operation.get("parameters")):
+    for given in openapi.array(operation.get("parameters")):
         parameter = _resolved(given, document)
         name, where = str(parameter.get("name")), str(parameter.get("in"))
         place = f"the path's parameter {places.index(name) + 1}" if where == "path" and name in places else f"the {where} parameter {name}"
         yield place, parameter.get("schema"), parameter.get("required") is True
 
 
-def _fields(parameters: Iterator[tuple[str, object, bool]], document: Mapping[str, object]) -> dict[str, Shape]:
+def _fields(parameters: Iterator[tuple[str, JsonValue | None, bool]], document: Document) -> dict[str, Shape]:
     found: dict[str, Shape] = {}
     for place, schema, required in parameters:
         found.update(_flat(place, schema, document, required=required))
     return found
 
 
-def _flat(path: str, schema: object, document: Mapping[str, object], *, required: bool, within: frozenset[str] = frozenset()) -> Iterator[tuple[str, Shape]]:
+def _flat(path: str, schema: JsonValue | None, document: Document, *, required: bool, within: frozenset[str] = frozenset()) -> Iterator[tuple[str, Shape]]:
     """`schema`'s shape at `path`, and every field's within it, by its path: `.key` for a property, `[]` for an array's
     items, `{}` for a map's values. A component already being walked is not walked again."""
     arms = _arms(schema, document, within)
@@ -278,9 +295,8 @@ def _flat(path: str, schema: object, document: Mapping[str, object], *, required
     yield path, Shape(kinds, required, frozenset(values) if values and enumerated else None)
     alone = sum(1 for arm, _ in arms if "properties" in arm) == 1  # a field one model of a union requires may be absent
     for arm, seen in arms:
-        properties = _object(arm.get("properties"))
-        needed = {str(key) for key in _list(arm.get("required"))}
-        for key, inner in properties.items():
+        needed = {str(key) for key in openapi.array(arm.get("required"))}
+        for key, inner in openapi.mapping(arm.get("properties")).items():
             yield from _flat(f"{path}.{key}", inner, document, required=alone and key in needed, within=seen)
         if isinstance(items := arm.get("items"), dict):
             yield from _flat(f"{path}[]", items, document, required=True, within=seen)
@@ -288,7 +304,7 @@ def _flat(path: str, schema: object, document: Mapping[str, object], *, required
             yield from _flat(f"{path}{{}}", values_of, document, required=True, within=seen)
 
 
-def _arms(schema: object, document: Mapping[str, object], within: frozenset[str]) -> list[tuple[dict[str, object], frozenset[str]]]:
+def _arms(schema: JsonValue | None, document: Document, within: frozenset[str]) -> list[tuple[Document, frozenset[str]]]:
     """`schema` as the schemas any of whose values it holds, each resolved through its references, with the
     components walked to reach it."""
     if not isinstance(schema, dict):
@@ -300,33 +316,32 @@ def _arms(schema: object, document: Mapping[str, object], within: frozenset[str]
     choices = schema.get("anyOf", schema.get("oneOf"))
     if isinstance(choices, list):
         return [found for choice in choices for found in _arms(choice, document, within)]
-    return [({str(key): value for key, value in schema.items()}, within)]
+    return [(schema, within)]
 
 
-def _kind(schema: Mapping[str, object]) -> set[str]:
+def _kind(schema: Document) -> set[str]:
     kind = schema.get("type")
-    kinds: set[str] = {str(found) for found in _list(kind)} if isinstance(kind, list) else {str(kind)} if kind is not None else set[str]()
+    kinds: set[str] = {str(found) for found in kind} if isinstance(kind, list) else {str(kind)} if kind is not None else set[str]()
     if "const" in schema or "enum" in schema:
         kinds |= {_type_of(value) for value in _enumerated(schema)}
     if (form := schema.get("format")) is not None:
         kinds = {f"{found}:{form}" if found == "string" else found for found in kinds}
-    if schema.get("pattern") == openapi.DECIMAL["pattern"]:
+    if decimals.EXTENSION in schema:
         kinds = {"string:decimal" if found == "string" else found for found in kinds}
     return kinds or {"any"}
 
 
-def _values(schema: Mapping[str, object]) -> list[str]:
+def _values(schema: Document) -> list[str]:
     return [json.dumps(value) for value in _enumerated(schema)]
 
 
-def _enumerated(schema: Mapping[str, object]) -> list[object]:
+def _enumerated(schema: Document) -> list[JsonValue]:
     if "const" in schema:
         return [schema["const"]]
-    listed = schema.get("enum")
-    return list(listed) if isinstance(listed, list) else []
+    return openapi.array(schema.get("enum"))
 
 
-def _type_of(value: object) -> str:
+def _type_of(value: JsonValue) -> str:
     match value:
         case None:
             return "null"
@@ -346,33 +361,25 @@ def _kinds(kinds: frozenset[str]) -> str:
     return " or ".join(sorted(kinds))
 
 
-def _resolved(schema: object, document: Mapping[str, object]) -> dict[str, object]:
-    found: object = schema
+def _resolved(schema: JsonValue | None, document: Document) -> Document:
+    found: JsonValue | None = schema
     seen: set[str] = set()
     while isinstance(found, dict) and isinstance(reference := found.get("$ref"), str) and reference.startswith("#/") and reference not in seen:
         seen.add(reference)
-        target: object = document
+        target: JsonValue | None = document
         for part in reference[2:].split("/"):
-            target = _object(target).get(part.replace("~1", "/").replace("~0", "~"))
+            target = openapi.mapping(target).get(part.replace("~1", "/").replace("~0", "~"))
         found = target
-    return _object(found)
+    return openapi.mapping(found)
 
 
-def _object(value: object) -> dict[str, object]:
-    return {str(key): item for key, item in value.items()} if isinstance(value, dict) else {}
-
-
-def _list(value: object) -> list[object]:
-    return list(value) if isinstance(value, list) else []
-
-
-def _parsed(text: str, where: str) -> dict[str, object]:
+def _parsed(text: str, where: str) -> Document:
     try:
-        found: object = json.loads(text)
+        found = json.loads(text)
     except json.JSONDecodeError as error:
         msg = f"{where} is not JSON ({error}): run `uv run basis sync`, which writes it"
         raise ContractError(msg) from None
-    return _object(found)
+    return openapi.mapping(found)
 
 
 def _last_release(repo: Path, releases: str) -> str | None:
@@ -403,9 +410,22 @@ def _last_release(repo: Path, releases: str) -> str | None:
     raise ContractError(msg)
 
 
+def _at(repo: Path, tag: str, document: str) -> bool:
+    """Whether `tag` holds `document`, relative to `repo`: a release made before the API had its document holds none."""
+    listed = _git(repo, "ls-tree", "--name-only", tag, "--", document)
+    if listed.returncode != 0:
+        said = " ".join(listed.stderr.split())
+        msg = f"git cannot read release {tag} in {repo}: {said}: check the clone's history and tags, as `git fetch --tags` fetches them"
+        raise ContractError(msg)
+    return bool(listed.stdout.strip())
+
+
 def _git(repo: Path, *argv: str) -> subprocess.CompletedProcess[str]:
+    """`git ARGV...` in `repo`, its messages in English whatever the machine's locale, since a missing tag is known by
+    what git says."""
+    environment = {**os.environ, "LC_ALL": "C", "LANGUAGE": "C"}
     try:
-        return subprocess.run(["git", *argv], cwd=repo, capture_output=True, text=True, encoding="utf-8", check=False)  # noqa: S607 -- git from the PATH, as every basis command runs it
+        return subprocess.run(["git", *argv], cwd=repo, capture_output=True, text=True, encoding="utf-8", check=False, env=environment)  # noqa: S607 -- git from the PATH, as every basis command runs it
     except FileNotFoundError as error:
         msg = "git is not on the PATH, and the breaking-change check reads the last release through it: install it, as `basis doctor` says"
         raise ContractError(msg) from error

@@ -7,18 +7,15 @@ application/vnd.apache.arrow.stream` alone, as basis-ui's client sends it, asks 
 Accept`, and an error is a problem in JSON whichever was asked for. The stream holds one record batch of every row,
 with the columns `dataset.Rows` declares, and none when there are no rows: a reader gets the schema either way.
 
-The rows are validated as the route's response, as FastAPI validates a JSON one, before they are written, so a
-request's transaction commits only after both, and a value no column holds, such as a time without its offset, is a
-defect: a 500, logged once."""
+The rows are validated as the route's response, by one adapter, as FastAPI validates a JSON one, objects' attributes
+included, and dumped once, before they are written, so a request's transaction commits only after both, and a value no
+column holds is a defect: a 500, logged once."""
 
 import re
-from collections.abc import Sequence
-from datetime import datetime
-from decimal import Decimal
+from collections.abc import Mapping, Sequence
 from enum import Enum
 
 import pyarrow as pa
-from pydantic import BaseModel
 
 from basis.api.dataset import Column, Kind, Rows
 
@@ -49,14 +46,15 @@ def schema(rows: Rows) -> pa.Schema:
     return pa.schema([pa.field(column.name, _type(column), nullable=column.nullable) for column in rows.columns])
 
 
-def encode(rows: Rows, values: Sequence[BaseModel]) -> bytes:
-    """`values`, each a row of `rows.model`, as an Arrow IPC stream."""
+def encode(rows: Rows, values: Sequence[Mapping[str, object]]) -> bytes:
+    """`values`, rows of `rows.model` as its adapter dumps them, by their columns' names, as an Arrow IPC stream."""
     declared = schema(rows)
-    arrays = [pa.array([_value(column, getattr(value, column.attribute)) for value in values], type=field.type) for column, field in zip(rows.columns, declared, strict=True)]
+    if converted := [column for column in rows.columns if column.enum or column.text]:  # what pyarrow does not convert itself
+        values = [{**row, **{column.name: _value(column, row.get(column.name)) for column in converted}} for row in values]
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, declared) as writer:
         if values:
-            writer.write_table(pa.Table.from_arrays(arrays, schema=declared))
+            writer.write_table(pa.Table.from_pylist(list(values), schema=declared))
     return bytes(sink.getvalue())
 
 
@@ -68,18 +66,9 @@ _TYPES: dict[Kind, pa.DataType] = {"utf8": pa.string(), "int64": pa.int64(), "fl
 
 
 def _value(column: Column, value: object) -> object:
-    """`value` as its column holds it: an `Enum` member by its value, a UUID as its text, and a time with its offset
-    as the instant it is."""
+    """`value` as its column holds it: an `Enum` member by its value, and a UUID as its text."""
     if value is None:
         return None
-    if column.enum and isinstance(value, Enum):
+    if isinstance(value, Enum):
         return value.value
-    if column.kind == "utf8" and not isinstance(value, str):
-        return str(value)
-    if isinstance(value, datetime) and value.tzinfo is None:
-        msg = f"the dataset column {column.name} holds the time {value.isoformat()}, which has no offset: give each time its offset, as datetime.now(UTC) does"
-        raise TypeError(msg)
-    if isinstance(value, Decimal) and not value.is_finite():
-        msg = f"the dataset column {column.name} holds {value}, which no decimal column holds"
-        raise TypeError(msg)
-    return value
+    return str(value) if column.text else value
