@@ -137,9 +137,12 @@ def test_a_verb_no_installed_part_has_does_not_parse(tmp_path: Path, capsys: pyt
     assert "invalid choice: 'nonsense'" in error_line(capsys)
 
 
-def test_a_declared_part_that_no_package_provides_names_the_package_to_add(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    assert basis(repo(tmp_path, '[tool.basis]\nparts = ["job"]\n'), "check") == 1
-    assert error_line(capsys).endswith("declares the part 'job', which no installed package provides: add basis-job to its [project] dependencies, and run `uv sync`")
+def test_a_declared_part_that_no_package_provides_says_to_add_the_package_its_entry_point_is_named_for(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert basis(repo(tmp_path, '[tool.basis]\nparts = ["report"]\n'), "check") == 1
+    assert error_line(capsys).endswith(
+        "declares the part 'report', which no installed package provides: add the package whose basis.verbs entry point is named 'report' to its [project]"
+        " dependencies, and run `uv sync --all-packages`"
+    )
 
 
 @pytest.mark.parametrize(

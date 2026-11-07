@@ -16,12 +16,14 @@ basis owns, in a repo:
   whatever its name, and whichever part wrote it, installed or not;
 - the rules `DENY` in `.claude/settings.json`, which keeps every other key and rule it holds;
 - each file whose first lines carry `MARKER`;
-- each path a part lists as `retired`: what an earlier version of it wrote before the marker existed.
+- each path a part lists as `retired`: what an earlier version of it wrote before the marker existed, such as the
+  `etl-*` skills etl-framework wrote, which a repo's first `basis sync` removes.
 
 `CLAUDE.md` and `.claude/settings.json` carry no marker: the one holds a single line, and the other is JSON, which has
 no comments. A file the repo already holds at one of these paths, which basis did not write, is the repo's own until
-it is adopted: one without the marker, a `CLAUDE.md` that holds anything else, or settings that hold none of basis's
-rules. `write` replaces it only when told to adopt it, after saving it beside itself as `NAME.before-basis`.
+it is adopted: one without the marker, a skill's `SKILL.md` among them, a `CLAUDE.md` that holds anything else, or
+settings that hold none of basis's rules. So a skill without the marker is basis's only when a part lists it as
+`retired`; anywhere else it is the repo's own, removed never, and replaced only when adopted. `write` replaces it only when told to adopt it, after saving it beside itself as `NAME.before-basis`.
 
 `plan` works out, once, what basis writes in a repo and what stops it: files the repo's own, and files basis cannot
 read, each of which leaves every other file to be checked and written. `stale` lists what differs, whether to rewrite
@@ -206,7 +208,8 @@ def plan(repo: Path, parts: Sequence[AgentFiles]) -> Plan:
     }
     for files in parts:
         for name, text in files.skills.items():
-            made.update({repo / folder / name / "SKILL.md": (lambda part=files.part, name=name, text=text: (_skill(part, name, text), True)) for folder in (SKILLS, CLAUDE_SKILLS)})
+            for path in (repo / folder / name / "SKILL.md" for folder in (SKILLS, CLAUDE_SKILLS)):
+                made[path] = lambda path=path, part=files.part, name=name, text=text: (_skill(part, name, text), _carries_marker(path))
     written: dict[Path, str] = {}
     unclaimed: dict[Path, str] = {}
     unreadable: dict[Path, Problem] = {}

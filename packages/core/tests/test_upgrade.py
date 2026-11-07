@@ -64,6 +64,12 @@ def upgraded(repo: Path, found: Desktop) -> tuple[int, list[str]]:
     return upgrade.upgrade(repo, PACKAGES, run=found.run, changed=found.files, write=said.append), said
 
 
+def test_a_distribution_matches_its_name_in_the_lock_as_pep_503_normalizes_it(tmp_path: Path) -> None:
+    lockfile = tmp_path / "uv.lock"
+    lockfile.write_text(LOCK.format(version="0.1.0") + '\n[[package]]\nname = "quant-parts"\nversion = "0.2.0"\nsource = { editable = "quant" }\n', encoding="utf-8")
+    assert {name: found.version for name, found in upgrade.locked(lockfile, {"Basis_Core", "Quant_Parts", "quant.parts", "basis-api"}).items()} == {"basis-core": "0.1.0", "quant-parts": "0.2.0"}
+
+
 def test_upgrade_relocks_basis_syncs_checks_in_full_and_says_what_changed(repo: Path) -> None:
     found = Desktop(repo, newest="0.1.1")
     code, said = upgraded(repo, found)

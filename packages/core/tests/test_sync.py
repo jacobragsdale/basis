@@ -180,6 +180,8 @@ def test_claude_settings_of_another_shape_say_how_to_fix_them(tmp_path: Path, te
         (".githooks/pre-commit", "#!/bin/sh\nmake lint\n"),
         ("CLAUDE.md", "@AGENTS.md\n\nAlways run the tests.\n"),
         (".claude/settings.json", '{"permissions": {"allow": ["Bash(make *)"]}}\n'),
+        (".agents/skills/job-new/SKILL.md", "---\nname: job-new\ndescription: How this team makes a job.\n---\n"),
+        (".claude/skills/job-new/SKILL.md", "---\nname: job-new\ndescription: How this team makes a job.\n---\n"),
     ],
 )
 def test_a_file_of_the_repos_own_at_a_path_basis_writes_is_left_alone_until_adopted(tmp_path: Path, relative: str, text: str) -> None:

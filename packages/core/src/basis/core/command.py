@@ -41,9 +41,6 @@ from basis.core.errors import BasisError
 from basis.core.logs import utc_now
 from basis.core.verbs import GROUP, Part, Runs, Shared, Verb, error_line, fail, holding
 
-PACKAGES = {"job": "basis-job", "api": "basis-api"}
-"""The package each of basis's own released parts comes in, for the fix when a repo declares one that is not installed;
-another part's own docs name its package."""
 CORE = ("check", "review", "new", "sync", "upgrade", "doctor", "docs")
 """Core's verbs, which no part may add: in the order `basis --help` lists them. `check`, `review`, `sync`, `upgrade`
 and `doctor` are always listed, since every repo has basis's own files and gates, and each of the others when a
@@ -192,8 +189,10 @@ def find(cwd: Path, installed: Installed) -> Repo:
     parts: dict[str, Part] = {}
     for name in declared(pyproject):
         if name not in installed:
-            package = PACKAGES.get(name, "the package that provides it")
-            msg = f"{pyproject} declares the part {name!r}, which no installed package provides: add {package} to its [project] dependencies, and run `uv sync`"
+            msg = (
+                f"{pyproject} declares the part {name!r}, which no installed package provides: add the package whose {GROUP} entry point is named {name!r}"
+                " to its [project] dependencies, and run `uv sync --all-packages`"
+            )
             raise CommandError(msg)
         parts[name] = installed[name]()
     return Repo(pyproject, parts)
