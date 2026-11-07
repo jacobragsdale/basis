@@ -25,7 +25,8 @@ from basis.core.resources import ResourceError
 from basis.core.settings import HttpService
 
 type Message = MutableMapping[str, Any]
-PRICING = resources.http("pricing", deadline_s=0.5)
+PRICING = resources.http("pricing", deadline_s=5)
+"""Another service, whose 5s a call that answers never needs: a call that must miss a deadline has one of its own."""
 AT = datetime(2026, 11, 6, 14, 30, tzinfo=UTC)
 
 
@@ -34,14 +35,13 @@ class Price(BaseModel):
     price: str
 
 
-def pricing(*, status: int = HTTPStatus.OK, body: object = None, wait_s: float = 0, seen: list[Message] | None = None, headers: tuple[tuple[bytes, bytes], ...] = ()) -> fakes.Http:
+def pricing(*, status: int = HTTPStatus.OK, body: object = None, seen: list[Message] | None = None, headers: tuple[tuple[bytes, bytes], ...] = ()) -> fakes.Http:
     """Another service, as the ASGI app its fake takes, which answers every request alike and keeps each one's scope."""
 
     async def app(scope: Message, receive: Callable[[], Awaitable[Message]], send: Callable[[Message], Awaitable[None]]) -> None:
         await receive()
         if seen is not None:
             seen.append(scope)
-        await asyncio.sleep(wait_s)
         payload = json.dumps(body if body is not None else {"security": "S1", "price": "101.25"}).encode()
         await send({"type": "http.response.start", "status": status, "headers": [(b"content-type", b"application/json"), *headers]})
         await send({"type": "http.response.body", "body": payload})
@@ -100,7 +100,7 @@ def test_a_call_validates_its_reply_and_has_a_span_that_the_other_service_contin
     [span] = exporter.get_finished_spans()
     assert (span.name, dict(span.attributes or {})) == (
         "pricing GET",
-        {"http.request.method": "GET", "url.path": "/prices/S1", "basis.resource": "pricing", "basis.deadline_s": 0.5, "http.response.status_code": 200},
+        {"http.request.method": "GET", "url.path": "/prices/S1", "basis.resource": "pricing", "basis.deadline_s": 5, "http.response.status_code": 200},
     )
     [scope] = seen
     headers = dict(scope["headers"])
@@ -138,7 +138,7 @@ def test_a_reply_that_is_not_the_declared_one_is_a_bad_reply() -> None:
 def test_a_service_that_cannot_be_reached_is_unavailable_and_gave_no_reply() -> None:
     async def main() -> None:
         async with client("pricing", HttpService.model_validate({"url": "http://127.0.0.1:9/"})) as opened:  # the discard port, which nothing serves
-            await HttpClient(resources.http("pricing", deadline_s=0.2), opened, spanned()[0]).post("/prices/S1", Price)
+            await HttpClient(PRICING, opened, spanned()[0]).post("/prices/S1", Price)
 
     with pytest.raises(Unavailable, match=r"^pricing could not be reached for POST /prices/S1: ConnectError$") as raised:
         asyncio.run(main())
@@ -152,8 +152,39 @@ def test_a_service_that_cannot_be_reached_is_unavailable_and_gave_no_reply() -> 
 )
 def test_a_call_past_the_shorter_deadline_is_a_timeout(around_s: float | None, detail: str) -> None:
     with pytest.raises(Timeout, match=detail) as raised:
-        get(pricing(wait_s=5), spanned()[0], around_s=around_s)
+        get(never(), spanned()[0], around_s=around_s, resource=resources.http("pricing", deadline_s=0.5))
     assert (raised.value.resource, raised.value.status) == ("pricing", None)
+
+
+def test_a_resend_the_deadline_cuts_short_is_still_unavailable() -> None:
+    """The first attempt answers 503; the resend never answers, and the deadline stops it: the service is still the
+    unavailable one it was, not a Timeout."""
+    attempts: list[int] = []
+
+    async def app(scope: Message, receive: Callable[[], Awaitable[Message]], send: Callable[[Message], Awaitable[None]]) -> None:
+        del scope
+        await receive()
+        attempts.append(len(attempts))
+        if len(attempts) > 1:
+            await asyncio.Event().wait()  # never answers
+        await send({"type": "http.response.start", "status": 503, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    fake = fakes.Http(app)
+    with pytest.raises(Unavailable, match="pricing answered 503 to GET /prices/S1") as raised:
+        get(fake, spanned()[0], resource=resources.http("pricing", deadline_s=1))
+    assert (len(attempts), fake.waits.waited, raised.value.status, type(raised.value.__context__)) == (2, [0.05], 503, Timeout)
+
+
+def never() -> fakes.Http:
+    """Another service that never answers, whose call the deadline stops."""
+
+    async def app(scope: Message, receive: Callable[[], Awaitable[Message]], send: Callable[[Message], Awaitable[None]]) -> None:
+        del scope, send
+        await receive()
+        await asyncio.Event().wait()
+
+    return fakes.Http(app)
 
 
 def test_a_call_with_no_time_left_is_never_made() -> None:
@@ -175,14 +206,15 @@ def test_an_unavailable_get_is_made_again_after_a_backoff_and_its_span_counts_th
 
 
 def test_an_unavailable_get_is_made_again_until_no_backoff_fits_before_its_deadline() -> None:
-    """A fake's waits take no time, and each waits all of its backoff: 50ms, doubling to 1s, which 5s fits eight of."""
+    """A fake's waits take no time, its clock moves by them alone, and each waits all of its backoff: 50ms, doubling to
+    1s, which 5s fits eight of, however long each attempt takes."""
     seen: list[Message] = []
     fake = pricing(status=503, seen=seen)
     started = time.monotonic()
     with pytest.raises(Unavailable, match="pricing answered 503 to GET /prices/S1"):
         get(fake, spanned()[0], resource=resources.http("pricing", deadline_s=5))
     assert (len(seen), fake.waits.waited) == (9, [0.05, 0.1, 0.2, 0.4, 0.8, 1, 1, 1])
-    assert time.monotonic() - started < 1
+    assert time.monotonic() - started < 4.55  # the waits' own seconds, were any really waited
 
 
 def test_the_systems_waits_jitter_each_backoff_between_half_and_all_of_it() -> None:
@@ -208,7 +240,7 @@ def test_no_other_method_is_made_again() -> None:
 def test_a_retry_after_longer_than_what_is_left_of_the_deadline_is_not_waited_for() -> None:
     seen: list[Message] = []
     with pytest.raises(Unavailable):
-        get(pricing(status=429, seen=seen, headers=((b"retry-after", b"5"),)), spanned()[0])
+        get(pricing(status=429, seen=seen, headers=((b"retry-after", b"10"),)), spanned()[0])
     assert len(seen) == 1
 
 

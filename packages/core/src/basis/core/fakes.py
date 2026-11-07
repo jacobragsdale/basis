@@ -11,7 +11,6 @@ waits as its `waits` do, which take no time, so a GET made again until its deadl
 `Failures` is how a fake keeps what it fails with, which every part's fakes share."""
 
 import threading
-import time
 from collections.abc import Awaitable, Callable, Hashable, MutableMapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -88,8 +87,10 @@ class Failures[K: Hashable]:
 
 
 class Waits:
-    """Waits that take no time: each is kept, in `waited`, and the clock the client reads moves on by it, so a call
-    made again while its deadline allows is made as often as it would be, at once. Each waits all of its backoff."""
+    """Waits that take no time: each is kept, in `waited`, and the clock the client reads moves by them alone, so a call
+    made again while its deadline allows is made as often as the backoff says, at once, however long each attempt
+    takes on the machine. Each waits all of its backoff. An attempt itself still has what is left of the deadline,
+    in real time."""
 
     def __init__(self) -> None:
         self.waited: list[float] = []
@@ -97,7 +98,7 @@ class Waits:
 
     def monotonic(self) -> float:
         with self._lock:
-            return time.monotonic() + sum(self.waited)
+            return sum(self.waited)
 
     async def sleep(self, seconds: float) -> None:
         with self._lock:

@@ -23,7 +23,10 @@ from basis.core.settings import HttpService
 
 type Message = MutableMapping[str, Any]
 type Transport = Literal["fake", "socket"]
-PRICING = resources.http("pricing", deadline_s=0.5)
+PRICING = resources.http("pricing", deadline_s=5)
+"""Another service, whose 5s a call that answers never needs."""
+HURRIED = resources.http("pricing", deadline_s=0.5)
+"""The same service, for the call that must miss its deadline, which the slow route holds past."""
 TRANSPORTS: tuple[Transport, ...] = ("fake", "socket")
 
 
@@ -37,6 +40,8 @@ class Service:
     """The service's app, which counts the requests it answers, and the fake around it, whose failures the test sets."""
 
     seen: list[str] = field(default_factory=list[str])
+    released: threading.Event = field(default_factory=threading.Event)
+    """What the slow route waits for: the test sets it once the call has missed its deadline."""
     fake: fakes.Http = field(init=False)
 
     def __post_init__(self) -> None:
@@ -48,7 +53,7 @@ class Service:
         await receive()
         self.seen.append(f"{scope['method']} {scope['path']}")
         if scope["path"] == "/slow":
-            await asyncio.sleep(1)  # past the 0.5s deadline
+            await asyncio.to_thread(self.released.wait, 30)  # past the call's deadline, whatever the machine's speed
         body = json.dumps({"security": "S1", "price": "101.25"}).encode()
         await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"application/json")]})
         await send({"type": "http.response.body", "body": body})
@@ -99,13 +104,16 @@ def reaching(transport: Transport, service: Service, served: Served) -> httpx2.A
     return client(PRICING.name, HttpService.model_validate({"url": f"http://127.0.0.1:{served.port}/"}))
 
 
-def outcome(transport: Transport, service: Service, served: Served, call: Callable[[HttpClient], Awaitable[object]]) -> tuple[object, ...]:
+def outcome(transport: Transport, service: Service, served: Served, call: Callable[[HttpClient], Awaitable[object]], *, resource: resources.HttpResource = PRICING) -> tuple[object, ...]:
     """What the call made of the service: its reply, or its failure's kind, resource, status and detail; and the
     requests the service's app answered."""
 
     async def main() -> object:
         async with reaching(transport, service, served) as opened:
-            return await call(HttpClient(PRICING, opened, TracerProvider().get_tracer("test"), waits=service.fake.waits))  # the same waits through either
+            try:
+                return await call(HttpClient(resource, opened, TracerProvider().get_tracer("test"), waits=service.fake.waits))  # the same waits through either
+            finally:
+                service.released.set()  # in the call's own loop, which waits for the held route's thread before it ends
 
     try:
         found: object = asyncio.run(main())
@@ -140,7 +148,7 @@ def test_a_post_unavailable_once_is_not_made_again_through_either(transport: Tra
 
 @pytest.mark.parametrize("transport", TRANSPORTS)
 def test_a_call_past_its_deadline_is_a_timeout_through_either(transport: Transport, service: Service, served: Served) -> None:
-    found = outcome(transport, service, served, lambda calling: calling.get("/slow", Price))
+    found = outcome(transport, service, served, lambda calling: calling.get("/slow", Price), resource=HURRIED)
     assert found == ((Timeout, "pricing", None, "pricing did not answer within its deadline of 0.5s"), ("GET /slow",))
 
 
@@ -165,4 +173,4 @@ def test_a_server_nothing_listens_for_is_unavailable(service: Service) -> None:
 
     with pytest.raises(Unavailable, match=r"^pricing could not be reached for GET /prices/S1: ConnectError$") as raised:
         asyncio.run(main())
-    assert (raised.value.status, service.seen, waits.waited) == (None, [], [0.05, 0.1, 0.2])  # each attempt refused, until no backoff fits 0.5s
+    assert (raised.value.status, service.seen, waits.waited) == (None, [], [0.05, 0.1, 0.2, 0.4, 0.8, 1, 1, 1])  # each attempt refused, until no backoff fits 5s
