@@ -10,15 +10,15 @@ import pytest
 from builders import Price, prices
 from integration.scratch import Scratch, configured, mssql
 
-import etl_framework as etl
-from etl_framework import ddl, runs
-from etl_framework.example import job as example
-from etl_framework.example import rows as example_rows
-from etl_framework.interval import Interval
-from etl_framework.job import Job, read
-from etl_framework.outputs import Target
-from etl_framework.settings import GivenSettings
-from etl_framework.storage import Root
+import basis.job as etl
+from basis.core.interval import Interval
+from basis.core.settings import GivenSettings
+from basis.core.storage import Root
+from basis.job import ddl, runs
+from basis.job.example import job as example
+from basis.job.example import rows as example_rows
+from basis.job.job import Job, read
+from basis.job.outputs import Target
 
 pytestmark = pytest.mark.integration
 

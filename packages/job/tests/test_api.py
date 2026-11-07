@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-import etl_framework as etl
-from etl_framework.example import job
+import basis.job as etl
+from basis.job.example import job
 
 
 @pytest.fixture(autouse=True)

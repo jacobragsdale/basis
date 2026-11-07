@@ -2,11 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from etl_framework import new, sync
+from basis.job import new, sync
+
+CHECKOUT = Path(__file__).parents[3]
+"""The checkout of basis these tests run in, which holds packages/core and packages/job."""
 
 
 def test_a_new_repo_holds_its_job_listed_and_its_agent_files_current(tmp_path: Path) -> None:
-    repo = new.repo(tmp_path / "pricing-etl", "prices", index=None, framework_path=Path(__file__).parents[1], install=False)
+    repo = new.repo(tmp_path / "pricing-etl", "prices", index=None, framework_path=CHECKOUT, install=False)
     assert (repo / "jobs/prices/job.py").read_text(encoding="utf-8").count("from jobs.prices.rows import") == 1
     assert 'prices = "jobs.prices.job"' in (repo / "pyproject.toml").read_text(encoding="utf-8")
     assert (repo / ".gitignore").exists()
@@ -14,7 +17,7 @@ def test_a_new_repo_holds_its_job_listed_and_its_agent_files_current(tmp_path: P
 
 
 def test_a_new_job_is_listed_beside_the_first(tmp_path: Path) -> None:
-    repo = new.repo(tmp_path / "pricing-etl", "prices", index=None, framework_path=Path(__file__).parents[1], install=False)
+    repo = new.repo(tmp_path / "pricing-etl", "prices", index=None, framework_path=CHECKOUT, install=False)
     new.job(repo, "rates", install=False)
     pyproject = (repo / "pyproject.toml").read_text(encoding="utf-8")
     assert 'rates = "jobs.rates.job"' in pyproject

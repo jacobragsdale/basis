@@ -3,10 +3,10 @@ from pathlib import Path
 import pytest
 from builders import DAY, Price, make_job, prices
 
-import etl_framework as etl
-from etl_framework.databases import Database, open_database
-from etl_framework.loader import EmptyInputError, load
-from etl_framework.settings import GivenSettings
+import basis.job as etl
+from basis.core.databases import Database, open_database
+from basis.core.settings import GivenSettings
+from basis.job.loader import EmptyInputError, load
 
 
 def no_databases(name: str) -> Database:

@@ -3,9 +3,10 @@ from decimal import Decimal
 import polars as pl
 from builders import Price, prices
 
-import etl_framework as etl
-from etl_framework.diff import OperationDiff, diff, diff_frames
-from etl_framework.outputs import Changes, Target
+import basis.job as etl
+from basis.core.tables import Changes
+from basis.job.diff import OperationDiff, diff, diff_frames
+from basis.job.outputs import Target
 
 
 def test_keyed_rows_are_matched_by_key_and_changes_counted_by_column() -> None:

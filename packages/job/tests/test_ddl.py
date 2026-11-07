@@ -1,8 +1,8 @@
 from builders import Price
 
-import etl_framework as etl
-from etl_framework.ddl import create_table
-from etl_framework.outputs import Target
+import basis.job as etl
+from basis.job.ddl import create_table
+from basis.job.outputs import Target
 
 TARGET = Target(Price, "warehouse", "dbo.prices", etl.Append(), ("day", "security_id"))
 

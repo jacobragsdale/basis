@@ -5,7 +5,7 @@
 name = "basis-workspace"
 version = "0.0.0"
 requires-python = ">=3.14"
-dependencies = ["basis-core", "etl-framework"]
+dependencies = ["basis-core", "basis-job"]
 
 [tool.uv]
 package = false
@@ -16,7 +16,7 @@ members = ["packages/*"]
 
 [tool.uv.sources]
 basis-core = { workspace = true }
-etl-framework = { workspace = true }
+basis-job = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -51,12 +51,23 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# pytest's assert is its API, and a test compares against literal expected values. A package's tests/ is not a package.
+# pytest's assert is its API, and a test compares against literal expected values. A package's tests/ is not a package,
+# and a naive datetime in a test stands for a database's value, in its column's zone.
 "**/tests/**" = ["S101", "PLR2004", "INP001", "DTZ001"]
+# basis-job's integration tier builds SQL around the scratch tables each test makes and names.
+"packages/job/tests/integration/**" = ["S101", "PLR2004", "INP001", "DTZ001", "S608"]
 "**/test_*.py" = ["S101", "PLR2004"]
 "**/conftest.py" = ["S101", "PLR2004"]
+# A job's hooks share their signatures, so a hook may leave an argument unused.
+"packages/job/src/basis/job/example/job.py" = ["ARG001"]
+# Statements name tables and columns, which a part's declarations restrict to letters, digits, underscores and $, so
+# they can only be built as strings; every value is bound. The rule cannot tell an identifier from a value.
+"packages/core/src/basis/core/databases/*.py" = ["S608"]
+# A generated repo's files, which `new` copies; they are not part of the package.
+"packages/*/src/basis/*/templates/**" = ["INP001"]
 
 [tool.ruff.lint.isort]
+known-first-party = ["basis"]  # every member's portion of the namespace, wherever its src/ is
 split-on-trailing-comma = false  # Do not preserve comma-forced import line breaks.
 
 [tool.ruff.lint.mccabe]
@@ -70,7 +81,7 @@ skip-magic-trailing-comma = true  # Collapse comma-forced multiline constructs w
 all = "error"  # Every rule is an error, including those ty leaves off by default. Opt out one rule at a time, with a reason.
 
 [tool.ty.environment]
-extra-paths = ["packages/job/tests"]  # as packages/job's pytest `pythonpath`, so its tests can import `builders`
+extra-paths = ["packages/job/tests"]  # as pytest's `pythonpath`, so basis-job's tests can import `builders`
 
 [tool.ty.analysis]
 respect-type-ignore-comments = false  # Require a specific `# ty: ignore[rule]` suppression.
@@ -81,12 +92,19 @@ strict-equality-semantics = true  # Do not narrow from ==, in, or match value pa
 error-on-warning = true
 
 [tool.pytest.ini_options]
-# importlib mode: members' tests share file names (spike 0.2), which pytest's default mode cannot collect.
-addopts = "-ra --strict-markers --strict-config --import-mode=importlib"
-testpaths = ["packages/core"]  # packages/job runs with its own pytest settings: `uv run pytest packages/job`
+# importlib mode: members' tests share file names (spike 0.2), which pytest's default mode cannot collect. The
+# templates are a generated repo's files, whose tests run in that repo.
+addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration' --ignore=packages/job/src/basis/job/templates"
+testpaths = ["packages/core/tests", "packages/job/tests", "packages/job/src/basis/job/example"]
+pythonpath = ["packages/job/tests"]  # basis-job's test modules share its `builders`
 xfail_strict = true  # An xfail that starts passing is a failure, not a silent pass.
 filterwarnings = [
     "error",  # A warning is a defect until someone decides otherwise.
+    # Add narrow, dated `ignore::` entries with a reason for third-party
+    # deprecations you do not control. Never widen this back to "default".
+]
+markers = [
+    "integration: needs a real SQL Server or Oracle (see packages/job/tests/integration/README.md); excluded from the default run",
 ]
 
 [tool.coverage.run]
@@ -99,25 +117,31 @@ skip_covered = true
 exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "@overload"]
 # Deliberately no fail_under: coverage is a diagnostic here, not a CI gate.
 
-# The import contracts, for every member. etl-framework's moved here with it, unchanged (roadmap step 1.2).
+# The import contracts, for every member.
 [tool.importlinter]
-root_package = "etl_framework"
+root_packages = ["basis.core", "basis.job"]  # portions of one namespace, each named (spike 0.2)
 include_external_packages = true  # so a contract can forbid a database driver
 exclude_type_checking_imports = true
+
+[[tool.importlinter.contracts]]
+name = "basis-core imports no part: every part builds on it, and none ships with another"
+type = "forbidden"
+source_modules = ["basis.core"]
+forbidden_modules = ["basis.job"]
 
 [[tool.importlinter.contracts]]
 name = "Job code and the checks it runs through do no I/O: the run loop loads, saves and publishes"
 type = "forbidden"
 source_modules = [
-    "etl_framework.rows", "etl_framework.params", "etl_framework.inputs", "etl_framework.outputs", "etl_framework.interval",
-    "etl_framework.changes", "etl_framework.destination", "etl_framework.diff", "etl_framework.ddl", "etl_framework.job",
-    "etl_framework.example.job", "etl_framework.example.rows",
+    "basis.job.rows", "basis.job.params", "basis.job.inputs", "basis.job.outputs", "basis.job.changes", "basis.job.diff",
+    "basis.job.ddl", "basis.job.job", "basis.job.example.job", "basis.job.example.rows",
+    "basis.core.interval", "basis.core.tables", "basis.core.destination", "basis.core.model",
 ]
 forbidden_modules = [
-    "etl_framework.loader", "etl_framework.publish", "etl_framework.runs", "etl_framework.snapshots", "etl_framework.storage",
-    "etl_framework.settings", "etl_framework.api", "etl_framework.cli", "etl_framework.new", "etl_framework.sync",
-    "etl_framework.testing", "mssql_python", "oracledb",
+    "basis.job.loader", "basis.job.runs", "basis.job.api", "basis.job.cli", "basis.job.new", "basis.job.sync", "basis.job.testing",
+    "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.storage",
+    "basis.core.settings", "basis.core.new", "basis.core.sync", "basis.core.testing", "mssql_python", "oracledb",
 ]
 ignore_imports = [
-    "etl_framework -> etl_framework.api",  # `etl.run` and `etl.replay` load on first use, which job code never makes
+    "basis.job -> basis.job.api",  # `etl.run` and `etl.replay` load on first use, which job code never makes
 ]

@@ -3,7 +3,12 @@
 etl-framework is a package that ETL job repos depend on, modelled on
 [portfolio-optim](https://github.com/jacobragsdale/portfolio-optim)'s idea: the core owns the run loop, so job code is
 pure and every run replays. It was designed on 2026-11-06 and built as 0.1.0 the same day. The docs for job authors,
-in `src/etl_framework/docs/`, describe the result; this page records the decisions and their reasons.
+in `src/basis/job/docs/`, describe the result; this page records the decisions and their reasons.
+
+Since basis's step 1.3, etl-framework is basis-job, which imports as `basis.job`, and its plumbing is basis-core's:
+the databases, settings, logs, storage, snapshots, publishing with the ledger, the shared halves of `replay`, `resume`
+and `regress`, and the machinery of `new`, `sync` and the contract tests. [basis's design](../../../docs/design.md)
+supersedes the decisions below about sharing a core with portfolio-optim; the rest stand.
 
 ## The problem
 

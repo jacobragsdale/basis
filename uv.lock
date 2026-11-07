@@ -5,8 +5,8 @@ requires-python = ">=3.14"
 [manifest]
 members = [
     "basis-core",
+    "basis-job",
     "basis-workspace",
-    "etl-framework",
 ]
 
 [[package]]
@@ -51,6 +51,49 @@ wheels = [
 name = "basis-core"
 version = "0.0.0"
 source = { editable = "packages/core" }
+dependencies = [
+    { name = "grimp" },
+    { name = "mssql-python" },
+    { name = "oracledb" },
+    { name = "polars" },
+    { name = "pyarrow" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "grimp", specifier = ">=3.19" },
+    { name = "mssql-python", specifier = ">=1.17.0" },
+    { name = "oracledb", specifier = ">=26.1.0" },
+    { name = "polars", specifier = ">=2.1.0" },
+    { name = "pyarrow", specifier = ">=26.0.1" },
+    { name = "pydantic", specifier = ">=2.14.3" },
+    { name = "pydantic-settings", specifier = ">=2.16.2" },
+    { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2025.2" },
+]
+
+[[package]]
+name = "basis-job"
+version = "0.0.0"
+source = { editable = "packages/job" }
+dependencies = [
+    { name = "basis-core" },
+    { name = "polars" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "basis-core", editable = "packages/core" },
+    { name = "polars", specifier = ">=2.1.0" },
+    { name = "pydantic", specifier = ">=2.14.3" },
+    { name = "python-dotenv", specifier = ">=1.2.1" },
+    { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2025.2" },
+]
 
 [[package]]
 name = "basis-workspace"
@@ -58,7 +101,7 @@ version = "0.0.0"
 source = { virtual = "." }
 dependencies = [
     { name = "basis-core" },
-    { name = "etl-framework" },
+    { name = "basis-job" },
 ]
 
 [package.dev-dependencies]
@@ -75,7 +118,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "basis-core", editable = "packages/core" },
-    { name = "etl-framework", editable = "packages/job" },
+    { name = "basis-job", editable = "packages/job" },
 ]
 
 [package.metadata.requires-dev]
@@ -425,57 +468,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/68/bc/d36966de7304047a1001a7559fbf266c464bb5d8cc85464536ef8c9bcc32/distlib-0.4.4.tar.gz", hash = "sha256:ca4175b4ac7f71223cc30ed7248c45d2b38c2439d8ee6e498ab67ed63cf3508d", size = 621304, upload-time = "2026-10-16T13:56:34.203Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c1/2b/238f02a4927fa2e27aa995371d240a468b52e42eae44a678434aff736b38/distlib-0.4.4-py2.py3-none-any.whl", hash = "sha256:cf09d55b1e85a89576b036aeb71550bfd68320f3f21761ca329eadadad918638", size = 472099, upload-time = "2026-10-16T13:56:32.053Z" },
-]
-
-[[package]]
-name = "etl-framework"
-version = "0.1.0"
-source = { editable = "packages/job" }
-dependencies = [
-    { name = "grimp" },
-    { name = "mssql-python" },
-    { name = "oracledb" },
-    { name = "polars" },
-    { name = "pyarrow" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "python-dotenv" },
-    { name = "tzdata", marker = "sys_platform == 'win32'" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "import-linter" },
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "pytest-randomly" },
-    { name = "ruff" },
-    { name = "ty" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "grimp", specifier = ">=3.19" },
-    { name = "mssql-python", specifier = ">=1.17.0" },
-    { name = "oracledb", specifier = ">=26.1.0" },
-    { name = "polars", specifier = ">=2.1.0" },
-    { name = "pyarrow", specifier = ">=26.0.1" },
-    { name = "pydantic", specifier = ">=2.14.3" },
-    { name = "pydantic-settings", specifier = ">=2.16.2" },
-    { name = "python-dotenv", specifier = ">=1.2.1" },
-    { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2025.2" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "import-linter", specifier = ">=2.16" },
-    { name = "pre-commit", specifier = ">=4.7.0" },
-    { name = "pytest", specifier = ">=9.2.0" },
-    { name = "pytest-cov", specifier = ">=7.1.0" },
-    { name = "pytest-randomly", specifier = ">=5.0.0" },
-    { name = "ruff", specifier = "==0.17.4" },
-    { name = "ty", specifier = "==0.0.99" },
 ]
 
 [[package]]

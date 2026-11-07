@@ -13,11 +13,11 @@ import pytest
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from etl_framework import ddl, runs
-from etl_framework.interval import Interval
-from etl_framework.job import Job
-from etl_framework.settings import GivenSettings
-from etl_framework.storage import Root
+from basis.core.interval import Interval
+from basis.core.settings import GivenSettings
+from basis.core.storage import Root
+from basis.job import ddl, runs
+from basis.job.job import Job
 
 oracledb.defaults.fetch_lobs = False  # the raw reads back compare CLOB values as strings, not LOB handles
 

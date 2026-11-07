@@ -5,11 +5,12 @@ from pathlib import Path
 import polars as pl
 from builders import DAY, make_job, params_file, prices
 
-import etl_framework as etl
-from etl_framework import runs, snapshots
-from etl_framework.job import Job
-from etl_framework.settings import GivenSettings
-from etl_framework.storage import Root
+import basis.job as etl
+from basis.core import snapshots
+from basis.core.settings import GivenSettings
+from basis.core.storage import Root
+from basis.job import runs
+from basis.job.job import Job
 
 
 def clock() -> datetime:
