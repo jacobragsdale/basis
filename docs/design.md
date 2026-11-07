@@ -350,7 +350,7 @@ retries and the response a route gives when nothing handles it:
 
 | Error | Raised for | Retried by basis | Unhandled, a route answers |
 |---|---|---|---|
-| `Timeout` | The deadline passing, or a 504 | Never on a write | 504 |
+| `Timeout` | The deadline passing, or a 504 | Never | 504 |
 | `Unavailable` | A connection refused or reset, or a 502, 503 or 429 | On a GET only, within the deadline | 503 |
 | `NotFound`, `Conflict`, `Rejected`, `Denied`, `BadReply`, `Failed` | A 404; a 409; a 400 or 422; a 401 or 403; a reply that does not match its declared model; a 500 and anything else | No | 502 |
 

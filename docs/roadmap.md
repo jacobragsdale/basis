@@ -20,12 +20,12 @@ Actions.
 | D. Eval | `evals/` | 0, then every phase |
 
 The critical path runs through lanes A and B: the namespace spike, the workspace, etl-framework's move, `basis-core`'s
-extraction, the `basis` command, the repo files, the desktop gates, then the API, its resources' move into `basis-core`
-(step 5.1), the service errors (5.8), the contract tests and gates (2.6), and the pilot, which confirms spikes 0.5 to
-0.8 at the firm; no step waits for those spikes. Steps 5.0b and 5.2 to 5.7 are off it: pandas (5.0b) follows 5.1, and
-5.2 to 5.7 run at once after it. So is `basis smoke` (2.10), which needs 5.6, and which the pilot runs. Optim is off
-the critical path, and runs alongside phase 2. Its design is provisional until the maintainer meets the firm's quant
-team, and nothing in lanes A and B may depend on it (see [the design](design.md#the-packages)).
+extraction, the `basis` command, the repo files, the desktop gates, the API, and its resources' move into `basis-core`
+(step 5.1). From there it forks, through the service errors (5.8), the contract tests and gates (2.6) and the new app
+(2.7) on one side, and pandas (5.0b) and environments (5.6) on the other, and joins at `basis smoke` (2.10), before
+the pilot, which confirms spikes 0.5 to 0.8 at the firm; no step waits for those spikes. Steps 5.2 to 5.5 and 5.7 are
+off it. Optim is off the critical path, and runs alongside phase 2. Its design is provisional until the maintainer
+meets the firm's quant team, and nothing in lanes A and B may depend on it (see [the design](design.md#the-packages)).
 
 ```mermaid
 flowchart TD
@@ -49,7 +49,7 @@ flowchart TD
   r8 --> a8
   a7 --> a10[2.10 basis smoke]
   c6 --> a10
-  a10 -. runs .-> a8
+  a10 --> a8
   r4 --> o2[3.2 move optim]
   r6 --> o2
   o1[3.1 oracle snapshot] --> o2 --> o3[3.3 port the plumbing] --> o4[3.4 orders through the ledger] --> o6[3.6 proof and release, on hold]
@@ -222,8 +222,9 @@ Lane B. Needs step 1.3. Steps 2.3 and 2.4 run at once, and so do 2.5 and 2.9.
    generated repo with an API and a job passes `basis check --full`, and its image serves the API and runs the job.
 8. **2.8 Pilot (work).** Create a pilot API repo with `uvx basis-api new app pilot`, beside basis-ui's pilot UI repo,
    from the internal feed. Deploy both to QA through their generated pipelines, behind one host if spike 0.4 allows it.
-   Lane D adds API tasks to the eval and runs them against the pilot. Needs 2.7, 1.8, 5.1 and spike 0.3, so it reports
-   to Datadog from its first day, and it confirms the checklists of spikes 0.5 to 0.8, fixing whatever they find wrong.
+   Lane D adds API tasks to the eval and runs them against the pilot. Needs 2.7, 2.10, 1.8, 5.1 and spike 0.3, so it
+   reports to Datadog from its first day, proves `basis smoke` after its deploy to QA, and starts on pandas rather than
+   polars, and it confirms the checklists of spikes 0.5 to 0.8, fixing whatever they find wrong.
    Done when `new app` reaches QA in one pipeline run and the loop time is recorded against the hook's one-minute
    budget.
 9. **2.9 After-commit calls.** Add the outbox, as the design has it: a state-changing call an `api.Client` sends with
@@ -242,7 +243,7 @@ Lane B. Needs step 1.3. Steps 2.3 and 2.4 run at once, and so do 2.5 and 2.9.
 
     A failure blocks promotion to prod. It makes no journeys across services, and needs no test tenancy, Pact, chaos
     testing or canary analysis, for the reasons [the design](design.md#gates-without-ci) gives. Needs 2.7 and 5.6, and
-    the pilot (2.8) runs it. Done when it passes on a generated repo with an API and a job, against the containers
+    the pilot (2.8) needs it. Done when it passes on a generated repo with an API and a job, against the containers
     standing in for QA, and fails, with its fix, when the served document differs from the committed one, an example's
     response does not validate, or a job's checks fail; and the generated pipeline runs it before promotion to prod.
 
