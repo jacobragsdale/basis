@@ -28,3 +28,6 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-name = "basis.api"
+
+[tool.basis-release]
+publish = true  # a basis release publishes this package, at the one version every member has

@@ -4,7 +4,7 @@ import os
 import sys
 from collections.abc import Callable, Mapping
 from functools import partial
-from importlib.metadata import entry_points
+from importlib.metadata import entry_points, version
 from pathlib import Path
 
 import pytest
@@ -216,7 +216,8 @@ def test_version_names_basis_core_and_each_installed_part_anywhere(tmp_path: Pat
     assert basis(tmp_path, "--version") == 0
     core, *parts = capsys.readouterr().out.rstrip("\n").split(", ")  # the parts in the order their packages are found
     installed = {f"{entry.dist.name} {entry.dist.version}" for entry in entry_points(group=command.GROUP) if entry.dist is not None}
-    assert (core, sorted(parts)) == ("basis-core 0.0.0", sorted(installed))
+    assert (core, sorted(parts)) == (f"basis-core {version('basis-core')}", sorted(installed))
+    assert {part.rpartition(" ")[2] for part in parts} == {version("basis-core")}  # every basis package is at one version
 
 
 def test_settings_that_do_not_validate_name_the_variables_to_set(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:

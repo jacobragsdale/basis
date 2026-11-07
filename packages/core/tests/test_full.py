@@ -1,6 +1,7 @@
 import os
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
+from importlib.metadata import version
 from pathlib import Path
 
 import pytest
@@ -263,11 +264,11 @@ def test_review_prints_what_regress_and_the_qa_tier_found_on_the_commit_checked(
     assert head is not None
     commit = head.head()
     printed = capsys.readouterr().out
-    assert f"`basis check --full` passed on commit `{commit}`, on 2026-11-07 14:02 UTC, with basis-core 0.0.0" in printed
+    assert f"`basis check --full` passed on commit `{commit}`, on 2026-11-07 14:02 UTC, with basis-core {version('basis-core')}" in printed
     assert "| prices | `R1` | prices: upsert: 1 changed (price 1) |" in printed
     assert "| alpha | prices | `Q1` | published: prices (3 inserted) |" in printed
     assert "### The alpha contract\n\n- `GET /prices`: `price` is now a decimal" in printed
-    assert "\n- basis-core 0.0.0\n" in printed
+    assert f"\n- basis-core {version('basis-core')}\n" in printed
 
 
 def test_review_of_a_commit_no_check_recorded_says_how_to_record_one(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:

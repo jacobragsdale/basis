@@ -48,6 +48,11 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = "optim"
 
+# Kept at the one version every member has, which its exact basis-core pin needs, and built and checked, but no release
+# publishes optim while its design may change.
+[tool.basis-release]
+publish = false
+
 [tool.ruff]
 line-length = 200
 required-version = ">=0.17.1"

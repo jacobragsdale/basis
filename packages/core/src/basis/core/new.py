@@ -6,6 +6,7 @@ import re
 import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from enum import Enum
 from functools import partial
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
@@ -15,7 +16,7 @@ from basis.core.errors import BasisError
 
 GIT = "https://github.com/jacobragsdale/basis"
 """Where a repo's basis packages come from, at the version's tag, when neither an index nor a checkout is given and
-the part was not installed from git."""
+the part was installed from a folder or an archive."""
 FOLDER = "packages/core"
 """basis-core's folder in a checkout of basis."""
 UNRELEASED = "0.0.0"
@@ -44,15 +45,29 @@ class Commit:
     url: str
     commit: str
     """The commit's full id, whatever ref named it: a branch moves on, and a new repo matches what made it."""
+    revision: str | None = None
+    """The ref uvx was given, such as `v0.7.0` or `main`, which uv records as `requested_revision`; None when none was."""
 
 
-def installed_from(name: str) -> Commit | None:
-    """The commit the installed distribution `name` came from, or None when it came from an index or a folder."""
+class Installed(Enum):
+    """Where a part's package was installed from, when not from a git commit."""
+
+    INDEX = "an index"
+    """As `uvx NAME` installs it. uv records no direct URL for a package from an index (PEP 610), so not which index."""
+    FILES = "a folder or an archive"
+    """Such as a checkout's member, installed editable, a wheel's file, or another version control system's checkout."""
+
+
+def installed_from(name: str) -> Commit | Installed:
+    """The commit the installed distribution `name` came from, or else whether it came from an index."""
     try:
         recorded = distribution(name).read_text("direct_url.json")
     except PackageNotFoundError:
-        return None
-    return commit_of(recorded, name) if recorded is not None else None
+        return Installed.FILES
+    if recorded is None:
+        return Installed.INDEX
+    commit = commit_of(recorded, name)
+    return commit if commit is not None else Installed.FILES
 
 
 def commit_of(direct_url: str, name: str) -> Commit | None:
@@ -78,7 +93,10 @@ def commit_of(direct_url: str, name: str) -> Commit | None:
     if not isinstance(commit := vcs.get("commit_id"), str) or not _COMMIT.match(commit):
         msg = f"{name}'s direct_url.json says it came from git, and gives no full commit id: {fix}"
         raise NewError(msg)
-    return Commit(url, commit)
+    if (revision := vcs.get("requested_revision")) is not None and not isinstance(revision, str):
+        msg = f"{name}'s direct_url.json gives a requested_revision that is not a ref: {fix}"
+        raise NewError(msg)
+    return Commit(url, commit, revision)
 
 
 def repo(  # noqa: PLR0913 -- the part says what it adds and where its packages come from, by keyword
@@ -86,7 +104,7 @@ def repo(  # noqa: PLR0913 -- the part says what it adds and where its packages 
 ) -> None:
     """A new folder at `path`, holding the shared templates and the part's `templates`, each with `{NAME}` replaced by
     `values[NAME]` and `{source}` by where the repo's basis packages come from (see `sources`): with neither an index
-    nor a checkout, the commit the part's package was installed from, if it came from git."""
+    nor a checkout, the tag or the commit the part's package was installed from, if it came from git."""
     if path.exists():
         msg = f"{path} already exists: give a new folder"
         raise NewError(msg)
@@ -99,12 +117,16 @@ def repo(  # noqa: PLR0913 -- the part says what it adds and where its packages 
         write_templates(path, folder, {**values, "source": source})
 
 
-def sources(distributions: Mapping[str, str], *, version: str, index: str | None, checkout: Path | None, installed: Callable[[], Commit | None]) -> str:
+def sources(distributions: Mapping[str, str], *, version: str, index: str | None, checkout: Path | None, installed: Callable[[], Commit | Installed]) -> str:
     """The `pyproject.toml` lines that say where a repo's basis packages come from: `index`; a checkout of basis at
-    `checkout`, installed editable; or, with neither, the commit the part was installed from, which `installed` reads
-    only then, or else basis's GitHub repository at `version`'s tag, which needs a release. `distributions` are the part's packages, by name, each
-    with its folder in a checkout. basis-core is not among them: no repo depends on it by name, and each part's own
-    workspace source brings it from the same checkout or commit, so a source for it would go unused.
+    `checkout`, installed editable; or, with neither, where the part was installed from, which `installed` reads only
+    then. From git, that is the release's tag when uvx was given `version`'s tag, and otherwise the commit, since a
+    branch or another tag moves on, and a new repo matches what made it. From a folder or an archive, it is basis's
+    GitHub repository at `version`'s tag, which needs a release. From an index it is refused: uv does not record which
+    index, and a new repo would take its basis packages from somewhere other than that feed, such as public GitHub.
+    `distributions` are the part's packages, by name, each with its folder in a checkout. basis-core is not among them:
+    no repo depends on it by name, and each part's own workspace source brings it from the same checkout or commit, so
+    a source for it would go unused.
 
     The index replaces PyPI for the whole repo (`default = true`), so a name the index lacks fails rather than being
     taken from PyPI, where anyone may publish it; the firm's feed proxies PyPI for every other package."""
@@ -120,8 +142,16 @@ def sources(distributions: Mapping[str, str], *, version: str, index: str | None
             msg = f"{checkout} is not a checkout of basis: it has no {', '.join(missing)}; give the folder that holds packages/"
             raise NewError(msg)
         lines = [f'{name} = {{ path = "{(root / folder).as_posix()}", editable = true }}' for name, folder in distributions.items()]
-    elif (commit := installed()) is not None:
-        lines = [f'{name} = {{ git = "{commit.url}", subdirectory = "{folder}", rev = "{commit.commit}" }}' for name, folder in distributions.items()]
+    elif isinstance(origin := installed(), Commit):
+        ref = f'tag = "v{version}"' if origin.revision == f"v{version}" else f'rev = "{origin.commit}"'
+        lines = [f'{name} = {{ git = "{origin.url}", subdirectory = "{folder}", {ref} }}' for name, folder in distributions.items()]
+    elif origin is Installed.INDEX:
+        name = next(iter(distributions))
+        msg = (
+            f"{name} came from an index, and uv does not record which, so the new repo cannot take its basis packages from the same feed:"
+            f" pass --index with the feed's URL, as `uvx {name} new repo NAME --index URL` does"
+        )
+        raise NewError(msg)
     elif version == UNRELEASED:
         name, folder = next(iter(distributions.items()))
         command = f"uvx --from 'git+{GIT}#subdirectory={folder}' {name} new repo NAME"

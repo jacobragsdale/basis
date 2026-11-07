@@ -40,7 +40,8 @@ keeps current: the `Dockerfile`, the deploy pipeline in `azure-pipelines.yml`, t
 `.githooks/`, which `basis check`, `sync` and `new` turn on, `.gitattributes`, and the agent files. Its `pyproject.toml` declares the job part, as `[tool.basis] parts = ["job"]`, so its one
 command, `basis`, offers the job verbs: `uv run basis --help` lists them, and `uv run basis new job NAME` adds a job.
 To take every package from an internal package index instead, pass `--index URL`: it replaces PyPI for the whole repo,
-so it must proxy PyPI.
+so it must proxy PyPI. A basis-job that `uvx` installed from an index needs it, since uv does not record which index:
+without `--index`, `new repo` refuses, rather than take basis from GitHub.
 
 ## Documentation
 

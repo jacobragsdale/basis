@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from basis.core.new import GIT, UNRELEASED, Commit, NewError, NoReleaseError, commit_of, repo, sources
+from basis.core.new import GIT, UNRELEASED, Commit, Installed, NewError, NoReleaseError, commit_of, installed_from, repo, sources
 
 PART = {"basis-job": "packages/job"}
 CHECKOUT = Path(__file__).parents[3]
@@ -14,11 +14,15 @@ SHA1 = "0123456789abcdef0123456789abcdef01234567"
 SHA256 = "0123456789abcdef" * 4
 
 
-def from_an_index_or_a_folder() -> None:
-    return None
+def from_a_folder() -> Installed:
+    return Installed.FILES
 
 
-def unread() -> Commit | None:
+def from_an_index() -> Installed:
+    return Installed.INDEX
+
+
+def unread() -> Commit | Installed:
     """Where the part was installed from, which `sources` must not read when an index or a checkout says."""
     msg = "sources read where the part was installed from, when an index or a checkout already said where its packages come from"
     raise AssertionError(msg)
@@ -30,26 +34,48 @@ def test_a_checkout_gives_the_parts_package_from_its_folder_and_basis_core_throu
 
 
 def test_without_an_index_or_a_checkout_the_parts_package_comes_from_the_versions_tag() -> None:
-    found = tomllib.loads(sources(PART, version="0.7.0", index=None, checkout=None, installed=from_an_index_or_a_folder))["tool"]["uv"]["sources"]
+    found = tomllib.loads(sources(PART, version="0.7.0", index=None, checkout=None, installed=from_a_folder))["tool"]["uv"]["sources"]
     assert found == {"basis-job": {"git": GIT, "subdirectory": "packages/job", "tag": "v0.7.0"}}
 
 
 def test_before_a_release_there_is_no_tag_and_the_error_says_to_run_from_git_or_use_a_checkout() -> None:
     run = r"run basis-job from git, as `uvx --from 'git\+\S+#subdirectory=packages/job' basis-job new repo NAME` does"
     with pytest.raises(NoReleaseError, match=rf"no tag holds its packages: {run}, or clone \S+ and pass --framework-path"):
-        sources(PART, version=UNRELEASED, index=None, checkout=None, installed=from_an_index_or_a_folder)
+        sources(PART, version=UNRELEASED, index=None, checkout=None, installed=from_a_folder)
 
 
 @pytest.mark.parametrize("version", [UNRELEASED, "0.7.0"])
-def test_a_part_installed_from_git_gives_the_new_repo_its_commit(version: str) -> None:
-    found = tomllib.loads(sources(PART, version=version, index=None, checkout=None, installed=lambda: Commit(FORK, SHA1)))["tool"]["uv"]["sources"]
+@pytest.mark.parametrize("revision", [None, "main", "v0.6.0", "0.7.0"], ids=["no-ref", "a-branch", "another-tag", "no-v"])
+def test_a_part_installed_from_git_gives_the_new_repo_its_commit(version: str, revision: str | None) -> None:
+    installed = Commit(FORK, SHA1, revision)
+    found = tomllib.loads(sources(PART, version=version, index=None, checkout=None, installed=lambda: installed))["tool"]["uv"]["sources"]
     assert found == {"basis-job": {"git": FORK, "subdirectory": "packages/job", "rev": SHA1}}
+
+
+@pytest.mark.parametrize("version", [UNRELEASED, "0.7.0"])
+def test_a_part_installed_from_git_at_its_versions_tag_gives_the_new_repo_that_release(version: str) -> None:
+    installed = Commit(FORK, SHA1, f"v{version}")
+    found = tomllib.loads(sources(PART, version=version, index=None, checkout=None, installed=lambda: installed))["tool"]["uv"]["sources"]
+    assert found == {"basis-job": {"git": FORK, "subdirectory": "packages/job", "tag": f"v{version}"}}
+
+
+@pytest.mark.parametrize("version", [UNRELEASED, "0.7.0"])
+def test_a_part_installed_from_an_index_is_refused_without_one_since_uv_does_not_say_which(version: str) -> None:
+    fix = r"pass --index with the feed's URL, as `uvx basis-job new repo NAME --index URL` does$"
+    with pytest.raises(NewError, match=rf"^basis-job came from an index, and uv does not record which, so the new repo cannot take its basis packages from the same feed: {fix}"):
+        sources(PART, version=version, index=None, checkout=None, installed=from_an_index)
+
+
+def test_what_an_install_records_says_whether_it_came_from_an_index() -> None:
+    assert installed_from("pydantic") is Installed.INDEX  # from PyPI, as every third-party package here is
+    assert installed_from("basis-core") is Installed.FILES  # this workspace's member, installed editable
+    assert installed_from("no-such-distribution") is Installed.FILES
 
 
 @pytest.mark.parametrize(
     ("direct_url", "commit"),
     [
-        (f'{{"url": "{FORK}", "vcs_info": {{"vcs": "git", "commit_id": "{SHA1}", "requested_revision": "main"}}, "subdirectory": "packages/job"}}', Commit(FORK, SHA1)),
+        (f'{{"url": "{FORK}", "vcs_info": {{"vcs": "git", "commit_id": "{SHA1}", "requested_revision": "main"}}, "subdirectory": "packages/job"}}', Commit(FORK, SHA1, "main")),
         (f'{{"url": "{FORK}", "vcs_info": {{"vcs": "git", "commit_id": "{SHA256}"}}}}', Commit(FORK, SHA256)),
         ('{"url": "file:///src/basis/packages/job", "dir_info": {"editable": true}}', None),
         ('{"url": "https://files.example.com/basis_job-0.7.0.tar.gz", "archive_info": {}}', None),
@@ -68,8 +94,9 @@ def test_only_a_git_install_names_a_commit(direct_url: str, commit: Commit | Non
         ('{"vcs_info": {"vcs": "git"}}', "gives no url"),
         (f'{{"url": "{FORK}", "vcs_info": {{"commit_id": "{SHA1}"}}}}', "has a vcs_info that names no version control system"),
         (f'{{"url": "{FORK}", "vcs_info": {{"vcs": "git", "commit_id": "main"}}}}', "says it came from git, and gives no full commit id"),
+        (f'{{"url": "{FORK}", "vcs_info": {{"vcs": "git", "commit_id": "{SHA1}", "requested_revision": 7}}}}', "gives a requested_revision that is not a ref"),
     ],
-    ids=["not-json", "no-url", "no-vcs", "a-ref-not-a-commit"],
+    ids=["not-json", "no-url", "no-vcs", "a-ref-not-a-commit", "a-revision-not-a-ref"],
 )
 def test_a_direct_url_that_is_not_what_pep_610_describes_is_refused_with_the_fix(direct_url: str, problem: str) -> None:
     with pytest.raises(NewError, match=rf"basis-job's direct_url.json.* {problem}.*: reinstall basis-job, as `uvx --refresh --from .*` does, or give --index or --framework-path$"):
