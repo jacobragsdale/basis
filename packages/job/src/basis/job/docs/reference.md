@@ -155,9 +155,10 @@ A run writes nothing when any of these holds, and lists each in its manifest's `
 - `ReplaceWhere(interval=...)` runs without an interval.
 - The destination table lacks a row's column, fills it itself (identity, computed or virtual), cannot hold its type
   exactly, or requires a column the row leaves out.
-- A value does not fit its column: a string longer than its length, a number its precision cannot hold, an integer
-  beyond its type's range, a null in a `NOT NULL` column, or a fraction of a second that `DATE`, `DATETIME` or
-  `SMALLDATETIME` drops.
+- A value does not fit its column: a string longer than its length, a string holding a character its column's code
+  page cannot store (a SQL Server `char`, `varchar` or `text` without a UTF-8 collation, which would store another in
+  its place), a number its precision cannot hold, an integer beyond its type's range, a null in a `NOT NULL` column,
+  or a fraction of a second that `DATE`, `DATETIME` or `SMALLDATETIME` drops.
 - The job's `check` returns a reason, or raises.
 
 The destination checks run only where the database is configured.

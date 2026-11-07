@@ -52,9 +52,8 @@ TEXTS = (
     "Zoë, naïve, Ångström; 日本語, 한국어; \U0001f680; \U00020000",  # accented Latin, CJK, an emoji, and CJK Extension B
 )
 LONG = "a" * 4094 + "\U0001f600b"
-"""An emoji across the driver's first chunk of 4,095 UTF-16 units, which `fetch*` reads by. No publish here writes it:
-mssql-python 1.17.0's `executemany` counts one row for a batch with a string past 4,000 characters, so basis's count
-check fails the publish, and nothing commits."""
+"""An emoji across the driver's first chunk of 4,095 UTF-16 units, which `fetch*` reads by. test_text_writes publishes
+strings this long and longer."""
 LATIN = "Zoë, café, naïve, Ångström, £5"
 """Text code page 1252 holds."""
 FULL = {"e_full": "é" * 10, "euro_full": "€" * 10}
@@ -82,7 +81,9 @@ def source_table(scratch: Scratch) -> str:
 
 @pytest.fixture
 def source() -> Iterator[Scratch]:
-    """A SQL Server table of `texts()`, written by the driver's defaults, which bind text exactly."""
+    """A SQL Server table of `texts()`, written by the driver's defaults, which bind this text exactly only because no
+    column's longest value is ASCII: one whose longest is binds as `varchar`, through the database's code page, which
+    is why basis binds every string as `nvarchar` (test_text_writes)."""
     scratch = mssql(configured(), uuid.uuid4().hex[:8]).with_ledger()
     scratch.execute(f"CREATE TABLE {source_table(scratch)} ({COLUMNS})")
     insert(scratch, texts())

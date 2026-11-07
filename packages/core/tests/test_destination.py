@@ -101,3 +101,20 @@ def test_an_integer_beyond_its_column_is_refused() -> None:
     target = Table((Column(name="n", kind="int", nullable=False, dtype=pl.Int64()),), table="counts", key=None)
     spec = TableSpec("mssql", "counts", {"n": column("n", "SMALLINT")})
     assert check_values(target, spec, Changes(insert=pl.DataFrame({"n": [40_000]}))) == ["insert: n: values from 40000 to 40000, beyond SMALLINT's -32768 to 32767"]
+
+
+CANNOT_HOLD = (
+    "insert: note: 3 values hold characters code page cp1252 cannot store, such as '日', which the database would replace without an error:"
+    " store them in a Unicode column, NVARCHAR or a VARCHAR with a UTF-8 collation"
+)
+
+
+@pytest.mark.parametrize(
+    ("encoding", "notes", "problems"),
+    [("cp1252", ["hello world", "Zoë, café, €5", None], []), ("cp1252", ["hello world", "日本", "Ω", "\U0001f600"], [CANNOT_HOLD]), (None, ["hello world", "日本", "Ω", "\U0001f600"], [])],
+    ids=["text-its-code-page-holds", "text-it-does-not", "a-unicode-column"],
+)
+def test_text_a_columns_code_page_cannot_store_is_refused(encoding: str | None, notes: list[str | None], problems: list[str]) -> None:
+    """SQL Server replaces a character a `varchar`'s code page cannot hold, as `日` with `?`, and raises no error."""
+    note = DestColumn("note", "VARCHAR", None, None, None, nullable=True, generated=False, defaulted=False, encoding=encoding)
+    assert check_values(TARGET, mssql(note=note), Changes(insert=prices(*(dict[str, object](note=text) for text in notes)))) == problems

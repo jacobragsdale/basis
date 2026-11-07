@@ -1,12 +1,15 @@
 import logging
 import socket
 import time
-from collections.abc import Generator
+from collections.abc import Callable, Generator
+from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Literal
 
 import mssql_python
 import oracledb
+import polars as pl
 import pyarrow as pa
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
@@ -15,14 +18,16 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from pydantic import Field, ValidationError
 
 from basis.core import traces
-from basis.core.databases import mssql, open_database, oracle
+from basis.core.databases import Counts, mssql, open_database, oracle
 from basis.core.databases.base import end_reading
 from basis.core.databases.failures import Boundary, ending, failures
 from basis.core.databases.mssql import MssqlReader, MssqlWriter, fetches_char_as_utf8
 from basis.core.databases.oracle import OracleReader, connect
+from basis.core.destination import TableSpec
 from basis.core.errors import Conflict, Denied, Failed, Rejected, ServiceError, Timeout, Unavailable
 from basis.core.model import Model
 from basis.core.settings import GivenSettings, OracleSettings, publish_refusal, variable
+from basis.core.tables import Changes, Column
 
 MSSQL = {"kind": "mssql", "connection_string": "Server=nowhere", "isolation": "snapshot", "timeout_s": 5, "max_rows": 10}
 ORACLE = {"kind": "oracle", "dsn": "nowhere:1521/X", "user": "reader", "password": "x", "mode": "thin", "isolation": "read_only", "timeout_s": 5, "max_rows": 10}
@@ -387,3 +392,88 @@ def test_each_statement_a_reader_or_a_writer_runs_has_a_span_on_the_runs_tracer(
         ("warehouse commit", {"db.system.name": "microsoft.sql_server", "basis.resource": "warehouse"}),
         ("ledger SELECT", {"db.system.name": "oracle.db", "basis.resource": "ledger", "db.query.text": "SELECT price FROM prices", "db.response.returned_rows": 3}),
     ]
+
+
+@dataclass(frozen=True)
+class _Target:
+    """A target as a part declares one, with only what SQL Server's writer reads."""
+
+    columns: tuple[Column, ...]
+    table: str = "docs"
+    database: str = "warehouse"
+    key: tuple[str, ...] | None = ("id",)
+
+    def column(self, name: str) -> Column:
+        return next(column for column in self.columns if column.name == name)
+
+
+DOCS = _Target(
+    (
+        Column(name="id", kind="int", nullable=False, dtype=pl.Int64()),
+        Column(name="body", kind="str", nullable=True, dtype=pl.String()),
+        Column(name="amount", kind="decimal", nullable=True, dtype=pl.Decimal(18, 4), precision=18, scale=4),
+    )
+)
+DOCS_SPEC = TableSpec("mssql", "docs", {})  # unread by SQL Server's writer, which binds by the target's kinds
+
+
+class _Server:
+    """SQL Server as its writer reaches it, through cursors that record each call: an `executemany` counts each row as
+    `reported` says, as the driver's count, the stage holds what its batches gave it but `lost` rows, and every other
+    statement counts one row."""
+
+    def __init__(self, *, reported: Callable[[int], int] = lambda rows: rows, lost: int = 0) -> None:
+        self.calls: list[tuple[str, object]] = []
+        self.reported, self.lost = reported, lost
+        self.staged = 0
+        self.rowcount = 0
+
+    def cursor(self) -> _Server:
+        return self
+
+    def setinputsizes(self, sizes: object) -> None:
+        self.calls.append(("setinputsizes", sizes))
+
+    def executemany(self, sql: str, rows: list[tuple[object, ...]]) -> None:
+        self.calls.append(("executemany", [row[0] for row in rows]))
+        self.staged += len(rows) if "#etl_stage" in sql else 0
+        self.rowcount = self.reported(len(rows))
+
+    def execute(self, sql: str, binds: tuple[object, ...] = ()) -> None:
+        self.calls.append(("execute", binds[0] if binds else sql.split(None, 1)[0]))
+        self.staged += 1 if binds and "#etl_stage" in sql else 0
+        self.rowcount = 0 if sql.startswith(("UPDATE", "DROP")) else self.staged if sql.startswith("INSERT INTO docs") and "SELECT" in sql else 1
+
+    def fetchone(self) -> tuple[int]:
+        return (self.staged - self.lost,)
+
+    def close(self) -> None:
+        pass
+
+
+def _docs(*rows: tuple[int, str | None]) -> pl.DataFrame:
+    return pl.DataFrame({"id": [row[0] for row in rows], "body": [row[1] for row in rows], "amount": [Decimal("1.5")] * len(rows)}, schema={column.name: column.dtype for column in DOCS.columns})
+
+
+def test_a_string_binds_as_nvarchar_sized_in_utf16_units_and_a_row_past_4000_goes_by_itself() -> None:
+    """mssql-python 1.17.0 typed each column by its longest value, binding one whose longest is ASCII as `varchar`,
+    which the database's code page converts, and counted only the last row of a batch holding a longer string."""
+    server = _Server()
+    writer = MssqlWriter("warehouse", server, 10, "etl.publishes")  # ty: ignore[invalid-argument-type] -- a fake connection
+    frame = _docs((1, "hello world"), (2, "日本\U0001f600"), (3, "a" * 3999 + "\U0001f600"), (4, "\U0001f600" * 2000), (5, None))
+    assert writer.apply(DOCS, Changes(insert=frame), DOCS_SPEC) == Counts(inserted=5)
+    sizes = [(mssql_python.SQL_BIGINT, 19, 0), (mssql_python.SQL_WVARCHAR, 4000, 0), (mssql_python.SQL_VARCHAR, 41, 0)]
+    assert server.calls == [("setinputsizes", sizes), ("executemany", [1, 2, 4, 5]), ("execute", 3)]
+
+
+@pytest.mark.parametrize(("lost", "error"), [(0, None), (1, "staging for docs wrote 2 rows, and the run computed 3: nothing is committed")], ids=["counted", "short"])
+def test_a_stage_is_counted_by_the_server_whatever_the_driver_reports(lost: int, error: str | None) -> None:
+    server = _Server(reported=lambda _: 1, lost=lost)  # as the driver counted a batch holding a long string
+    writer = MssqlWriter("warehouse", server, 10, "etl.publishes")  # ty: ignore[invalid-argument-type] -- a fake connection
+    frame = _docs((1, "x"), (2, "a" * 4001), (3, "y"))
+    if error is None:
+        assert writer.apply(DOCS, Changes(upsert=frame), DOCS_SPEC) == Counts(upserted=3)
+        return
+    with pytest.raises(RuntimeError) as raised:
+        writer.apply(DOCS, Changes(upsert=frame), DOCS_SPEC)
+    assert str(raised.value) == error

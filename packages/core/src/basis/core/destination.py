@@ -4,8 +4,8 @@ module reads the description, and these functions only compare.
 `check_table` runs before anything loads, so a table that has drifted from its row fails a run in seconds: a column
 the row has and the table does not, a type that cannot hold the row's values exactly, or a column the table requires
 that the row leaves out. `check_values` runs after the transform, on the values themselves: a string longer than its
-column, a number its column's precision cannot hold, a null where the table forbids one, or a time of day finer than
-the column keeps."""
+column, or holding a character its column's code page cannot store, a number its column's precision cannot hold, a
+null where the table forbids one, or a time of day finer than the column keeps."""
 
 from dataclasses import dataclass
 from decimal import Decimal
@@ -33,6 +33,10 @@ class DestColumn:
     generated: bool
     """An identity, computed or virtual column, which the table fills."""
     defaulted: bool
+    encoding: str | None = None
+    """Python's codec for the code page a string column stores its text in, such as `cp1252` for a SQL Server
+    `varchar` under `SQL_Latin1_General_CP1_CI_AS`; None where it holds any Unicode text, as an `nvarchar` or a UTF-8
+    `varchar` does, or for a column that is not a string."""
 
 
 @dataclass(frozen=True)
@@ -128,10 +132,8 @@ def _value_problems(column: Column, found: DestColumn, series: pl.Series) -> lis
     if not values.len():
         return problems
     match column.kind:
-        case "str" if found.length is not None:
-            longest = _number(values.str.len_chars().max())
-            if longest > found.length:
-                problems.append(f"values up to {longest} characters, and the column holds {found.length}")
+        case "str":
+            problems.extend(_text_problems(found, values))
         case "int":
             low, high = _INTEGER_RANGES.get(found.type, (-(10 ** (found.precision or 38)) + 1, 10 ** (found.precision or 38) - 1))
             if _number(values.min()) < low or _number(values.max()) > high:
@@ -148,6 +150,31 @@ def _value_problems(column: Column, found: DestColumn, series: pl.Series) -> lis
         case _:
             pass
     return problems
+
+
+def _text_problems(found: DestColumn, values: pl.Series) -> list[str]:
+    problems: list[str] = []
+    if found.length is not None and (longest := _number(values.str.len_chars().max())) > found.length:
+        problems.append(f"values up to {longest} characters, and the column holds {found.length}")
+    if found.encoding is not None and (lost := _unstorable(values, found.encoding)):
+        count, character = lost
+        problems.append(
+            f"{count} values hold characters code page {found.encoding} cannot store, such as {character!r}, which the database would"
+            " replace without an error: store them in a Unicode column, NVARCHAR or a VARCHAR with a UTF-8 collation"
+        )
+    return problems
+
+
+def _unstorable(values: pl.Series, encoding: str) -> tuple[int, str] | None:
+    """How many of `values` hold a character `encoding` cannot store, and the first such character; None if every one
+    is stored exactly. A code page holds ASCII, so only the others are encoded."""
+    count, first = 0, ""
+    for value in values.filter(values.str.contains(r"[^\x00-\x7F]")):
+        try:
+            str(value).encode(encoding)
+        except UnicodeEncodeError as error:
+            count, first = count + 1, first or str(error.object[error.start])
+    return (count, first) if count else None
 
 
 def _number(value: object) -> Decimal:
