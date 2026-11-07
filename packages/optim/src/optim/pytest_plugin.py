@@ -2,7 +2,7 @@
 safeguards. A model's contract tests are not here: they are `optim.testing.ContractTests`, which each model's
 `tests/test_contract.py` subclasses, so they appear in the IDE like any test.
 
-For the repo's e2e suite, marked `e2e`, the `optim_qa` fixture runs `optim run` against the QA environment. It refuses
+For the repo's e2e suite, marked `e2e`, the `optim_qa` fixture runs `basis run` against the QA environment. It refuses
 to run unless every configured source and destination carries a QA marker (`optim_qa_markers`, default `qa`) and every
 write goes to the allowlist (`optim_e2e_writes`: the QA snapshot root and orders table). `QA.listed` picks a model's
 first portfolios from its `portfolios` dataset, and `QA.portfolios` picks portfolios by what they hold, with a
@@ -103,19 +103,19 @@ class QA:
         return list(dict.fromkeys(str(portfolio_id) for portfolio_id in columns["portfolio_id"]))
 
     def run(self, model: str, params: Path, portfolios: Sequence[str], *args: str) -> E2ERun:
-        """`optim run` as the deployed image runs it, labelled `purpose=e2e`, from the repo: `params` is best relative
+        """`basis run` as the deployed image runs it, labelled `purpose=e2e`, from the repo: `params` is best relative
         to it, as `models/MODEL/params/default.json`."""
         command = [*self.command, "run", model, "--params", params.as_posix(), "--portfolios", *portfolios, "--label", "purpose=e2e", *args]
         ran = subprocess.run(command, cwd=self.root, capture_output=True, text=True, check=False)  # noqa: S603 -- the configured command
         if not (found := re.search(r"^run (\S+)$", ran.stdout, re.MULTILINE)):
-            msg = f"optim run did not complete (exit {ran.returncode}):\n{ran.stderr[-4000:]}"
+            msg = f"basis run did not complete (exit {ran.returncode}):\n{ran.stderr[-4000:]}"
             raise AssertionError(msg)
         return E2ERun(found.group(1), ran.returncode, snapshots.find([self.settings.snapshots()], found.group(1)))
 
     def replay(self, run: E2ERun) -> E2ERun:
         ran = subprocess.run([*self.command, "replay", run.run_id, "--label", "purpose=e2e"], cwd=self.root, capture_output=True, text=True, check=False)  # noqa: S603 -- the configured command
         if not (found := re.search(r"^run (\S+)$", ran.stdout, re.MULTILINE)):
-            msg = f"optim replay did not complete (exit {ran.returncode}):\n{ran.stderr[-4000:]}"
+            msg = f"basis replay did not complete (exit {ran.returncode}):\n{ran.stderr[-4000:]}"
             raise AssertionError(msg)
         return E2ERun(found.group(1), ran.returncode, snapshots.find([self.settings.snapshots()], found.group(1)))
 

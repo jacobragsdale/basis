@@ -3,7 +3,8 @@
 This page specifies how a quant works in a model repo: where to start, how the repo is organized, how a model runs,
 and where each kind of change goes. It was agreed on 2026-10-23 and is implemented in `optim` 0.2.0, which breaks
 0.1's model contract and repo layout. [The optim framework](design.md) is the design underneath it; this page replaces
-its sections on the repo layout and on running from an IDE.
+its sections on the repo layout and on running from an IDE. Since basis's roadmap step 3.5, the repo's command is
+`basis`, and `optim` is the same command; `basis sync` writes the files the layout below marks as basis's.
 
 The reader it is designed for is an analyst who knows Python at a high level. They clone a model repo, or make one,
 open it in PyCharm or VS Code, probably with GitHub Copilot beside them, and must be able to see where to start, run
@@ -29,14 +30,14 @@ and debug a model, and add a rule, a dataset or a constraint without reading `op
 ```text
 sma-optimizer/
   README.md               the start page: run the tests, run a model, then a "To ... edit ..." table
-  AGENTS.md               the optim contract, as a block that optim sync writes
-  .agents/skills/         the optim-* skills, which optim sync copies
-  pyproject.toml          the optim pin, an entry point per model, and pytest, ruff and ty settings
+  AGENTS.md, CLAUDE.md    basis's block and the optim contract, which basis sync writes
+  .agents/skills/         the optim-* skills, which basis sync copies, and into .claude/skills/
+  pyproject.toml          the optim pin, [tool.basis] parts, an entry point per model, and pytest, ruff and ty settings
   .env.example            copied to .env, .env.qa and .env.prod, which git ignores
-  Dockerfile, .dockerignore, azure-pipelines.yml
+  Dockerfile, azure-pipelines.yml, .githooks/, .gitattributes   basis's, which basis sync writes
+  .dockerignore
   snapshots/              ignored by git: every run from Python saves here; delete it whenever you like
   tests/
-    test_agent_files.py   AGENTS.md's block and the skills match the installed optim
     e2e/test_smoke.py     the QA suite, marked e2e, which runs the deployed image against QA
   models/
     __init__.py
@@ -46,7 +47,7 @@ sma-optimizer/
 
 Every repo's package is `models`, installed in editable mode, so `from models.income import model` works whether a
 file runs from PyCharm, VS Code or a terminal. Each model is listed as an entry point,
-`income = "models.income.model"`, which is how `optim run income` and a replay find it.
+`income = "models.income.model"`, which is how `basis run income` and a replay find it.
 
 ## A model's folder
 
@@ -159,7 +160,7 @@ if __name__ == "__main__":
 
 - `optim.run(model, *, params, portfolios, as_of, env, data, workers, labels, snapshots, cache)` decides portfolios
   and returns the `Run`, whose `decisions`, `trades`, `reasons` and `metrics` are DataFrames to inspect in the
-  debugger. It prints what `optim run` prints.
+  debugger. It prints what `basis run` prints.
 - Relative paths are the model's folder's, wherever the IDE runs the file from. `env` is found in the model's folder or
   a folder above it, up to the repo's root, where `.env` lives.
 - Data is live by default, from the sources the settings file configures. `data="tests/fixture"` reads every dataset
@@ -179,7 +180,7 @@ if __name__ == "__main__":
 
 ## Production
 
-`optim run MODEL --params FILE [--portfolios ...] [--as-of DATE] [--data DIR]` reads the process's environment, saves
+`basis run MODEL --params FILE [--portfolios ...] [--as-of DATE] [--data DIR]` reads the process's environment, saves
 the snapshot under `BASIS_SNAPSHOT_ROOT`, which it requires, and writes accepted portfolios' orders where
 `BASIS_OPTIM__ORDERS__*` configures a table. It is the only thing that writes orders. Its paths are the working
 directory's, as any command's are. It and `optim.run` share everything from loading to saving.
@@ -187,7 +188,7 @@ directory's, as any command's are. It and `optim.run` share everything from load
 ## Settings files
 
 `.env`, `.env.qa` and `.env.prod` sit at the repo's root, and git ignores all of them but `.env.example`. `main.py`
-picks one with `env=`. `BASIS_SNAPSHOT_ROOT` is where `optim run` saves and where a replay looks for a run id; a run
+picks one with `env=`. `BASIS_SNAPSHOT_ROOT` is where `basis run` saves and where a replay looks for a run id; a run
 from Python does not need it. A dataset's source that a settings file does not configure fails its load, naming the
 variables to set. No run ever falls back from a source to the fixture.
 
@@ -195,7 +196,7 @@ variables to set. No run ever falls back from a source to the fixture.
 
 A model may give its `Data` a `portfolios` attribute, declared like any dataset, whose query takes only the as-of date
 and whose rows are the portfolios the model manages, one each, with any columns the model wants. `portfolios=None`, or
-`optim run` without `--portfolios`, then decides every portfolio it lists. Each portfolio's hooks see only its own row,
+`basis run` without `--portfolios`, then decides every portfolio it lists. Each portfolio's hooks see only its own row,
 as with any per-portfolio dataset, and `prepare_market` sees every row. A portfolio given by id that the dataset does
 not list is rejected as not one of the model's portfolios on that date. The fixture holds `portfolios.csv`. A model
 without the dataset decides the portfolios it is given, or every portfolio in a holdings file.
@@ -206,7 +207,7 @@ without the dataset decides the portfolios it is given, or every portfolio in a 
   the model's module. Its tests check that the default params validate, that every portfolio of the fixture is
   accepted and reports exactly the metrics `Metrics` declares, and that the model's code cannot reach I/O through its
   imports. They appear and run in the IDE's test panel like any test; `optim` injects no tests.
-- `tests/test_agent_files.py` checks that `AGENTS.md`'s block and the skills match the installed `optim`.
+- `basis check` checks that `AGENTS.md`'s blocks, the skills and basis's other files match the installed versions.
 - `models/income/tests/builders.py` builds what a model's tests need in a line: `portfolio(*rows, **datasets)`, the
   portfolio a run would prepare from a few securities, before its rules; `MARKET`; and `params(**changes)`,
   `default.json` with changes. `optim.testing` keeps builders for what `optim` owns: `frame`, `data`, and the default
@@ -216,7 +217,7 @@ without the dataset decides the portfolios it is given, or every portfolio in a 
 
 ## Shared code
 
-`optim new model` creates `models/shared/`, with a README, when it adds a repo's second model. It is laid out like a
+`basis new model` creates `models/shared/`, with a README, when it adds a repo's second model. It is laid out like a
 model's folder, without `model.py`, `main.py` or `params/`. Models import from it, as in
 `models.shared.rules.controls`, and never from each other. Code moves there when a second model needs it, and into
 `optim.datasets` when a second repo does. Each model's fixture still has a file for every dataset it reads. A repo with
@@ -225,7 +226,7 @@ one model keeps everything in the model's folder.
 ## How a repo explains itself
 
 - The repo's `README.md` is the start page: run the tests, which need no credentials, then copy `.env.example` and run
-  a model's `main.py`, then a table that maps each task to the files to edit and the guide (`optim docs PAGE`).
+  a model's `main.py`, then a table that maps each task to the files to edit and the guide (`basis docs optim/PAGE`).
 - The `AGENTS.md` block holds the contract (the hooks, the rules to keep, the commands) and points at the README's
   table, so there is one copy of where each change goes.
 - The skills cover the long procedures: start a model, port a legacy optimizer, run a research sweep, triage an e2e
@@ -237,8 +238,9 @@ one model keeps everything in the model's folder.
 
 ## Making a repo
 
-`optim new repo REPO MODEL (--index URL | --optim-path PATH)` makes `REPO/` with `models/MODEL/` copied from the one
-example, runs `git init` and `uv sync`, and leaves the first commit to the quant. `optim new model NAME`, in a repo, adds
+`optim new repo REPO MODEL [--index URL | --framework-path PATH]` makes `REPO/` with `models/MODEL/` copied from the
+one example, runs `git init`, points git at the repo's hooks, runs `uv sync`, and leaves the first commit to the
+quant. `basis new model NAME`, in a repo, adds
 `models/NAME/`, its entry point and its README row, and `models/shared/` with the second model. The example is a
 taxable SMA rebalance with four datasets (`portfolios`, with a client's own rating floor; `signals`, one table for
 every portfolio; `controls` and `mandates`, per portfolio), four rule modules (controls, credit, screens, and mandates,

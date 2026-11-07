@@ -124,7 +124,7 @@ To add a dataset:
    ```
 
 To confirm it worked, run `uv run pytest`: the contract test loads the new file through the row model and decides every
-portfolio of the fixture with it. `uv run optim describe MODEL` then lists `issuer_scores` under `datasets`, with its
+portfolio of the fixture with it. `uv run basis describe MODEL` then lists `issuer_scores` under `datasets`, with its
 source and columns. A run saved before the dataset existed did not save it, so it cannot be replayed with the new
 code.
 

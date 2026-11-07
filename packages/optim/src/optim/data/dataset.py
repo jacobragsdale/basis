@@ -41,7 +41,7 @@ class Dataset:
     key: tuple[str, ...]
     """Columns whose values no two rows share."""
     cache: timedelta | None = None
-    """How long a cache entry stays fresh; None reads it live on every load. `optim warm` fills every cached dataset."""
+    """How long a cache entry stays fresh; None reads it live on every load. `basis warm` fills every cached dataset."""
     check: Callable[[pd.DataFrame], None] | None = None
     """Rules across rows, which raise `ValueError` on rows that disagree."""
 

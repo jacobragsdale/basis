@@ -5,7 +5,7 @@ description: Triage a failing or refused optim e2e run against QA, and tell a mo
 
 # Triage an e2e failure
 
-Follow the triage section of `uv run optim docs how-to/run-the-qa-suite`. In short, sort the failure first:
+Follow the triage section of `uv run basis docs optim/how-to/run-the-qa-suite`. In short, sort the failure first:
 
 1. **Refused to run**: the `optim_qa` fixture found a source or destination without the QA marker, or a write outside
    `optim_e2e_writes`. Fix the environment, never the safeguard.

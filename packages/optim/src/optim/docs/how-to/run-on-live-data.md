@@ -7,7 +7,7 @@ each source is.
 Prerequisites:
 
 - A model repo with `uv sync` run, and your editor's Python interpreter set to the repo's `.venv`.
-- Read access to every source the model reads. `uv run optim describe MODEL` lists each dataset with its `source`:
+- Read access to every source the model reads. `uv run basis describe MODEL` lists each dataset with its `source`:
   a database, by the name its settings give, or `rest` or `file`. The income example reads `holdings`, `portfolios`,
   `controls` and `mandates` from the SQL Server database named `mssql`, `securities` from the Oracle database named
   `oracle`, and `signals` from the signals API (`rest`).
@@ -35,7 +35,7 @@ To run a model on live data:
    - `as_of`, a date or `"2026-10-16"`, is the business date every query takes. Without it, the run decides as of
      today in New York.
 3. Run the file: press Run in your editor, or `uv run python models/MODEL/main.py` from a terminal. The run prints a
-   row per portfolio, as `optim run` does, and `results` holds its decisions, trades, reasons and metrics as tables.
+   row per portfolio, as `basis run` does, and `results` holds its decisions, trades, reasons and metrics as tables.
 
 The settings file is found in the model's folder or a folder above it, up to the repo's root, wherever your editor
 runs the file from. Its variables are set for the call alone, and the environment is as it was after it, so two calls
@@ -77,18 +77,18 @@ Airflow runs the repo's image, which runs `optim`, under `tini`, with the argume
 environment's variables:
 
 ```sh
-optim run income --params models/income/params/default.json --as-of 2026-10-16
+basis run income --params models/income/params/default.json --as-of 2026-10-16
 ```
 
-`optim run` decides as a run from `main.py` does, through the same code, with these differences: it reads the process's
-environment, which `uv run --env-file .env optim run ...` sets on a machine; its paths are the working directory's; it
+`basis run` decides as a run from `main.py` does, through the same code, with these differences: it reads the process's
+environment, which `uv run --env-file .env basis run ...` sets on a machine; its paths are the working directory's; it
 saves its snapshot under `BASIS_SNAPSHOT_ROOT`, which it requires; it writes the accepted portfolios' orders where
 `BASIS_OPTIM__ORDERS__DATABASE` and `BASIS_OPTIM__ORDERS__TABLE` configure a table, through that database's write login;
 and it exits 0 only when every portfolio was accepted. `--portfolios P1 P2`, or `--portfolios @FILE` with one id per
 line, names the portfolios; without it, it decides every portfolio the model lists.
 
 > [!WARNING]
-> `optim run` writes orders wherever its environment configures an orders table. Keep `BASIS_OPTIM__ORDERS__*`, and
+> `basis run` writes orders wherever its environment configures an orders table. Keep `BASIS_OPTIM__ORDERS__*`, and
 > every database's `WRITE` block, out of the settings files on your machine, `.env.prod` included, which hold read-only
 > credentials alone.
 

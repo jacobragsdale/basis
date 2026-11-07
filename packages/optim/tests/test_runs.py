@@ -2,16 +2,16 @@
 it again from the snapshot alone."""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
-from fakes import Clock, Rows, loader, saved
+from fakes import Basis, Clock, Rows, loader, saved
 from pandas.testing import assert_frame_equal
 
 import optim
 from basis.core.storage import Root
 from optim import models, snapshots
-from optim.cli import main
 from optim.datasets import HOLDINGS, SECURITIES
 from optim.runs import replay_run, run_model
 from optim.testing import AS_OF, CASH, frame
@@ -129,7 +129,7 @@ def test_params_that_break_the_models_schema_fail_before_anything_loads(tmp_path
     assert source.fetches == []
 
 
-def test_the_command_exits_zero_only_when_every_portfolio_is_accepted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_command_exits_zero_only_when_every_portfolio_is_accepted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, basis: Basis, capsys: pytest.CaptureFixture[str]) -> None:
     data = tmp_path / "data"
     data.mkdir()
     HELD.to_csv(data / "holdings.csv", index=False)
@@ -137,10 +137,13 @@ def test_the_command_exits_zero_only_when_every_portfolio_is_accepted(tmp_path: 
     monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", str(tmp_path / "snapshots"))
     command = ["run", "toys.basic", "--data", str(data), "--as-of", "2026-10-16", "--params"]
 
-    assert main([*command, str(params(tmp_path))]) == 0  # every portfolio in the holdings file
-    assert main([*command, str(params(tmp_path, unsolved=["P1"]))]) == 1
+    assert basis(*command, str(params(tmp_path))) == 0  # every portfolio in the holdings file
+    assert basis(*command, str(params(tmp_path, unsolved=["P1"]))) == 1
+    line = capsys.readouterr().err.splitlines()[-1]
+    fix = r"fix what each says; `basis replay toys\.basic \1` decides them again on what the run read"
+    assert re.fullmatch(rf"ERROR: run (\S+) rejected 1 of its 2 portfolios, for the reasons above: {fix}", line), line
     [first, _] = sorted(path.stem for path in (tmp_path / "snapshots" / "runs" / "optim" / "toys.basic").iterdir())
-    assert main(["replay", first]) == 0
+    assert basis("replay", first) == 0
     assert saved(Root.at(tmp_path / "snapshots"), first).results()["decisions"]["portfolio_id"].tolist() == ["P1", "P2"]
 
 

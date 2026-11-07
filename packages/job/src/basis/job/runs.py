@@ -102,6 +102,7 @@ def run(job: Job, settings: Settings, request: Request, *, snapshot_root: Root, 
         run_id=run_id, job=job.name, module=job.module, version=VERSION, git_sha=request.git_sha, started_at=started,
         interval=str(request.interval) if request.interval is not None else None, params_path=str(request.params),
         params_sha256=snapshots.params_digest(params_text), labels=dict(request.labels), data=str(request.data) if request.data is not None else None,
+        again=request.again,
     )  # fmt: skip
     targets = targets_of(job)
     specs, reasons = _check_destinations(targets, settings, databases, publishing=request.publish)
@@ -211,6 +212,7 @@ class _Record:
     labels: dict[str, str]
     data: str | None
     replay_of: str | None = None
+    again: bool = False
     inputs: dict[str, InputRecord] = field(default_factory=dict)
     outputs: dict[str, snapshots.OutputRecord] = field(default_factory=dict)
 
@@ -222,7 +224,7 @@ class _Record:
         return RunRecord(
             run_id=self.run_id, job=self.job, module=self.module, version=self.version, git_sha=self.git_sha, started_at=self.started_at,
             finished_at=finished_at, interval=self.interval, params_path=self.params_path, params_sha256=self.params_sha256, labels=self.labels,
-            data=self.data, replay_of=self.replay_of, status=status, inputs=self.inputs, outputs=self.outputs, reasons=reasons or [], error=error,
+            data=self.data, replay_of=self.replay_of, again=self.again, status=status, inputs=self.inputs, outputs=self.outputs, reasons=reasons or [], error=error,
             publishes=publishes or {},
         )  # fmt: skip
 
@@ -281,14 +283,15 @@ def replay(job: Job, source: Snapshot, *, params: Path | None = None, snapshot_r
     return result, diffs
 
 
-def resume(job: Job, source: Snapshot, settings: Settings, *, clock: Callable[[], datetime] = utc_now) -> RunRecord:
-    """Finish publishing a run that committed to some of its databases and failed on another, from its snapshot."""
+def resume(job: Job, source: Snapshot, settings: Settings, *, again: bool = False, clock: Callable[[], datetime] = utc_now) -> RunRecord:
+    """Finish publishing a run that committed to some of its databases and failed on another, from its snapshot: told
+    `again` as the run was, or as `again` says now."""
     record = source.record()
     logs.bind(run_id=record.run_id, job=job.name)
     if record.status == "published":
         log.info("already published")
         return record
-    final = core_runs.resume(source, record, name=job.name, targets=targets_of(job), databases=core_runs.opener(settings), version=VERSION, clock=clock)
+    final = core_runs.resume(source, record, name=job.name, targets=targets_of(job), databases=core_runs.opener(settings), version=VERSION, clock=clock, again=again)
     _summary(final)
     return final
 

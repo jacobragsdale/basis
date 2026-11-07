@@ -6,7 +6,7 @@ applies them, or trade sizing. It goes in `models/shared/`, which is laid out li
 
 Prerequisites:
 
-- A repo with two models. `uv run optim new model NAME` adds the second, copied from optim's example, with its entry
+- A repo with two models. `uv run basis new model NAME` adds the second, copied from optim's example, with its entry
   point and its row in the README, and creates `models/shared/` with a README.
 
 Move code there when a second model needs it, not before: a repo with one model keeps everything in the model's

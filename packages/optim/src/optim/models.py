@@ -63,7 +63,8 @@ def load(name: str) -> LoadedModel:
     except ModuleNotFoundError as error:
         if not (error.name is not None and f"{path}.".startswith(f"{error.name}.")):
             raise  # the model's own module imports something that is missing
-        msg = f"no model {name!r}: it is not an entry point in {GROUP} ({', '.join(sorted(models)) or 'none installed'}), nor a module"
+        listed = ", ".join(sorted(models)) or "none installed"
+        msg = f"no model {name!r}: it is not an entry point in {GROUP} ({listed}), nor a module: give one of them, or a model's module path, as models.NAME.model"
         raise LookupError(msg) from error
     return read(name, module)
 

@@ -1,7 +1,7 @@
 # Reference
 
 The repo layout, the model contract, the Python API, the command line, the settings, the snapshot files,
-`optim.testing` and the pytest plugin of `optim` 0.2.0.
+`optim.testing` and the pytest plugin of `optim`, as it runs on basis.
 
 ## The repo
 
@@ -11,16 +11,16 @@ editable mode, so `from models.MODEL import model` works whichever folder a file
 | Path | Holds |
 |---|---|
 | `README.md` | The start page: a table of models, how to start, and which file each kind of change goes in. |
-| `AGENTS.md` | The optim contract, as a block between `<!-- optim:begin -->` and `<!-- optim:end -->` that `optim sync` writes. |
-| `.agents/skills/optim-*/` | The skills `optim sync` copies. |
-| `pyproject.toml` | The `optim` version range and its source, an entry point per model, and the pytest, ruff and ty settings. |
+| `AGENTS.md`, `CLAUDE.md` | basis's block and the optim contract, each between the markers of the block `basis sync` writes; `CLAUDE.md` holds only `@AGENTS.md`. |
+| `.agents/skills/optim-*/`, `.claude/skills/optim-*/` | The skills `basis sync` copies. |
+| `pyproject.toml` | The `optim` version range and its source, `[tool.basis] parts = ["optim"]`, an entry point per model, and the pytest, ruff and ty settings. |
 | `.env.example` | The settings, commented; copied to `.env`, `.env.qa` and `.env.prod`, which git ignores. |
-| `Dockerfile`, `.dockerignore`, `azure-pipelines.yml` | The image Airflow runs, and a stub of the pipeline that tests, builds and runs the QA suite. |
+| `Dockerfile`, `.dockerignore`, `azure-pipelines.yml` | The image Airflow runs, `basis run MODEL ...` under tini, and a stub of the pipeline that checks and builds it. `basis sync` writes the Dockerfile and the pipeline. |
+| `.githooks/`, `.gitattributes` | The commit hook, which fixes and formats with ruff and runs `basis check --staged`, and the push hook, which runs `basis check`; LF line endings. |
 | `snapshots/` | Every run from Python, which git ignores. Safe to delete at any time. |
-| `tests/test_agent_files.py` | Fails when the agent files do not match the installed `optim`. |
 | `tests/e2e/test_smoke.py` | The QA suite, marked `e2e`. |
 | `models/MODEL/` | One model. |
-| `models/shared/` | What two or more models use, laid out like a model's folder; `optim new model` adds it with the second model. |
+| `models/shared/` | What two or more models use, laid out like a model's folder; `basis new model` adds it with the second model. |
 
 Each model is listed as `NAME = "models.MODEL.model"` under `[project.entry-points."optim.models"]`. A command names a
 model by that `NAME`, or by its module path, as does a module path that is not an entry point, such as
@@ -89,7 +89,7 @@ the other datasets.
 
 The base of a model's `Params`, and of any model nested in them. It refuses unknown keys, does not coerce types (a JSON
 integer is a valid float, a string is not a number), and is frozen. Field docstrings become the field descriptions
-`optim describe` prints. A params file is one JSON object; a field it leaves out takes its default.
+`basis describe` prints. A params file is one JSON object; a field it leaves out takes its default.
 
 ## `optim.Datasets`
 
@@ -244,7 +244,7 @@ if __name__ == "__main__":
     results = run(model, params="params/default.json", portfolios=None, env=".env")
 ```
 
-They run as `optim run`, `optim replay` and `optim sweep` do, through the same code, with these differences:
+They run as `basis run`, `basis replay` and `basis sweep` do, through the same code, with these differences:
 
 | | From Python | From the command line |
 |---|---|---|
@@ -265,7 +265,7 @@ copy .env.example to .env ...`. With `env=None`, a call reads the process's envi
 run(model, *, params="params/default.json", portfolios=None, as_of=None, env=".env", data=None, workers=None, labels={}, snapshots=None, cache=True) -> Run
 ```
 
-Decides portfolios with the model, saves the run, prints what `optim run` prints, and returns the `Run`.
+Decides portfolios with the model, saves the run, prints what `basis run` prints, and returns the `Run`.
 
 | Argument | Default | Description |
 |---|---|---|
@@ -286,7 +286,7 @@ replay(model, run, *, params=None, portfolios=None, env=".env", workers=None, la
 ```
 
 Decides a saved run of the model again, with the code you have now and other params if given, saves it as a new run,
-prints what `optim replay` prints, and returns it. `run` is a run's id, found in the repo's `snapshots/`, then under the
+prints what `basis replay` prints, and returns it. `run` is a run's id, found in the repo's `snapshots/`, then under the
 settings file's `BASIS_SNAPSHOT_ROOT`, such as production's in `.env.prod`; or the path of its manifest, relative to the
 model's folder, or its URL. A run of another model is refused. `params` defaults to the params the run used.
 `portfolios` decides those alone; for a model that reserves, the portfolios before them in its order decide again too.
@@ -299,7 +299,7 @@ sweep(model, run, *, params, env=".env", workers=None, snapshots=None) -> DataFr
 ```
 
 Decides a saved run of the model once per params file in `params`, each relative to the model's folder, every file
-validated before any decides, saves nothing, and returns the [sweep table](#optim-sweep). `run` is found as `replay`
+validated before any decides, saves nothing, and returns the [sweep table](#basis-sweep). `run` is found as `replay`
 finds it. `workers` defaults to `BASIS_OPTIM__WORKERS`, or 1.
 
 ### `Run`
@@ -313,17 +313,22 @@ finds it. `workers` defaults to `BASIS_OPTIM__WORKERS`, or 1.
 | `reasons` | A row per reason a portfolio was rejected, as `results/reasons`. |
 | `metrics` | A row per portfolio and metric, as `results/metrics`. |
 | `outcomes` | Each portfolio's `Outcome`: `portfolio_id`, `decision` (rounded), `decided` (as the model decided it), `reasons`, `numbers` (`value`, `cash`, `turnover`), `seconds` and `accepted`. |
-| `summary()` | What `optim run` prints: `run RUN_ID`, a row per portfolio, and each reason. |
+| `summary()` | What `basis run` prints: `run RUN_ID`, a row per portfolio, and each reason. |
 
 ## The command line
 
-Every command reads its settings from the process's environment, as `uv run --env-file .env optim ...` sets them, logs
-JSON lines on stderr, and exits 1 on an error, logged once with its root cause. Paths are the working directory's.
+A model repo's command is `basis`, and `uv run basis --help` lists every verb it has; `optim` is the same command,
+under its earlier name. `run`, `describe`, `replay` and `regress` are verbs jobs have too: in a repo with both jobs and
+models, the model's name comes first, and `basis VERB NAME --help` gives the model's arguments. Every verb reads its
+settings from the process's environment, as `uv run --env-file .env basis ...` sets them, logs JSON lines on stderr,
+ends its stderr with a log record, `finished VERB`, with its exit code and how long it took, and then prints each
+failure as one line, `ERROR: REASON: FIX`, the last. Paths are the working
+directory's. `--portfolios` takes ids, or `@FILE` with one per line.
 
-### `optim run`
+### `basis run`
 
 ```text
-optim run MODEL --params FILE [--as-of DATE] [--portfolios ID ...] [--data DIR] [--label KEY=VALUE] [--workers N] [--no-cache]
+basis run MODEL --params FILE [--as-of DATE] [--portfolios ID ...] [--data DIR] [--label KEY=VALUE] [--workers N] [--no-cache]
 ```
 
 Validates the params, loads the model's data, decides each portfolio, saves the snapshot under `BASIS_SNAPSHOT_ROOT`,
@@ -341,21 +346,22 @@ accepted.
 | `--workers` | `BASIS_OPTIM__WORKERS`, or 1 | Worker processes. |
 | `--no-cache` | off | Reads every dataset live. |
 
-### `optim replay`
+### `basis replay`
 
 ```text
-optim replay RUN [--params FILE] [--portfolios ID ...] [--label KEY=VALUE] [--workers N]
+basis replay [MODEL] RUN [--params FILE] [--portfolios ID ...] [--label KEY=VALUE] [--workers N]
 ```
 
 Decides a saved run again with the code installed now, and other params if given, and saves it as a new run under
-`BASIS_SNAPSHOT_ROOT`. `RUN` is a run id under `BASIS_SNAPSHOT_ROOT`, or the path or URL of its manifest. Reads no
+`BASIS_SNAPSHOT_ROOT`. `RUN` is a run id under `BASIS_SNAPSHOT_ROOT`, or the path or URL of its manifest; `MODEL`,
+where given, must be the model whose run it is, and is needed first in a repo that has jobs too. Reads no
 source and writes no orders. A replay of a subset decides that subset; for a model that reserves, the portfolios before
 them in its order decide again too. A replay of a replay of a subset replays that subset. Exit status as `run`.
 
-### `optim sweep`
+### `basis sweep`
 
 ```text
-optim sweep RUN VARIANTS [--out FILE] [--workers N]
+basis sweep RUN VARIANTS [--out FILE] [--workers N]
 ```
 
 Decides the run once per `*.json` params file in the directory `VARIANTS`, every file validated first, and writes one
@@ -363,52 +369,62 @@ table, as CSV on stdout or to `--out` as `.csv` or `.parquet`. Reads only the sn
 defaults to 1. Columns: `variant` (the file's stem), `portfolio_id`, `accepted`, `objective`, `turnover`, `trades`,
 `cash`, `solve_seconds`, `seconds`, one column per metric, and `reasons`, joined with `; `. Exits 0.
 
-### `optim regress`
+### `basis regress`
 
 ```text
-optim regress MODEL [--snapshots ROOT] [--last N] [--label KEY=VALUE] [--out FILE] [--workers N]
+basis regress [MODEL] [--snapshots ROOT] [--last N] [--label KEY=VALUE] [--out FILE] [--workers N]
 ```
 
-Replays the model's `--last` (default 20) most recent runs under `--snapshots` (default `BASIS_SNAPSHOT_ROOT`), replays
-aside and only those with every `--label` given, with each run's own params, and writes a row per change: `run_id`,
-`portfolio_id`, `status_before`, `status_after`, `limit` (either decision stopped at a time limit), and for a changed
-trade `security_id`, `side`, `before` and `after`, the rounded quantities. Exits 1 if anything changed.
+Replays the model's, or without `MODEL` every model's, `--last` (default 20) most recent runs under `--snapshots`
+(default `BASIS_SNAPSHOT_ROOT`), replays aside and only those with every `--label` given, with each run's own params,
+and writes a row per change: `run_id`, `portfolio_id`, `status_before`, `status_after`, `limit` (either decision
+stopped at a time limit), and for a changed trade `security_id`, `side`, `before` and `after`, the rounded quantities.
+With `MODEL`, the rows are a table, CSV on stdout or the `--out` file; without it, each row also names its `model`,
+and they are JSON on stdout, a list of objects, or the `--out` file. In a repo with jobs too, `basis regress` without a
+name takes only `--snapshots`, `--last` and `--label`, which a job's takes as well, and prints one JSON object, each
+part's result by part, `job` and `optim`. Exits 1 if anything changed.
 
-### `optim describe`
+### `basis describe`
 
 ```text
-optim describe MODEL
+basis describe [MODEL]
 ```
 
 Prints JSON: `model`, `module`, `optim_version`, `hooks` (the optional hooks it defines), `params` (the JSON schema),
 `datasets` (by attribute: `name`, `source`, `per_portfolio`, which is false for `portfolios`, `key`, `cache_seconds`,
-`columns`) and `metrics` (the JSON schema, or null).
+`columns`) and `metrics` (the JSON schema, or null). Without `MODEL`, it prints each model the repo lists, by name,
+with its module path.
 
-### `optim new repo` and `optim new model`
+### `optim new repo` and `basis new model`
 
 ```text
-optim new repo NAME MODEL (--index URL | --optim-path PATH) [--dir DIR] [--no-sync]
-optim new model NAME [--no-sync]
+optim new repo NAME MODEL [--index URL | --framework-path PATH] [--dir DIR]
+basis new model NAME
 ```
 
-`new repo` makes `DIR/NAME` (default here), which must be empty or not exist: the templates, the agent files, and one
-model, `models/MODEL/`, copied from optim's example, then runs `git init` and `uv sync`, and leaves the first commit to
-you. The repo depends on `optim>=0.2,<0.3`, from the source its `pyproject.toml` names: `--index`, or `UV_INDEX`, the
-internal index, or `--optim-path`, a checkout of `optim`, editable, to try a change to it. It refuses to make a repo
-with neither, or both: PyPI has an unrelated package named `optim`, which a repo with no source would install.
+`optim new repo` makes `DIR/NAME` (default here), which must not exist: basis's files, the hooks and the agent files
+among them, optim's templates, and one model, `models/MODEL/`, copied from optim's example; then it runs `git init`,
+points the clone at its hooks, runs `uv sync`, and leaves the first commit to you. It runs outside any repo, as
+`uvx optim new repo` runs it. The repo declares `[tool.basis] parts = ["optim"]`, and depends on optim at the minor
+version that made it, from the source its `pyproject.toml` names: `--index`, the internal index, which every package
+then comes from; `--framework-path`, a checkout of basis, whose `packages/optim` it installs editable, to try a change
+to optim; or, with neither, the commit optim was installed from, as `uvx --from 'git+URL@REF#subdirectory=packages/optim'
+optim new repo` installs it, or else the release's tag. It never takes optim from PyPI, which has an unrelated package
+of that name.
 
-`new model` adds `models/NAME/`, copied from the example, to the repo in the working directory, with its entry point
-and a row in the `README.md`'s table of models, and adds `models/shared/`, with a `README.md`, when it is the repo's
-second model; then it runs `uv sync`. A name that is taken, or cannot name a Python module, is refused. `--no-sync`
-leaves `uv sync` out.
+`basis new model` adds `models/NAME/`, copied from the example, to the repo, with its entry point and a row in the
+`README.md`'s table of models, and adds `models/shared/`, with a `README.md`, when it is the repo's second model; then
+it runs `uv sync`. A name that is taken, or cannot name a Python module, is refused.
 
-### `optim sync`, `optim docs` and `optim warm`
+### `basis sync`, `basis docs` and `basis warm`
 
-`optim sync` writes the contract block into the working directory's `AGENTS.md`, keeping what is written around it, and
-copies the `optim-*` skills into `.agents/skills/`, deleting copies of skills `optim` no longer ships; it prints each
-path it wrote. `optim docs [PAGE]` prints a page of these docs, such as `how-to/add-a-dataset`, or lists them.
-`optim warm MODEL ... [--as-of DATE]` reads every cached dataset the models read whole, the `portfolios` dataset
-included, live, and overwrites its cache entry; it needs `BASIS_OPTIM__CACHE_ROOT` and exits 1 if any load failed.
+`basis sync` writes the files basis owns, as the installed versions of basis and optim write them: the Dockerfile,
+the pipeline stub and the hooks; basis's block of `AGENTS.md` and optim's, the contract, keeping what is written
+around them; `CLAUDE.md`; and the `optim-*` skills, in `.agents/skills/` and `.claude/skills/`, deleting copies of
+skills optim no longer ships. `basis check` fails when one of them differs. `basis docs` lists these docs, as
+`optim/PAGE`, and `basis docs optim/PAGE` prints one, such as `optim/how-to/add-a-dataset`. `basis warm MODEL ...
+[--as-of DATE]` reads every cached dataset the models read whole, the `portfolios` dataset included, live, and
+overwrites its cache entry; it needs `BASIS_OPTIM__CACHE_ROOT` and exits 1 if any load failed.
 
 ## Settings
 
@@ -421,7 +437,7 @@ naming the variable that replaced it.
 
 | Variable | Default | Description |
 |---|---|---|
-| `BASIS_SNAPSHOT_ROOT` | none | The run store where `optim run` saves its runs, and where a replay finds a run by its id: a path, or a URL `pyarrow.fs` opens, such as `abfs://...`. Required by `optim run`, `optim replay`, and `optim sweep` and `optim regress` given a run id; a run from Python saves in the repo's `snapshots/` instead. |
+| `BASIS_SNAPSHOT_ROOT` | none | The run store where `basis run` saves its runs, and where a replay finds a run by its id: a path, or a URL `pyarrow.fs` opens, such as `abfs://...`. Required by `basis run`, `basis replay`, and `basis sweep` and `basis regress` given a run id; a run from Python saves in the repo's `snapshots/` instead. |
 | `BASIS_DATABASES__NAME__KIND` | required with the database | `mssql` or `oracle`. `NAME` is the name a dataset's `source` gives, upper-cased: optim's shared holdings read `mssql`, and its securities `oracle`. |
 | `BASIS_DATABASES__NAME__CONNECTION_STRING` | required with SQL Server | A login that may read. The primary, not a readable secondary: holdings must include the trades just booked. |
 | `BASIS_DATABASES__NAME__DSN`, `__USER`, `__PASSWORD`, `__MODE` | required with Oracle | `MODE` is `thin` (no client libraries) or `thick`, which loads Oracle Instant Client. |
@@ -433,14 +449,14 @@ naming the variable that replaced it.
 | `BASIS_OPTIM__REST__URL`, `__MAX_CONCURRENT`, `__TIMEOUT_S`, `__MAX_ROWS` | required with REST | The base URL of a JSON API that answers a GET with a list of records; calls open at once, seconds per call, and the most records a call may return, each at least 1. |
 | `BASIS_OPTIM__CACHE_ROOT` | none | The dataset cache, a path or URL; without it nothing is cached. |
 | `BASIS_OPTIM__WORKERS` | `1` | Worker processes per run, at least 1; `1` decides in the calling process. |
-| `BASIS_OPTIM__ORDERS__DATABASE`, `__TABLE` | none | Production only: the database whose write login inserts the orders, and the table they are inserted into, as `run_id, portfolio_id, security_id, side, quantity`. `TABLE` is `schema.table`. Only `optim run` writes to it, each insert bounded by the database's `TIMEOUT_S`. |
+| `BASIS_OPTIM__ORDERS__DATABASE`, `__TABLE` | none | Production only: the database whose write login inserts the orders, and the table they are inserted into, as `run_id, portfolio_id, security_id, side, quantity`. `TABLE` is `schema.table`. Only `basis run` writes to it, each insert bounded by the database's `TIMEOUT_S`. |
 | `BASIS_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR`, for `optim`'s and models' loggers. |
 | `BASIS_LOG_FORMAT` | `json`; `text` from Python | `json` lines, or `text` for a person. |
 | `BASIS_GIT_SHA`, `BASIS_IMAGE` | none | Set in an image: the commit and image a run records. |
 
 ## Snapshots
 
-Every run is kept in a run store, `ROOT`: `BASIS_SNAPSHOT_ROOT` for `optim run` and `optim replay`, and the repo's
+Every run is kept in a run store, `ROOT`: `BASIS_SNAPSHOT_ROOT` for `basis run` and `basis replay`, and the repo's
 `snapshots/` for a run from Python. A run is a manifest, a JSON file that holds its record and names each dataset it
 saved by the SHA-256 of its object, a Parquet file the store holds once however many runs save it, so the morning's
 holdings that twenty runs load are stored once. The objects are written first and the manifest last, each under a
@@ -513,9 +529,8 @@ class TestContract(ContractTests):
 | `test_every_portfolio_of_its_fixture_is_accepted` | | The fixture lacks `fixture.json` or a file for a dataset, or deciding every portfolio it lists, or every one in its holdings, with the default params rejects one. Also fails when decisions report a metric `Metrics` does not declare, or do not report one it declares. |
 | `test_its_code_cannot_reach_io_through_its_imports` | | An import chain leads from `model.py` to a source, the loader, the cache, storage, snapshots, outputs, the runs or the Python API, research, the settings, the command line, a database driver or an HTTP client (`FORBIDDEN`). The failure names the chain. |
 
-`check_agent_files(repo)` fails when the repo's `AGENTS.md` block or its `optim-*` skills do not match what `optim sync`
-writes; the repo's `tests/test_agent_files.py` calls it. `check_params`, `check_fixture` and `check_imports` are the
-checks the contract tests run, and raise `ContractError`, an `AssertionError`.
+`check_params`, `check_fixture` and `check_imports` are the checks the contract tests run, and raise `ContractError`,
+an `AssertionError`. `basis check`, not a test, checks the repo's agent files.
 
 | Builder | Description |
 |---|---|
@@ -538,7 +553,7 @@ and `MARKET`.
 | `trial(snapshot, portfolio_id, params=None)` | A `Trial`, deciding one portfolio in this process: `portfolio_id`, `portfolio` (what `prepare_portfolio` returned), `market` (after the reservations of the portfolios before it), `problem` (the cvxpy problem `optim.cvxpy` solved, or `None`) and `outcome`. |
 | `sweep(snapshot, variants, *, workers=1)` | The sweep table, for params files' paths. |
 | `regress(model, snapshots, *, last=20, labels=None, workers=1)` | The regression table, for a loaded model and the run store at `snapshots`, a path or URL. |
-| `describe(model)` | The `optim describe` JSON, for a loaded model. |
+| `describe(model)` | The `basis describe` JSON, for a loaded model. |
 
 `optim.models.load(name)` loads a model by name or module path.
 
@@ -560,6 +575,6 @@ every configured source and destination carries a marker and every write is on t
 |---|---|
 | `listed(model, count=3)` | The first `count` portfolios the model lists in its `portfolios` dataset today, read in a read-only transaction. A model that lists none raises `LookupError`. |
 | `portfolios(query, *, source="mssql", **params)` | Runs the `SELECT` or `WITH` query in the SQL file `query`, in a read-only transaction, rolled back, and returns its `portfolio_id`s. |
-| `run(model, params, portfolios, *args)` | Runs `optim run MODEL --params PARAMS --portfolios ... --label purpose=e2e` with the command, from the repo's root, and returns the run's id, exit code and snapshot. |
-| `replay(run)` | Runs `optim replay RUN_ID --label purpose=e2e` the same way. |
+| `run(model, params, portfolios, *args)` | Runs `basis run MODEL --params PARAMS --portfolios ... --label purpose=e2e` with the command, from the repo's root, and returns the run's id, exit code and snapshot. |
+| `replay(run)` | Runs `basis replay RUN_ID --label purpose=e2e` the same way. |
 | `smoke(model, params, portfolios, *args)` | Fails unless the run completes, every portfolio is accepted or rejected with reasons, and its replay gives the same trades for the decisions that did not stop at a time limit. |

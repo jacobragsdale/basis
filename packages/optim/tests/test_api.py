@@ -1,4 +1,4 @@
-"""Running a model from Python, as its `main.py` does: `optim.run`, `optim.replay` and `optim.sweep`, in a repo `optim new`
+"""Running a model from Python, as its `main.py` does: `optim.run`, `optim.replay` and `optim.sweep`, in a repo `optim new repo`
 made, with paths from the model's folder wherever the process runs, the settings file set for the call alone, snapshots
 in the repo, and no orders."""
 
@@ -15,7 +15,7 @@ from fakes import saved
 
 import optim
 from basis.core.storage import Root
-from optim.new import new_model, new_repo
+from optim import new
 
 
 @pytest.fixture
@@ -32,7 +32,7 @@ def environ() -> Generator[None]:
 @pytest.fixture
 def repo(tmp_path: Path, on_path: list[str], environ: None, monkeypatch: pytest.MonkeyPatch) -> Path:  # noqa: ARG001 -- environ restores what the test sets
     """A generated repo, `sma`, with one model, `income`, and a working directory elsewhere, as an IDE's may be."""
-    repo = new_repo("sma", "income", directory=tmp_path, index="https://pypi.firm/simple", uv_sync=False)
+    repo = new.repo(tmp_path / "sma", "income", index="https://pypi.firm/simple", framework_path=None, install=False)
     on_path.insert(0, str(repo))
     (tmp_path / "elsewhere").mkdir()
     monkeypatch.chdir(tmp_path / "elsewhere")
@@ -85,7 +85,7 @@ def test_a_settings_file_of_optim_0_2_0_is_refused_naming_each_variables_new_nam
 
 def test_a_replay_finds_its_run_in_the_repos_snapshots_and_refuses_another_models(repo: Path) -> None:
     ran = optim.run(income(), data="tests/fixture")
-    new_model("ladder", repo=repo, uv_sync=False)
+    new.model(repo, "ladder", install=False)
     ladder = importlib.import_module("models.ladder.model")
 
     replayed = optim.replay(income(), ran.run_id, portfolios=["P1"])

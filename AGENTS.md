@@ -43,8 +43,14 @@ uv run basis check                  # the framework files, the hooks, the lockfi
 git add --all && git commit -m "First commit"   # the commit hook fixes, formats and runs basis check
 ```
 
-To check what `optim new repo` generates, follow the Checks section of [packages/optim/AGENTS.md](packages/optim/AGENTS.md)
-from `packages/optim`, whose `--optim-path .` is that folder.
+To check what `optim new repo` generates, from the root, then as the Checks section of
+[packages/optim/AGENTS.md](packages/optim/AGENTS.md) goes on:
+
+```sh
+uv run optim new repo sma income --dir SCRATCH --framework-path .   # its first model is income
+cd SCRATCH/sma && uv run basis new model ladder
+uv run basis check
+```
 
 A repo whose image builds needs basis from git rather than a checkout: push the branch, and make one with
 `uvx --from 'git+https://github.com/jacobragsdale/basis@BRANCH#subdirectory=packages/job' basis-job new repo loads`,
@@ -56,19 +62,26 @@ docs, and builds that repo's image and publishes its job to SQL Server.
 `basis` is basis-core's console script, and each part adds its verbs to it; `packages/core/src/basis/core/verbs.py`
 holds the interface, and its docstring is the reference.
 
-- A part lists one entry point in the `basis.verbs` group, named after the part (`job`, `api`, later `optim`), that
+- A part lists one entry point in the `basis.verbs` group, named after the part (`job`, `api`, `optim`), that
   points at a callable returning its `Part`: its own `verbs`, each a `Verb` with a name, a one-line help, a function
   that adds its arguments to an argparse parser, and a handler that returns the exit code; and the fields core's verbs
-  use, `files` (`sync`, `check`; read only when used), `docs` (`docs`), `new` (`new KIND NAME`) and `runs` (`replay`,
-  `regress`).
+  use, `files` (`sync`, `check`; read only when used), `docs` (`docs`), `new` (`new KIND NAME`), `runs` (`run`,
+  `describe`, `resume`, `replay`, `regress` and `ddl`, which jobs and models both have), and `renamed`, which refuses
+  the variables an earlier version of the part read, before any verb runs, as `basis` refuses `ETL_*`.
 - A repo declares its parts in its `pyproject.toml`, as `[tool.basis] parts = ["job"]`, and basis never infers one
   from a folder. `basis` loads only those parts, and `basis --help` lists their verbs and each core verb one of them
   gives something to do. A declared part that is not installed, or a verb of one that is not declared, is refused.
 - No two declared parts add the same verb, no part adds one twice, and none adds one of core's. A verb that several
-  kinds of part share belongs in core, reaching each part through a field of `Part`, as `replay` does.
-- Every failure prints one line on stderr, `ERROR: REASON: FIX`: a handler returns `fail(reason, fix)`, or raises a
-  `basis.core.errors.BasisError` whose message ends with the fix; a pydantic `ValidationError` of settings or params
-  prints as one line too. Any other exception is a defect, whose traceback is logged first. A call that raises a
+  kinds of part share belongs in core, reaching each part through a field of `Part`, as the verbs of `runs` do: core
+  parses NAME, and RUN_ID for `resume` and `replay`, and the `Shared` of the part that runs NAME adds and reads the
+  rest, so a job's `run` takes `--interval` and a model's `--portfolios`. Where several declared parts have the verb,
+  NAME comes first, and a name two of them run is refused.
+- Every command's stderr ends with one log record, `finished VERB`, with its `verb`, `exit_code` and `ms`, whatever
+  the outcome, and then, for each failure, one line, `ERROR: REASON: FIX`: so a failure's ERROR line is the last line,
+  and the only one starting `ERROR`. The other stderr lines are JSON log records, for machines. A handler returns
+  `fail(reason, fix)`, or raises a `basis.core.errors.BasisError` whose message ends with the fix; a pydantic
+  `ValidationError` of settings or params prints as one line too; `basis` holds each ERROR line back until the record.
+  Any other exception is a defect, whose traceback is logged first. A call that raises a
   builtin error on purpose, such as a lookup that finds no run, goes in `with deliberate(LookupError):`. Results a
   caller reads are JSON on stdout.
 - `basis sync` owns the framework files (`basis.core.sync.REPO_FILES`: the Dockerfile, `azure-pipelines.yml`, the

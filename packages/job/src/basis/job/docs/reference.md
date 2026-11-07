@@ -157,7 +157,7 @@ basis's.
 | `basis check [--staged]` | Checks that the framework and agent files are what the installed basis writes, byte for byte, with nothing left over that it no longer writes; that the clone runs the hooks in `.githooks/`, pointing it at them if it names no hooks folder; and that `uv.lock` matches `pyproject.toml`; then runs `ruff check`, `ruff format --check`, `ty check` and `pytest`, each through `uv run --locked`. With `--staged`, it first checks each file staged for a commit, as git will commit it: none holds a private key, none is over 500 KB, and each YAML and TOML file parses. Every step runs, and each that fails prints its findings and then its `ERROR` line. Needs no network or database. The commit hook runs `basis check --staged` after ruff fixes and formats the staged Python files; the push hook runs `basis check` on each commit pushed, in a temporary worktree when it is not a clean `HEAD`. |
 | `basis run JOB --params FILE [--interval START..END] [--data DIR] [--label KEY=VALUE]... [--publish] [--again]` | Runs a job, saves its snapshot, and with `--publish` writes its changes. `--again` publishes an `Append()` table for an interval the ledger already has. |
 | `basis replay [JOB] RUN_ID [--params FILE]` | Runs a saved run's transform again on its inputs; prints the replay's status, reasons and differences as JSON. Without `JOB`, the run is found by its id alone. |
-| `basis resume [JOB] RUN_ID` | Writes a partly published run's changes to each database whose ledger lacks the run. Without `JOB`, the run is found by its id alone. |
+| `basis resume [JOB] RUN_ID [--again]` | Writes a partly published run's changes to each database whose ledger lacks the run, told `--again` if the run was, or if given now. Without `JOB`, the run is found by its id alone. |
 | `basis regress [JOB] [--last N] [--label KEY=VALUE]... [--snapshots ROOT]` | Replays the last `N` (default 10) published runs of `JOB`, or of every job the repo lists, whose labels include every `--label`; prints each run's job, reasons and differences as JSON. |
 | `basis describe [JOB]` | Prints the job's params schema, inputs and outputs as JSON; without `JOB`, every job the repo lists, with its module. |
 | `basis ddl JOB --dialect mssql\|oracle` | Prints `CREATE TABLE` for each of the job's tables. |
@@ -168,8 +168,9 @@ basis's.
 | `basis-job new repo NAME [JOB] [--dir DIR] [--index URL \| --framework-path PATH]` | Makes a job repo, `NAME`, whose first job, `JOB` (`positions` if not given), is a copy of the example, runs `git init`, points git at its hooks, and runs `uv sync`. `PATH` is a checkout of basis, the folder that holds `packages/`, installed editable. `URL` replaces PyPI for the whole repo, so it must proxy PyPI. Without either option, basis-job comes from the commit `basis-job` was installed from, when `uvx --from 'git+https://github.com/jacobragsdale/basis@REF#subdirectory=packages/job'` installed it, and otherwise from basis's GitHub tag for this version, which needs a release. |
 
 `JOB` is a name the repo lists as an entry point, or a module path. `replay`, `resume` and `regress` find runs under
-`BASIS_SNAPSHOT_ROOT`. Every failure prints one line on stderr, after any log records: `ERROR:`, the reason, and the
-fix. A result a caller reads, such as `describe`'s, is JSON on stdout.
+`BASIS_SNAPSHOT_ROOT`. Every command ends its stderr with a log record, `finished VERB`, with its exit code and how
+long it took, and every failure then prints one line: `ERROR:`, the reason, and the fix, the last line. A result a
+caller reads, such as `describe`'s, is JSON on stdout.
 
 | Exit code | Meaning |
 |---|---|

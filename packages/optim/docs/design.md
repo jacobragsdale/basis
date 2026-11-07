@@ -8,7 +8,9 @@ design was agreed on 2026-10-22 and implemented in `optim` 0.1.0, by the steps i
 model repo, as [The developer experience](developer-experience.md) specifies: one folder per model, a `main.py` to run,
 and renamed hooks. The taxable SMA optimizer this repository held was a mock that existed to test
 the engine; it is the package's example. The docs for quants are in `src/optim/docs/` and ship with the package; this
-page records the design and its reasons.
+page records the design and its reasons. Since basis's roadmap step 3.5, optim's verbs are `basis`'s, and `optim` is
+the same command: a model repo declares `[tool.basis] parts = ["optim"]`, and `basis sync` and `basis check` own its
+framework files, its hooks and its agent files, as [basis's design](../../../docs/design.md) says.
 
 ## Where the implementation differs
 
@@ -21,27 +23,27 @@ design's intent:
 | Hooks | `prepare` is `prepare_market(data, params) -> market`, `prepare_portfolio(data, market, params) -> portfolio`, `decide(portfolio, market, params)` and `check(portfolio, decision)`; "shared" and "prepared" are gone. | Names an analyst reads as what they hold. |
 | `reserve`, `order` | `reserve(market, decision)` returns the market the next portfolio sees. `order(portfolios, market, params)` takes every prepared portfolio by id and returns the ids in order; one that drops a portfolio fails the run. | The page left `order`'s arguments open. Returning the state keeps `reserve` pure, and the prepared portfolios are what a fairness rule ranks. |
 | Rules and constraints | Every rule is `(portfolio, market, params) -> portfolio`, in the model's `rules/`, and may drop rows, add columns, and change the limits the optimizer reads from the portfolio. Constraints and the objective are cvxpy, in the model's `optimizer/`: `constraints.py` holds each constraint, trade sizes among them, and `problem.py` builds the problem and its objective. Their limits come from params, datasets, rules and code. | A constraint in cvxpy needs no format of its own for `optim` to own. Trade sizing stays visible in the model, for quants to change. |
-| `Metrics` | A model may export `Metrics`, a model of float fields, so `optim describe` can print its metrics; a contract test fails when decisions report metrics it does not declare. | `describe` must print a model's metrics without running it. |
-| Repo layout | Each model is a folder, `models/MODEL/`, holding everything about it: `main.py`, `model.py`, `prep.py`, `datasets/`, `rules/`, `optimizer/`, `params/` and `tests/`, its fixture `tests/fixture/` with one file per dataset and `fixture.json`. Every repo's package is `models`; code two models share is in `models/shared/`, which `optim new model` adds with the second model. | One folder per model means one place for each change, and the `models` package imports the same way from any editor. |
-| `optim run --data DIR` | Reads each dataset that has a file in `DIR` instead of its source, as of the date in `DIR/fixture.json` unless `--as-of` says otherwise. Without `--portfolios`, a run decides every portfolio the model lists, or with `--data`, every portfolio in the holdings file. | It is how a laptop and the contract tests run on files without editing `Data`, and a fixture's rows are of its date. |
-| Caching | A dataset's cache is `cache=timedelta(...)`; `optim warm MODEL ...` fills every cached dataset read whole. Warm hooks, `live_on_miss` and `optim clear` are gone. | Every query takes only the as-of date, so warming needs no parameters, and an entry past its age is read live. |
+| `Metrics` | A model may export `Metrics`, a model of float fields, so `basis describe` can print its metrics; a contract test fails when decisions report metrics it does not declare. | `describe` must print a model's metrics without running it. |
+| Repo layout | Each model is a folder, `models/MODEL/`, holding everything about it: `main.py`, `model.py`, `prep.py`, `datasets/`, `rules/`, `optimizer/`, `params/` and `tests/`, its fixture `tests/fixture/` with one file per dataset and `fixture.json`. Every repo's package is `models`; code two models share is in `models/shared/`, which `basis new model` adds with the second model. | One folder per model means one place for each change, and the `models` package imports the same way from any editor. |
+| `basis run --data DIR` | Reads each dataset that has a file in `DIR` instead of its source, as of the date in `DIR/fixture.json` unless `--as-of` says otherwise. Without `--portfolios`, a run decides every portfolio the model lists, or with `--data`, every portfolio in the holdings file. | It is how a laptop and the contract tests run on files without editing `Data`, and a fixture's rows are of its date. |
+| Caching | A dataset's cache is `cache=timedelta(...)`; `basis warm MODEL ...` fills every cached dataset read whole. Warm hooks, `live_on_miss` and `optim clear` are gone. | Every query takes only the as-of date, so warming needs no parameters, and an entry past its age is read live. |
 | Holdings | The shared holdings are working holdings; `--holdings sod` is gone. | Queries take only the as-of date and the ids. A model that needs start-of-day holdings declares its own dataset with the same row model. |
 | Sources | Every source is optional, so a run on files needs only `BASIS_SNAPSHOT_ROOT`. The REST source is `rest`, `BASIS_OPTIM__REST__URL`. | A laptop on files must not need database settings. |
 | Plumbing | Since basis's roadmap step 3.3, optim's databases, settings, logs, storage and run store are basis-core's: a dataset's `source` names a database, as `BASIS_DATABASES__NAME__*` configures it, or is `rest` or `file`; settings are `BASIS_*`, with optim's own in `BASIS_OPTIM__*`, among them each database's `MAX_CONCURRENT`, and `OPTIM_*` is refused, naming each variable's new name; and a run is a manifest, `runs/optim/MODEL/RUN_ID.json`, naming each dataset by the hash of its object in the store. optim keeps its per-portfolio batching (ids bound as JSON, a semaphore per source, a transaction that only reads per batch), its REST and file sources, and its file cache, which nothing in basis-core matches. | One copy of the plumbing for every basis part, since the copies had drifted: a defect etl-framework fixed in how its SQL Server reads begin a snapshot transaction was in optim's too. The shared datasets keep the names `mssql` and `oracle`, so model code is unchanged. |
 | Rounding | To the nearest whole increment; a sale within half an increment of the holding sells the holding, so an odd lot sells whole. The core rejects a decision that rounding moved by more than its tolerance, and a portfolio with no holdings, as a likely wrong id. | Nearest rounding keeps a solver's near-integers exact; the holding rule keeps odd lots tradable. The solver proved the decision meets its constraints, so a decision rounding left alone meets them too, and no model checks its constraints a second time. |
 | Solved | A decision is solved when the solver stopped `optimal`, within `SolveSettings.mip_gap`; one stopped at its time limit is rejected. There is no separate acceptance gap. | The page names one MIP gap in `Params`; one number means one rule. |
-| Replay | `optim replay` saves its snapshot under `BASIS_SNAPSHOT_ROOT`, and a replay from Python in the repo's `snapshots/`, wherever the run it replays is. The run's manifest keeps its portfolios, and `replay.portfolios` the subset decided. | Replaying a production snapshot on a laptop must write nothing to production storage, and a replay of a replay of a subset must decide the same sequence. |
-| `optim regress` | Takes `--snapshots ROOT`, `--last N` and `--label KEY=VALUE`, such as `purpose=production`, and exits 1 when anything changed. | Production runs are found by their labels, and a non-zero exit lets a pipeline gate an upgrade on it. |
-| `optim sweep` | Writes the table as CSV on stdout, or to `--out`. | Agents read CSV; a file suits a person. |
-| `optim docs` | Prints a page of the docs that ship with the installed `optim`, which the skills point at. | A model repo's agents read the docs for the version the repo installed, without a copy in each repo. |
-| Python API | `optim.run(model, ...)`, `optim.replay(model, run, ...)` and `optim.sweep(model, run, params=...)`, which a model's `main.py` calls, share `optim.runs` with the command line. Their paths are the model's folder's, their settings file is set for the call alone, they save in the repo's `snapshots/`, and they never write orders. `optim.runs.open_snapshot(run)` and `optim.research.trial(snapshot, portfolio_id, params=None)` return what a portfolio was prepared with, the market, the cvxpy problem and the outcome. | Analysts run and debug models from their IDEs by running a file, which must spell out what it runs; production keeps one `optim run` for every repo. |
-| Contract tests | Each model's `tests/test_contract.py` subclasses `optim.testing.ContractTests`: its params, its fixture and its imports, from `model.py`'s. The repo's `tests/test_agent_files.py` checks the agent files. The plugin injects no tests. | Tests an analyst can see and run from the IDE's test panel, like any other. |
+| Replay | `basis replay` saves its snapshot under `BASIS_SNAPSHOT_ROOT`, and a replay from Python in the repo's `snapshots/`, wherever the run it replays is. The run's manifest keeps its portfolios, and `replay.portfolios` the subset decided. | Replaying a production snapshot on a laptop must write nothing to production storage, and a replay of a replay of a subset must decide the same sequence. |
+| `basis regress` | Takes `--snapshots ROOT`, `--last N` and `--label KEY=VALUE`, such as `purpose=production`, and exits 1 when anything changed. | Production runs are found by their labels, and a non-zero exit lets a pipeline gate an upgrade on it. |
+| `basis sweep` | Writes the table as CSV on stdout, or to `--out`. | Agents read CSV; a file suits a person. |
+| `basis docs` | Prints a page of the docs that ship with the installed `optim`, which the skills point at. | A model repo's agents read the docs for the version the repo installed, without a copy in each repo. |
+| Python API | `optim.run(model, ...)`, `optim.replay(model, run, ...)` and `optim.sweep(model, run, params=...)`, which a model's `main.py` calls, share `optim.runs` with the command line. Their paths are the model's folder's, their settings file is set for the call alone, they save in the repo's `snapshots/`, and they never write orders. `optim.runs.open_snapshot(run)` and `optim.research.trial(snapshot, portfolio_id, params=None)` return what a portfolio was prepared with, the market, the cvxpy problem and the outcome. | Analysts run and debug models from their IDEs by running a file, which must spell out what it runs; production keeps one `basis run` for every repo. |
+| Contract tests | Each model's `tests/test_contract.py` subclasses `optim.testing.ContractTests`: its params, its fixture and its imports, from `model.py`'s. `basis check` checks the agent files. The plugin injects no tests. | Tests an analyst can see and run from the IDE's test panel, like any other. |
 | e2e | The plugin's `optim_qa` fixture checks the markers (`optim_qa_markers`) and the allowlist (`optim_e2e_writes`), picks each model's first listed portfolios (`QA.listed`), or portfolios with a `SELECT` alone, and runs `optim_e2e_command` from the repo's root with repo-relative params paths, such as `docker run ... IMAGE`; `QA.smoke` is each model's smoke case, in the generated `tests/e2e/test_smoke.py`. | The page named the safeguards; these are where they live. Relative paths resolve both in a checkout and in the image, whose workdir holds the repo, and the image holds no pytest. |
 | Orders | Written as `run_id, portfolio_id, security_id, side, quantity`, in one transaction, through the write login of the database `BASIS_OPTIM__ORDERS__DATABASE` names, a login that may insert, into `BASIS_OPTIM__ORDERS__TABLE`. | The read-only credentials that load data must not write. The real table's columns are still to confirm. |
-| `optim.testing` | `ContractTests` and `check_agent_files`, and builders for behaviour tests: `frame(dataset, *rows)` and `data(Data, frames, **more)`, with default shared rows. Each model's own `tests/builders.py` builds its portfolio and params. | The page names the core's builders. |
-| Example | One example, a taxable SMA rebalance laid out as a model's folder, with a `ruff.toml` that sorts imports as a model repo does and that `optim new` leaves out. The `plain` example is gone. | Copied code must pass the generated repo's own ruff; one example means one variant of the layout to keep. |
-| `optim new repo` | `optim new repo REPO MODEL` needs `--index`, or `--optim-path`, a checkout, editable, and writes that source for `optim` into the repo's `pyproject.toml`; `--from` is gone. | PyPI has an unrelated package named `optim`, which a repo with no source would install. A repo and its first model are named apart. |
-| Agent files | `optim sync` writes `AGENTS.md`'s block and `.agents/skills/` alone. | The open conventions every agent reads, Copilot's included; no vendor's own files. |
+| `optim.testing` | `ContractTests`, and builders for behaviour tests: `frame(dataset, *rows)` and `data(Data, frames, **more)`, with default shared rows. Each model's own `tests/builders.py` builds its portfolio and params. | The page names the core's builders. |
+| Example | One example, a taxable SMA rebalance laid out as a model's folder, with a `ruff.toml` that sorts imports as a model repo does and that `optim new repo` and `basis new model` leave out. The `plain` example is gone. | Copied code must pass the generated repo's own ruff; one example means one variant of the layout to keep. |
+| `optim new repo` | `optim new repo REPO MODEL` runs outside any repo and writes, through `basis.core.new`, the source the repo takes `optim` from into its `pyproject.toml`: `--index`, every package's; `--framework-path`, a checkout of basis, editable; or the commit or tag optim came from. `--from` is gone. | PyPI has an unrelated package named `optim`, which a repo with no source would install. A repo and its first model are named apart. |
+| Agent files | `basis sync` writes `AGENTS.md`'s blocks, basis's and optim's, the skills in `.agents/skills/` and their copies in `.claude/skills/`, and `CLAUDE.md`, as it does in every basis repo. | The open conventions every agent reads, Copilot's included, and the one folder Claude Code reads. |
 | Image | The generated `Dockerfile` runs `optim` under `tini`, the container's first process. | The first process ignores a signal's default action, so `optim` run as the first process would log the scheduler's SIGTERM and carry on, writing orders, until it was killed. |
 
 What is not done here, because it needs what this repository cannot reach: a run of the tests on Windows, publishing by
@@ -73,7 +75,7 @@ run time, and a quant writing code by hand never reads it.
 So `optim` is one package, which the firm's pipeline publishes to the internal PyPI server when a version is tagged,
 and each model repo depends on a version range. Everything that must stay the same across repos ships in the package
 and upgrades with it: the run loop, the shared datasets, the contract tests and the no-I/O check, the e2e safeguards,
-the examples the generator copies, and the agent guidance that `optim sync` writes into each repo. A model repo holds
+the examples the generator copies, and the agent guidance that `basis sync` writes into each repo. A model repo holds
 only the quant's work.
 
 The package stays at 0.x until one real SMA model and one real institutional model run on it in production, because
@@ -202,7 +204,7 @@ makes trade quantities exact.
 
 The cache stores each cached dataset as a Parquet file under `OPTIM_CACHE_ROOT`, with the time its source was read, and
 writes through the same `pyarrow.fs` layer as snapshots. Each dataset declares how long an entry stays fresh, and
-`optim warm` fills the cache before the day's first run. A write goes to a temporary file followed by a rename, so a
+`basis warm` fills the cache before the day's first run. A write goes to a temporary file followed by a rename, so a
 concurrent run never reads half an entry. Without `OPTIM_CACHE_ROOT`, nothing is cached. A laptop points the setting at
 a local folder, and production at shared storage, so Airflow tasks share entries. Redis would be infrastructure in
 every environment, bounded by memory and awkward on Windows laptops. The cache sits behind a small interface, so
@@ -210,7 +212,7 @@ another backend can be added if files prove too slow for some dataset.
 
 ## Where runs happen
 
-Airflow runs `optim run MODEL --params FILE --as-of DATE [--portfolios ...]` in the model repo's image. A repo lists
+Airflow runs `basis run MODEL --params FILE --as-of DATE [--portfolios ...]` in the model repo's image. A repo lists
 its models as entry points, and `MODEL` is one of their names:
 
 ```toml
@@ -242,12 +244,12 @@ whether local disk, NFS or Azure Files, and moving to Azure Data Lake changes on
 a file store, so it does not hold snapshots. Production snapshots go to shared storage, so that quants and agents can
 replay them by run id, and they are kept as long as trade records.
 
-`optim replay RUN [--params FILE] [--portfolios ...]` solves a saved run again with the current code, and other
-params if given. `optim sweep RUN VARIANTS_DIR` solves the same snapshot once per params file and writes one comparison
+`basis replay RUN [--params FILE] [--portfolios ...]` solves a saved run again with the current code, and other
+params if given. `basis sweep RUN VARIANTS_DIR` solves the same snapshot once per params file and writes one comparison
 table, with a row per variant and portfolio: objective, turnover, number of trades, cash, whether it was accepted,
 solve time, and the model's own metrics. A sweep reads only the snapshot, so an agent can run a hundred variants
 without loading anything from production. From Python, a quant or an agent can load a snapshot and decide one
-portfolio, getting back its prepared inputs, the cvxpy problem if there is one, and the decision. `optim describe MODEL`
+portfolio, getting back its prepared inputs, the cvxpy problem if there is one, and the decision. `basis describe MODEL`
 prints the model's params JSON schema, datasets and metrics as JSON, so an agent can drive research without reading
 the model's code.
 
@@ -263,10 +265,10 @@ stub for the firm's Azure DevOps pipeline framework.
    configuration that could drift.
 2. Behaviour tests are the quant's own, on small inputs built with the core's builders, especially for the rules in
    `prepare_portfolio`.
-3. `optim regress MODEL` replays the model's recent production snapshots with the working tree's code and installed
+3. `basis regress MODEL` replays the model's recent production snapshots with the working tree's code and installed
    `optim`, and lists every trade that changed. It is how an upgrade or a model change is proven, and it needs read
    access to the snapshot root. Production snapshots never go in git, because they hold client holdings.
-4. An e2e pytest suite in each repo runs the deployed image's `optim run` against the QA environment. It refuses to run
+4. An e2e pytest suite in each repo runs the deployed image's `basis run` against the QA environment. It refuses to run
    unless every configured source and destination carries the QA marker, writes only to an allowlist (the QA orders
    table and snapshot root), and picks test portfolios by what they hold rather than by fixed ids. Every model gets a
    smoke case: the run completes, each portfolio is accepted or rejected with reasons, and replaying the snapshot gives
@@ -274,7 +276,7 @@ stub for the firm's Azure DevOps pipeline framework.
 
 ## Agents
 
-`optim sync` writes the core's one-page contract into a marked block in the repo's `AGENTS.md`, whose `CLAUDE.md` is
+`basis sync` writes the core's one-page contract into a marked block in the repo's `AGENTS.md`, whose `CLAUDE.md` is
 `@AGENTS.md`, and copies the core's skills into `.agents/skills/optim-*`, which Codex reads, and
 `.claude/skills/optim-*`, which Claude Code reads. They are copies rather than symlinks because Git on Windows checks a
 symlink out as a plain text file unless Developer Mode and `core.symlinks` are on. A contract test fails when the copies
@@ -283,11 +285,11 @@ do not match the installed `optim`. The skills cover starting a new model, porti
 research sweep, and triaging an e2e failure.
 
 Each model's `README.md` states its behaviour in business terms: what it maximises, its constraints, its data and its
-known limits. The machine-readable surfaces are `optim describe`, the JSON logs and the sweep tables.
+known limits. The machine-readable surfaces are `basis describe`, the JSON logs and the sweep tables.
 
 ## A model repo
 
-`optim new repo NAME [--from cvxpy|plain]` creates a model repo, and `optim new model NAME [--from ...]` adds a model to
+`optim new repo NAME [--from cvxpy|plain]` creates a model repo, and `basis new model NAME [--from ...]` adds a model to
 the repo it runs in. Before any repo exists, a quant runs `uvx --index INDEX_URL optim new repo NAME`, where `INDEX_URL`
 is the internal PyPI server. A new repo gets:
 
@@ -296,7 +298,7 @@ is the internal PyPI server. A new repo gets:
   behaviour test
 - a `Dockerfile`: Python 3.14 slim with uv, `uv sync --frozen --no-dev`, and `optim` as the entry point
 - the `azure-pipelines.yml` stub, `.gitignore` (snapshots, cache, `.env`) and `.env.example` (the `OPTIM_*` settings)
-- `AGENTS.md`, `CLAUDE.md` and the skills, written by `optim sync`
+- `AGENTS.md`, `CLAUDE.md` and the skills, written by `basis sync`
 
 The generator runs `git init` and `uv sync`, and leaves the first commit to the quant. A new model gets its module,
 params, README and test, and its entry-point line. The templates are the installed package's examples, so a generated
@@ -343,7 +345,7 @@ Each step was a change that left the checks passing, and every step is done, but
    interface. Remove Redis (`data/cache.py`, the dependency and its settings), and add the `file` source.
 4. Start workers with `spawn` in `engine.py`, and run the tests on Windows.
 5. Build the model contract: `optim.Params`, `optim.Datasets`, `optim.Decision`, `optim.cvxpy`, and a run loop that
-   calls the hooks and finds models by entry point, with `optim run MODEL --params FILE`. Move the mock (`prep/`,
+   calls the hooks and finds models by entry point, with `basis run MODEL --params FILE`. Move the mock (`prep/`,
    `rules/`, `optimizer/model.py`, the constraints and objective terms, `strategy.py` and `strategies/`) into the
    `cvxpy` example, whose `Params` replaces the strategy JSON. Holdings and securities become `optim.datasets`, and the
    other datasets become the example's own.
@@ -353,6 +355,6 @@ Each step was a change that left the checks passing, and every step is done, but
 8. Add the research commands: `replay --params`, `sweep`, `describe`, `regress`, and the Python API for one portfolio.
 9. Add the pytest plugin: contract tests, the import check for model repos, the agent-files check, and the e2e
    fixtures. The core keeps its own `lint-imports` contract.
-10. Add the generator and `optim sync`: the repo templates, the skills, and the `plain` example.
+10. Add the generator and `basis sync`: the repo templates, the skills, and the `plain` example.
 11. Write the docs for quants and rewrite `AGENTS.md`, the README and the other pages in `docs/` for the package. Set
     the version to 0.1.0 and publish it by tag.

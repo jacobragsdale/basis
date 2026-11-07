@@ -81,6 +81,8 @@ class RunRecord(Model):
     data: str | None = None
     """The folder a run on files read its inputs from."""
     replay_of: str | None = None
+    again: bool = False
+    """Whether the run was told to publish a plain insert for an interval the ledger has already, as its resume is."""
     status: Status
     inputs: dict[str, InputRecord] = Field(default_factory=dict)
     outputs: dict[str, OutputRecord] = Field(default_factory=dict)

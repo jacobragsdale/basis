@@ -2,41 +2,76 @@
 
 It finds its repo, the nearest folder at or above the working directory with a `pyproject.toml`, reads the parts that
 file declares as `[tool.basis] parts = ["job"]`, loads each one's entry point in the `basis.verbs` group, and runs
-one verb: a part's own, or one of core's, which reach the parts through their `Part`. A verb of a part the repo does
-not declare is refused, never offered. The verbs a developer runs on a clone, `check`, `sync` and `new`, point a clone
-that names no hooks folder at the repo's hooks (`basis.core.hooks.ensure`); `run` and the rest, which a container or a
-scheduler runs, leave git alone.
+one verb: a part's own, or one of core's, which reach the parts through their `Part`. A verb that jobs and models
+both have, such as `run`, is core's too (`SHARED`): it parses NAME, and RUN_ID where the verb takes one, and the part
+that runs NAME parses the rest. A verb of a part the repo does not declare is refused, never offered. The verbs a
+developer runs on a clone, `check`, `sync` and `new`, point a clone that names no hooks folder at the repo's hooks
+(`basis.core.hooks.ensure`); `run` and the rest, which a container or a scheduler runs, leave git alone.
 
-Every failure is one line on stderr, `ERROR: REASON: FIX`, and the exit code is 1, or 2 for a command line that does
-not parse. A `BasisError`, which basis raises on purpose with the fix in its message, prints as that line alone, as
-does a pydantic `ValidationError` of the caller's settings or params; any other exception is a defect, and its
+Every command ends with one log record, `finished VERB`, with its `exit_code` and `ms`, whatever its outcome, and then
+each failure's line on stderr, `ERROR: REASON: FIX`, held back until then (`basis.core.verbs.holding`): so a failure's
+ERROR line is the last line, and monitoring finds every exit code. The exit code is 1, or 2 for a command line that
+does not parse. A `BasisError`, which basis raises on purpose with the fix in its message, prints as that line alone,
+as does a pydantic `ValidationError` of the caller's settings or params; any other exception is a defect, and its
 traceback is logged before the line, as every exception's is with `BASIS_LOG_LEVEL=DEBUG`. `standalone` runs a
 command of the same kind outside a repo, such as `basis-job`, which makes one."""
 
 import argparse
+import contextlib
+import io
+import json
 import logging
 import os
 import sys
+import time
 import tomllib
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import partial
+from functools import cached_property, partial
 from importlib.metadata import EntryPoint, entry_points, version
 from pathlib import Path
-from typing import NoReturn, override
+from typing import Literal, NoReturn, override
 
 from pydantic import ValidationError
 
 from basis.core import check, hooks, logs, settings, sync
 from basis.core.errors import BasisError
-from basis.core.verbs import Part, Regress, Replay, Runs, Verb, fail
+from basis.core.verbs import Part, Runs, Shared, Verb, error_line, fail, holding
 
 GROUP = "basis.verbs"
 PACKAGES = {"job": "basis-job", "api": "basis-api", "optim": "optim"}
 """The package each part comes in, for the fix when a repo declares a part that is not installed."""
-CORE = ("check", "replay", "regress", "new", "sync", "docs")
+CORE = ("check", "new", "sync", "docs")
 """Core's verbs, which no part may add: in the order `basis --help` lists them. `check` and `sync` are always listed,
 since every repo has basis's own files, and each of the others when a declared part gives it something to do."""
+
+
+@dataclass(frozen=True)
+class Spec:
+    """How core parses one of the verbs the parts that run things share, before the part that runs NAME reads the
+    rest."""
+
+    name: str
+    """NAME's help, with `{noun}` for what the parts run, such as `job`, and `{path}` where a module path would do."""
+    required: bool = False
+    run_id: bool = False
+    """Whether RUN_ID follows NAME."""
+    alone: Literal["refuse", "each", "first", "names"] = "refuse"
+    """What the verb does without NAME, where more than one declared part has it: refuse; hand the arguments, which
+    must be options every part takes, to each part in turn, and print what each part printed as JSON, by part; hand
+    them to the first; or print the name of everything every part runs."""
+
+
+SHARED = {
+    "run": Spec("the {noun}'s name, as the repo lists it{path}", required=True),
+    "describe": Spec("the {noun} to describe{path}; without it, every one the repo lists, by name", alone="names"),
+    "resume": Spec("the {noun} whose run it is; without it, the run is found by its id", run_id=True),
+    "replay": Spec("the {noun} whose run it is; without it, the run is found by its id", run_id=True),
+    "regress": Spec("the {noun} whose runs to replay; without it, every one", alone="each"),
+    "ddl": Spec("the {noun} whose tables to print{path}", alone="first"),
+}
+"""The verbs that jobs and models both have, which are core's, in the order `basis --help` lists them; each is listed
+when a declared part's `Runs` has it."""
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +110,10 @@ def installed() -> dict[str, Callable[[], Part]]:
 
 def run(argv: Sequence[str], *, cwd: Path, installed: Installed) -> int:
     """`basis` with `argv`, in the repo at or above `cwd`, with the parts `installed` lists."""
+    return _finishing("basis", argv, partial(_run, argv, cwd=cwd, installed=installed))
+
+
+def _run(argv: Sequence[str], *, cwd: Path, installed: Installed) -> int:
     try:
         logs.setup()
         if list(argv[:1]) == ["--version"]:  # which needs no repo
@@ -82,6 +121,9 @@ def run(argv: Sequence[str], *, cwd: Path, installed: Installed) -> int:
             return 0
         settings.refuse_renamed(os.environ)
         repo = find(cwd, installed)
+        for part in repo.parts.values():
+            if part.renamed is not None:
+                part.renamed(os.environ)
         groups = _groups(repo)
         verbs = {verb.name: verb for _, group in groups for verb in group}
         _refuse_undeclared(argv, repo, verbs, installed)
@@ -93,11 +135,28 @@ def run(argv: Sequence[str], *, cwd: Path, installed: Installed) -> int:
 def standalone(prog: str, description: str, verbs: Sequence[Verb], argv: Sequence[str] | None = None) -> int:
     """A command with `verbs` that runs outside a repo, such as `basis-job`, which makes one; it parses, runs and
     fails as `basis` does."""
-    try:
-        logs.setup()
-        return _execute(_parser(prog, description, verbs), {verb.name: verb for verb in verbs}, sys.argv[1:] if argv is None else argv)
-    except Exception as error:  # noqa: BLE001 -- the boundary where every failure becomes its one line
-        return report(error)
+    given = sys.argv[1:] if argv is None else argv
+
+    def execute() -> int:
+        try:
+            logs.setup()
+            return _execute(_parser(prog, description, verbs), {verb.name: verb for verb in verbs}, given)
+        except Exception as error:  # noqa: BLE001 -- the boundary where every failure becomes its one line
+            return report(error)
+
+    return _finishing(prog, given, execute)
+
+
+def _finishing(prog: str, argv: Sequence[str], execute: Callable[[], int]) -> int:
+    """`execute`'s exit code, `prog ARGV`'s, after the record that says it finished, with its verb, its exit code and
+    how long it took, and then the ERROR lines it printed, so that they are last."""
+    start = time.perf_counter()
+    with holding() as held:
+        code = execute()
+    verb = next((argument for argument in argv if not argument.startswith("-")), None)
+    log.info("finished %s", verb or prog, extra={"verb": verb, "exit_code": code, "ms": logs.ms_since(start)})
+    sys.stderr.write("".join(held))
+    return code
 
 
 def versions() -> str:
@@ -167,14 +226,16 @@ def _load(entry: EntryPoint) -> Part:
 
 
 def _groups(repo: Repo) -> list[tuple[str, list[Verb]]]:
-    """Core's verbs and each declared part's, as `basis --help` lists them."""
-    groups = [("In every basis repo", _core(repo))]
-    owners = dict.fromkeys(CORE, _CORE)
+    """Core's verbs, the verbs the parts that run things share, and each declared part's own, as `basis --help` lists
+    them; a group with no verbs is left out."""
+    owners = dict.fromkeys((*CORE, *SHARED), _CORE)
     for name, part in repo.parts.items():
         for verb in part.verbs:
             _claim(owners, verb.name, name, f"basis {verb.name}")
-        groups.append((f"From the {name} part", list(part.verbs)))
-    return groups
+    running = [runs for runs in (part.runs for part in repo.parts.values()) if runs is not None]
+    groups = [("In every basis repo", _core(repo)), (f"For its {' and '.join(f'{runs.noun}s' for runs in running)}", _shared(repo))]
+    groups += [(f"From the {name} part", list(part.verbs)) for name, part in repo.parts.items()]
+    return [(title, verbs) for title, verbs in groups if verbs]
 
 
 _CORE = "core"
@@ -200,7 +261,6 @@ def _core(repo: Repo) -> list[Verb]:
     parts = repo.parts.values()
     files = [part.files for part in parts if part.files is not None]
     kinds = _kinds(repo)
-    saving = {name: part.runs for name, part in repo.parts.items() if part.runs is not None}
 
     def agent_files() -> list[sync.AgentFiles]:
         return [read() for read in files]
@@ -212,16 +272,8 @@ def _core(repo: Repo) -> list[Verb]:
     def run_sync(n: argparse.Namespace) -> int:
         return _sync(repo.root, agent_files(), SyncArgs(adopt=bool(n.adopt)))
 
-    def replay(n: argparse.Namespace) -> int:
-        return _owner(saving, n.name).replay(Replay(n.name, str(n.run_id), n.params))
-
-    def regress(n: argparse.Namespace) -> int:
-        return _regress(saving, Regress(n.name, n.last, dict(n.label), n.snapshots))
-
     offered = {
         "check": Verb("check", "lint, format check, type check and test the repo, and check its framework files and hooks", _check_arguments, run_check),
-        "replay": Verb("replay", "rerun a saved run's transform with today's code, and print how its outputs differ", _replay_arguments, replay),
-        "regress": Verb("regress", "replay recent published runs with today's code, and list what changed", _regress_arguments, regress),
         "new": Verb("new", f"add a {' or a '.join(kinds)} to the repo", partial(_new_arguments, kinds), lambda n: _new(repo, kinds[str(n.kind)], str(n.name))),
         "sync": Verb("sync", "rewrite the repo's framework and agent files from the installed version", _sync_arguments, run_sync),
         "docs": Verb("docs", "list the docs of the installed parts, or print one", _docs_arguments, lambda n: _docs(_pages(repo), n.page)),
@@ -231,9 +283,16 @@ def _core(repo: Repo) -> list[Verb]:
 
 
 def _gives(part: Part) -> set[str]:
-    """The core verbs `part` gives something to do."""
-    fields = {"docs": part.docs is not None, "new": bool(part.new), "replay": part.runs is not None, "regress": part.runs is not None}
-    return {name for name, given in fields.items() if given}
+    """The core verbs `part` gives something to do, the shared verbs among them."""
+    fields = {"docs": part.docs is not None, "new": bool(part.new)}
+    shared: set[str] = set(_sides(part.runs)) if part.runs is not None else set()
+    return {name for name, given in fields.items() if given} | shared
+
+
+def _sides(runs: Runs) -> dict[str, Shared]:
+    """The part's side of each verb in `SHARED` it has, by the verb's name."""
+    sides = {"run": runs.run, "describe": runs.describe, "resume": runs.resume, "replay": runs.replay, "regress": runs.regress, "ddl": runs.ddl}
+    return {name: side for name, side in sides.items() if side is not None}
 
 
 def _offers(part: Part) -> set[str]:
@@ -246,6 +305,7 @@ def _refuse_undeclared(argv: Sequence[str], repo: Repo, verbs: Collection[str], 
     verb = next((argument for argument in argv if not argument.startswith("-")), None)
     if verb is None or verb in verbs:
         return
+    offering: list[str] = []
     for name, load in installed.items():
         if name in repo.parts:
             continue
@@ -255,8 +315,14 @@ def _refuse_undeclared(argv: Sequence[str], repo: Repo, verbs: Collection[str], 
             log.debug("the %s part does not load", name, exc_info=True)
             continue
         if verb in _offers(part):
-            msg = f"`basis {verb}` comes with the {name} part, which {repo.pyproject} does not declare: add {name!r} to its [tool.basis] parts"
-            raise CommandError(msg)
+            offering.append(name)
+    if len(offering) == 1:
+        msg = f"`basis {verb}` comes with the {offering[0]} part, which {repo.pyproject} does not declare: add {offering[0]!r} to its [tool.basis] parts"
+        raise CommandError(msg)
+    if offering:
+        parts = " and ".join(offering)
+        msg = f"`basis {verb}` comes with the {parts} parts, which {repo.pyproject} does not declare: add the one the repo has, {' or '.join(map(repr, offering))}, to its [tool.basis] parts"
+        raise CommandError(msg)
 
 
 def _kinds(repo: Repo) -> dict[str, Callable[[Path, str], Path]]:
@@ -269,28 +335,183 @@ def _kinds(repo: Repo) -> dict[str, Callable[[Path, str], Path]]:
     return kinds
 
 
-def _owner(saving: Mapping[str, Runs], name: str | None) -> Runs:
-    """The runs of the part that runs `name`: the only part that saves runs, or the one whose names hold it."""
-    if len(saving) == 1:
-        return next(iter(saving.values()))
-    if name is None:
-        msg = f"more than one part of this repo saves runs ({', '.join(saving)}): give the job's or model's name before the run's id"
-        raise CommandError(msg)
-    owners = [runs for runs in saving.values() if name in runs.names()]
-    if len(owners) == 1:
-        return owners[0]
-    if owners:
-        msg = f"more than one part runs something named {name!r}: rename one of them"
-        raise CommandError(msg)
-    names = sorted(found for runs in saving.values() for found in runs.names())
-    msg = f"nothing in this repo is named {name!r}: give one of {', '.join(names) or 'its jobs or models, once it has some'}"
-    raise CommandError(msg)
+@dataclass(frozen=True)
+class _Dispatched(Verb):
+    """A verb in `SHARED`, which reads its own command line, since which part's parser reads it depends on its NAME:
+    `_execute` hands it the arguments after the verb."""
+
+    dispatch: Callable[[Sequence[str]], int]
 
 
-def _regress(saving: Mapping[str, Runs], args: Regress) -> int:
-    if args.name is not None:
-        return _owner(saving, args.name).regress(args)
-    return max(runs.regress(args) for runs in saving.values())
+def _shared(repo: Repo) -> list[Verb]:
+    """Each verb in `SHARED` a declared part has, dispatched to the parts that have it."""
+    found: list[Verb] = []
+    for name, spec in SHARED.items():
+        sides = {part: (runs, side) for part, runs in _running(repo).items() if (side := _sides(runs).get(name)) is not None}
+        if sides:
+            sharing = _Sharing(name, spec, sides)
+            found.append(_Dispatched(name, sharing.help(), _no_arguments, partial(_dispatched, sharing.dispatch), sharing.dispatch))
+    return found
+
+
+def _no_arguments(_: argparse.ArgumentParser) -> None:
+    """A shared verb's arguments in the parser of every verb: none, since its parts' parsers read them."""
+
+
+def _dispatched(dispatch: Callable[[Sequence[str]], int], _: argparse.Namespace) -> int:
+    """A shared verb that argparse reached with nothing after it, as in `basis -- describe`."""
+    return dispatch(())
+
+
+def _running(repo: Repo) -> dict[str, Runs]:
+    return {name: part.runs for name, part in repo.parts.items() if part.runs is not None}
+
+
+@dataclass(frozen=True)
+class _Sharing:
+    """A verb in `SHARED` as the declared parts that have it share it."""
+
+    verb: str
+    spec: Spec
+    sides: Mapping[str, tuple[Runs, Shared]]
+    """Each part that has the verb, by name, with what it runs and its side of the verb."""
+
+    @cached_property
+    def names(self) -> dict[str, Mapping[str, str]]:
+        """What each part runs, by name, with its module path: read once per command, when it is needed."""
+        return {part: runs.names() for part, (runs, _) in self.sides.items()}
+
+    def help(self) -> str:
+        """The verb's line in `basis --help`: the only part's help, or each part's, after what it runs."""
+        if len(self.sides) == 1:
+            return next(iter(self.sides.values()))[1].help
+        return " | ".join(f"{runs.noun}s: {side.help}" for runs, side in self.sides.values())
+
+    def dispatch(self, argv: Sequence[str]) -> int:
+        """`basis VERB ARGV`: handed to the only part that has the verb, or to the one that runs NAME, whose parser
+        reads every argument; without NAME, where several parts have it, as `spec.alone` says."""
+        if len(self.sides) == 1:
+            return self._hand(next(iter(self.sides)), argv)
+        leading = next((index for index, argument in enumerate(argv) if argument.startswith("-")), len(argv))
+        helping = "-h" in argv or "--help" in argv
+        known = leading >= 1 and any(argv[0] in found for found in self.names.values())
+        if leading >= (2 if self.spec.run_id else 1) or (known and helping):  # NAME is given, and comes first
+            return self._hand(self._owner(argv[0]), argv)
+        if self.spec.run_id and known:
+            msg = f"basis {self.verb} {argv[0]} takes the id of one of its runs after the name: give it, as `basis {self.verb} {argv[0]} RUN_ID`"
+            raise CommandError(msg, code=2)
+        if helping:
+            return self._help()
+        match self.spec.alone:
+            case "names":
+                return _print(self._listed())
+            case "each":
+                return self._every_part(argv)
+            case "first":
+                return self._hand(next(iter(self.sides)), argv)
+            case "refuse":
+                where = "before the run's id" if self.spec.run_id else "first"
+                msg = f"more than one part of this repo has `basis {self.verb}` ({', '.join(self.sides)}): give the {self._nouns("'s")} name {where}"
+                raise CommandError(msg)
+
+    def _parser(self, part: str) -> argparse.ArgumentParser:
+        """`part`'s parser for the verb: core's NAME and RUN_ID, and the part's own arguments."""
+        runs, side = self.sides[part]
+        parser = _Parser(prog=f"basis {self.verb}", description=side.help)
+        metavar, path = (runs.noun.upper(), ", or its module path") if len(self.sides) == 1 else ("NAME", "")
+        parser.add_argument("name", metavar=metavar, nargs=None if self.spec.required else "?", help=self.spec.name.format(noun=runs.noun, path=path))
+        if self.spec.run_id:
+            parser.add_argument("run_id", metavar="RUN_ID")
+        side.arguments(parser)
+        return parser
+
+    def _hand(self, part: str, argv: Sequence[str]) -> int:
+        """`argv`, parsed by `part`'s parser, handed to `part`; for `describe` without NAME, what every part runs."""
+        try:
+            namespace = self._parser(part).parse_args(argv)
+        except SystemExit as exited:  # --help prints, then exits
+            return exited.code if isinstance(exited.code, int) else 0
+        if namespace.name is None and self.spec.alone == "names":
+            return _print(self._listed())
+        return self.sides[part][1].handle(namespace)
+
+    def _every_part(self, argv: Sequence[str]) -> int:
+        """`basis VERB ARGV` without NAME, handed to every part in turn: with only the options every part takes, since
+        one part's would fail the others, and with each part's result, which it prints as JSON, printed as one JSON
+        object, by part. A part's failure is its own line, and every other part still runs."""
+        for part in self.sides:
+            _, unknown = self._parser(part).parse_known_args(argv)
+            if options := [argument.partition("=")[0] for argument in unknown if argument.startswith("-")]:
+                listed = ", ".join(options)
+                msg = f"basis {self.verb}: {listed} is not an option of the {part} part's `basis {self.verb}`: name the {self._nouns()} it is for, as `basis {self.verb} NAME {options[0]} ...`"
+                raise CommandError(msg, code=2)
+        results: dict[str, object] = {}
+        code = 0
+        for part in self.sides:
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                code = max(code, self._each(part, argv))
+            results[part] = self._parsed(part, printed.getvalue())
+        _print(results)
+        return code
+
+    def _each(self, part: str, argv: Sequence[str]) -> int:
+        """`part`'s side of the verb, whose failure is its own line, so that every other part's runs too."""
+        try:
+            return self._hand(part, argv)
+        except Exception as error:  # noqa: BLE001 -- each part's failure is its own line, and the other parts still run
+            error.add_note(f"in the {part} part")
+            return report(error)
+
+    def _parsed(self, part: str, printed: str) -> object:
+        """What `part`'s side of the verb printed, as JSON, or None where it printed nothing."""
+        if not printed.strip():
+            return None
+        try:
+            return json.loads(printed)
+        except json.JSONDecodeError as error:
+            msg = f"the {part} part's `basis {self.verb}` printed what is not JSON, which it must print where several parts run it: {error}"
+            raise ValueError(msg) from error
+
+    def _help(self) -> int:
+        """What `basis VERB --help` prints where several parts have the verb, before NAME says whose arguments to give."""
+        spec = self.spec
+        usage = f"basis {self.verb} [-h] {'NAME' if spec.required or spec.run_id else '[NAME]'}{' RUN_ID' if spec.run_id else ''} ..."
+        lines = [f"With a {runs.noun}'s NAME, it does as the {part} part says: {side.help}." for part, (runs, side) in self.sides.items()]
+        lines.append(f"`basis {self.verb} NAME --help` gives the arguments of NAME's part.")
+        sys.stdout.write(f"usage: {usage}\n\n" + "\n".join(lines) + "\n")
+        return 0
+
+    def _owner(self, name: str) -> str:
+        """The part that runs `name`."""
+        owners = [part for part, found in self.names.items() if name in found]
+        if len(owners) == 1:
+            return owners[0]
+        if owners:
+            msg = f"the {' and '.join(owners)} parts both run something named {name!r}: rename one of them"
+            raise CommandError(msg)
+        listed = sorted({found for each in self.names.values() for found in each})
+        msg = f"nothing in this repo is named {name!r}: give one of {', '.join(listed) or f'its {self._nouns("s")}, once it has some'}"
+        raise CommandError(msg)
+
+    def _listed(self) -> dict[str, str]:
+        """Everything the parts run, by name, with its module path; a name two parts run is refused."""
+        found: dict[str, str] = {}
+        for each in self.names.values():
+            for name, path in each.items():
+                if name in found:
+                    self._owner(name)  # refuses it
+                found[name] = path
+        return found
+
+    def _nouns(self, suffix: str = "") -> str:
+        """What the parts run, as `job or model`, each with `suffix`."""
+        return " or ".join(f"{runs.noun}{suffix}" for runs, _ in self.sides.values())
+
+
+def _print(value: object) -> int:
+    sys.stdout.write(json.dumps(value, indent=2) + "\n")
+    return 0
 
 
 def _new(repo: Repo, make: Callable[[Path, str], Path], name: str) -> int:
@@ -328,6 +549,8 @@ def _pages(repo: Repo) -> dict[str, Path]:
 
 def _docs(pages: Mapping[str, Path], page: str | None) -> int:
     """Every page's name, or the page `page` names, as `PART/PAGE` or as `PAGE` where only one part has it."""
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(encoding="utf-8")  # a page is UTF-8, and a redirected Windows console is cp1252
     if page is None:
         sys.stdout.write("".join(f"{name}\n" for name in pages))
         return 0
@@ -373,25 +596,12 @@ def existing_folder(text: str) -> Path:
     return Path(text)
 
 
-def _positive(text: str) -> int:
+def positive(text: str) -> int:
     """A count of at least 1, as argparse's `type`."""
     if not text.isdecimal() or int(text) < 1:
         msg = f"give a whole number of 1 or more, not {text!r}"
         raise argparse.ArgumentTypeError(msg)
     return int(text)
-
-
-def _replay_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("name", metavar="NAME", nargs="?", help="the job or model whose run it is; without it, the run is found by its id")
-    parser.add_argument("run_id", metavar="RUN_ID")
-    parser.add_argument("--params", type=existing_file, help="other params to replay with, instead of the run's own")
-
-
-def _regress_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("name", metavar="NAME", nargs="?", help="the job or model whose runs to replay; without it, every one")
-    parser.add_argument("--last", type=_positive, default=10, help="how many published runs of each, newest first")
-    parser.add_argument("--label", type=label, action="append", default=[], help="KEY=VALUE a run's labels must include; repeatable")
-    parser.add_argument("--snapshots", help="the snapshot root to read, instead of BASIS_SNAPSHOT_ROOT")
 
 
 def _new_arguments(kinds: Mapping[str, object], parser: argparse.ArgumentParser) -> None:
@@ -428,6 +638,8 @@ def _describe(repo: Repo, groups: Sequence[tuple[str, Sequence[Verb]]]) -> str:
 
 
 def _execute(parser: argparse.ArgumentParser, verbs: Mapping[str, Verb], argv: Sequence[str]) -> int:
+    if argv and isinstance(verb := verbs.get(argv[0]), _Dispatched):
+        return verb.dispatch(argv[1:])
     try:
         namespace = parser.parse_args(argv)
     except SystemExit as exited:  # --help and --version print, then exit
@@ -438,7 +650,7 @@ def _execute(parser: argparse.ArgumentParser, verbs: Mapping[str, Verb], argv: S
 def report(error: Exception) -> int:
     """Print `error` as its one line, after its traceback if it is a defect, and return its exit code."""
     if isinstance(error, CommandError):
-        sys.stderr.write(f"ERROR: {error}\n")
+        error_line(str(error))
         return error.code
     deliberate = isinstance(error, BasisError | ValidationError)
     if not deliberate or log.isEnabledFor(logging.DEBUG):
@@ -446,7 +658,7 @@ def report(error: Exception) -> int:
     message = one_line(error)
     if not deliberate:
         message = f"{type(error).__name__}: {message}: a defect; the log record above holds its traceback"
-    sys.stderr.write(f"ERROR: {message}\n")
+    error_line(message)
     return 1
 
 

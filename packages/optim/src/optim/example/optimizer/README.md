@@ -11,4 +11,4 @@ The cvxpy problem a portfolio's decision solves.
 A limit's number comes from the params, such as `max_issuer_weight`, or from the portfolio, such as its `sector_caps`,
 which its mandates tighten; the constraint that holds the problem to it is cvxpy in `constraints.py`.
 
-`uv run optim docs how-to/add-a-constraint` and `uv run optim docs how-to/change-the-objective` say more.
+`uv run basis docs optim/how-to/add-a-constraint` and `uv run basis docs optim/how-to/change-the-objective` say more.

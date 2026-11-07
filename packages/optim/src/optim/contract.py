@@ -20,7 +20,7 @@ from optim.schema import Model
 class Params(Model):
     """Base for a model's parameters, and for any model nested in them. Strict: an unknown key is refused and no value is
     coerced, so a misspelled key or `"0.05"` for a number in a variant an agent wrote fails before any data loads,
-    rather than being ignored. Document each field with a docstring under it: `optim describe` prints them."""
+    rather than being ignored. Document each field with a docstring under it: `basis describe` prints them."""
 
     model_config = ConfigDict(strict=True)
 
@@ -64,7 +64,7 @@ def declared(data: type[Datasets]) -> dict[str, Dataset]:
 
 class Metrics(Model):
     """Base for a model's optional `Metrics`: one float field per number it reports for sweeps, each with a docstring.
-    `optim describe` prints them, and a `Decision` takes an instance as its `metrics`."""
+    `basis describe` prints them, and a `Decision` takes an instance as its `metrics`."""
 
 
 type Stop = Literal["optimal", "limit", "imprecise", "infeasible", "unbounded", "failed"]

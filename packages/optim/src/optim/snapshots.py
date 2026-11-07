@@ -295,7 +295,7 @@ def find(roots: Sequence[Root], run_id: str) -> Saved:
         except LookupError:
             continue
         return read(path)
-    msg = f"no run {run_id} in {' or '.join(root.location for root in roots)}"
+    msg = f"no run {run_id} in {' or '.join(root.location for root in roots)}: give the id of a run there, or the path of its manifest, or set BASIS_SNAPSHOT_ROOT to the run store that holds it"
     raise LookupError(msg)
 
 

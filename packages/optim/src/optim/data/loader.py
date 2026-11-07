@@ -77,7 +77,7 @@ class DatasetRead(Model):
     """Where it was read from: a source's name, or for a file, `file:` and its path."""
     read: Literal["live", "hit", "miss", "refresh"]
     """`live`: read from its source, as it is not cached; `hit`: from the cache; `miss`: read from its source, then
-    cached; `refresh`: read from its source by `optim warm`."""
+    cached; `refresh`: read from its source by `basis warm`."""
     fetched_at: datetime
     """When its source was read: for a hit, when the cache entry was filled. Loaded in batches, the oldest batch's."""
 
@@ -160,7 +160,7 @@ class Loader:
         return None
 
     def warm(self, datasets: Iterable[Dataset], as_of_date: date) -> bool:
-        """`optim warm`: read each of `datasets`, read whole, that is cached live for `as_of_date`, and overwrite its
+        """`basis warm`: read each of `datasets`, read whole, that is cached live for `as_of_date`, and overwrite its
         entry, so the day's runs read it from the cache. A failed load is logged and the rest still land; returns
         whether all of them did."""
         loader = replace(self, refresh=True)

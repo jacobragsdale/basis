@@ -1,9 +1,9 @@
 """Fakes for optim's tests: a source serving rows from memory, which records what it was asked, and a clock that moves
-a second at each reading, so a test can run a model end to end, snapshot included, with no database; and `saved`, a
-run by its id in a store. Named apart from basis-job's `builders`, since the root's pytest run puts both packages'
+a second at each reading, so a test can run a model end to end, snapshot included, with no database; `saved`, a
+run by its id in a store; and `Basis`, the type of the `basis` fixture, which runs the command in a model repo. Named apart from basis-job's `builders`, since the root's pytest run puts both packages'
 tests folders on the path."""
 
-from collections.abc import Generator, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,6 +20,9 @@ from optim.sources import Columns, Param
 from optim.sources.file import FileSource
 
 EXAMPLE = Path(__file__).parent.parent / "src" / "optim" / "example"
+
+type Basis = Callable[..., int]
+"""`basis ARGV...` in a model repo, which returns its exit code: the `basis` fixture's type."""
 
 
 class Rows:

@@ -8,4 +8,4 @@ Move code here when a second model needs it, not before, and update the imports 
 fixture still has a file for every dataset it reads, shared ones included. When a second repo needs a dataset, it
 belongs in `optim.datasets` instead.
 
-`uv run optim docs how-to/share-code-between-models` says more.
+`uv run basis docs optim/how-to/share-code-between-models` says more.

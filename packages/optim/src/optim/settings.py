@@ -81,7 +81,7 @@ class OptimSettings(Model):
     """The REST API that datasets with `source="rest"` read."""
     orders: OrdersSettings | None = None
     """The orders table accepted portfolios' orders are written to. Only production configures one, and only
-    `optim run` writes to it."""
+    `basis run` writes to it."""
 
 
 CONSISTENT = {"mssql": "snapshot", "oracle": "read_only"}

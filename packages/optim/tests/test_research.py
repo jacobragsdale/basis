@@ -9,12 +9,11 @@ import cvxpy as cp
 import pandas as pd
 import pyarrow as pa
 import pytest
-from fakes import EXAMPLE, Clock, Rows, loader, saved
+from fakes import EXAMPLE, Basis, Clock, Rows, loader, saved
 from toys.scarce import Supply
 
 from basis.core.storage import Root
 from optim import models, research
-from optim.cli import main
 from optim.datasets import HOLDINGS, SECURITIES
 from optim.runs import open_snapshot, read_snapshot, run_model
 from optim.snapshots import Manifest, Saved
@@ -95,8 +94,8 @@ def test_one_portfolio_of_a_model_that_reserves_decides_after_those_before_it(tm
     assert trial.outcome.decision.buy == {"NEW": 20_000.0}
 
 
-def test_describe_tells_an_agent_what_a_model_takes_reads_and_reports(capsys: pytest.CaptureFixture[str]) -> None:
-    assert main(["describe", "optim.example.model"]) == 0
+def test_describe_tells_an_agent_what_a_model_takes_reads_and_reports(basis: Basis, capsys: pytest.CaptureFixture[str]) -> None:
+    assert basis("describe", "optim.example.model") == 0
 
     described = json.loads(capsys.readouterr().out)
     assert "Buy only bonds rated this or better" in described["params"]["properties"]["min_rating"]["description"]
@@ -112,9 +111,9 @@ def test_describe_tells_an_agent_what_a_model_takes_reads_and_reports(capsys: py
     assert described["hooks"] == ["prepare_market", "prepare_portfolio"]
 
 
-def test_the_sweep_command_writes_its_table(tmp_path: Path) -> None:
+def test_the_sweep_command_writes_its_table(tmp_path: Path, basis: Basis) -> None:
     snapshot = toy_run(tmp_path, "toys.basic")
     variants(tmp_path, a={"buy": "A"})
 
-    assert main(["sweep", snapshot.path.path, str(tmp_path / "variants"), "--out", str(tmp_path / "sweep.csv")]) == 0
+    assert basis("sweep", snapshot.path.path, str(tmp_path / "variants"), "--out", str(tmp_path / "sweep.csv")) == 0
     assert pd.read_csv(tmp_path / "sweep.csv")["variant"].tolist() == ["a", "a", "a"]

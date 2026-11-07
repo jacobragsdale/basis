@@ -50,7 +50,9 @@ uv run --env-file .env.prod basis resume prices RUN_ID
 ```
 
 `resume` writes the run's saved changes, the same rows, to each database whose ledger does not have the run, and
-exits 0 once every database has committed. A run that failed before publishing cannot be resumed: run it again.
+exits 0 once every database has committed. A run told `--again` resumes as it ran, inserting an append-only table's
+rows for an interval the ledger already has; `basis resume prices RUN_ID --again` does so for a run that was not. A
+run that failed before publishing cannot be resumed: run it again.
 
 ## Publish an append-only table again for the same interval
 

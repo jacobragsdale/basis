@@ -1,58 +1,32 @@
-"""The agent files `optim sync` writes into a model repo, from the installed `optim`: the core's one-page contract, as
-a marked block in `AGENTS.md`, and the core's skills, copied into `.agents/skills/optim-*`. They are the open
-conventions every agent reads, Copilot's included, so no repo holds a vendor's own files. The skills are copies rather
-than symlinks because Git on Windows checks a symlink out as a plain text file unless Developer Mode and
-`core.symlinks` are on. The repo's `tests/test_agent_files.py` fails when the files do not match the installed `optim`,
-so an upgrade brings its guidance with it."""
+"""What a model repo carries from the installed optim: its block in `AGENTS.md`, the contract every model keeps; the
+`optim-*` skills, in `.agents/skills/` and their copies in `.claude/skills/`; and its line of the Dockerfile.
+`basis sync` writes them with basis's own files, and `basis check` fails when one differs from what the installed optim
+writes, so an upgrade brings its guidance with it."""
 
 from pathlib import Path
 
 import optim
+from basis.core import sync as core_sync
+from basis.core.sync import AgentFiles
 
 PACKAGE = Path(__file__).parent
 SKILLS = PACKAGE / "skills"
-BEGIN, END = "<!-- optim:begin -->", "<!-- optim:end -->"
-SKILL_DIRS = (Path(".agents") / "skills",)
+IMAGE = "#   a model: run MODEL --params models/MODEL/params/default.json --as-of DATE\n"
+"""The Dockerfile's line for models: the command a scheduler gives a model's container."""
 
 
-def block() -> str:
-    """The marked block, stamped with the installed version, so an upgrade makes it stale."""
-    contract = (PACKAGE / "templates" / "contract.md").read_text(encoding="utf-8").replace("{version}", optim.__version__)
-    return f"{BEGIN}\n{contract.rstrip()}\n{END}"
-
-
-def expected(repo: Path) -> dict[Path, str]:
-    """Every agent file, by its path in the repo, as `optim sync` would write it. `AGENTS.md` keeps what the repo wrote
-    before and after the block exactly as written."""
-    agents = repo / "AGENTS.md"
-    current = agents.read_text(encoding="utf-8") if agents.exists() else ""
-    before, found, rest = current.partition(BEGIN)
-    files = {Path("AGENTS.md"): f"{before}{block()}{rest.partition(END)[2]}" if found else f"{current.rstrip()}\n\n{block()}\n".lstrip("\n")}
-    for skill in sorted(SKILLS.glob("*/SKILL.md")):
-        for directory in SKILL_DIRS:
-            files[directory / skill.parent.name / "SKILL.md"] = skill.read_text(encoding="utf-8")
-    return files
+def agent_files() -> AgentFiles:
+    """optim's block, stamped with the installed version, so an upgrade makes it stale, its skills, and its line of the
+    Dockerfile."""
+    block = (PACKAGE / "templates" / "contract.md").read_text(encoding="utf-8").replace("{version}", optim.__version__)
+    return AgentFiles("optim", block, core_sync.skills(SKILLS), image=IMAGE)
 
 
 def stale(repo: Path) -> list[Path]:
-    """The agent files that do not match the installed `optim`, and skill copies it no longer ships."""
-    wrong = [path for path, text in expected(repo).items() if not (repo / path).exists() or (repo / path).read_text(encoding="utf-8") != text]
-    shipped = {skill.parent.name for skill in SKILLS.glob("*/SKILL.md")}
-    return wrong + [found.relative_to(repo) for directory in SKILL_DIRS for found in sorted((repo / directory).glob("optim-*")) if found.name not in shipped]
+    """The files basis and optim write that do not match the installed versions."""
+    return core_sync.stale(repo, [agent_files()])
 
 
-def sync(repo: Path) -> list[Path]:
-    """Write every stale agent file, and delete skill copies the installed `optim` no longer ships. Returns the paths
-    it changed."""
-    changed = stale(repo)
-    files = expected(repo)
-    for path in changed:
-        target = repo / path
-        if path in files:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(files[path], encoding="utf-8", newline="\n")
-        else:
-            for file in sorted(target.rglob("*"), reverse=True):
-                file.unlink() if file.is_file() else file.rmdir()
-            target.rmdir()
-    return changed
+def write(repo: Path) -> list[Path]:
+    """Rewrite every stale file basis and optim write, and return them."""
+    return core_sync.write(repo, [agent_files()]).changed

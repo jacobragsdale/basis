@@ -231,9 +231,6 @@ jobs:
 
   optim-generated-repo:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/optim
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
@@ -242,21 +239,77 @@ jobs:
       - run: uv sync --locked
       - name: Make a model repo from this checkout, with a second model, and run its checks
         run: |
-          uv run optim new repo sma income --dir "$RUNNER_TEMP" --optim-path .
+          uv run optim new repo sma income --dir "$RUNNER_TEMP" --framework-path .
           cd "$RUNNER_TEMP/sma"
-          uv run optim new model ladder
-          uv run pytest
-          uv run ruff check .
-          uv run ruff format --check .
-          uv run ty check
-      - name: Run the second model on its fixture, from Python and from the command line
+          uv run basis new model ladder
+          uv run basis --help
+          test "$(uv run optim --help)" = "$(uv run basis --help)"
+          uv run basis check
+      - name: Commit and push through its hooks, which refuse an edited skill basis writes
+        working-directory: ${{ runner.temp }}/sma
+        run: |
+          test "$(git config core.hooksPath)" = .githooks
+          git config user.name ci && git config user.email ci@example.com
+          git add --all && git commit --quiet --message "First commit"
+          echo "An edit." >> .agents/skills/optim-new-model/SKILL.md
+          git add --all
+          if git commit --quiet --message "An edited skill"; then echo "the commit hook let an edited skill through" >&2; exit 1; fi
+          git reset --quiet --hard
+          uv run basis sync && test -z "$(git status --porcelain)"
+          git init --quiet --bare "$RUNNER_TEMP/remote.git"
+          git push --quiet "$RUNNER_TEMP/remote.git" main
+      - name: Run the second model on its fixture, from Python and from the command line under both its names
         working-directory: ${{ runner.temp }}/sma
         run: |
           cp .env.example .env
           uv run python -c 'from optim import run; from models.ladder import model; run(model, data="tests/fixture")'
+          uv run --env-file .env basis run ladder --params models/ladder/params/default.json --data models/ladder/tests/fixture
           uv run --env-file .env optim run ladder --params models/ladder/params/default.json --data models/ladder/tests/fixture
+          run=$(ls snapshots/runs/optim/ladder | head -n 1)
+          uv run --env-file .env basis replay ladder "${run%.json}" --portfolios P1
+          uv run --env-file .env basis regress
+          uv run basis describe ladder > /dev/null
+          uv run basis docs optim/tutorial > /dev/null
       - name: Run it from its main.py, which reads live data and stops, naming the settings to set
         working-directory: ${{ runner.temp }}/sma
         run: |
           if uv run python models/ladder/main.py 2> "$RUNNER_TEMP/live.log"; then echo "main.py ran with no source configured" >&2; exit 1; fi
           grep --quiet "set BASIS_DATABASES__MSSQL__" "$RUNNER_TEMP/live.log" || { cat "$RUNNER_TEMP/live.log" >&2; exit 1; }
+      - name: Add the job part to it, and run a job and a model by name in the one repo
+        working-directory: ${{ runner.temp }}/sma
+        env:
+          CHECKOUT: ${{ github.workspace }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          job = Path(os.environ["CHECKOUT"], "packages/job").as_posix()
+          pyproject = Path("pyproject.toml")
+          text = pyproject.read_text(encoding="utf-8")
+          for old, new in [
+              ('dependencies = ["optim', 'dependencies = ["basis-job", "polars>=2.1.0", "optim'),
+              ('parts = ["optim"]', 'parts = ["optim", "job"]'),
+              ('[project.entry-points."optim.models"]', '[project.entry-points."basis.jobs"]\n\n[project.entry-points."optim.models"]'),
+              ('module-name = "models"', 'module-name = ["models", "jobs"]'),
+              ("[tool.uv.sources]\n", f'[tool.uv.sources]\nbasis-job = {{ path = "{job}", editable = true }}\n'),
+              ('testpaths = ["models", "tests"]', 'testpaths = ["models", "jobs", "tests"]'),
+              ('"models/*/tests/**" = ["S101"]', '"models/*/tests/**" = ["S101"]\n"jobs/*/tests/**" = ["S101", "PLR2004", "DTZ001"]\n"jobs/*/job.py" = ["ARG001"]'),
+          ]:
+              assert old in text, old
+              text = text.replace(old, new)
+          pyproject.write_text(text, encoding="utf-8")
+          Path("jobs").mkdir()
+          Path("jobs/__init__.py").write_text("", encoding="utf-8")
+          PY
+          uv sync --quiet
+          uv run basis new job positions
+          uv run basis sync
+          uv run basis --help
+          uv run basis check
+          uv run --env-file .env basis run positions --params jobs/positions/params/default.json --data jobs/positions/tests/fixture --interval 2026-11-05..2026-11-06
+          uv run --env-file .env basis run income --params models/income/params/default.json --data models/income/tests/fixture
+          uv run basis describe | python3 -c 'import json, sys; assert set(json.load(sys.stdin)) == {"income", "ladder", "positions"}'
+          uv run --env-file .env basis regress | python3 -c 'import json, sys; assert set(json.load(sys.stdin)) == {"job", "optim"}'
+          if uv run --env-file .env basis run positions --params jobs/positions/params/default.json --portfolios P1 2> "$RUNNER_TEMP/refused.log"; then echo "a model's option was taken for a job" >&2; exit 1; fi
+          tail -n 1 "$RUNNER_TEMP/refused.log" | grep --quiet '^ERROR: basis run: unrecognized arguments: --portfolios P1'
+          tail -n 2 "$RUNNER_TEMP/refused.log" | head -n 1 | grep --quiet '"message":"finished run".*"exit_code":2' || { cat "$RUNNER_TEMP/refused.log" >&2; exit 1; }

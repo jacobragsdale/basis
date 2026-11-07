@@ -77,7 +77,9 @@ def test_qa_picks_portfolios_with_a_select_alone(tmp_path: Path) -> None:
 
 
 def test_the_smoke_case_runs_replays_and_compares_a_models_trades(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Against files standing in for QA: the run's command is this interpreter's optim, as an image's is."""
+    """Against files standing in for QA: the run's command is this interpreter's optim, as an image's is, in a repo that
+    declares optim."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "sma"\n\n[tool.basis]\nparts = ["optim"]\n', encoding="utf-8")
     data = tmp_path / "data"
     data.mkdir()
     frame(HOLDINGS, {"portfolio_id": "P1"}, {"portfolio_id": "P2"}).to_csv(data / "holdings.csv", index=False)

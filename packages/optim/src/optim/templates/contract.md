@@ -1,7 +1,7 @@
 ## The optim contract
 
-Written by `optim sync` from optim {version}. Edit outside this block; `uv run optim sync` rewrites it, and
-`tests/test_agent_files.py` fails when it does not match the installed optim.
+Written from optim {version}. `basis check` fails when this block differs from what the installed optim writes, and
+`uv run basis sync` rewrites it.
 
 This repo holds models that run on `optim`. `optim` loads each model's data in the parent process, decides each
 portfolio in worker processes, rounds each decision to its securities' trading increments, checks it, saves the run as
@@ -48,7 +48,7 @@ no solver returns `optim.Decision(buy={...}, sell={...})`.
 - Log with `logging.getLogger(__name__)`, never `print`. Document every field with a docstring under it, and open every
   file with a docstring that says what it holds.
 - Keep each model's `README.md` true: what it maximizes, its constraints, its data and its known limits.
-- Never write orders from Python: a run from `main.py` cannot, and only `optim run` in production does.
+- Never write orders from Python: a run from `main.py` cannot, and only `basis run` in production does.
 
 ### Where things are
 
@@ -63,7 +63,7 @@ no solver returns `optim.Decision(buy={...}, sell={...})`.
 | `models/MODEL/params/` | `default.json`, and variants beside it. |
 | `models/MODEL/tests/` | `test_contract.py`, the behaviour tests, `builders.py`, and `fixture/`: a CSV per dataset and `fixture.json`. |
 | `models/shared/` | What two or more models use, laid out like a model's folder. |
-| `tests/` | `test_agent_files.py`, and `e2e/`, the QA suite, marked `e2e`, which runs only against QA. |
+| `tests/e2e/` | The QA suite, marked `e2e`, which runs only against QA. |
 | `.env`, `.env.qa`, `.env.prod` | The settings files, copied from `.env.example`, which git ignores. |
 | `snapshots/` | Every run from Python, which git ignores. |
 
@@ -71,16 +71,18 @@ no solver returns `optim.Decision(buy={...}, sell={...})`.
 
 ```sh
 uv run python models/MODEL/main.py               # what pressing Run does: decide portfolios, print a row for each
-uv run pytest                                    # behaviour and contract tests
-uv run ruff check . && uv run ty check           # lint and types
-uv run optim describe MODEL                      # params schema, datasets and metrics, as JSON
-uv run --env-file .env optim run MODEL --params models/MODEL/params/default.json --data models/MODEL/tests/fixture
-uv run --env-file .env optim replay RUN_ID [--params FILE]   # decide a saved run again with this code
-uv run --env-file .env optim sweep RUN_ID DIR    # one table: a row per params file in DIR and portfolio
-uv run optim new model NAME                      # add a model, and models/shared/ with the second
-uv run optim sync                                # rewrite this block and the optim-* skills
-uv run optim docs [PAGE]                         # optim's own docs: tutorial, how-to, reference, explanation
+uv run basis check                               # lint, format, types, behaviour and contract tests, basis's files
+uv run basis describe MODEL                      # params schema, datasets and metrics, as JSON
+uv run --env-file .env basis run MODEL --params models/MODEL/params/default.json --data models/MODEL/tests/fixture
+uv run --env-file .env basis replay RUN_ID [--params FILE] [--portfolios ID ...]   # decide a saved run again
+uv run --env-file .env basis sweep RUN_ID DIR    # one table: a row per params file in DIR and portfolio
+uv run --env-file .env basis regress [MODEL]     # replay recent runs with this code; exit 1 if a trade changed
+uv run basis new model NAME                      # add a model, and models/shared/ with the second
+uv run basis sync                                # rewrite this block, the optim-* skills and basis's files
+uv run basis docs [optim/PAGE]                   # optim's own docs: tutorial, how-to, reference, explanation
 ```
 
+`optim` is the same command as `basis`, under its earlier name.
+
 The `optim-*` skills in `.agents/skills/` cover starting a new model, porting a legacy optimizer, running a research
-sweep, finding out why a portfolio was rejected, and triaging an e2e failure; each points at a page of `optim docs`.
+sweep, finding out why a portfolio was rejected, and triaging an e2e failure; each points at a page of `basis docs`.

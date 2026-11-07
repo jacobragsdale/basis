@@ -1,6 +1,6 @@
 """Running a model from Python, as a model's `main.py` does: `run`, `replay` and `sweep`, which `optim` exports. Each
-takes the model's module first, `from models.income import model`, and runs as `optim run`, `optim replay` and
-`optim sweep` do, through `optim.runs`, with four differences that suit an analyst's machine:
+takes the model's module first, `from models.income import model`, and runs as `basis run`, `basis replay` and
+`basis sweep` do, through `optim.runs`, with four differences that suit an analyst's machine:
 
 - A relative path is the model's folder's, wherever the IDE runs the file from, and `env` is found in the model's folder
   or a folder above it, up to the repo's root.
@@ -8,7 +8,7 @@ takes the model's module first, `from models.income import model`, and runs as `
   files do not mix, and logs are text unless the settings say otherwise.
 - The run is saved in the repo's `snapshots/`, a run store of its own, unless `snapshots` says elsewhere; delete the
   folder whenever you like.
-- No orders are written, whatever the settings file configures: only `optim run` writes them.
+- No orders are written, whatever the settings file configures: only `basis run` writes them.
 
 An error raises, with its traceback, so a debugger stops where it surfaced; a hook's error rejects its portfolio alone,
 and its reason names the line of model code that raised."""
@@ -47,7 +47,7 @@ def run(
     snapshots: str | Path | None = None,
     cache: bool = True,
 ) -> Run:
-    """Decide portfolios with `model`, a model's `model.py` module, save the run, print what `optim run` prints, and
+    """Decide portfolios with `model`, a model's `model.py` module, save the run, print what `basis run` prints, and
     return the run, whose `decisions`, `trades`, `reasons` and `metrics` are tables.
 
     - `portfolios`: None decides every portfolio the model lists, from `data` where it has the file; for a model that
@@ -96,7 +96,7 @@ def replay(
     snapshots: str | Path | None = None,
 ) -> Run:
     """Decide a saved run of `model` again, with the code you have now and other params if given, save it as a new run,
-    print what `optim replay` prints, and return it. `run` is a run's id, in the repo's `snapshots/` or under the
+    print what `basis replay` prints, and return it. `run` is a run's id, in the repo's `snapshots/` or under the
     settings file's `BASIS_SNAPSHOT_ROOT`, such as production's, or the path or URL of its manifest. `portfolios`
     decides those alone; for a model that reserves, the portfolios before them in its order decide again too."""
     loaded = _loaded(model)
@@ -110,7 +110,7 @@ def replay(
 
 
 def sweep(model: ModuleType, run: str, *, params: Sequence[str | Path], env: str | Path | None = ".env", workers: int | None = None, snapshots: str | Path | None = None) -> pd.DataFrame:
-    """Decide a saved run of `model` once per params file, saving nothing, and return one table, as `optim sweep`
+    """Decide a saved run of `model` once per params file, saving nothing, and return one table, as `basis sweep`
     writes it: a row per params file and portfolio, with whether it was accepted, its objective, turnover, trades,
     cash, solve time and metrics, and why it was rejected. `run` is found as `replay` finds it."""
     loaded = _loaded(model)
