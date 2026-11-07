@@ -83,6 +83,7 @@ source = { editable = "packages/api" }
 dependencies = [
     { name = "basis-core" },
     { name = "fastapi" },
+    { name = "httpx2" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
@@ -93,6 +94,7 @@ dependencies = [
 requires-dist = [
     { name = "basis-core", editable = "packages/core" },
     { name = "fastapi", specifier = ">=0.162.0" },
+    { name = "httpx2", specifier = ">=2.16.0" },
     { name = "opentelemetry-api", specifier = ">=1.45.2" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.45.2" },
     { name = "opentelemetry-sdk", specifier = ">=1.45.2" },
@@ -163,7 +165,6 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "coptpy" },
-    { name = "httpx2" },
     { name = "import-linter" },
     { name = "pandas-stubs" },
     { name = "pre-commit" },
@@ -186,7 +187,6 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "coptpy", specifier = ">=8.0.7" },
-    { name = "httpx2", specifier = ">=2.16.0" },
     { name = "import-linter", specifier = ">=2.16" },
     { name = "pandas-stubs", specifier = ">=3.0.5.260914" },
     { name = "pre-commit", specifier = ">=4.7.0" },

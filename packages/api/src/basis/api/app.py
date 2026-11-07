@@ -1,17 +1,18 @@
 """Building a service's FastAPI app, the same way for every service:
 
-- its settings, read once here, so that a missing one stops the app before it serves;
+- its settings, read once here, so that a missing one stops the app before it serves, its resources' included;
 - the request boundary (`requests.py`): request ids, log fields, `traceparent` out, and the error no handler expected;
 - one exception map (`errors.problem`) for every error a handler or FastAPI raises;
 - FastAPI's own telemetry, on the app's tracer provider (`traces.py`), which reads `traceparent` in and makes each
   request's server span;
-- a lifespan that adds the settings' span exporter, marks the app ready, and on shutdown flushes the spans;
-- `/health/live`, which answers while the process does, and `/health/ready`, which answers 200 only between startup
-  finishing and shutdown beginning, and a 503 problem before and after.
+- a lifespan that adds the settings' span exporter, opens the service's resources (`opened.py`), marks the app ready,
+  and on shutdown closes the resources and flushes the spans;
+- `/health/live`, which answers while the process does, and `/health/ready`, which answers 200 only between the
+  resources being open and shutdown beginning, and a 503 problem before and after.
 
 `server.py` runs the result with uvicorn, and tests run it with FastAPI's `TestClient`:
 
-    app = api.build(service, settings=Settings.given())  # settings from the arguments alone, never the environment
+    app = api.build(service, settings=Settings.given(), fakes={WAREHOUSE: fakes.Database(answers=...)})  # never the environment
     with TestClient(app.asgi) as client:  # runs the lifespan, as `basis serve` does
         client.get("/accrued-interest", params=...)
 """
@@ -27,13 +28,16 @@ from uuid import UUID
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
+from opentelemetry.sdk.trace import TracerProvider
 from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from basis.api import errors, traces
+from basis.api import errors, opened, traces
+from basis.api.fakes import Fake
 from basis.api.requests import HEALTH, REQUEST_ID, Requests
+from basis.api.resources import Resource
 from basis.api.service import STATE, Runtime, Service, ServiceError
 from basis.api.settings import Settings, read
 from basis.core.model import Model
@@ -79,22 +83,28 @@ class App:
     asgi: FastAPI
     """The ASGI app, for uvicorn or a `TestClient`."""
     lifecycle: Lifecycle
+    provider: TracerProvider
+    """The app's own tracer provider, every span of the app's on it, to which a test may add a processor of its own."""
 
 
 class Health(Model):
     status: Literal["live", "ready"]
 
 
-def build(service: Service, *, settings: Settings | None = None) -> App:
-    """The app for `service`, with `settings`, or its settings read from the environment. An app starts once."""
+def build(service: Service, *, settings: Settings | None = None, fakes: Mapping[Resource, Fake] | None = None) -> App:
+    """The app for `service`, with `settings`, or its settings read from the environment, and its resources opened
+    as the settings configure them, or as `fakes` gives them, by resource. An app starts once."""
     if settings is None:
         settings = read(service.settings)
     elif not isinstance(settings, service.settings):
         msg = f"service {service.name}'s settings are {service.settings.__qualname__}, so build it with those, not a {type(settings).__qualname__}"
         raise ServiceError(msg)
     configured = settings
+    planned = opened.plan(service, configured, fakes or {})
+    writes = {route.handler: route.writes for route in service.routes if route.writes is not None}
     lifecycle = Lifecycle()
     provider = traces.provider(service.name)
+    tracer = provider.get_tracer("basis.api")
     started = False
 
     @asynccontextmanager
@@ -106,13 +116,25 @@ def build(service: Service, *, settings: Settings | None = None) -> App:
         started = True
         if (exporter := traces.exporter(configured.traces)) is not None:
             provider.add_span_processor(exporter)
-        lifecycle.advance(Stage.READY)
-        log.info("%s is ready", service.name, extra={"service": service.name, "traces": configured.traces.exporter if configured.traces is not None else None})
         try:
-            yield {STATE: Runtime(configured)}
+            resources = await opened.Resources.open(planned, tracer)
+        except BaseException:
+            await asyncio.to_thread(provider.shutdown)  # the failed open's spans too
+            raise
+        lifecycle.advance(Stage.READY)
+        log.info(
+            "%s is ready",
+            service.name,
+            extra={"service": service.name, "traces": configured.traces.exporter if configured.traces is not None else None, "resources": [resource.name for resource in service.resources]},
+        )
+        try:
+            yield {STATE: Runtime(configured, resources, writes)}
         finally:
             lifecycle.advance(Stage.STOPPING)
-            await asyncio.to_thread(provider.shutdown)  # exports the spans still queued, which blocks
+            try:
+                await resources.close()
+            finally:
+                await asyncio.to_thread(provider.shutdown)  # exports the spans still queued, which blocks
             lifecycle.advance(Stage.STOPPED)
             log.info("%s stopped", service.name, extra={"service": service.name})
 
@@ -144,7 +166,7 @@ def build(service: Service, *, settings: Settings | None = None) -> App:
     app.add_api_route(f"{HEALTH}ready", ready, methods=["GET"], include_in_schema=False)
     for route in service.routes:
         app.add_api_route(route.path, route.handler, methods=[route.method], status_code=route.status, name=route.name)
-    return App(service, configured, app, lifecycle)
+    return App(service, configured, app, lifecycle, provider)
 
 
 async def _problem(request: Request, error: Exception) -> Response:

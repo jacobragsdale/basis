@@ -4,12 +4,16 @@ query, as `CAST(x AS NUMBER(18,4))`.
 
 Thin mode, the default, needs no client libraries. Thick mode loads Oracle Client libraries, which native network
 encryption and older servers need. A write binds whole frames to batched statements, with no staging table: an
-upsert and an insert of new rows are a `MERGE` per row, from `dual`, and a delete by values is a `DELETE` per row."""
+upsert and an insert of new rows are a `MERGE` per row, from `dual`, and a delete by values is a `DELETE` per row.
+
+`statements` runs a caller's own SQL, binding `:name` by name: each round trip's deadline is the driver's call
+timeout, in milliseconds, after which the driver breaks the call off."""
 
 import logging
+import math
 import threading
 import time
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from concurrent.futures import Future, wait
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
@@ -17,8 +21,9 @@ from functools import partial
 
 import oracledb
 import polars as pl
+import pyarrow as pa
 
-from basis.core.databases.base import LEDGER_COLUMNS, Counts, LedgerEntry, TooManyRowsError, binds_named, check_count, for_writing, ledger_values, naive_in_zone, slices
+from basis.core.databases.base import FETCH_ROWS, LEDGER_COLUMNS, Bind, Counts, LedgerEntry, TooManyRowsError, binds_named, check_count, for_writing, ledger_values, lower_cased, naive_in_zone, slices
 from basis.core.destination import DestColumn, TableSpec
 from basis.core.interval import Interval
 from basis.core.logs import ms_since
@@ -62,26 +67,21 @@ class OracleDatabase:
 
     @property
     def writable(self) -> bool:
-        return self.settings.write is not None
+        return self.settings.write is not None and self.settings.write.ledger is not None
 
     @contextmanager
     def reading(self) -> Generator[OracleReader]:
-        start = time.perf_counter()
-        with closing(connect(self.settings, user=self.settings.user, password=self.settings.password.get_secret_value())) as connection:
-            log.info("connected", extra={"database": self.name, "access": "read", "connect_ms": ms_since(start)})
-            if self.settings.isolation == "read_only":
-                with closing(connection.cursor()) as cursor:
-                    cursor.execute("SET TRANSACTION READ ONLY")
-            try:
-                yield OracleReader(connection, self.settings.max_rows)
-            finally:
-                connection.rollback()
+        with self._read_transaction(level=logging.INFO) as connection:
+            yield OracleReader(connection, self.settings.max_rows)
 
     @contextmanager
     def writing(self) -> Generator[OracleWriter]:
         write = self.settings.write
         if write is None:
             msg = f"database {self.name!r} has no write settings: set BASIS_DATABASES__{self.name.upper()}__WRITE__USER, __PASSWORD and __LEDGER"
+            raise LookupError(msg)
+        if write.ledger is None:
+            msg = f"database {self.name!r} has no ledger, which a publish writes in its transaction: set BASIS_DATABASES__{self.name.upper()}__WRITE__LEDGER"
             raise LookupError(msg)
         start = time.perf_counter()
         with closing(connect(self.settings, user=write.user, password=write.password.get_secret_value())) as connection:
@@ -92,6 +92,39 @@ class OracleDatabase:
             finally:
                 if not writer.committed:
                     connection.rollback()
+
+    @contextmanager
+    def statements(self, *, writes: bool) -> Generator[OracleStatements]:
+        if not writes:
+            with self._read_transaction(level=logging.DEBUG) as connection:
+                yield OracleStatements(self.name, connection, self.settings.timeout_s, self.settings.max_rows, writes=False)
+            return
+        if (write := self.settings.write) is None:
+            msg = f"database {self.name!r} has no write settings: set BASIS_DATABASES__{self.name.upper()}__WRITE__USER and __PASSWORD"
+            raise LookupError(msg)
+        start = time.perf_counter()
+        with closing(connect(self.settings, user=write.user, password=write.password.get_secret_value())) as connection:
+            log.debug("connected", extra={"database": self.name, "access": "write", "connect_ms": ms_since(start)})
+            statements = OracleStatements(self.name, connection, self.settings.timeout_s, self.settings.max_rows, writes=True)
+            try:
+                yield statements
+            finally:
+                if not statements.committed:
+                    connection.rollback()
+
+    @contextmanager
+    def _read_transaction(self, *, level: int) -> Generator[oracledb.Connection]:
+        """A connection through the read login, in a transaction at the settings' isolation, rolled back at the end."""
+        start = time.perf_counter()
+        with closing(connect(self.settings, user=self.settings.user, password=self.settings.password.get_secret_value())) as connection:
+            log.log(level, "connected", extra={"database": self.name, "access": "read", "connect_ms": ms_since(start)})
+            if self.settings.isolation == "read_only":
+                with closing(connection.cursor()) as cursor:
+                    cursor.execute("SET TRANSACTION READ ONLY")
+            try:
+                yield connection
+            finally:
+                connection.rollback()
 
 
 @dataclass
@@ -235,6 +268,50 @@ class OracleWriter(OracleReader):
     def commit(self) -> None:
         self.connection.commit()
         self.committed = True
+
+
+@dataclass
+class OracleStatements:
+    database: str
+    connection: oracledb.Connection
+    limit_s: int
+    """The settings' `timeout_s`, which bounds every round trip's own."""
+    max_rows: int
+    writes: bool
+    committed: bool = False
+
+    def query(self, sql: str, binds: Mapping[str, Bind], *, timeout_s: float) -> pa.Table:
+        self._deadline(timeout_s)
+        batches: list[pa.Table] = []
+        rows = 0
+        for batch in self.connection.fetch_df_batches(sql, dict(binds) or None, size=FETCH_ROWS, fetch_decimals=True):
+            table = pa.table(batch)
+            rows += table.num_rows
+            if rows > self.max_rows:
+                what = f"a query of database {self.database}"
+                raise TooManyRowsError(what, self.max_rows)
+            batches.append(table)
+        return lower_cased(pa.concat_tables(batches) if batches else pa.table({}))
+
+    def execute(self, sql: str, binds: Mapping[str, Bind], *, timeout_s: float) -> int:
+        self._refuse_reads("change rows")
+        self._deadline(timeout_s)
+        with closing(self.connection.cursor()) as cursor:
+            cursor.execute(sql, dict(binds))
+            return cursor.rowcount
+
+    def commit(self) -> None:
+        self._refuse_reads("commit")
+        self.connection.commit()
+        self.committed = True
+
+    def _deadline(self, timeout_s: float) -> None:
+        self.connection.call_timeout = max(1, math.ceil(min(timeout_s, self.limit_s) * 1000))  # milliseconds, per round trip
+
+    def _refuse_reads(self, what: str) -> None:
+        if not self.writes:
+            msg = f"database {self.database}'s transaction only reads, so it cannot {what}: open it with writes=True, through the write login"
+            raise RuntimeError(msg)
 
 
 def _bound(target: Target, frame: pl.DataFrame, spec: TableSpec) -> pl.DataFrame:

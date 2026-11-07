@@ -20,6 +20,7 @@ jobs:
       - run: uv run pytest
 
   job-integration:
+    # Every package's integration tier, basis-job's and basis-api's, against SQL Server and Oracle.
     runs-on: ubuntu-latest
     services:
       mssql:

@@ -5,18 +5,23 @@ A write stages each frame an upsert, an insert of new rows, or a delete by value
 login may create, shaped by `SELECT TOP 0 ... INTO` from the destination itself, so the stage has the destination's
 types exactly. The driver's bulk copy is not used: it opens a connection of its own, outside the run's transaction.
 Upserts are an UPDATE then an INSERT of the keys still missing, never `MERGE`, whose history of defects in SQL Server
-is long; the INSERT locks the keys it checks, so two writers never insert one key twice."""
+is long; the INSERT locks the keys it checks, so two writers never insert one key twice.
+
+`statements` runs a caller's own SQL, binding `%(name)s` by name: each statement's deadline is the driver's query
+timeout, in whole seconds, which SQL Server enforces by cancelling the statement on the server too."""
 
 import logging
+import math
 import time
-from collections.abc import Generator, Sequence
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 
 import mssql_python
 import polars as pl
+import pyarrow as pa
 
-from basis.core.databases.base import LEDGER_COLUMNS, Counts, LedgerEntry, TooManyRowsError, binds_named, check_count, for_writing, ledger_values, naive_in_zone, slices
+from basis.core.databases.base import FETCH_ROWS, LEDGER_COLUMNS, Bind, Counts, LedgerEntry, TooManyRowsError, binds_named, check_count, for_writing, ledger_values, lower_cased, naive_in_zone, slices
 from basis.core.destination import DestColumn, TableSpec
 from basis.core.interval import Interval
 from basis.core.logs import ms_since
@@ -55,40 +60,69 @@ class MssqlDatabase:
 
     @property
     def writable(self) -> bool:
-        return self.settings.write is not None
+        return self.settings.write is not None and self.settings.write.ledger is not None
 
     @contextmanager
     def reading(self) -> Generator[MssqlReader]:
-        start = time.perf_counter()
-        # With autocommit off, the driver's implicit transaction would begin at the SET itself, under the default
-        # level, and SQL Server refuses to switch a begun transaction to snapshot: so autocommit stays on, and the
-        # transaction begins explicitly, after the level is set.
-        with closing(connect_to(self.settings.connection_string.get_secret_value(), self.settings.timeout_s, autocommit=True)) as connection:
-            log.info("connected", extra={"database": self.name, "access": "read", "connect_ms": ms_since(start)})
-            with closing(connection.cursor()) as cursor:
-                level = "SNAPSHOT" if self.settings.isolation == "snapshot" else "READ COMMITTED"
-                cursor.execute(f"SET TRANSACTION ISOLATION LEVEL {level}")
-                cursor.execute("BEGIN TRANSACTION")
-            try:
-                yield MssqlReader(connection, self.settings.max_rows)
-            finally:
-                with closing(connection.cursor()) as cursor:
-                    cursor.execute("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION")
+        with self._read_transaction(level=logging.INFO) as connection:
+            yield MssqlReader(connection, self.settings.max_rows)
 
     @contextmanager
     def writing(self) -> Generator[MssqlWriter]:
-        if self.settings.write is None:
+        write = self.settings.write
+        if write is None:
             msg = f"database {self.name!r} has no write settings: set BASIS_DATABASES__{self.name.upper()}__WRITE__CONNECTION_STRING and __LEDGER"
             raise LookupError(msg)
+        if write.ledger is None:
+            msg = f"database {self.name!r} has no ledger, which a publish writes in its transaction: set BASIS_DATABASES__{self.name.upper()}__WRITE__LEDGER"
+            raise LookupError(msg)
         start = time.perf_counter()
-        with closing(connect_to(self.settings.write.connection_string.get_secret_value(), self.settings.timeout_s, autocommit=False)) as connection:
+        with closing(connect_to(write.connection_string.get_secret_value(), self.settings.timeout_s, autocommit=False)) as connection:
             log.info("connected", extra={"database": self.name, "access": "write", "connect_ms": ms_since(start)})
-            writer = MssqlWriter(connection, self.settings.max_rows, self.settings.write.ledger)
+            writer = MssqlWriter(connection, self.settings.max_rows, write.ledger)
             try:
                 yield writer
             finally:
                 if not writer.committed:
                     connection.rollback()
+
+    @contextmanager
+    def statements(self, *, writes: bool) -> Generator[MssqlStatements]:
+        if not writes:
+            with self._read_transaction(level=logging.DEBUG) as connection:
+                yield MssqlStatements(self.name, connection, self.settings.timeout_s, self.settings.max_rows, writes=False)
+            return
+        if (write := self.settings.write) is None:
+            msg = f"database {self.name!r} has no write settings: set BASIS_DATABASES__{self.name.upper()}__WRITE__CONNECTION_STRING"
+            raise LookupError(msg)
+        start = time.perf_counter()
+        with closing(connect_to(write.connection_string.get_secret_value(), self.settings.timeout_s, autocommit=False)) as connection:
+            log.debug("connected", extra={"database": self.name, "access": "write", "connect_ms": ms_since(start)})
+            statements = MssqlStatements(self.name, connection, self.settings.timeout_s, self.settings.max_rows, writes=True)
+            try:
+                yield statements
+            finally:
+                if not statements.committed:
+                    connection.rollback()
+
+    @contextmanager
+    def _read_transaction(self, *, level: int) -> Generator[mssql_python.Connection]:
+        """A connection through the read login, in a transaction at the settings' isolation, rolled back at the end."""
+        start = time.perf_counter()
+        # With autocommit off, the driver's implicit transaction would begin at the SET itself, under the default
+        # level, and SQL Server refuses to switch a begun transaction to snapshot: so autocommit stays on, and the
+        # transaction begins explicitly, after the level is set.
+        with closing(connect_to(self.settings.connection_string.get_secret_value(), self.settings.timeout_s, autocommit=True)) as connection:
+            log.log(level, "connected", extra={"database": self.name, "access": "read", "connect_ms": ms_since(start)})
+            with closing(connection.cursor()) as cursor:
+                isolation = "SNAPSHOT" if self.settings.isolation == "snapshot" else "READ COMMITTED"
+                cursor.execute(f"SET TRANSACTION ISOLATION LEVEL {isolation}")
+                cursor.execute("BEGIN TRANSACTION")
+            try:
+                yield connection
+            finally:
+                with closing(connection.cursor()) as cursor:
+                    cursor.execute("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION")
 
 
 @dataclass
@@ -261,3 +295,56 @@ class MssqlWriter(MssqlReader):
     def commit(self) -> None:
         self.connection.commit()
         self.committed = True
+
+
+@dataclass
+class MssqlStatements:
+    database: str
+    connection: mssql_python.Connection
+    limit_s: int
+    """The settings' `timeout_s`, which bounds every statement's own."""
+    max_rows: int
+    writes: bool
+    committed: bool = False
+
+    def query(self, sql: str, binds: Mapping[str, Bind], *, timeout_s: float) -> pa.Table:
+        with closing(self._cursor(timeout_s)) as cursor:
+            _execute(cursor, sql, binds)
+            reader = cursor.arrow_reader(batch_size=FETCH_ROWS)
+            batches: list[pa.RecordBatch] = []
+            rows = 0
+            for batch in reader:
+                rows += batch.num_rows
+                if rows > self.max_rows:
+                    reader.close()
+                    what = f"a query of database {self.database}"
+                    raise TooManyRowsError(what, self.max_rows)
+                batches.append(batch)
+            return lower_cased(pa.Table.from_batches(batches, schema=reader.schema))
+
+    def execute(self, sql: str, binds: Mapping[str, Bind], *, timeout_s: float) -> int:
+        self._refuse_reads("change rows")
+        with closing(self._cursor(timeout_s)) as cursor:
+            _execute(cursor, sql, binds)
+            return max(cursor.rowcount, 0)
+
+    def commit(self) -> None:
+        self._refuse_reads("commit")
+        self.connection.commit()
+        self.committed = True
+
+    def _cursor(self, timeout_s: float) -> mssql_python.Cursor:
+        self.connection.timeout = max(1, math.ceil(min(timeout_s, self.limit_s)))  # whole seconds, for the next cursor's statements
+        return self.connection.cursor()
+
+    def _refuse_reads(self, what: str) -> None:
+        if not self.writes:
+            msg = f"database {self.database}'s transaction only reads, so it cannot {what}: open it with writes=True, through the write login"
+            raise RuntimeError(msg)
+
+
+def _execute(cursor: mssql_python.Cursor, sql: str, binds: Mapping[str, Bind]) -> None:
+    if binds:
+        cursor.execute(sql, dict(binds))
+    else:
+        cursor.execute(sql)
