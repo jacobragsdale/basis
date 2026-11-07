@@ -66,7 +66,7 @@ UNICODE: dict[str, list[str | None]] = {
 LATIN: dict[str, list[str | None]] = {
     "ascii-longest": ["hello world", "Zoë", "€", "café", None],
     "either-side-of-4000-units": ["é" * 3999, "é" * 4000, "é" * 4001, "x"],
-    "100000-characters": ["Zoë, café, €5; " * 6_666 + "Zoë, café, €5", "hello world"],
+    "100000-characters": [("Zoë, café, €5; " * 6_667)[:100_000], "hello world"],
 }
 """Batches of text code page 1252 holds, in all three columns."""
 
