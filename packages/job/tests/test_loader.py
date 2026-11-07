@@ -16,10 +16,11 @@ import basis.job as etl
 from basis.core import fakes
 from basis.core.databases import Database, open_database
 from basis.core.interval import Interval
+from basis.core.opened import Waits
 from basis.core.settings import GivenSettings, SettingsError
 from basis.core.snapshots import InputRecord
 from basis.job.inputs import Dataset
-from basis.job.loader import EmptyInputError, json_rows
+from basis.job.loader import EmptyInputError, Reach, json_rows
 from basis.job.loader import load as loading
 
 type Message = MutableMapping[str, Any]
@@ -29,13 +30,18 @@ def no_databases(name: str) -> Database:
     return open_database(GivenSettings(), name)
 
 
-def no_services(name: str) -> httpx2.AsyncClient:
+def no_services(name: str) -> tuple[httpx2.AsyncClient, Waits]:
     msg = f"no service {name} here"
     raise LookupError(msg)
 
 
+def reaching(fake: fakes.Http) -> Reach:
+    """Each service a fetch names as `fake`, whose client waits as the fake's waits do."""
+    return lambda name: (fake.client(name), fake.waits)
+
+
 def load(
-    datasets: Mapping[str, Dataset], interval: Interval | None, *, open_database: Callable[[str], Database], data: Path | None, reach: Callable[[str], httpx2.AsyncClient] = no_services
+    datasets: Mapping[str, Dataset], interval: Interval | None, *, open_database: Callable[[str], Database], data: Path | None, reach: Reach = no_services
 ) -> tuple[dict[str, pl.DataFrame], dict[str, InputRecord]]:
     return loading(datasets, interval, open_database=open_database, reach=reach, tracer=NoOpTracer(), data=data)
 
@@ -81,7 +87,7 @@ class Fetched(etl.Inputs):
 def test_a_fetch_gets_its_intervals_rows_and_a_number_keeps_the_digits_it_was_sent_with(tmp_path: Path) -> None:
     seen: list[str] = []
     body = b'[{"day": "2026-11-05", "security_id": "S1", "price": 100.1234, "booked_at": "2026-11-05T09:30:00"}, {"day": "2026-11-05", "security_id": "S2", "price": 7}]'
-    frames, records = load(Fetched.declared(), DAY, open_database=no_databases, data=tmp_path, reach=answering(body, seen).client)
+    frames, records = load(Fetched.declared(), DAY, open_database=no_databases, data=tmp_path, reach=reaching(answering(body, seen)))
     assert seen == ["/prices/2026-11-05"]
     expected = prices({"price": Decimal("100.1234"), "booked_at": datetime(2026, 11, 5, 9, 30)}, {"security_id": "S2", "price": Decimal(7)})
     assert frames["prices"].equals(expected)
@@ -105,7 +111,7 @@ def test_a_fetchs_rows_are_a_list_of_flat_objects_of_its_rows_columns(body: byte
 
 def test_a_fetchs_empty_list_fails_unless_its_dataset_allows_it(tmp_path: Path) -> None:
     with pytest.raises(EmptyInputError, match="prices returned no rows"):
-        load(Fetched.declared(), DAY, open_database=no_databases, data=tmp_path, reach=answering([], []).client)
+        load(Fetched.declared(), DAY, open_database=no_databases, data=tmp_path, reach=reaching(answering([], [])))
 
 
 def test_a_fixtures_file_stands_in_for_a_fetch(tmp_path: Path) -> None:
@@ -134,7 +140,7 @@ def test_a_fetchs_interval_ends_are_iso_8601_and_percent_encoded_so_an_offsets_p
         await send({"type": "http.response.body", "body": b"[]"})
 
     interval = Interval.parse("2026-11-05T05:30:00+05:30..2026-11-06T05:30:00+05:30")
-    load(Ranged.declared(), interval, open_database=no_databases, data=tmp_path, reach=fakes.Http(app).client)
+    load(Ranged.declared(), interval, open_database=no_databases, data=tmp_path, reach=reaching(fakes.Http(app)))
     [scope] = seen
     assert parse_qs(scope["query_string"].decode()) == {"from": ["2026-11-05T00:00:00+00:00"], "to": ["2026-11-06T00:00:00+00:00"], "on": ["2026-11-05"]}
 

@@ -28,7 +28,7 @@ from basis.core.databases import Database
 from basis.core.errors import BadReply
 from basis.core.interval import Interval
 from basis.core.logs import ms_since
-from basis.core.opened import HttpClient
+from basis.core.opened import HttpClient, Waits
 from basis.core.snapshots import InputRecord
 from basis.core.storage import Root
 from basis.job.inputs import Dataset, Fetch, File, Query
@@ -41,8 +41,9 @@ class EmptyInputError(ValueError):
     pass
 
 
-type Reach = Callable[[str], httpx2.AsyncClient]
-"""The client of the service a fetch names, as the settings or a fake reach it."""
+type Reach = Callable[[str], tuple[httpx2.AsyncClient, Waits]]
+"""The client of the service a fetch names, as the settings or a fake reach it, and how it waits between attempts: the
+system's waits, or the fake's, which take no time."""
 
 
 def load(  # noqa: PLR0913 -- what the run reads, and how it reaches it, by keyword
@@ -109,17 +110,19 @@ def _read_database(database: Database, queries: Mapping[str, Query], interval: I
 
 async def _fetch_all(fetches: Mapping[str, Fetch], interval: Interval | None, reach: Reach, tracer: Tracer) -> dict[str, tuple[pl.DataFrame, InputRecord]]:
     """Each fetch's GET, at once, on one client for each service."""
-    clients: dict[str, httpx2.AsyncClient] = {}
+    clients: dict[str, tuple[httpx2.AsyncClient, Waits]] = {}
     try:
         for fetch in fetches.values():
             if fetch.http not in clients:
                 clients[fetch.http] = reach(fetch.http)
         async with asyncio.TaskGroup() as group:
-            tasks = {name: group.create_task(_fetch(name, fetch, interval, HttpClient(fetch.resource, clients[fetch.http], tracer))) for name, fetch in fetches.items()}
+            tasks = {
+                name: group.create_task(_fetch(name, fetch, interval, HttpClient(fetch.resource, clients[fetch.http][0], tracer, waits=clients[fetch.http][1]))) for name, fetch in fetches.items()
+            }
     except ExceptionGroup as failed:
         raise failed.exceptions[0] from None  # the first fetch that failed, as a database's load names its one dataset; the others are cancelled
     finally:
-        for client in clients.values():
+        for client, _ in clients.values():
             await client.aclose()
     return {name: task.result() for name, task in tasks.items()}
 
