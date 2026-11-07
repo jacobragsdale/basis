@@ -38,10 +38,10 @@ jobs:
         options: >-
           --health-cmd healthcheck.sh --health-interval 10s --health-timeout 5s --health-retries 30
     env:
-      ETL_TEST_MSSQL: Server=127.0.0.1,1433;Database=etltest;UID=sa;PWD=Etl-test-1234;Encrypt=yes;TrustServerCertificate=yes
-      ETL_TEST_ORACLE_DSN: 127.0.0.1:1521/FREEPDB1
-      ETL_TEST_ORACLE_USER: etl
-      ETL_TEST_ORACLE_PASSWORD: etltest
+      BASIS_TEST_MSSQL: Server=127.0.0.1,1433;Database=etltest;UID=sa;PWD=Etl-test-1234;Encrypt=yes;TrustServerCertificate=yes
+      BASIS_TEST_ORACLE_DSN: 127.0.0.1:1521/FREEPDB1
+      BASIS_TEST_ORACLE_USER: etl
+      BASIS_TEST_ORACLE_PASSWORD: etltest
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
@@ -76,10 +76,8 @@ jobs:
       - run: uv sync --locked
       - name: Make a job repo from this checkout, with a second job, and run its checks
         run: |
-          uv run etl new repo pricing-etl prices --dir "$RUNNER_TEMP" --framework-path .
+          uv run basis-job new repo pricing-etl --dir "$RUNNER_TEMP" --framework-path .
           cd "$RUNNER_TEMP/pricing-etl"
-          uv run etl new job rates
-          uv run pytest
-          uv run ruff check .
-          uv run ruff format --check .
-          uv run ty check
+          uv run basis new job rates
+          uv run basis --help
+          uv run basis check

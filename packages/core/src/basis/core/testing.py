@@ -1,25 +1,23 @@
-"""What every part's contract tests share: the check that code cannot reach I/O through its imports, and the check
-that a repo's agent files match the installed version. Each part's own `testing` module builds its contract tests on
-these."""
+"""What every part's contract tests share: the check that code cannot reach I/O through its imports. Each part's own
+`testing` module builds its contract tests on it. Whether a repo's agent files match the installed parts is
+`basis check`'s to say."""
 
 from collections.abc import Iterable
-from pathlib import Path
 
 import grimp
 
-from basis.core import sync
-from basis.core.sync import AgentFiles
-
 FORBIDDEN = (
-    "basis.core.databases", "basis.core.new", "basis.core.publish", "basis.core.runs", "basis.core.settings",
-    "basis.core.snapshots", "basis.core.storage", "basis.core.sync", "basis.core.testing", "mssql_python", "oracledb",
+    "basis.core.check", "basis.core.command", "basis.core.databases", "basis.core.new", "basis.core.publish",
+    "basis.core.runs", "basis.core.settings", "basis.core.snapshots", "basis.core.storage", "basis.core.sync",
+    "basis.core.testing", "basis.core.verbs", "mssql_python", "oracledb",
     "pyodbc", "pymssql", "cx_Oracle", "sqlalchemy", "psycopg", "psycopg2", "snowflake", "httpx", "requests", "urllib3",
     "aiohttp", "pyarrow", "boto3", "azure",
 )  # fmt: skip
 """What a part's pure code may not reach through its imports: basis-core's I/O, a database driver, an HTTP client, or
 storage. Each part adds its own run loop. An installed package is named whole, since an import graph records only an
 external package's top-level name: `pyarrow`, whose `fs` reads and writes files, rather than `pyarrow.fs`, which no
-graph holds. Pure code needs no pyarrow of its own: its part hands it frames, such as basis-job's polars."""
+graph holds. Pure code needs no pyarrow of its own: its part hands it frames, such as basis-job's polars. The
+command is I/O too: `basis.core.check` runs tools, and `basis.core.verbs` writes to stderr."""
 
 
 class ContractError(AssertionError):
@@ -48,11 +46,3 @@ def package_of(module: str) -> str:
     such as `basis.job`, since the namespace is no package of its own."""
     top, _, rest = module.partition(".")
     return f"{top}.{rest.partition('.')[0]}" if top == "basis" and rest else top
-
-
-def check_agent_files(repo: Path, files: AgentFiles) -> None:
-    """One part's block of `AGENTS.md` and its skills, in the repo at `repo`, match the installed version."""
-    __tracebackhide__ = True
-    if stale := sync.stale(repo, files):
-        msg = f"the agent files do not match the installed {files.part}: run `uv run {files.command} sync`, which rewrites {', '.join(map(str, stale))}"
-        raise ContractError(msg)

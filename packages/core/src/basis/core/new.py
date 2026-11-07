@@ -6,6 +6,8 @@ import subprocess
 from collections.abc import Mapping
 from pathlib import Path
 
+from basis.core.errors import BasisError
+
 GIT = "https://github.com/jacobragsdale/basis"
 """Where a repo's basis packages come from when neither an index nor a checkout is given, at the version's tag."""
 FOLDER = "packages/core"
@@ -18,7 +20,11 @@ _DOTTED = {"gitignore", "dockerignore", "env.example", "python-version", "pre-co
 _REPO = re.compile(r"^[a-z0-9][a-z0-9._-]{0,99}$")
 
 
-class NoReleaseError(LookupError):
+class NewError(BasisError, ValueError):
+    """A repo or a part that cannot be made as asked."""
+
+
+class NoReleaseError(BasisError, LookupError):
     """A repo made with neither an index nor a checkout, by a basis that has no release to take its packages from."""
 
 
@@ -29,10 +35,10 @@ def repo(  # noqa: PLR0913 -- the part says what it adds and where its packages 
     `values[NAME]` and `{source}` by where the repo's basis packages come from (see `sources`)."""
     if path.exists():
         msg = f"{path} already exists: give a new folder"
-        raise FileExistsError(msg)
+        raise NewError(msg)
     if not _REPO.match(path.name):
-        msg = f"{path.name}: a repo's name is lower-case letters, digits, '.', '_' and '-'"
-        raise ValueError(msg)
+        msg = f"{path.name!r} is no repo's name: give one of lower-case letters, digits, '.', '_' and '-'"
+        raise NewError(msg)
     source = sources(distributions, version=version, index=index, checkout=checkout)
     path.mkdir(parents=True)
     for folder in (TEMPLATES, templates):
@@ -49,8 +55,8 @@ def sources(distributions: Mapping[str, str], *, version: str, index: str | None
     The index replaces PyPI for the whole repo (`default = true`), so a name the index lacks fails rather than being
     taken from PyPI, where anyone may publish it; the firm's feed proxies PyPI for every other package."""
     if index is not None and checkout is not None:
-        msg = "give --index or --framework-path, not both"
-        raise ValueError(msg)
+        msg = "--index and --framework-path both say where the repo's basis packages come from: give one of them"
+        raise NewError(msg)
     if index is not None:
         comment = "# Every package comes from this index, which proxies PyPI; a name it lacks fails, rather than coming from PyPI."
         return f'{comment}\n[[tool.uv.index]]\nname = "internal"\nurl = "{index}"\ndefault = true\n'
@@ -58,7 +64,7 @@ def sources(distributions: Mapping[str, str], *, version: str, index: str | None
         root = checkout.resolve()
         if missing := [folder for folder in (*distributions.values(), FOLDER) if not (root / folder / "pyproject.toml").exists()]:
             msg = f"{checkout} is not a checkout of basis: it has no {', '.join(missing)}; give the folder that holds packages/"
-            raise FileNotFoundError(msg)
+            raise NewError(msg)
         lines = [f'{name} = {{ path = "{(root / folder).as_posix()}", editable = true }}' for name, folder in distributions.items()]
     elif version == UNRELEASED:
         msg = f"basis has no release yet, so no tag holds its packages: clone {GIT} and pass --framework-path with the clone's folder"
@@ -95,4 +101,11 @@ def install(repo: Path) -> None:
 
 
 def run(argv: list[str], cwd: Path) -> None:
-    subprocess.run(argv, cwd=cwd, check=True)
+    try:
+        subprocess.run(argv, cwd=cwd, check=True)
+    except FileNotFoundError as error:
+        msg = f"{argv[0]} is not on the PATH, and a new repo needs it: install it, and run `{' '.join(argv)}` in {cwd}"
+        raise NewError(msg) from error
+    except subprocess.CalledProcessError as error:
+        msg = f"`{' '.join(argv)}` failed in {cwd}, as it says above: fix what it says, and run it there again"
+        raise NewError(msg) from error

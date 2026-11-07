@@ -1,4 +1,4 @@
-"""Scratch databases for the integration tier: real SQL Server and Oracle, configured only by `ETL_TEST_*` variables
+"""Scratch databases for the integration tier: real SQL Server and Oracle, configured only by `BASIS_TEST_*` variables
 that name scratch databases (see README.md)."""
 
 from collections.abc import Callable
@@ -25,7 +25,7 @@ oracledb.defaults.fetch_lobs = False  # the raw reads back compare CLOB values a
 class TestDatabases(BaseSettings):
     """Where the integration tier may write: scratch databases only, never a shared one."""
 
-    model_config = SettingsConfigDict(env_prefix="ETL_TEST_", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="BASIS_TEST_", extra="ignore")
 
     mssql: SecretStr | None = None
     """A connection string to a scratch SQL Server database whose login may create tables."""
@@ -90,7 +90,7 @@ def configured() -> TestDatabases:
 
 def mssql(databases: TestDatabases, suffix: str) -> Scratch:
     if databases.mssql is None:
-        pytest.fail("set ETL_TEST_MSSQL to a connection string for a scratch SQL Server database (see tests/integration/README.md)")
+        pytest.fail("set BASIS_TEST_MSSQL to a connection string for a scratch SQL Server database (see tests/integration/README.md)")
     connection_string = databases.mssql.get_secret_value()
     settings: dict[str, object] = {"kind": "mssql", "connection_string": connection_string, "isolation": "snapshot", "timeout_s": 60, "max_rows": 100_000}
     settings["write"] = {"connection_string": connection_string, "ledger": f"etl_ledger_{suffix}"}
@@ -99,7 +99,7 @@ def mssql(databases: TestDatabases, suffix: str) -> Scratch:
 
 def oracle(databases: TestDatabases, suffix: str) -> Scratch:
     if databases.oracle_dsn is None or databases.oracle_user is None or databases.oracle_password is None:
-        pytest.fail("set ETL_TEST_ORACLE_DSN, _USER and _PASSWORD for a scratch Oracle schema (see tests/integration/README.md)")
+        pytest.fail("set BASIS_TEST_ORACLE_DSN, _USER and _PASSWORD for a scratch Oracle schema (see tests/integration/README.md)")
     dsn, user, password = databases.oracle_dsn, databases.oracle_user, databases.oracle_password.get_secret_value()
     settings: dict[str, object] = {"kind": "oracle", "dsn": dsn, "user": user, "password": password, "mode": "thin", "isolation": "read_only", "timeout_s": 60, "max_rows": 100_000}
     settings["write"] = {"user": user, "password": password, "ledger": f"etl_ledger_{suffix}"}

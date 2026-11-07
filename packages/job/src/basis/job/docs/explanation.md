@@ -46,14 +46,14 @@ The ledger handles it instead. Each database a job writes holds one ledger table
 table in the same transaction as the data, so the ledger is never wrong about whether a publish happened. A second
 append for an overlapping interval finds the first in the ledger and is refused, unless the run says `--again`. The
 ledger is also the only DDL the framework asks for, once per database: runs never create or alter a table, and
-`etl ddl` prints the statements for whoever has the rights.
+`basis ddl` prints the statements for whoever has the rights.
 
 ## All or nothing, across databases
 
 Within one database, a run is all or nothing: every check passes for every output before any database is touched, and
 then each database's tables and ledger rows commit together. Across databases, true atomicity would need distributed
 transactions, which the drivers do not make dependable. Instead, databases commit one at a time, in name order, and a
-run that fails between two commits is `partial`. The ledgers say which databases have the run, and `etl resume` writes
+run that fails between two commits is `partial`. The ledgers say which databases have the run, and `basis resume` writes
 the rest from the snapshot: the same rows, not a fresh extract, so the databases end up as if one transaction had
 written them.
 
@@ -76,7 +76,7 @@ query binds only the run's interval and never a param: a param that changed a qu
 not hold. Each dataset is stored once, named by the hash of its content, so the inputs that a day's runs share, and
 those a replay reruns, take no more space.
 
-Regression is replay at scale: `etl regress` replays a job's recent published runs with a branch's code and diffs each
+Regression is replay at scale: `basis regress` replays a job's recent published runs with a branch's code and diffs each
 table's changes by key. A change that alters production output shows up as rows added, removed and changed, by
 column, before it merges.
 

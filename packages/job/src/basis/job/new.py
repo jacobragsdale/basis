@@ -1,6 +1,6 @@
-"""`etl new repo` and `etl new job`: a job repo, or a job in one, from basis's shared templates, this package's own and
-its example, so a new repo matches the basis-job version that made it. A repo's package is `jobs`, each job a folder
-in it."""
+"""`basis-job new repo` and `basis new job`: a job repo, or a job in one, from basis's shared templates, this
+package's own and its example, so a new repo matches the basis-job version that made it. A repo's package is `jobs`,
+each job a folder in it, and its `pyproject.toml` declares the part, as `[tool.basis] parts = ["job"]`."""
 
 import shutil
 from pathlib import Path
@@ -41,18 +41,18 @@ def job(repo_path: Path, name: str, *, install: bool = True) -> Path:
     _check_job_name(name)
     pyproject = repo_path / "pyproject.toml"
     if not pyproject.exists() or not (repo_path / "jobs").is_dir():
-        msg = f"{repo_path} is not a job repo: it has no pyproject.toml and jobs/; make one with `etl new repo`"
-        raise FileNotFoundError(msg)
+        msg = f"{repo_path} is not a job repo: it has no pyproject.toml and jobs/; make one with `uvx basis-job new repo NAME`"
+        raise core_new.NewError(msg)
     target = repo_path / "jobs" / name
     if target.exists():
-        msg = f"{target} already exists"
-        raise FileExistsError(msg)
+        msg = f"{target} already exists: give the new job another name"
+        raise core_new.NewError(msg)
     _copy_example(target, name)
     text = pyproject.read_text(encoding="utf-8")
     header = f'[project.entry-points."{GROUP}"]\n'
     if header not in text:
         msg = f"{pyproject} has no {header.strip()} table to list the job in"
-        raise ValueError(msg)
+        raise core_new.NewError(msg)
     pyproject.write_text(text.replace(header, f'{header}{name} = "jobs.{name}.job"\n'), encoding="utf-8")
     if install:
         core_new.run(["uv", "sync", "--quiet"], repo_path)
@@ -61,8 +61,8 @@ def job(repo_path: Path, name: str, *, install: bool = True) -> Path:
 
 def _check_job_name(name: str) -> None:
     if not IDENTIFIER.match(name) or name.startswith("_"):
-        msg = f"{name}: a job's name is lower-case letters, digits and underscores, starting with a letter"
-        raise ValueError(msg)
+        msg = f"{name!r} is no job's name: give one of lower-case letters, digits and underscores, starting with a letter"
+        raise core_new.NewError(msg)
 
 
 def _copy_example(target: Path, name: str) -> None:

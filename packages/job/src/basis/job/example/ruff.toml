@@ -1,5 +1,5 @@
 # Sort imports as a job repo does, where basis is a third-party package and the job's own modules, here
-# basis.job.example, are first-party. `etl new` leaves this file out of the jobs it copies.
+# basis.job.example, are first-party. `basis new job` leaves this file out of the jobs it copies.
 extend = "../../../../../../pyproject.toml"
 
 [lint.isort]

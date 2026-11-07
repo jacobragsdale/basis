@@ -15,7 +15,10 @@ dependencies = [
 ]
 
 [project.scripts]
-etl = "basis.job.cli:main"
+basis-job = "basis.job.cli:scaffold"  # `uvx basis-job new repo NAME` makes a job repo
+
+[project.entry-points."basis.verbs"]
+job = "basis.job.cli:part"  # basis-job's verbs, in a repo whose [tool.basis] parts include "job"
 
 [tool.uv.sources]
 basis-core = { workspace = true }

@@ -1,4 +1,4 @@
-"""How two runs' changes to a table differ, as `etl replay` and `etl regress` report it. With a key, rows are matched
+"""How two runs' changes to a table differ, as `basis replay` and `basis regress` report it. With a key, rows are matched
 by it, and a matched row that differs in any column counts as changed, by column; without one, rows are compared as
 a multiset, so a row repeated once more is one added."""
 

@@ -139,7 +139,8 @@ repo still behaves the same.
 ## Repos and products
 
 A repo declares its parts in its `pyproject.toml`: an API, jobs and models, in any combination, and basis never infers a
-part from which folders exist. A product can span several repos, and its UI is always one of its own.
+part from which folders exist. The declaration is `[tool.basis] parts = ["api", "job"]`, naming each part the repo
+has. A product can span several repos, and its UI is always one of its own.
 
 | Path | Holds, when the repo has that part |
 |---|---|

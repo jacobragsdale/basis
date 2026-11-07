@@ -81,7 +81,7 @@ class OracleDatabase:
     def writing(self) -> Generator[OracleWriter]:
         write = self.settings.write
         if write is None:
-            msg = f"database {self.name!r} has no write settings: set ETL_DATABASES__{self.name.upper()}__WRITE__USER, __PASSWORD and __LEDGER"
+            msg = f"database {self.name!r} has no write settings: set BASIS_DATABASES__{self.name.upper()}__WRITE__USER, __PASSWORD and __LEDGER"
             raise LookupError(msg)
         start = time.perf_counter()
         with closing(connect(self.settings, user=write.user, password=write.password.get_secret_value())) as connection:

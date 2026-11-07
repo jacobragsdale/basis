@@ -12,30 +12,35 @@ basis has no release yet, so a job repo takes basis-job from a checkout of basis
 
 ```sh
 git clone https://github.com/jacobragsdale/basis
-uv run --project basis etl new repo pricing-etl prices --framework-path basis
+uv run --project basis basis-job new repo pricing-etl prices --framework-path basis
 cd pricing-etl
 ```
 
 The last log line should be:
 
 ```text
-{"time":"...","level":"info","logger":"basis.job.cli","message":"made pricing-etl"}
+{"time":"...","level":"info","logger":"basis.job.cli","message":"made pricing-etl: run `uv run basis check` in it"}
 ```
+
+From here on, every command is `basis`, run with `uv run` in the repo. `uv run basis --help` lists its verbs: those
+every basis repo has, such as `check`, and those of the job part, such as `run`, which the repo declares in its
+`pyproject.toml` as `[tool.basis] parts = ["job"]`.
 
 The repo's job is `jobs/prices/`: `job.py` declares what it reads and writes and holds the transform, `rows.py` holds
 the tables' columns, `sql/` holds the queries it runs on its source database, and `tests/fixture/` holds a few rows
 of each input. In this tutorial the fixture replaces the queries, so no database is needed.
 
-## Run the tests
+## Check the repo
 
 ```sh
-uv run pytest
+uv run basis check
 ```
 
-The output should end with this, with your own time:
+It runs the lint, format and type checks, which print nothing when they pass, and then the tests. The output should
+end with this, with your own time:
 
 ```text
-============================== 9 passed in 1.69s ===============================
+9 passed in 0.27s
 ```
 
 Notice that three of those tests are the job's contract tests, in `jobs/prices/tests/test_contract.py`: its default
@@ -49,7 +54,7 @@ includes its start and stops before its end, so `2026-11-05..2026-11-06` is the 
 
 ```sh
 cp .env.example .env
-uv run --env-file .env etl run prices --params jobs/prices/params/default.json --data jobs/prices/tests/fixture --interval 2026-11-05..2026-11-06
+uv run --env-file .env basis run prices --params jobs/prices/params/default.json --data jobs/prices/tests/fixture --interval 2026-11-05..2026-11-06
 ```
 
 The log is JSON, one record per line. The last record is the run's summary:
@@ -109,7 +114,7 @@ echo '{"include_closed_accounts": true}' > jobs/prices/params/closed.json
 Replay the saved run with it. RUN_ID is the manifest's name under `snapshots/runs/job/prices/`, without `.json`:
 
 ```sh
-uv run --env-file .env etl replay prices RUN_ID --params jobs/prices/params/closed.json 2>/dev/null
+uv run --env-file .env basis replay prices RUN_ID --params jobs/prices/params/closed.json 2>/dev/null
 ```
 
 The replay prints what changed:
@@ -138,27 +143,30 @@ Break one trade in the fixture. In `jobs/prices/tests/fixture/trades.csv`, chang
 `T5,A3,XS0002,2026-11-05,BUY,...` to `T5,A3,XS0002,2026-11-05,BYU,...`. Then run the job again:
 
 ```sh
-uv run --env-file .env etl run prices --params jobs/prices/params/default.json --data jobs/prices/tests/fixture --interval 2026-11-05..2026-11-06
+uv run --env-file .env basis run prices --params jobs/prices/params/default.json --data jobs/prices/tests/fixture --interval 2026-11-05..2026-11-06
 echo $?
 ```
 
-You should see a warning naming the reason, a summary with `"status":"failed"` and `"reasons":1`, and an exit code of 1:
+You should see a warning naming the reason, a summary with `"status":"failed"` and `"reasons":1`, one `ERROR` line
+that gives the reason and the fix, and an exit code of 1:
 
 ```text
 {"time":"...","level":"warning","logger":"basis.job.runs","message":"not writing: check: trades have sides other than BUY and SELL: ['BYU']","run_id":"...","job":"prices"}
 {"time":"...","level":"info","logger":"basis.job.runs","message":"run summary","run_id":"...","job":"prices","status":"failed","interval":"2026-11-05..2026-11-06","labels":{},"inputs":{"trades":5,"accounts":3},"outputs":{"positions":{"insert":3},"activity":{"upsert":2}},"reasons":1,"error":null,"publishes":{},"run_ms":...}
+ERROR: run ... of prices wrote nothing, because check: trades have sides other than BUY and SELL: ['BYU']: fix it, and run the job again; `basis replay prices ...` reruns it on what it read
 1
 ```
 
 The reason comes from the job's own `check` in `jobs/prices/job.py`. A run that has a reason writes nothing to any
-database, even with `--publish`, and its snapshot keeps its inputs, so `etl replay` can run it again after a fix.
-`uv run pytest` fails the same way now. Change `BYU` back to `BUY` before you go on.
+database, even with `--publish`, and its snapshot keeps its inputs, so `basis replay` can run it again after a fix.
+`uv run basis check` fails the same way now. Change `BYU` back to `BUY` before you go on.
 
 ## Next steps
 
 You have made a job repo, run its job, read its snapshot, replayed it with other params, and seen a check stop it.
 With `--publish` and its databases configured, a run whose checks pass writes each database and reports
 `"status":"published"`. To set that up, see [How to publish a job to a database for the first
-time](how-to.md#publish-a-job-to-a-database-for-the-first-time) (`uv run etl docs how-to`). To write your own job,
-run `uv run etl new job NAME` and read the [reference](reference.md) (`uv run etl docs reference`). For why a job is
-shaped this way, read [How basis-job is put together](explanation.md) (`uv run etl docs explanation`).
+time](how-to.md#publish-a-job-to-a-database-for-the-first-time) (`uv run basis docs job/how-to`). To write your own
+job, run `uv run basis new job NAME` and read the [reference](reference.md) (`uv run basis docs job/reference`). For
+why a job is shaped this way, read [How basis-job is put together](explanation.md) (`uv run basis docs
+job/explanation`).

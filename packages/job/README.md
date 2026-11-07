@@ -27,20 +27,22 @@ basis has no release yet, so a job repo takes basis-job from a checkout of basis
 
 ```sh
 git clone https://github.com/jacobragsdale/basis
-uv run --project basis etl new repo pricing-etl prices --framework-path basis
+uv run --project basis basis-job new repo pricing-etl prices --framework-path basis
 cd pricing-etl
-uv run pytest
+uv run basis check
 ```
 
 The repo holds one job, `jobs/prices/`, copied from the package's example: daily positions from trades. Around it are
 a README that maps each kind of change to the file it goes in, a `Dockerfile`, a `.env.example`, and the agent files
-`etl sync` keeps current. `uv run etl new job NAME` adds a job. To take every package from an internal package index
-instead, pass `--index URL`: it replaces PyPI for the whole repo, so it must proxy PyPI.
+`basis sync` keeps current. Its `pyproject.toml` declares the job part, as `[tool.basis] parts = ["job"]`, so its one
+command, `basis`, offers the job verbs: `uv run basis --help` lists them, and `uv run basis new job NAME` adds a job.
+To take every package from an internal package index instead, pass `--index URL`: it replaces PyPI for the whole repo,
+so it must proxy PyPI.
 
 ## Documentation
 
-The docs ship with the package, so a job repo reads the ones for the version it installed: `uv run etl docs` lists
-them and `uv run etl docs PAGE` prints one.
+The docs ship with the package, so a job repo reads the ones for the version it installed: `uv run basis docs` lists
+them and `uv run basis docs job/PAGE` prints one.
 
 - [Run, replay and check your first job](src/basis/job/docs/tutorial.md): a tutorial, on the example's fixture,
   with no database.

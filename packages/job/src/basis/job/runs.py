@@ -142,18 +142,18 @@ def _check_destinations(targets: Mapping[str, Target], settings: Settings, datab
     for database, tables in sorted(by_database.items()):
         if database not in settings.databases:
             if publishing:
-                reasons.append(f"database {database!r} is not configured, and the run publishes to it: set ETL_DATABASES__{database.upper()}__*")
+                reasons.append(f"database {database!r} is not configured, and the run publishes to it: set BASIS_DATABASES__{database.upper()}__*")
             else:
                 log.info("not checking the destination: its database is not configured", extra={"database": database, "outputs": sorted(tables)})
             continue
         opened = databases(database)
         if publishing and not opened.writable:
-            reasons.append(f"database {database!r} has no write settings, and the run publishes to it: set ETL_DATABASES__{database.upper()}__WRITE__*")
+            reasons.append(f"database {database!r} has no write settings, and the run publishes to it: set BASIS_DATABASES__{database.upper()}__WRITE__*")
         with opened.reading() as reader:
             for name, target in tables.items():
                 spec = reader.describe(target.table)
                 if spec is None:
-                    reasons.append(f"{name}: {target.table} does not exist in {database}: `etl ddl` prints a CREATE TABLE for it")
+                    reasons.append(f"{name}: {target.table} does not exist in {database}: `basis ddl` prints a CREATE TABLE for it")
                     continue
                 specs[name] = spec
                 reasons.extend(f"{name}: {reason}" for reason in check_table(target, spec))

@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import polars as pl
 
+from basis.core.errors import BasisError
 from basis.core.tables import IDENTIFIER, Column, Kind
 
 MAX_PRECISION = 38
@@ -57,7 +58,7 @@ class Zone:
 _DTYPES: dict[Kind, pl.DataType] = {"int": pl.Int64(), "float": pl.Float64(), "str": pl.String(), "bool": pl.Boolean(), "date": pl.Date(), "datetime": pl.Datetime("us", "UTC")}
 
 
-class RowError(TypeError):
+class RowError(BasisError, TypeError):
     """A row class that does not declare its columns as `conform` needs them."""
 
 

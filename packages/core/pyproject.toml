@@ -15,6 +15,9 @@ dependencies = [
     "tzdata>=2025.2; sys_platform == 'win32'",  # zoneinfo has no time zone database of its own on Windows
 ]
 
+[project.scripts]
+basis = "basis.core.command:main"  # every part's verbs, through the basis.verbs entry points
+
 [build-system]
 requires = ["uv_build>=0.13.6,<0.14"]
 build-backend = "uv_build"

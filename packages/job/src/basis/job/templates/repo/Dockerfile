@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# The image a scheduler runs: `etl run JOB --params jobs/JOB/params/default.json --interval START..END --publish`.
+# The image a scheduler runs: `basis run JOB --params jobs/JOB/params/default.json --interval START..END --publish`.
 # Build it with the commit, which every run's snapshot records: docker build --build-arg GIT_SHA=$(git rev-parse HEAD) .
 
 # The build stage installs the dependencies. git is here, and not in the image, for basis's packages taken from git.
@@ -18,17 +18,17 @@ COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
 
 # The image. SQL Server's driver, mssql-python, bundles its ODBC driver, which links against these. tini is the
-# container's first process and passes a stop signal on to etl: the first process ignores a signal's default action,
-# so etl run as the first process would carry on past a stop. A stopped run commits nothing: its transactions roll back.
+# container's first process and passes a stop signal on to basis: the first process ignores a signal's default action,
+# so basis run as the first process would carry on past a stop. A stopped run commits nothing: its transactions roll back.
 FROM python:3.14-slim
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends libltdl7 libkrb5-3 libgssapi-krb5-2 tini \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --uid 10001 --no-create-home etl
+    && useradd --system --uid 10001 --no-create-home basis
 WORKDIR /app
 COPY --from=build /app /app
 ARG GIT_SHA
-ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 ETL_GIT_SHA=$GIT_SHA
+ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 BASIS_GIT_SHA=$GIT_SHA
 USER 10001
-ENTRYPOINT ["tini", "--", "etl"]
+ENTRYPOINT ["tini", "--", "basis"]
 CMD ["--help"]

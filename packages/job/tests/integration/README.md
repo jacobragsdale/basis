@@ -10,7 +10,7 @@ docker run -d --name etlf-test-oracle -p 127.0.0.1:15221:1521 -e ORACLE_PASSWORD
 # once SQL Server is up: a scratch database that allows snapshot reads
 docker exec etlf-test-mssql /opt/mssql-tools18/bin/sqlcmd -C -U sa -P Etl-test-1234 -Q "CREATE DATABASE etltest; ALTER DATABASE etltest SET ALLOW_SNAPSHOT_ISOLATION ON"
 
-export ETL_TEST_MSSQL='Server=127.0.0.1,14433;Database=etltest;UID=sa;PWD=Etl-test-1234;Encrypt=yes;TrustServerCertificate=yes'
-export ETL_TEST_ORACLE_DSN=127.0.0.1:15221/FREEPDB1 ETL_TEST_ORACLE_USER=etl ETL_TEST_ORACLE_PASSWORD=etltest
+export BASIS_TEST_MSSQL='Server=127.0.0.1,14433;Database=etltest;UID=sa;PWD=Etl-test-1234;Encrypt=yes;TrustServerCertificate=yes'
+export BASIS_TEST_ORACLE_DSN=127.0.0.1:15221/FREEPDB1 BASIS_TEST_ORACLE_USER=etl BASIS_TEST_ORACLE_PASSWORD=etltest
 uv run pytest -m integration
 ```

@@ -51,5 +51,5 @@ def test_without_a_release_a_repo_needs_a_checkout_or_an_index(tmp_path: Path) -
 
 @pytest.mark.parametrize("name", ["Prices", "1prices", "_prices", "pri-ces"])
 def test_a_job_name_is_an_identifier(tmp_path: Path, name: str) -> None:
-    with pytest.raises(ValueError, match="a job's name is lower-case"):
+    with pytest.raises(ValueError, match="is no job's name: give one of lower-case letters"):
         new.repo(tmp_path / "pricing-etl", name, index=None, framework_path=None, install=False)
