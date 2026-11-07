@@ -71,7 +71,7 @@ class TaskGroup:
 
 
 class DatasetRead(Model):
-    """How a run got one dataset, as its snapshot's `run.json` records it."""
+    """How a run got one dataset, as its manifest records it under `reads`."""
 
     source: str
     """Where it was read from: a source's name, or for a file, `file:` and its path."""
@@ -96,7 +96,7 @@ class Reads:
                 self._by_dataset[dataset] = read
 
     def by_dataset(self) -> dict[str, DatasetRead]:
-        """By dataset name, so a run's `run.json` lists them in the same order whichever load finished first."""
+        """By dataset name, so a run's manifest lists them in the same order whichever load finished first."""
         with self._lock:
             return dict(sorted(self._by_dataset.items()))
 

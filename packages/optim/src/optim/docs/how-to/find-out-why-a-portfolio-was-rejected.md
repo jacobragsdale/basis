@@ -51,7 +51,7 @@ To find out why a portfolio was rejected:
    ```
 
    For a model that decides portfolios in turn, the portfolios before P1 in its order decide again too, since what they
-   reserve is what P1 sees. In place of an id, `run` may be a snapshot's absolute path or its URL.
+   reserve is what P1 sees. In place of an id, `run` may be the absolute path of the run's manifest, or its URL.
 3. Look inside. Set a breakpoint on the line a reason names, or in the rule or optimizer code you suspect, and debug
    `main.py`. The replay decides in this process, where the debugger stops, unless `BASIS_OPTIM__WORKERS` is above 1;
    pass `workers=1` to be sure.

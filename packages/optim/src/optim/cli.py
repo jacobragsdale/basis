@@ -191,7 +191,7 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
 
     deciding = argparse.ArgumentParser(add_help=False)
-    deciding.add_argument("--label", type=_label, action="append", default=[], dest="labels", metavar="KEY=VALUE", help="recorded in the run's run.json, e.g. purpose=production; repeat for more")
+    deciding.add_argument("--label", type=_label, action="append", default=[], dest="labels", metavar="KEY=VALUE", help="recorded in the run's manifest, e.g. purpose=production; repeat for more")
     deciding.add_argument("--workers", type=int, help="worker processes (default: BASIS_OPTIM__WORKERS, or 1)")
     tabled = argparse.ArgumentParser(add_help=False)
     tabled.add_argument("--out", type=Path, help="write the table to this .csv or .parquet file (default: CSV on stdout)")

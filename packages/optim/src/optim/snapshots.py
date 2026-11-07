@@ -46,7 +46,7 @@ class _Built(BaseSettings):
 
 
 class Code(Model):
-    """The model's code a run ran, as `run.json` records it."""
+    """The model's code a run ran, as its manifest records it."""
 
     git_sha: str | None
     """The commit: `BASIS_GIT_SHA`, baked into the image, or else the HEAD of the checkout the model's module is in.
