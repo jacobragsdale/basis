@@ -34,7 +34,8 @@ from typing import Literal, NoReturn, override
 
 from pydantic import ValidationError
 
-from basis.core import check, hooks, logs, settings, sync
+from basis.core import check, ddl, hooks, logs, settings, sync
+from basis.core.destination import Dialect
 from basis.core.errors import BasisError
 from basis.core.verbs import Part, Runs, Shared, Verb, error_line, fail, holding
 
@@ -56,10 +57,11 @@ class Spec:
     required: bool = False
     run_id: bool = False
     """Whether RUN_ID follows NAME."""
-    alone: Literal["refuse", "each", "first", "names"] = "refuse"
+    alone: Literal["refuse", "each", "ledger", "names"] = "refuse"
     """What the verb does without NAME, where more than one declared part has it: refuse; hand the arguments, which
-    must be options every part takes, to each part in turn, and print what each part printed as JSON, by part; hand
-    them to the first; or print the name of everything every part runs."""
+    must be options every part takes, to each part in turn, and print what each part printed as JSON, by part; print
+    the ledger's CREATE TABLE, which is core's, whichever part publishes; or print the name of everything every part
+    runs."""
 
 
 SHARED = {
@@ -68,7 +70,7 @@ SHARED = {
     "resume": Spec("the {noun} whose run it is; without it, the run is found by its id", run_id=True),
     "replay": Spec("the {noun} whose run it is; without it, the run is found by its id", run_id=True),
     "regress": Spec("the {noun} whose runs to replay; without it, every one", alone="each"),
-    "ddl": Spec("the {noun} whose tables to print{path}", alone="first"),
+    "ddl": Spec("the {noun} whose tables to print{path}", alone="ledger"),
 }
 """The verbs that jobs and models both have, which are core's, in the order `basis --help` lists them; each is listed
 when a declared part's `Runs` has it."""
@@ -407,8 +409,8 @@ class _Sharing:
                 return _print(self._listed())
             case "each":
                 return self._every_part(argv)
-            case "first":
-                return self._hand(next(iter(self.sides)), argv)
+            case "ledger":
+                return _ledger(argv)
             case "refuse":
                 where = "before the run's id" if self.spec.run_id else "first"
                 msg = f"more than one part of this repo has `basis {self.verb}` ({', '.join(self.sides)}): give the {self._nouns("'s")} name {where}"
@@ -618,6 +620,27 @@ class _Parser(argparse.ArgumentParser):
     def error(self, message: str) -> NoReturn:
         msg = f"{self.prog}: {message}: `{self.prog} --help` says what it takes"
         raise CommandError(msg, code=2)
+
+
+@dataclass(frozen=True)
+class LedgerArgs:
+    table: str
+    dialect: Dialect
+
+
+def _ledger(argv: Sequence[str]) -> int:
+    """`basis ddl --ledger TABLE --dialect DIALECT` without NAME, in a repo where several parts publish: the ledger's
+    CREATE TABLE, which is the same for every part."""
+    parser = _Parser(prog="basis ddl", description="print the ledger's CREATE TABLE, or name a job or model to print its tables")
+    parser.add_argument("--ledger", metavar="TABLE", required=True, help="the ledger, as BASIS_DATABASES__NAME__WRITE__LEDGER names it")
+    parser.add_argument("--dialect", choices=["mssql", "oracle"], required=True)
+    try:
+        namespace = parser.parse_args(argv)
+    except SystemExit as exited:  # --help prints, then exits
+        return exited.code if isinstance(exited.code, int) else 0
+    args = LedgerArgs(namespace.ledger, "mssql" if namespace.dialect == "mssql" else "oracle")
+    sys.stdout.write(ddl.ledger(args.table, args.dialect))
+    return 0
 
 
 def _parser(prog: str, description: str, verbs: Iterable[Verb]) -> argparse.ArgumentParser:
