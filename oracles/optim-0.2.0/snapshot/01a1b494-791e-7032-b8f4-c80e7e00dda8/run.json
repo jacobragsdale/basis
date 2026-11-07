@@ -1,0 +1,78 @@
+{
+  "run_id": "01a1b494-791e-7032-b8f4-c80e7e00dda8",
+  "optim_version": "0.2.0",
+  "model": {
+    "name": "income",
+    "module": "models.income.model"
+  },
+  "as_of_date": "2026-10-16",
+  "portfolios": [
+    "P1",
+    "P2"
+  ],
+  "params": {
+    "max_bond_weight": 0.05,
+    "max_issuer_weight": 0.1,
+    "sector_caps": {},
+    "max_turnover": 0.25,
+    "cost_bps": 5.0,
+    "min_rating": "A-",
+    "exclude_sectors": [],
+    "exclude_issuers": [],
+    "solve": {
+      "solver": "HIGHS",
+      "time_limit_s": 30.0,
+      "mip_gap": 0.001,
+      "options": {}
+    }
+  },
+  "params_file": {
+    "path": "/tmp/claude-1000/-home-jacob-dev/a0e5725e-460f-43fd-9986-1b0127454772/scratchpad/a/sma-optimizer/models/income/params/default.json",
+    "sha256": "bc3d4b9d1c0907b6b9e092961fb283e2926bc1305617802c4bb952b3fdf87339",
+    "git_commit": null
+  },
+  "labels": {},
+  "code": {
+    "git_sha": null,
+    "image": null,
+    "dirty": null
+  },
+  "workers": 1,
+  "started_at": "2026-11-07T05:56:31.646395Z",
+  "loaded_at": "2026-11-07T05:56:31.677645Z",
+  "finished_at": "2026-11-07T05:56:31.737069Z",
+  "datasets": {
+    "controls": {
+      "source": "file:/tmp/claude-1000/-home-jacob-dev/a0e5725e-460f-43fd-9986-1b0127454772/scratchpad/a/sma-optimizer/models/income/tests/fixture/controls.csv",
+      "read": "live",
+      "fetched_at": "2026-11-07T05:56:31.664283Z"
+    },
+    "holdings": {
+      "source": "file:/tmp/claude-1000/-home-jacob-dev/a0e5725e-460f-43fd-9986-1b0127454772/scratchpad/a/sma-optimizer/models/income/tests/fixture/holdings.csv",
+      "read": "live",
+      "fetched_at": "2026-11-07T05:56:31.660244Z"
+    },
+    "mandates": {
+      "source": "file:/tmp/claude-1000/-home-jacob-dev/a0e5725e-460f-43fd-9986-1b0127454772/scratchpad/a/sma-optimizer/models/income/tests/fixture/mandates.csv",
+      "read": "live",
+      "fetched_at": "2026-11-07T05:56:31.669938Z"
+    },
+    "portfolios": {
+      "source": "file:/tmp/claude-1000/-home-jacob-dev/a0e5725e-460f-43fd-9986-1b0127454772/scratchpad/a/sma-optimizer/models/income/tests/fixture/portfolios.csv",
+      "read": "live",
+      "fetched_at": "2026-11-07T05:56:31.646793Z"
+    },
+    "securities": {
+      "source": "file:/tmp/claude-1000/-home-jacob-dev/a0e5725e-460f-43fd-9986-1b0127454772/scratchpad/a/sma-optimizer/models/income/tests/fixture/securities.csv",
+      "read": "live",
+      "fetched_at": "2026-11-07T05:56:31.660717Z"
+    },
+    "signals": {
+      "source": "file:/tmp/claude-1000/-home-jacob-dev/a0e5725e-460f-43fd-9986-1b0127454772/scratchpad/a/sma-optimizer/models/income/tests/fixture/signals.csv",
+      "read": "live",
+      "fetched_at": "2026-11-07T05:56:31.661731Z"
+    }
+  },
+  "order": null,
+  "replay": null
+}
