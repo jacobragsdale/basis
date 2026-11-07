@@ -19,14 +19,14 @@ from basis.core import command, logs, snapshots
 from basis.core.destination import Dialect
 from basis.core.errors import BasisError, deliberate
 from basis.core.interval import Interval
-from basis.core.publish import refused_overlap
 from basis.core.settings import Settings
-from basis.core.snapshots import RunRecord, Snapshot
+from basis.core.snapshots import Snapshot
 from basis.core.storage import Root
 from basis.core.tables import Column
-from basis.core.verbs import Part, Runs, Shared, Verb, fail
-from basis.job import ddl, docs, new, runs, sync
+from basis.core.verbs import Difference, Part, Regress, Regressed, Regressions, Runs, Shared, Verb, fail
+from basis.job import ddl, docs, new, qa, runs, sync
 from basis.job import job as jobs
+from basis.job.diff import OperationDiff
 
 log = logging.getLogger(__name__)
 
@@ -92,7 +92,8 @@ class NewArgs:
 
 def part() -> Part:
     """basis-job's side of the verbs core shares among the parts that run things, which every job verb is, and what
-    core's verbs do with its jobs: `basis new job`, its docs and its agent files."""
+    core's verbs do with its jobs: `basis new job`, the regressions and QA runs of `basis check --full`, its docs and
+    its agent files."""
     return Part(
         files=sync.agent_files,
         docs=docs.FOLDER,
@@ -106,7 +107,9 @@ def part() -> Part:
             replay=Shared("rerun a saved run's transform with today's code, and print how its outputs differ", lambda n: _replay(ReplayArgs(n.name, n.run_id, n.params)), _replay_arguments),
             regress=Shared("replay recent published runs with today's code, and list what changed", _regress_from, _regress_arguments),
             ddl=Shared("print CREATE TABLE statements for a job's tables, or for the ledger", lambda n: _ddl(DdlArgs(n.name, n.ledger, n.dialect)), _ddl_arguments),
+            regressions=_regress_jobs,
         ),
+        qa=qa.plan,
     )
 
 
@@ -173,37 +176,7 @@ def _run(args: RunArgs) -> int:
     settings = Settings()
     request = runs.Request(args.params, args.interval, args.data, args.labels, publish=args.publish, again=args.again, git_sha=os.environ.get("BASIS_GIT_SHA"))
     result = runs.run(job, settings, request, snapshot_root=settings.snapshots())
-    return fail(*found) if (found := failure_of(result.record, publish=args.publish)) is not None else 0
-
-
-def failure_of(record: RunRecord, *, publish: bool) -> tuple[str, str] | None:
-    """Why a run did not do what it was asked, and the fix, or None when it did: `checked` without `--publish`, or
-    `published` with it."""
-    if record.status == ("published" if publish else "checked"):
-        return None
-    run = f"run {record.run_id} of {record.job}"
-    if record.status == "partial":
-        return f"{run} published to some of its databases and failed on another", f"fix what its publishes record, then `{resume_command(record)}`"
-    if record.error is not None:
-        return f"{run} failed: {record.error}", "fix it, and run the job again"
-    if record.reasons:
-        more = f", and {len(record.reasons) - 1} more the log lists" if len(record.reasons) > 1 else ""
-        replay = f"; `basis replay {record.job} {record.run_id}` reruns it on what it read" if record.inputs else ""
-        return f"{run} wrote nothing, because {record.reasons[0]}{more}", f"fix {'each' if more else 'it'}, and run the job again{replay}"
-    if errors := [f"{name}: {entry.error}" for name, entry in record.publishes.items() if entry.error is not None]:
-        again = refused_overlap(record.publishes)
-        return (
-            f"{run} committed to no database: {'; '.join(errors)}",
-            "run the job again with --again, if its rows are meant to be inserted a second time" if again else "fix it, and run the job again",
-        )
-    return f"{run} ended {record.status} with no reason recorded, when it was asked to publish", "its log records say what happened; run it again, and report it if it does the same"
-
-
-def resume_command(record: RunRecord) -> str:
-    """The command that finishes publishing `record`'s run: told `--again` as the run was, or where a database refused
-    it for an interval its ledger has, since the next attempt needs it then."""
-    again = record.again or refused_overlap(record.publishes)
-    return f"basis resume {record.job} {record.run_id}{' --again' if again else ''}"
+    return fail(*found) if (found := runs.failure_of(result.record, publish=args.publish)) is not None else 0
 
 
 def _saved(root: Root, run_id: str, name: str | None) -> tuple[Snapshot, jobs.Job]:
@@ -239,32 +212,49 @@ def _resume(args: ResumeArgs) -> int:
         record = runs.resume(job, source, settings, again=args.again)
     if record.status == "published":
         return 0
-    return fail(f"run {args.run_id} of {job.name} is still {record.status}", f"fix what its publishes record, then `{resume_command(record)}` again")
+    return fail(f"run {args.run_id} of {job.name} is still {record.status}", f"fix what its publishes record, then `{runs.resume_command(record)}` again")
 
 
 def _regress_from(n: argparse.Namespace) -> int:
-    return regress_jobs(RegressArgs((n.name,) if n.name is not None else tuple(sorted(jobs.listed())), n.last, dict(n.label), n.snapshots))
+    """`basis regress`: each run replayed, as JSON on stdout, and a line for each failure to replay a job; 1 when one
+    failed, or when a run differs or would not write."""
+    found = regress_jobs(RegressArgs((n.name,) if n.name is not None else tuple(sorted(jobs.listed())), n.last, dict(n.label), n.snapshots))
+    failed = sum(command.report(error) for error in found.failures)
+    _print([{"job": entry.name, "run_id": entry.run_id, "reasons": list(entry.reasons), "differences": [dict(diff.detail) for diff in entry.differences]} for entry in found.replayed])
+    if changed := [entry for entry in found.replayed if entry.changed]:
+        failed += fail(f"{len(changed)} of the {len(found.replayed)} runs replayed differ, or would not write", "stdout lists how; fix the code, or say in the pull request why the change is meant")
+    return 1 if failed else 0
 
 
-def regress_jobs(args: RegressArgs) -> int:
-    """`basis regress` for the jobs `args` names. Each job replays on its own: one that fails to load or to replay
-    prints its failure, and the rest still replay and print."""
+def _regress_jobs(args: Regress) -> Regressions:
+    return regress_jobs(RegressArgs((args.name,) if args.name is not None else tuple(sorted(jobs.listed())), args.last, args.labels, args.snapshots))
+
+
+def regress_jobs(args: RegressArgs) -> Regressions:
+    """`basis regress` for the jobs `args` names, which `basis` prints. Each job replays on its own: one that fails to
+    load or to replay is a failure of its own, and the rest still replay."""
     root = Root.at(args.snapshots) if args.snapshots is not None else Settings().snapshots()
-    found: list[dict[str, object]] = []
-    failed = 0
+    replayed: list[Regressed] = []
+    failures: list[Exception] = []
     for name in args.jobs:
         try:
             job = jobs.load(name)
             entries = runs.regress(job, root, last=args.last, labels=args.labels)
         except Exception as error:  # noqa: BLE001 -- each job's failure is its own line, and the other jobs still replay
             error.add_note(f"while regressing {name}")
-            failed += command.report(error)
+            failures.append(error)
             continue
-        found += [{"job": job.name, "run_id": entry.run_id, "reasons": entry.reasons, "differences": [vars(diff) for diff in entry.diffs]} for entry in entries]
-    _print(found)
-    if changed := [entry for entry in found if entry["differences"] or entry["reasons"]]:
-        failed += fail(f"{len(changed)} of the {len(found)} runs replayed differ, or would not write", "stdout lists how; fix the code, or say in the pull request why the change is meant")
-    return 1 if failed else 0
+        replayed += [Regressed(job.name, entry.run_id, tuple(entry.reasons), tuple(difference(diff) for diff in entry.diffs)) for entry in entries]
+    return Regressions(tuple(replayed), tuple(failures))
+
+
+def difference(found: OperationDiff) -> Difference:
+    """How a table's changes differ, in a few words, in rows: `upsert: 2 added, 1 changed (price 1)`."""
+    if found.operation == "delete":
+        return Difference(found.output, "its delete differs", vars(found))
+    counts = ", ".join(f"{count} {word}" for count, word in ((found.added, "added"), (found.removed, "removed"), (found.changed, "changed")) if count)
+    columns = f" ({', '.join(f'{name} {count}' for name, count in found.columns.items())})" if found.columns else ""
+    return Difference(found.output, f"{found.operation}: {counts}{columns}", vars(found))
 
 
 def _describe(args: DescribeArgs) -> int:

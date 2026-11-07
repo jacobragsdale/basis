@@ -159,6 +159,37 @@ class GivenSettings(Settings):
         return (init_settings,)
 
 
+def locate(location: str, folder: Path) -> str:
+    """A run store as `BASIS_SNAPSHOT_ROOT` names it, found where a command reads it: a URL or an absolute path as it
+    is, and a relative path in `folder`, which is the repo, or the clone's own folder for a check in another worktree."""
+    return location if "://" in location or Path(location).is_absolute() else (folder / location).as_posix()
+
+
+class FileSettings(Settings):
+    """Settings from one settings file alone, never the process's environment: the QA tier's, so a variable set for
+    another environment never mixes in. As in the environment, a variable that sets no setting is ignored, such as
+    `BASIS_LOG_LEVEL`, and so is one under a name basis read before, such as `ETL_SNAPSHOT_ROOT`."""
+
+    model_config = SettingsConfigDict(dotenv_filtering="only_existing")
+
+    @classmethod
+    @override
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (dotenv_settings,)
+
+
+def read(path: Path) -> FileSettings:
+    """The settings the file at `path` holds, and nothing else."""
+    return FileSettings(_env_file=path)
+
+
 _KINDS = {"mssql", "oracle"}
 """Each database's `kind`, which pydantic adds to a validation error's location, after the database's name."""
 

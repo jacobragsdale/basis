@@ -23,7 +23,7 @@ variables:
 
 stages:
   - stage: check
-    displayName: basis check
+    displayName: basis check --full
     jobs:
       - job: check
         pool:
@@ -35,8 +35,8 @@ stages:
           - script: |
               export PATH="$HOME/.local/bin:$PATH"
               uv sync --locked
-              uv run --locked basis check  # `basis check --full` once basis has it
-            displayName: basis check
+              uv run --locked basis check --full
+            displayName: basis check --full
             # STUB: an internal index needs its credentials here, as the team's templates provide them
 
   - stage: image

@@ -154,7 +154,11 @@ basis's.
 
 | Command | Does |
 |---|---|
-| `basis check [--staged]` | Checks that the framework and agent files are what the installed basis writes, byte for byte, with nothing left over that it no longer writes; that the clone runs the hooks in `.githooks/`, pointing it at them if it names no hooks folder; and that `uv.lock` matches `pyproject.toml`; then runs `ruff check`, `ruff format --check`, `ty check` and `pytest`, each through `uv run --locked`. With `--staged`, it first checks each file staged for a commit, as git will commit it: none holds a private key, none is over 500 KB, and each YAML and TOML file parses. Every step runs, and each that fails prints its findings and then its `ERROR` line. Needs no network or database. The commit hook runs `basis check --staged` after ruff fixes and formats the staged Python files; the push hook runs `basis check` on each commit pushed, in a temporary worktree when it is not a clean `HEAD`. |
+| `basis check [--staged]` | Checks that the framework and agent files are what the installed basis writes, byte for byte, with nothing left over that it no longer writes; that the clone runs the hooks in `.githooks/`, pointing it at them if it names no hooks folder; and that `uv.lock` matches `pyproject.toml`; then runs `ruff check`, `ruff format --check`, `ty check` and `pytest`, each through `uv run --locked`. With `--staged`, it first checks each file staged for a commit, as git will commit it: none holds a private key, none is over 500 KB, and each YAML and TOML file parses. Every step runs, and each that fails prints its findings and then its `ERROR` line. Needs no network or database. The commit hook runs `basis check --staged` after ruff fixes and formats the staged Python files. |
+| `basis check --full [--settings-from DIR] [--no-qa]` | `basis check`, then `regress` (the last 10 published runs of every job, from `BASIS_SNAPSHOT_ROOT` in the environment, where it is set and reachable), then the QA tier (see [QA tier](#qa-tier)), where `pyproject.toml` declares one and this machine has its settings file. A piece that does not run prints one `SKIPPED:` line saying why; neither runs when `basis check` fails. An output `regress` sees change prints and fails nothing; a failure to regress, a QA tier that refuses, or a QA run that fails exits 1. With nothing uncommitted, it records what it found for `basis review`. The push hook runs it on each commit pushed, in a temporary worktree when it is not a clean `HEAD`, with `--settings-from` naming the clone's folder, where the files git does not track are; `azure-pipelines.yml`'s check stage runs it too. `--no-qa` leaves the QA tier to the push, as `basis upgrade` does. A failure in one piece, whatever it raises, is its `ERROR` line, and the pieces after it still run and are recorded. |
+| `basis review [--commit REF]` | Prints, as Markdown for a pull request's description, what the latest `basis check --full` of `REF` (default `HEAD`) found: the outputs `regress` saw change, the QA tier's runs, the basis versions, and the commit. Exits 1 when no check of the commit is recorded in this clone, or when it failed. |
+| `basis doctor` | Checks this desktop, on Windows and in WSL, in a repo or outside one: uv and its version, git, that the clone runs the repo's hooks, the feed (the default index of the user's `uv.toml`, which must be the repo's index where `pyproject.toml` names one), and the settings: the environment's, and the QA tier's file. Prints `ok:` for each check passed and one `ERROR` line, ending with its fix, for each problem. |
+| `basis upgrade` | With nothing uncommitted, relocks basis's packages within what `pyproject.toml` allows, runs `basis sync` and `basis check --full --no-qa` with the newly locked version, and prints each package's version before and after and each file it changed. The QA tier runs when the upgrade is committed and pushed, so QA publishes it once, with a record for `basis review`. |
 | `basis run JOB --params FILE [--interval START..END] [--data DIR] [--label KEY=VALUE]... [--publish] [--again]` | Runs a job, saves its snapshot, and with `--publish` writes its changes. `--again` publishes an `Append()` table for an interval the ledger already has. |
 | `basis replay [JOB] RUN_ID [--params FILE]` | Runs a saved run's transform again on its inputs; prints the replay's status, reasons and differences as JSON. Without `JOB`, the run is found by its id alone. |
 | `basis resume [JOB] RUN_ID [--again]` | Writes a partly published run's changes to each database whose ledger lacks the run, told `--again` if the run was, or if given now. Without `JOB`, the run is found by its id alone. |
@@ -177,6 +181,39 @@ caller reads, such as `describe`'s, is JSON on stdout.
 | `0` | The command did what it says: a run without `--publish` was `checked`, a run with it `published`. |
 | `1` | A run failed, was refused, or published partly; a regression found differences; or the command failed. |
 | `2` | The command line did not parse. |
+
+## QA tier
+
+`basis check --full` runs each job against the QA databases, published, where the repo declares the tier in
+`pyproject.toml` and this machine has its settings file. Everything is declared; nothing is inferred:
+
+```toml
+[tool.basis.qa]
+settings = ".env.qa"   # the settings file the tier reads, alone: never the process's environment
+marker = "qa"          # what each QA server or database name, and each QA store, contains
+stores = ["abfs://runs@qaaccount.dfs.core.windows.net/pricing-etl"]   # BASIS_SNAPSHOT_ROOT must be one of these
+writes = { warehouse = ["daily_positions", "account_activity", "etl.publishes"] }   # by database: ledgers too
+
+[tool.basis.qa.job]
+positions = { params = "jobs/positions/params/default.json", interval = "2026-11-05..2026-11-06" }
+```
+
+| Key | Meaning |
+|---|---|
+| `settings` | The settings file, relative to the repo, which the tier reads and nothing else. |
+| `marker` | Two or more letters, digits, `_`, `.` or `-`, which every QA name contains, ignoring case, and no production name does. |
+| `stores` | The run stores the tier may save its runs in, as `BASIS_SNAPSHOT_ROOT` writes them; each must contain the marker. |
+| `writes` | By database, as the settings name it, the tables the tier may write, as the job names them, ignoring case. Each ledger the settings name must be here. |
+| `[tool.basis.qa.job]` | Each job the repo lists, with `params` (relative to the repo), `interval` (`START..END`; leave it out for a job that runs without one) and `again` (`true` to publish an `Append()` table for an interval the ledger has, as a second QA run of one does). |
+
+A database's settings carry the marker when a SQL Server connection string, and its `WRITE` block's, names one server
+(`Server`, `Data Source`, `Address`, `Addr` or `Network Address`) or one database (`Database` or `Initial Catalog`)
+that contains it, or when an Oracle DSN contains it. The tier refuses to run, and runs nothing, while any database the
+file configures does not carry it, the store is not in `stores`, a ledger is not in `writes`, a job the repo lists is
+not declared, a job reads a database the file does not configure, or a job writes a table `writes` does not list.
+The databases a QA run writes refuse any other table inside the transaction, before writing it. Each QA run is
+labelled `purpose=qa` and records the commit checked. A login can still reach another database by name inside a
+query, which no setting shows: give QA's logins access to QA alone.
 
 ## Python API
 

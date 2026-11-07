@@ -94,6 +94,34 @@ uv run --env-file .env.prod basis regress prices --last 20 --label purpose=produ
 Each entry names the run, and each difference the output, the operation, and the rows added, removed and changed, by
 column.
 
+## Run every job against QA before it is pushed
+
+Declare the QA tier in `pyproject.toml`, as the reference's [QA tier](reference.md#qa-tier) shows: the settings file,
+the marker QA's names contain, QA's run stores, the tables each job may write there, and each job's params and
+interval. Then copy `.env.example` to that file, `.env.qa`, and fill in QA's databases and `BASIS_SNAPSHOT_ROOT`:
+
+```sh
+uv run basis doctor        # says whether .env.qa points only at QA, with the fix for anything that does not
+uv run basis check --full  # what the push hook runs: check, regress, and each job published to QA
+```
+
+A setting that points outside QA, or a table the declaration does not list, is one `ERROR` line, and nothing runs.
+On a machine without `.env.qa`, the push hook prints a `SKIPPED` line instead.
+
+## Open a pull request with what the checks found
+
+The push hook runs `basis check --full` on each commit pushed, and records what it found. `basis review` prints it as
+Markdown, for the pull request's description:
+
+```sh
+git push
+gh pr create --title "TITLE" --body "$(uv run basis review)"   # or paste its output into the pull request
+```
+
+It lists the outputs `regress` saw change, which the description should say are meant, what the QA tier ran, the
+basis versions, and the commit checked. `regress` reads `BASIS_SNAPSHOT_ROOT` from the environment git runs the hook
+in: set it there to the store whose published runs to replay.
+
 ## Write a table whose changes depend on what it holds
 
 When no write mode fits, such as a history table or a dedupe against rows already written, write the table with

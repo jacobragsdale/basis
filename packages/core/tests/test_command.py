@@ -119,7 +119,7 @@ def error_line(capsys: pytest.CaptureFixture[str]) -> str:
 def test_help_lists_the_declared_parts_verbs_and_the_core_verbs_they_give_something_to_do(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert basis(repo(tmp_path), "--help") == 0
     listed = [line.split()[0] for line in capsys.readouterr().out.splitlines() if line.startswith("  ") and not line.lstrip().startswith("-")]
-    assert listed == ["check", "sync", "serve"]
+    assert listed == ["check", "review", "sync", "upgrade", "doctor", "serve"]
 
 
 def test_a_verb_runs_from_a_folder_inside_the_repo(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -499,3 +499,9 @@ def test_a_verb_of_more_than_one_installed_part_the_repo_does_not_declare_names_
     assert error_line(capsys).endswith(
         f"`basis replay` comes with the alpha and beta parts, which {tmp_path / 'pyproject.toml'} does not declare: add the one the repo has, 'alpha' or 'beta', to its [tool.basis] parts"
     )
+
+
+@pytest.mark.parametrize("option", [["--no-qa"], ["--settings-from", "."]], ids=["no-qa", "settings-from"])
+def test_the_options_of_a_full_check_are_refused_without_full(tmp_path: Path, capsys: pytest.CaptureFixture[str], option: list[str]) -> None:
+    assert basis(repo(tmp_path), "check", *option) == 1
+    assert error_line(capsys).startswith("ERROR: --settings-from and --no-qa change what `basis check --full` does, and were given without --full")

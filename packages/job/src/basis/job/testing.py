@@ -32,7 +32,7 @@ from basis.job.rows import Row, conform
 
 FORBIDDEN = (
     *core_testing.FORBIDDEN,
-    "basis.job.api", "basis.job.cli", "basis.job.loader", "basis.job.new", "basis.job.runs", "basis.job.sync", "basis.job.testing",
+    "basis.job.api", "basis.job.cli", "basis.job.loader", "basis.job.new", "basis.job.qa", "basis.job.runs", "basis.job.sync", "basis.job.testing",
 )  # fmt: skip
 """What a job's code may not reach through its imports: the run loop, a database driver, an HTTP client, or storage."""
 _LAZY = [("basis.job", "basis.job.api")]

@@ -10,13 +10,12 @@ git finds the clone from the repo's folder, never from a `GIT_DIR` that a hook o
 import logging
 import os
 import shutil
-import subprocess
 from pathlib import Path
+
+from basis.core.clone import output as _git
 
 FOLDER = ".githooks"
 HOOKS = ("pre-commit", "pre-push")
-_LOCATION = frozenset({"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"})
-"""The variables that point git at a clone other than the one its working directory is in."""
 
 log = logging.getLogger(__name__)
 
@@ -52,10 +51,3 @@ def _setting(root: Path, top: str) -> str:
     """`core.hooksPath` for the repo at `root`, in the clone whose top is `top`: relative to the top, where git runs
     hooks from, so the setting holds wherever the clone is."""
     return Path(os.path.relpath((root / FOLDER).resolve(), Path(top).resolve())).as_posix()
-
-
-def _git(git: str, root: Path, *argv: str) -> str | None:
-    """What `git ARGV` prints, run in `root`, or None when it fails."""
-    environment = {name: value for name, value in os.environ.items() if name not in _LOCATION}
-    found = subprocess.run([git, *argv], cwd=root, env=environment, capture_output=True, text=True, check=False)
-    return found.stdout.strip() if found.returncode == 0 else None
