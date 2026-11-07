@@ -11,7 +11,7 @@ same steps:
 5. Write the snapshot.
 6. Publish, if asked and nothing gave a reason not to: each database in one transaction, with its ledger rows.
 
-A run that fails at any step records why in its `run.json`, and a run that loaded its inputs keeps them in its
+A run that fails at any step records why in its manifest, and a run that loaded its inputs keeps them in its
 snapshot, so it can be replayed on a laptop with the code of the day."""
 
 import logging
@@ -44,6 +44,9 @@ from basis.job.params import Params
 from basis.job.version import VERSION
 
 log = logging.getLogger(__name__)
+
+PACKAGE = "job"
+"""basis-job's folder in the run store, which holds each job's manifests: `runs/job/JOB/RUN_ID.json`."""
 
 
 @dataclass(frozen=True)
@@ -123,9 +126,9 @@ def run(job: Job, settings: Settings, request: Request, *, snapshot_root: Root, 
     publication = publish.Publication(run_id, job.name, request.interval, VERSION, request.again, clock)
     publishes = publish.publish(publication, targets, changes, databases)
     final = record.done(core_runs.status_of(publishes, len({target.database for target in targets.values()})), reasons=[], finished_at=clock(), publishes=publishes)
-    result.snapshot.save_record(final)
+    snapshot = result.snapshot.save_record(final)
     _summary(final)
-    return Result(final, result.snapshot, frames, planned)
+    return Result(final, snapshot, frames, planned)
 
 
 def _check_destinations(targets: Mapping[str, Target], settings: Settings, databases: Callable[[str], Database], *, publishing: bool) -> tuple[dict[str, TableSpec], list[str]]:
@@ -226,9 +229,9 @@ class _Record:
 
 def _finish(record: RunRecord, root: Root | None, params_text: str, frames: Mapping[str, pl.DataFrame], planned: Mapping[str, Planned]) -> Result:
     changes = {name: entry.changes for name, entry in planned.items() if entry.changes is not None}
-    snapshot = snapshots.write(root, record, params_text, dict(frames), changes) if root is not None else None
+    snapshot = snapshots.write(root, record, params_text, frames, changes, package=PACKAGE) if root is not None else None
     if snapshot is not None:
-        log.info("saved the snapshot", extra={"snapshot": snapshot.root.location})
+        log.info("saved the snapshot", extra={"snapshot": snapshot.path.location})
     return Result(record, snapshot, dict(frames), dict(planned))
 
 
@@ -298,4 +301,4 @@ def regress(job: Job, root: Root, *, last: int, labels: Mapping[str, str]) -> li
         result, diffs = replay(job, snapshot)
         return result.record, diffs
 
-    return core_runs.regress(root, job.name, last=last, labels=labels, replay=replayed)
+    return core_runs.regress(root, job.name, package=PACKAGE, last=last, labels=labels, replay=replayed)

@@ -1,13 +1,13 @@
 ---
 name: etl-why-failed
-description: Find out why a basis-job run failed, refused to publish, or published partly, from its run.json and logs. Use when the user asks why a job failed, or what a run did.
+description: Find out why a basis-job run failed, refused to publish, or published partly, from its manifest and logs. Use when the user asks why a job failed, or what a run did.
 ---
 
 # Why a run failed
 
-1. Find the run: its id is in every log line (`run_id`). Its snapshot is `ETL_SNAPSHOT_ROOT/JOB/RUN_ID/`, or the
-   repo's `snapshots/JOB/RUN_ID/` for a run from Python.
-2. Read `run.json`. `status` says how it ended: `failed` (see `error` and `reasons`), `checked` (passed, not asked to
+1. Find the run: its id is in every log line (`run_id`). Its manifest is `ETL_SNAPSHOT_ROOT/runs/job/JOB/RUN_ID.json`,
+   or the repo's `snapshots/runs/job/JOB/RUN_ID.json` for a run from Python.
+2. Read the manifest. `status` says how it ended: `failed` (see `error` and `reasons`), `checked` (passed, not asked to
    publish), `published`, or `partial` (some databases committed; `etl resume JOB RUN_ID` finishes it).
 3. Each entry in `reasons` names its output and what failed: a row check, a destination check, a rerun guard, or the
    job's own `check`. A transform error names the line of job code that raised.

@@ -3,7 +3,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import polars as pl
-from builders import DAY, make_job, params_file, prices
+from builders import DAY, Price, make_job, params_file, prices
 
 import basis.job as etl
 from basis.core import snapshots
@@ -23,6 +23,11 @@ def run_on_files(tmp_path: Path, job: Job, frame: pl.DataFrame, *, params: str =
     frame.write_parquet(folder / "prices.parquet")
     request = runs.Request(params_file(tmp_path, params), DAY, folder, {"purpose": "test"}, publish=publish)
     return runs.run(job, GivenSettings(), request, snapshot_root=Root.at(tmp_path / "snapshots"), clock=clock)
+
+
+def objects(tmp_path: Path) -> set[str]:
+    """The hashes of the datasets the run store under `tmp_path` holds."""
+    return {path.name.removesuffix(".parquet") for path in (tmp_path / "snapshots" / "objects").iterdir() if not path.name.startswith(".")}
 
 
 def test_a_run_on_files_checks_its_changes_and_saves_a_snapshot_that_holds_them(tmp_path: Path) -> None:
@@ -85,3 +90,41 @@ def test_regress_replays_only_published_runs_and_lists_what_changed(tmp_path: Pa
 
     found = runs.regress(make_job(write=etl.Upsert(), factor=2), Root.at(tmp_path / "snapshots"), last=10, labels={"purpose": "test"})
     assert [(entry.run_id, [diff.columns for diff in entry.diffs]) for entry in found] == [(published.record.run_id, [{"price": 1}])]
+
+
+def test_a_run_that_loads_the_same_input_twice_stores_it_once_as_does_a_second_run_on_it(tmp_path: Path) -> None:
+    class Inputs(etl.Inputs):
+        prices = etl.File(Price, path="prices.parquet", empty="fail")
+        again = etl.File(Price, path="prices.parquet", empty="fail")
+
+    class Outputs(etl.Outputs):
+        prices = etl.Table(Price, database="warehouse", table="prices", write=etl.Upsert(), key=("day", "security_id"))
+
+    def transform(inputs: Inputs, _params: etl.Params) -> Outputs:
+        return Outputs(prices=inputs.prices.with_columns(pl.col("price") * 2))
+
+    job = Job("prices", "tests.prices", etl.Params, Inputs, Outputs, transform, None, Path(__file__).parent)
+    (tmp_path / "data").mkdir()
+    prices({}, {"security_id": "S2"}).write_parquet(tmp_path / "data" / "again.parquet")
+    first = run_on_files(tmp_path, job, prices({}, {"security_id": "S2"}))
+    assert first.snapshot is not None
+    saved = first.snapshot.manifest.datasets
+    assert saved["inputs/prices"] == saved["inputs/again"]
+    assert objects(tmp_path) == set(saved.values())
+    second = run_on_files(tmp_path, job, prices({}, {"security_id": "S2"}))
+    assert second.snapshot is not None
+    assert second.snapshot.manifest.datasets == saved
+    assert objects(tmp_path) == set(saved.values())
+
+
+def test_a_replay_saved_beside_its_run_stores_only_the_outputs_that_changed(tmp_path: Path) -> None:
+    job = make_job(write=etl.Upsert())
+    original = run_on_files(tmp_path, job, prices({}))
+    assert original.snapshot is not None
+    before = objects(tmp_path)
+    replayed, _ = runs.replay(job, original.snapshot, params=params_file(tmp_path / "data", '{"scale": 2}'), snapshot_root=Root.at(tmp_path / "snapshots"))
+    assert replayed.snapshot is not None
+    saved = replayed.snapshot.manifest.datasets
+    assert saved["inputs/prices"] == original.snapshot.manifest.datasets["inputs/prices"]
+    assert saved["outputs/prices/upsert"] not in before
+    assert objects(tmp_path) == before | {saved["outputs/prices/upsert"]}

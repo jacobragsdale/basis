@@ -116,7 +116,7 @@ the row's columns. `etl.Delete()` deletes every row. The other three are frames 
 
 ### Checks on every output
 
-A run writes nothing when any of these holds, and lists each in `run.json`'s `reasons`:
+A run writes nothing when any of these holds, and lists each in its manifest's `reasons`:
 
 - A frame does not conform to its row.
 - A key appears more than once across the upsert, the insert of new keys, and the insert.
@@ -201,7 +201,7 @@ Settings come only from environment variables, which a settings file can hold.
 | `ETL_DATABASES__NAME__WRITE__LEDGER` | The ledger table in that database. |
 | `ETL_LOG_LEVEL` | `DEBUG`, `INFO` (default), `WARNING` or `ERROR`. |
 | `ETL_LOG_FORMAT` | `json` (the commands' default) or `text` (the Python API's default). |
-| `ETL_GIT_SHA` | The job repo's commit, which `run.json` records; the generated `Dockerfile` sets it. |
+| `ETL_GIT_SHA` | The job repo's commit, which the run's manifest records; the generated `Dockerfile` sets it. |
 
 `NAME` is the database's name in upper case. A database without a `WRITE` block can be read and never written. A
 field a database's block does not have is an error; a variable the framework does not read is ignored.
@@ -212,21 +212,25 @@ the seconds before the run began, which a `TRUNCATE` does.
 
 ## Snapshot files
 
+Snapshots are kept in a run store, at `ETL_SNAPSHOT_ROOT`, or in the repo's `snapshots/` for a run from Python:
+
 ```text
-ETL_SNAPSHOT_ROOT/JOB/RUN_ID/
-  run.json
-  params.json
-  inputs/NAME.parquet
-  outputs/NAME/upsert.parquet, insert_new.parquet, insert.parquet, delete_matching.parquet
+objects/HASH.parquet         each dataset, once, named by the SHA-256 of the file
+runs/job/JOB/RUN_ID.json     each run's manifest
 ```
 
-A snapshot is written whole, under a hidden name renamed into place, before anything is published; `run.json` is
-rewritten after publishing. Run ids are UUIDv7s, so they sort by start time.
+A dataset that several runs save, such as a day's input loaded by each of that day's runs, or the inputs a replay
+reruns, is stored once. A run's objects are written before its manifest, and the manifest under a hidden name renamed
+into place, all before anything is published; the manifest is rewritten after publishing. Run ids are UUIDv7s, so
+they sort by start time.
 
-`run.json` holds the run's `run_id`, `job`, `module`, `version`, `git_sha`, `started_at`, `finished_at`, `interval`,
-`params_path`, `params_sha256`, `labels`, `data`, `replay_of`, `status`, `inputs` (each dataset's source, rows and
-read time), `outputs` (each table's database, table, write mode, delete and rows by operation), `reasons`, `error`,
-and `publishes` (each database's status, time, counts and error).
+The manifest holds the run's `run_id`, `job`, `module`, `version`, `git_sha`, `started_at`, `finished_at`,
+`interval`, `params_path` (the params file, or `run RUN_ID` for a replay with that run's params), `params_sha256`,
+`labels`, `data`, `replay_of`, `status`, `inputs` (each dataset's source, rows and read time), `outputs` (each
+table's database, table, write mode, delete and rows by operation), `reasons`, `error`, `publishes` (each database's
+status, time, counts and error), `params` (the params file's text, as the run read it), and `datasets`: the hash of
+each input, as `inputs/NAME`, and of each table's frames, as `outputs/NAME/upsert`, `insert_new`, `insert` and
+`delete_matching`. The params and datasets never change after the run saves them.
 
 | `status` | Meaning |
 |---|---|
