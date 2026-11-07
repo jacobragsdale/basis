@@ -292,3 +292,19 @@ def test_a_record_is_kept_where_every_worktree_of_the_clone_finds_it(repo: Path,
     git(repo, "worktree", "add", "--quiet", "--detach", str(tmp_path / "other"), "HEAD")
     assert checked(tmp_path / "other", Part()) == 0
     assert record(repo).commit == git(repo, "rev-parse", "HEAD").strip()
+
+
+@pytest.mark.parametrize(
+    ("diff", "line"),
+    [
+        ("No earlier release to compare with.", "No earlier release to compare with"),
+        ("## Changed since v0.1.0\n\n- `GET /prices`: added", "Changed since v0.1.0"),
+        ("- `GET /prices`: `price` is now a decimal", "`GET /prices`: `price` is now a decimal"),
+        ("\n\n- `GET /prices`: added", "changed"),
+        ("", "changed"),
+    ],
+    ids=["a-sentence", "a-heading", "a-list-item", "a-blank-first-line", "empty"],
+)
+def test_the_contract_line_is_its_diffs_plain_first_line(declared: Path, capsys: pytest.CaptureFixture[str], diff: str, line: str) -> None:
+    assert checked(declared, Part(contract=lambda _: diff)) == 0
+    assert f"basis check --full: the alpha part's contract: {line}, as `uv run basis review` shows" in capsys.readouterr().err

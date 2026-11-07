@@ -14,7 +14,7 @@ from basis.core.ddl import ledger
 from basis.core.errors import BasisError, deliberate
 from basis.core.settings import Settings
 from basis.core.sync import AgentFiles, stamped
-from basis.core.verbs import Part, Runs, Shared, Verb, fail, table
+from basis.core.verbs import Part, ProjectError, Runs, Shared, Verb, fail, table
 
 ALPHA = '[project]\nname = "repo"\n\n[tool.basis]\nparts = ["alpha"]\n'
 
@@ -159,9 +159,21 @@ def test_a_declared_part_that_no_package_provides_says_to_add_the_package_its_en
             "has [tool.basis.api], a part's own table, and its [tool.basis] parts does not declare the api part: add 'api' to its parts, or remove the table",
         ),
         ('[tool.basis]\nparts = ["alpha"]\nbeta = "v*"\n', "has beta, which basis does not read"),
+        ('[tool.basis]\nparts = "alpha"\n\n[tool.basis.alpha]\nreleases = "v*"\n', "parts is not a list of part names"),
         ('[tool.basis]\nparts = ["alpha"]\nalpha = "v*"\n', "[tool.basis] alpha is not a table: give the alpha part's own as [tool.basis.alpha]"),
     ],
-    ids=["no-parts", "none", "not-a-list", "twice", "an-unknown-key", "not-toml", "an-undeclared-parts-table", "an-unknown-key-beside-the-parts", "a-parts-table-that-is-not-one"],
+    ids=[
+        "no-parts",
+        "none",
+        "not-a-list",
+        "twice",
+        "an-unknown-key",
+        "not-toml",
+        "an-undeclared-parts-table",
+        "an-unknown-key-beside-the-parts",
+        "a-parts-table-whose-parts-are-not-a-list",
+        "a-parts-table-that-is-not-one",
+    ],
 )
 def test_a_repo_declares_its_parts_in_pyproject_and_nowhere_else(tmp_path: Path, capsys: pytest.CaptureFixture[str], pyproject: str, problem: str) -> None:
     assert basis(repo(tmp_path, pyproject), "check") == 1
@@ -563,3 +575,12 @@ def test_sync_writes_the_files_a_declared_part_makes(tmp_path: Path) -> None:
     folder = repo(tmp_path)
     assert basis(folder, "sync", installed={"alpha": lambda: Part(files=lambda: files)}) == 0
     assert (folder / "openapi.json").read_text(encoding="utf-8") == document
+
+
+def test_a_part_reads_its_table_as_basis_reads_the_parts(tmp_path: Path) -> None:
+    folder = repo(tmp_path, "[tool.basis\n")
+    with pytest.raises(ProjectError, match=r"pyproject.toml is not TOML: .*: fix it$"):
+        table(folder, "alpha")
+    (folder / "pyproject.toml").write_text('[tool.basis]\nparts = ["alpha"]\nalpha = 1\n', encoding="utf-8")
+    with pytest.raises(ProjectError, match=r"\[tool.basis\] alpha is not a table: give the alpha part's own as \[tool.basis.alpha\], or remove it$"):
+        table(folder, "alpha")

@@ -93,6 +93,20 @@ def test_a_file_a_part_cannot_make_fails_and_every_other_step_still_runs(repo: P
     assert errors(capsys) == ["ERROR: service accruals does not import: fix it"]
 
 
+def test_a_file_whose_maker_raises_an_import_error_fails_and_every_other_step_still_runs(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    def fails() -> str:
+        msg = "No module named 'accruals'"
+        raise ImportError(msg)
+
+    ran, run = runner()
+    assert check(repo, [AgentFiles("basis-alpha", "the alpha block\n", {}, made={"openapi.json": fails})], run=run) == 1
+    assert len(ran) == 5
+    lines = capsys.readouterr().err.splitlines()  # the traceback's record first, where logging is set up
+    assert [line for line in lines if line.startswith("ERROR")] == [
+        "ERROR: openapi.json could not be made, ImportError: No module named 'accruals': a defect; the log record above holds its traceback"
+    ]
+
+
 def test_claude_settings_basis_cannot_read_fail_and_every_other_step_still_runs(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (repo / ".claude/settings.json").write_text("{", encoding="utf-8")
     ran, run = runner()

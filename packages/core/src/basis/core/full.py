@@ -11,6 +11,7 @@ does not track are: the QA settings file, and a run store a relative path names.
 its `ERROR` line, and the pieces after it still run and are recorded. `basis upgrade` leaves the QA tier out, since
 its relock is not yet a commit: the push runs it."""
 
+import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
@@ -179,9 +180,15 @@ def _contracts(repo: Path, parts: Mapping[str, Part], report: Report) -> tuple[d
             broken += 1
             continue
         diff = found[name]
-        summary = diff.partition("\n")[0].rstrip(".") if diff is not None else None
-        _said(f"the {name} part's contract is unchanged" if summary is None else f"the {name} part's contract: {summary}, as `uv run basis review` shows")
+        _said(f"the {name} part's contract is unchanged" if diff is None else f"the {name} part's contract: {_summary(diff)}, as `uv run basis review` shows")
     return found, broken, None
+
+
+def _summary(diff: str) -> str:
+    """A contract diff's summary, its first line: without a Markdown heading's or a list item's mark, or a full stop,
+    and `changed` where the line holds nothing else."""
+    first = re.sub(r"^(?:#+|>|[-*+]|[0-9]+[.)])\s+", "", diff.partition("\n")[0].strip()).strip().rstrip(".").strip()
+    return first or "changed"
 
 
 def _skipped(piece: str, why: str) -> None:

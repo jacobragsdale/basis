@@ -35,6 +35,7 @@ the repo match, which `basis sync` does. Both take every part the repo has at on
 writes may be another's."""
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -101,6 +102,8 @@ _UNREAD = {".git", ".venv", "venv", "node_modules", "__pycache__", ".ruff_cache"
 """Folders whose files basis never writes, so no marker is looked for in them."""
 _BLOCK = re.compile(r"<!-- (?P<name>[\w.-]+):begin \(written by `[\w -]*sync`[^)]*\) -->.*?<!-- (?P=name):end -->(?P<tail>\n*)", re.DOTALL)
 
+log = logging.getLogger(__name__)
+
 type Problem = tuple[str, str]
 """A reason and its fix, which `basis` prints as one `ERROR` line."""
 
@@ -165,6 +168,8 @@ class Plan:
     """Files basis cannot work out what to write in, each with why and the fix."""
     unwritten: list[Path]
     """What basis owns that nothing writes now."""
+    refusals: tuple[Problem, ...] = ()
+    """Each file a part would make that basis refuses to write, with why: a path no part may make."""
 
     def stale(self) -> list[Path]:
         """Each file that does not hold what basis writes, or a hook git would skip, and each that nothing writes."""
@@ -173,7 +178,7 @@ class Plan:
     def problems(self) -> list[Problem]:
         """What stops basis writing some of its files: one line for the files of the repo's own, and one for each it
         cannot read, once however many files it stops."""
-        return list(dict.fromkeys([*self.unreadable.values(), *_unclaimed(self.repo, list(self.unclaimed))]))
+        return list(dict.fromkeys([*self.refusals, *self.unreadable.values(), *_unclaimed(self.repo, list(self.unclaimed))]))
 
 
 @dataclass(frozen=True)
@@ -189,9 +194,11 @@ class Synced:
     """Each file of the repo's own left alone, since `write` was not told to adopt it."""
     unwritable: dict[Path, Problem] = field(default_factory=dict[Path, Problem])
     """Each file left alone because basis cannot read it, or cannot keep what it holds now."""
+    refusals: tuple[Problem, ...] = ()
+    """Each file a part would make that basis refuses to write: `Plan.refusals`."""
 
     def problems(self) -> list[Problem]:
-        return list(dict.fromkeys([*self.unwritable.values(), *_unclaimed(self.repo, self.refused)]))
+        return list(dict.fromkeys([*self.refusals, *self.unwritable.values(), *_unclaimed(self.repo, self.refused)]))
 
 
 def core() -> AgentFiles:
@@ -219,18 +226,25 @@ def plan(repo: Path, parts: Sequence[AgentFiles]) -> Plan:
         for name, text in files.skills.items():
             for path in (repo / folder / name / "SKILL.md" for folder in (SKILLS, CLAUDE_SKILLS)):
                 made[path] = lambda path=path, part=files.part, name=name, text=text: (_skill(part, name, text), _carries_marker(path))
-    from_code, unreadable = _from_code(repo, parts, set(made))
+    from_code, refused = _from_code(repo, parts, set(made))
     made.update(from_code)
     written: dict[Path, str] = {}
     unclaimed: dict[Path, str] = {}
+    unreadable: dict[Path, Problem] = {}
     for path, make in made.items():
         try:
             text, claimed = make()
         except SyncError as error:
             unreadable[path] = error.problem
             continue
+        except Exception as error:  # a defect of whatever makes the file: its line, after its traceback, and every other file is still made
+            name = path.relative_to(repo).as_posix()
+            log.exception("could not make %s", name)
+            unreadable[path] = (f"{name} could not be made, {type(error).__name__}: {' '.join(str(error).split())}", "a defect; the log record above holds its traceback")
+            continue
         (written if claimed or not path.exists() else unclaimed)[path] = text
-    return Plan(repo, written, unclaimed, unreadable, _unwritten(repo, parts, set(made) | set(unreadable)))
+    kept = set(made) | {path for path, _ in refused}  # a file there that basis refuses to write is still not removed
+    return Plan(repo, written, unclaimed, unreadable, _unwritten(repo, parts, kept), tuple(problem for _, problem in refused))
 
 
 def stale(repo: Path, parts: Sequence[AgentFiles]) -> list[Path]:
@@ -244,7 +258,7 @@ def write(repo: Path, parts: Sequence[AgentFiles], *, adopt: bool = False) -> Sy
     """Rewrite each file that does not hold what basis and the parts write, remove each that none of them writes, and
     with `adopt`, replace each file of the repo's own after saving it as `NAME.before-basis`."""
     found = plan(repo, parts)
-    done = Synced(repo, unwritable=dict(found.unreadable))
+    done = Synced(repo, unwritable=dict(found.unreadable), refusals=found.refusals)
     for path, text in found.files.items():
         if not _holds(repo, path, text):
             _put(repo, path, text)
@@ -327,27 +341,28 @@ def _skill(part: str, name: str, text: str) -> str:
         raise SyncError(reason, f"a defect in {part}: install it from a basis release, with `uv sync --reinstall`") from error
 
 
-def _from_code(repo: Path, parts: Sequence[AgentFiles], taken: set[Path]) -> tuple[dict[Path, Callable[[], tuple[str, bool]]], dict[Path, Problem]]:
-    """What each part makes from the repo's code, by its path in `repo`, and why no part may make each of the rest: a
+def _from_code(repo: Path, parts: Sequence[AgentFiles], taken: set[Path]) -> tuple[dict[Path, Callable[[], tuple[str, bool]]], list[tuple[Path, Problem]]]:
+    """What each part makes from the repo's code, by its path in `repo`, and each file no part may make, with why: a
     path outside the repo or in a folder basis never reads, one basis writes itself, which `taken` holds, or one that
-    two parts make. Paths are compared ignoring case, as Windows and macOS compare them."""
+    two parts make. Paths are compared ignoring case, as Windows and macOS compare them. A file refused for two reasons
+    is two problems."""
     makers: dict[str, list[tuple[str, str, Callable[[], str]]]] = defaultdict(list)
-    refused: dict[Path, Problem] = {}
+    refused: list[tuple[Path, Problem]] = []
     own = {path.relative_to(repo).as_posix().casefold() for path in taken}
     for files in parts:
         for given, make in files.made.items():
-            relative, wrong = _relative(given)
+            relative, wrong = _relative(repo, given)
             if wrong is not None:
-                refused[repo / given] = (f"the {files.part} part makes {given!r}, {wrong}", _DEFECT)
+                refused.append((repo / given, (f"the {files.part} part makes {given!r}, {wrong}", _DEFECT)))
             elif relative.casefold() in own:
-                refused[repo / relative] = (f"the {files.part} part makes {relative}, which basis writes itself", _DEFECT)
+                refused.append((repo / relative, (f"the {files.part} part makes {relative}, which basis writes itself", _DEFECT)))
             else:
                 makers[relative.casefold()].append((relative, files.part, make))
     making: dict[Path, Callable[[], tuple[str, bool]]] = {}
     for found in makers.values():
         relative = found[0][0]
         if len(found) > 1:
-            refused[repo / relative] = (f"the {' and '.join(part for _, part, _ in found)} parts each make {relative}", _DEFECT)
+            refused.append((repo / relative, (f"the {' and '.join(part for _, part, _ in found)} parts each make {relative}", _DEFECT)))
         else:
             making[repo / relative] = _making(repo / relative, found[0][1], found[0][2])
     return making, refused
@@ -356,15 +371,18 @@ def _from_code(repo: Path, parts: Sequence[AgentFiles], taken: set[Path]) -> tup
 _DEFECT = "a defect in basis: install every basis package from one release, with `uv sync --reinstall`"
 
 
-def _relative(given: str) -> tuple[str, str | None]:
-    """`given` as the `/`-separated path relative to the repo that it names, or why no part may make it."""
+def _relative(repo: Path, given: str) -> tuple[str, str | None]:
+    """`given` as the `/`-separated path relative to `repo` that it names, or why no part may make it."""
     posix = PurePosixPath(given)
     if not posix.parts or "\\" in given or posix.is_absolute() or PureWindowsPath(given).drive:
         return given, "which is not a file's path relative to the repo"
     if ".." in posix.parts:
         return given, "which leads out of the repo"
-    if any(part in _UNREAD for part in posix.parts[:-1]):
-        return given, "which is in a folder basis never writes in"
+    folder = repo
+    for name in posix.parts[:-1]:
+        if _unread(folder, name):
+            return given, "which is in a folder basis never writes in"
+        folder /= name
     return posix.as_posix(), None
 
 
@@ -383,11 +401,23 @@ def _making(path: Path, part: str, make: Callable[[], str]) -> Callable[[], tupl
 
 
 def _unwritten(repo: Path, parts: Sequence[AgentFiles], wanted: set[Path]) -> list[Path]:
-    """What basis owns in `repo` that neither it nor any of `parts` writes now: none of `wanted`. A skill is its
-    folder."""
+    """What basis owns in `repo` that neither it nor any of `parts` writes now: none of `wanted`, nor a file the
+    filesystem holds as one of them, as a case-insensitive one holds `OpenAPI.json` as `openapi.json`. A skill is its
+    folder. A part's `retired` path is removed only where it holds nothing basis writes now."""
+    folded: dict[str, list[Path]] = defaultdict(list)
+    for path in wanted:
+        folded[str(path).casefold()].append(path)
+
+    def kept(path: Path) -> bool:
+        return path in wanted or any(other.exists() and path.exists() and path.samefile(other) for other in folded.get(str(path).casefold(), []))
+
+    def holds_wanted(path: Path) -> bool:
+        prefix = str(path).casefold() + os.sep
+        return kept(path) or any(key.startswith(prefix) for key in folded)
+
     skills = {repo / SKILLS, repo / CLAUDE_SKILLS}
-    found = {path.parent if path.name == "SKILL.md" and path.parent.parent in skills else path for path in _marked(repo) if path not in wanted}
-    found |= {repo / path for files in parts for path in files.retired if (repo / path).exists()}
+    found = {path.parent if path.name == "SKILL.md" and path.parent.parent in skills else path for path in _marked(repo) if not kept(path)}
+    found |= {repo / path for files in parts for path in files.retired if (repo / path).exists() and not holds_wanted(repo / path)}
     return sorted(found)
 
 
@@ -492,8 +522,14 @@ def _agents(current: str, parts: Sequence[AgentFiles]) -> str:
 def _marked(repo: Path) -> Iterator[Path]:
     """Each file in `repo` whose first lines carry `MARKER`, outside the folders basis never writes in."""
     for folder, names, files in os.walk(repo):
-        names[:] = sorted(name for name in names if name not in _UNREAD and not (Path(folder) / name / "pyvenv.cfg").exists())
+        names[:] = sorted(name for name in names if not _unread(Path(folder), name))
         for name in sorted(files):
             path = Path(folder) / name
             if path.exists() and _carries_marker(path):
                 yield path
+
+
+def _unread(folder: Path, name: str) -> bool:
+    """Whether the folder `name` in `folder` is one basis never writes in, nor looks for its marker in: one of `_UNREAD`,
+    or a virtual environment, whatever its name."""
+    return name in _UNREAD or (folder / name / "pyvenv.cfg").exists()

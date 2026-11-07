@@ -259,9 +259,10 @@ class Part:
     machine has its settings file, such as each job's, published to QA's tables."""
     contract: Callable[[Path], str | None] | None = None
     """How the contract the part's code offers others, such as an API's `openapi.json`, differs from the last
-    release's, as Markdown whose first line says so in a sentence, which `basis check --full` prints, or None when it
-    does not; called on the repo `basis check --full` checks, and printed by `basis review`. A change the contract's
-    users cannot take raises a `BasisError` that names it, which fails the check. A job offers none."""
+    release's, as Markdown, or None when it does not; called on the repo `basis check --full` checks, and printed by
+    `basis review`. Its first line is one plain sentence that sums it up, which `basis check --full` prints: a
+    heading's or a list item's mark before it is dropped, and a blank line prints as `changed`. A change the
+    contract's users cannot take raises a `BasisError` that names it, which fails the check. A job offers none."""
 
 
 _held: ContextVar[list[str] | None] = ContextVar("basis.core.verbs.held", default=None)
@@ -295,21 +296,40 @@ def holding() -> Generator[list[str]]:
         _held.reset(token)
 
 
-def table(repo: Path, part: str) -> Mapping[str, object]:
-    """The repo's own table for the part `part`, `[tool.basis.PART]` of its `pyproject.toml`, as TOML reads it, or empty
-    when it gives none: the part checks each key."""
-    pyproject = repo / "pyproject.toml"
+class ProjectError(BasisError, ValueError):
+    """A repo's `pyproject.toml` that basis cannot read its `[tool.basis]` from."""
+
+
+def basis_table(pyproject: Path) -> dict[str, object] | None:
+    """`pyproject`'s `[tool.basis]`, as TOML reads it, or None when it has none: the one place basis reads it, for
+    `basis` itself and for each part's `table`."""
     try:
         data: object = tomllib.loads(pyproject.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as error:
         msg = f"{pyproject} is not TOML: {error}: fix it"
-        raise BasisError(msg) from error
-    found: object = data
-    for key in ("tool", "basis", part):
-        found = found.get(key) if isinstance(found, dict) else None
+        raise ProjectError(msg) from error
+    return _mapping(_mapping(data, "tool"), "basis")
+
+
+def not_a_table(pyproject: Path, part: str) -> str:
+    """Why `[tool.basis] PART`, when it is not a table, is refused, and the fix."""
+    return f"{pyproject}'s [tool.basis] {part} is not a table: give the {part} part's own as [tool.basis.{part}], or remove it"
+
+
+def table(repo: Path, part: str) -> Mapping[str, object]:
+    """The repo's own table for the part `part`, `[tool.basis.PART]` of its `pyproject.toml`, as TOML reads it, or empty
+    when it gives none: the part checks each key."""
+    pyproject = repo / "pyproject.toml"
+    found = (basis_table(pyproject) or {}).get(part)
     if found is None:
         return {}
     if not isinstance(found, dict):
-        msg = f"{pyproject}'s [tool.basis] {part} is not a table: give the {part} part's own as [tool.basis.{part}], or remove it"
-        raise BasisError(msg)
+        raise ProjectError(not_a_table(pyproject, part))
     return {str(key): value for key, value in found.items()}
+
+
+def _mapping(value: object, key: str) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    found = {str(name): entry for name, entry in value.items()}.get(key)
+    return {str(name): entry for name, entry in found.items()} if isinstance(found, dict) else None

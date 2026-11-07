@@ -382,3 +382,58 @@ def test_a_file_a_part_makes_carries_the_marker(tmp_path: Path) -> None:
     assert found.problems() == [
         ("the basis-api part made openapi.json without basis's marker in its first lines", "a defect in basis: install every basis package from one release, with `uv sync --reinstall`")
     ]
+
+
+def test_a_file_whose_maker_raises_anything_is_one_problem_after_its_traceback(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    def fails() -> str:
+        msg = "No module named 'accruals.service'"
+        raise ImportError(msg)
+
+    broken = AgentFiles("basis-api", "the api block\n", {}, made={"openapi.json": fails})
+    found = plan(tmp_path, [FILES, broken])
+    assert found.problems() == [("openapi.json could not be made, ImportError: No module named 'accruals.service'", "a defect; the log record above holds its traceback")]
+    [record] = [record for record in caplog.records if record.getMessage() == "could not make openapi.json"]
+    assert isinstance(record.exc_info, tuple)
+    assert isinstance(record.exc_info[1], ImportError)
+    write(tmp_path, [FILES, broken])
+    assert (tmp_path / "Dockerfile").exists()
+    assert not (tmp_path / "openapi.json").exists()
+
+
+def test_a_path_a_part_retires_and_another_makes_is_made_and_never_removed(tmp_path: Path) -> None:
+    retiring = AgentFiles("basis-job", "the job block\n", {}, retired=("openapi.json", "api"))
+    making = AgentFiles("basis-api", "the api block\n", {}, made={"openapi.json": lambda: DOCUMENT, "api/openapi.json": lambda: DOCUMENT})
+    write(tmp_path, [retiring, making])
+    assert (tmp_path / "openapi.json").read_text(encoding="utf-8") == DOCUMENT
+    assert (tmp_path / "api" / "openapi.json").read_text(encoding="utf-8") == DOCUMENT
+    assert stale(tmp_path, [retiring, making]) == []
+
+
+def test_a_file_the_filesystem_holds_under_another_case_is_the_one_a_part_makes(tmp_path: Path) -> None:
+    write(tmp_path, [FILES, made(path="OpenAPI.json")])
+    old = tmp_path / "OpenAPI.json"
+    os.link(old, tmp_path / "openapi.json")  # one file under both names, as a case-insensitive filesystem holds it
+    assert old not in stale(tmp_path, [FILES, made()])
+    write(tmp_path, [FILES, made()])
+    assert (tmp_path / "openapi.json").read_text(encoding="utf-8") == DOCUMENT
+
+
+def test_a_file_under_an_old_case_that_is_another_file_is_removed(tmp_path: Path) -> None:
+    write(tmp_path, [FILES, made(path="OpenAPI.json")])
+    write(tmp_path, [FILES, made()])  # on a case-sensitive filesystem, a second file
+    names = sorted(path.name for path in tmp_path.iterdir() if path.name.casefold() == "openapi.json")
+    assert names == ["openapi.json"]
+
+
+def test_a_part_makes_no_file_in_a_virtual_environment_whatever_its_name(tmp_path: Path) -> None:
+    put(tmp_path, "env/pyvenv.cfg", "home = /usr/bin\n")
+    found = plan(tmp_path, [FILES, made(path="env/openapi.json")])
+    assert found.problems() == [
+        ("the basis-api part makes 'env/openapi.json', which is in a folder basis never writes in", "a defect in basis: install every basis package from one release, with `uv sync --reinstall`")
+    ]
+
+
+def test_each_refusal_of_one_path_is_its_own_problem(tmp_path: Path) -> None:
+    found = plan(tmp_path, [FILES, made(path="AGENTS.md"), made(path="AGENTS.md", part="basis-job")])
+    assert [reason for reason, _ in found.problems()] == ["the basis-api part makes AGENTS.md, which basis writes itself", "the basis-job part makes AGENTS.md, which basis writes itself"]
+    assert [reason for reason, _ in write(tmp_path, [FILES, made(path="AGENTS.md"), made(path="AGENTS.md", part="basis-job")]).problems()] == [reason for reason, _ in found.problems()]
