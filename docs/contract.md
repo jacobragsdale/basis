@@ -110,9 +110,23 @@ The errors basis answers itself, besides each API's own:
 | `sign-in-required` | 401 | A route that needs a user has an anonymous request | `WWW-Authenticate: Bearer` |
 | `invalid-token` | 401 | The bearer token does not verify, or has expired | `WWW-Authenticate: Bearer error="invalid_token"` |
 | `keys-unavailable` | 503 | The sign-in system's keys cannot be fetched, for a token whose key the API does not hold; a UI retries, and does not sign the user out | |
-| `deadline-exceeded` | 504 | A call the route made took longer than its deadline | |
-| `call-failed` | 502 | Another service the route called failed | |
+| `service-timeout` | 504 | A call the route made, to another service, a database, a cache or a compute function, took longer than its deadline, or another service answered 504 | |
+| `service-unavailable` | 503 | A service or a database the route called could not be reached or lost the connection, or another service answered 502, 503 or 429; a UI may retry | |
+| `service-not-found` | 502 | Another service answered 404 | |
+| `service-conflict` | 502 | Another service answered 409, or a database refused a statement for a unique key, or chose it as a deadlock's victim | |
+| `service-rejected` | 502 | Another service answered 400 or 422, or a database refused a statement for another constraint | |
+| `service-denied` | 502 | Another service answered 401 or 403, or a database refused the API's login or a permission | |
+| `service-bad-reply` | 502 | Another service answered with a body that is not the reply the API declares for the call | |
+| `service-failed` | 502 | Another service answered 500 or any other status that is not a 2xx, or a database failed the statement | |
 | `about:blank` | 404, 405, 500 | No route, the wrong method, or an error the API did not expect, whose problem says nothing more | |
+
+A `service-` problem is a failure of something the route called that its handler did not handle, one of basis's kinds
+of service error ([the design](design.md#what-jobs-and-apis-share)); a handler that has something to say about one, as
+the example's `dirty_price` says `unpriced` when the pricing service has no price, answers its own error instead. Its
+`detail` names what was called, as `pricing answered 503 to GET /prices/US0001`, and never holds what a database's
+driver said. An operation lists the kinds that what its route asks for can raise: every kind for another service, all
+but `service-not-found` and `service-bad-reply` for a database, and `service-timeout` for a cache or a compute
+function.
 
 Each operation lists, under each status, the type and title of every error it may answer, in its description.
 
