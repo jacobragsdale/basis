@@ -7,7 +7,7 @@ another service's client, the clock, ids, each call's deadline and span, tracing
 raises are basis-core's, which jobs share (`basis.core.resources`, `opened`, `fakes`, `deadlines`, `traces` and
 `errors`), and this package builds on them.
 [The design](../../docs/design.md#apis-basisapi) holds the decisions, and [the roadmap](../../docs/roadmap.md#phase-2-apis)
-the steps still to come: contract tests (2.6) and `basis-api new app` (2.7). What a UI can rely on, field by field,
+the steps still to come: `basis-api new app` (2.7) and `basis smoke` (2.10). What a UI can rely on, field by field,
 is [the contract page](../../docs/contract.md).
 
 ## Where things are
@@ -26,7 +26,7 @@ Paths are under `src/basis/api/`.
 | `relay.py` | `basis relay`: one run over a service's outboxes, which claims each due row, makes its call and records it, and reports each refused one, each statement with a span and a deadline, a failure stopping only its row; it fails, naming each call refused or expired, and each row a failure stopped. |
 | `deadlines.py` | A route's deadline, basis-core's deadline around a block's calls (`basis.core.deadlines`, of kind `route`), which caps each call its request makes, basis-core's client's included: `limit`, how long one call may take, and whose deadline sets it, and `exceeded`, its 504. |
 | `pool.py` | The process pool, spawned at startup: each compute call's deadline, span and log fields, and the in-process runs of `fakes.Compute`. |
-| `routes.py` | Each route as the app serves it: its deadline, its request read strictly before FastAPI's handler, its undeclared errors refused, a dataset's Arrow when the request asks for it, and `add`, which adds the routes to an app with each operation's id its handler's name and its errors under their statuses. |
+| `routes.py` | Each route as the app serves it: its deadline, its request read strictly before FastAPI's handler, a domain exception answered as the most specific meaning the route declares, its undeclared errors refused, a dataset's Arrow when the request asks for it, and `add`, which adds the routes to an app with each operation's id its handler's name and its errors under their statuses. |
 | `openapi.py` | The OpenAPI document, as the app serves it and a repo commits it: `Application`, whose `openapi()` `finish`es FastAPI's (problem media types, strict models, a request's decimals as strings of their digits); `document` and `text`, made without settings; `operations`, `mapping` and `array`, which `contract.py` reads documents by too. Its docstring is the reference. |
 | `decimals.py` | A request's decimal as the document gives it: its pattern from its digits and places, and its bounds in `x-basis-decimal`, from the types the routes read. Its docstring is the reference. |
 | `contract.py` | The breaking-change check, basis-api's `Part.contract`: `openapi.json` against the one at the last release the repo's `[tool.basis.api] releases` glob matches, and what breaks a UI on each side. Its docstring is the reference. |
@@ -36,15 +36,17 @@ Paths are under `src/basis/api/`.
 | `settings.py` | `Settings`, basis-core's, which holds `http`, `traces` and `git_sha` too, with `serve`, `compute`, `identity` and `allowed_origins`; `Settings.given`, settings from arguments alone, for tests; `read`, which names each variable to set, and refuses the development key off a declared desktop. |
 | `identity.py` | Who makes a request: `User`, which a service subclasses with the claims it needs; `SignInRequiredError` and the other identity errors; the `Identity` settings and their keys (`Jwks`, `PublicKey`, `Development`); `Machine`, how a desktop is declared, and the development key's refusal. Its docstring is the reference. |
 | `tokens.py` | Verifying bearer tokens with PyJWT: `plan`, the checks at build; `Verifier` and `KeySet`, the JWK set's fetches and cache; `Bearer`, the middleware inside the request boundary; `DEVELOPMENT_KEY` and `sign`, for tests and `basis dev`. |
-| `errors.py` | `Error`, which a service subclasses with a status and a title, or with `abstract=True` as a base for others; `DeclarationError`, a service that does not declare what basis needs; each kind of basis-core's `ServiceError` as its problem (`described`); `Problem`, and `ValidationProblem`, every 422's, whose `errors` are `PointerError`s and `ParameterError`s; `pointer`; `problem`, the one exception map. |
+| `errors.py` | `Error`, which a service subclasses with a status and a title, or with `abstract=True` as a base for others; `error`, the HTTP meaning of a domain's plain exception, a `DomainError` a route declares; `DeclarationError`, a service that does not declare what basis needs; each kind of basis-core's `ServiceError` as its problem (`described`); `Problem`, and `ValidationProblem`, every 422's, whose `errors` are `PointerError`s and `ParameterError`s; `pointer`; `problem`, the one exception map. |
 | `app.py` | `build`: the app, its own tracer provider (`basis.core.traces`), which FastAPI's telemetry makes server spans with, and the exporter the settings name, its lifespan, which opens and closes the resources, its exception handlers, its health endpoints and the `Lifecycle` readiness reports. |
 | `requests.py` | The request boundary: the request id in its log fields, beside the trace's and span's ids basis-core's logs add, `X-Request-Id` and `traceparent` out, one log line per request, and the 500 for an exception nothing expected. |
 | `server.py` | `serve`: uvicorn, with JSON logs through basis-core, a drain on SIGTERM before the graceful shutdown, and a second signal that stops at once; on the service's fakes and 127.0.0.1 alone for `basis dev`. |
-| `cli.py` | `part`, which the `basis.verbs` entry point named `api` gives the `basis` command: `basis serve [SERVICE]`, `basis dev [SERVICE]`, `basis call ROUTE [REQUEST] --fake\|--real` and `basis relay [SERVICE]`, each relay run one trace, its side of core's `basis ddl [SERVICE] --dialect DIALECT`, the files below, and the contract. |
+| `cli.py` | `part`, which the `basis.verbs` entry point named `api` gives the `basis` command: `basis serve [SERVICE]`, `basis dev [SERVICE]`, `basis call ROUTE [REQUEST] --fake\|--real` and `basis relay [SERVICE]`, each relay run one trace, its side of core's `basis ddl [SERVICE] --dialect DIALECT`, the files below, the contract, and its checks of the repo's code. |
+| `layers.py` | An API's layers, which `basis check` holds with grimp: imports go down service, handlers, repository, the declarations and domain; a domain module stays pure; and a handler never calls a method of what `api.given` gives it. Its docstring is the reference. |
+| `fuzz.py` | The app on its fakes, in `basis check`: built from its settings' defaults, and sent Schemathesis's requests from its own document, through `from_asgi`, each failure the `basis call` that makes its request again. Its docstring is the reference. |
 | `call.py` | `basis call`: one request to one route, in this process, through FastAPI's `TestClient`, its response printed as JSON. |
 | `dev.py` | The fakes a service declares with `Service(fakes="module:function")`, for `basis dev` and `basis call --fake`, checked to fake every database and other service. |
 | `sync.py`, `templates/agents.md` | What `basis sync` writes for an API: its block of `AGENTS.md`, its Dockerfile line, the image's `serve` and `relay` commands, and the repo's `openapi.json`, made from its one service, a failure to make it one `ERROR` line. |
-| `example/` | The example service, accrued interest on a bond, which reads and writes a database, calls a pricing service, uses a cache, the clock and ids, solves for a yield in its process pool (`compute.py`), answers a dataset, a bond's coupons, and books each settlement with a ledger service through the warehouse's outbox, with its fakes for `basis dev` (`dev.py`) and its tests on fakes. Its `openapi.json` is the sample basis-ui pins; `python -m basis.api.example` writes it, and its tests check it is current and keeps its contract with the last `v*` release. |
+| `example/` | The example service, accrued interest on a bond, in its layers (`service.py`, `handlers.py`, `repository.py`, `domain.py`, `resources.py` and `errors.py`), which reads and writes a database, calls a pricing service, uses a cache, the clock and ids, solves for a yield in its process pool (`compute.py`), answers a dataset, a bond's coupons, and books each settlement with a ledger service through the warehouse's outbox, with its fakes for `basis dev` (`dev.py`), and its tests by layer: the domain's on values, the handlers' on fakes, and the repository's in the integration tier. Its `openapi.json` is the sample basis-ui pins; `python -m basis.api.example` writes it, and its tests check it is current and keeps its contract with the last `v*` release. The package's `tests/test_gates.py` makes a repo of a copy of it, which passes every gate `basis check` holds, and of a copy that breaks each rule. |
 
 ## Rules to keep
 
@@ -54,11 +56,18 @@ Paths are under `src/basis/api/`.
 - A compute module imports no part of basis, no driver, client, server or settings, which its contract enforces; a
   repo's compute modules are those named `compute`, as `api.compute` requires. Its functions take values and return
   one, across the pool's processes by pickling.
+- An API's code keeps its layers, which `basis check` holds in every API repo (`layers.py`), and the example's keeps
+  them too, which the package's `tests/test_gates.py` checks; a domain module imports nothing of basis, and gives an exception's
+  HTTP meaning to `errors.py`, as `api.error(domain.Matured, status=..., title=...)`, never an `api.Error`.
+- `basis check` builds the app on its fakes and sends it Schemathesis's requests (`fuzz.py`) in its own process,
+  with no network, writing nothing to the repo and logging nothing while it does, and the same requests on every run
+  of `basis check`, so it is never flaky; Schemathesis is a repo's development dependency, and basis-api imports it only there.
 - Every route declares `deadline_s`, `response` (its handler's return annotation) and `errors`, with no default for
   any. A route answers only the errors in `Route.answers`: its own, and basis's that it can meet, which `service._met`
   derives from what it asks for: each kind of `api.ServiceError` that one of its resources or compute functions can
-  raise, and `SignInRequiredError` where it asks for the user. Any other `api.Error` or kind, or an `HTTPException`, is
-  a defect, a 500. A new error that basis raises inside a route joins `BASIS_ERRORS` and `_met`.
+  raise, and `SignInRequiredError` where it asks for the user. Any other `api.Error` or kind, a domain exception whose
+  meaning it does not declare, or an `HTTPException`, is a defect, a 500. A new error that basis raises inside a route
+  joins `BASIS_ERRORS` and `_met`.
 - A request is read strictly before FastAPI sees it (`strict.py`): a key nothing declares is refused, a body's values
   have their own JSON types, a decimal is a string, a time has its offset, and query and path text reads by its type's
   grammar. A type basis cannot read strictly is refused when the route is declared, and so is a request model that

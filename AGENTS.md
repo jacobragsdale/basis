@@ -79,7 +79,8 @@ holds the interface, and its docstring is the reference.
   use, `files` (`sync`, `check`; read only when used), `docs` (`docs`), `new` (`new KIND NAME`), `runs` (`run`,
   `describe`, `resume`, `replay`, `regress` and `ddl`, which every part that runs things by name has, and
   `regressions`, for `check --full`), `qa` (the QA tier), `contract` (`check --full` and `review`, such as basis-api's breaking-change check of
-  `openapi.json`), and `renamed`, which refuses the
+  `openapi.json`), `checks` (`check`: the part's own checks of the repo's code, each problem one `ERROR` line, such as
+  basis-api's layers and its app on its fakes), and `renamed`, which refuses the
   variables an earlier version of the part read, before any verb runs, as `basis` refuses `ETL_*`.
 - A repo declares its parts in its `pyproject.toml`, as `[tool.basis] parts = ["job"]`, and basis never infers one
   from a folder. `basis` loads only those parts, and `basis --help` lists their verbs and each core verb one of them
@@ -121,10 +122,16 @@ holds the interface, and its docstring is the reference.
   the fix, when the clone runs other hooks or is no clone. The hooks are POSIX sh, which Git for Windows runs too. The
   commit hook ends with `basis check --staged`, whose checks of the staged files are `basis.core.hygiene`'s; the push
   hook checks each pushed commit, in a temporary worktree inside the git folder when it is not a clean HEAD.
+- `basis check` (`basis.core.check`) holds every repo's tests to the gates (`basis.core.gates`): the coverage floor
+  `[tool.basis] coverage` gives, which pytest-cov measures as basis configures it, repository modules left out; no
+  `unittest.mock` or pytest-mock but in a file with a line `# basis: allow-mocks -- WHY`; and no socket in a unit test,
+  which basis-core's pytest plugin (`basis.core.pytest_plugin`, `pytest11`'s `basis`) fails, and tells the check of.
+  This workspace's own session leaves the plugin out (`-p no:basis`), since its tests serve and reach real servers.
 - `basis check --full` (`basis.core.full`), which the push hook and the pipeline run, adds `regress` from the process's
   `BASIS_SNAPSHOT_ROOT` where it is reachable, the QA tier where the repo declares `[tool.basis.qa]` and the machine has
-  its settings file, and each part's `contract`; a piece that does not run prints one `SKIPPED:` line. An output
-  `regress` sees change fails nothing. It records what it found for `basis review` in the git folder the clone's
+  its settings file, each part's `contract`, and mutation testing of the domain functions the change touches, in WSL
+  and on Linux (`basis.core.mutation`); a piece that does not run prints one `SKIPPED:` line. An output
+  `regress` sees change fails nothing, and nor does a mutant that survives. It records what it found for `basis review` in the git folder the clone's
   worktrees share (`basis/checks/PREFIX/COMMIT.json`), when the repo's folder has nothing uncommitted. The push hook
   checks a commit that is not a clean HEAD in a worktree of its own, with `--settings-from` naming the clone's folder,
   where the untracked QA settings are.

@@ -253,11 +253,20 @@ handlers module too:
 Beside them, two modules declare: `resources.py` the resources and settings, and `errors.py` the errors. `basis check`
 holds the layers with grimp, which core already uses, and no configuration file to keep: imports go down the table
 only; a domain module stays pure, as a compute module is today; and a handler passes a resource on and never calls its
-methods itself, so the SQL stays in repositories. Every API repo then has the same shape, and the checks keep it.
+methods itself, so the SQL stays in repositories. Every API repo then has the same shape, and the checks keep it. The
+declarations sit between the repository and the domain: every layer imports them, and they import only domain modules,
+as `errors.py` imports the exceptions it gives a meaning and `resources.py` a cache's domain type. An import counts
+directly or through a module of the repo's that is no layer, such as a helper. Pure means what it means for a compute
+module: nothing of basis, no web framework, server or settings, no database driver, HTTP client or storage, and none of
+the standard library's sockets, processes or databases. A handler's parameter that `api.given` gives may be passed as
+an argument, read, or called itself, as a compute function is, but no method of it is called; the check reads the
+handler's code, each failure one `ERROR` line with its fix.
 
 A domain's errors are plain Python exceptions, defined in its domain module, because the same domain code runs in jobs,
 which have no HTTP. The API gives each its HTTP meaning once, in `errors.py`, as
-`MATURED = api.error(domain.Matured, status=422, title="The bond has matured")`, and its routes list those.
+`MATURED = api.error(domain.Matured, status=422, title="The bond has matured")`, and its routes list those. A route answers
+the most specific meaning it declares for the exception's class, its problem's type the exception's name in kebab case
+and its detail the exception's message; a domain exception a route does not declare is a 500, as any other is.
 
 Request bodies and settings are strict models: an unknown key is refused and no value is coerced, so a misspelled field
 fails at the boundary instead of being silently ignored. A number in a request body is a JSON number, as it is in a
@@ -325,7 +334,12 @@ read the store. How long records are kept is out of scope for this design.
 The contract tests check that the app builds on fakes, that every route declares what it must, that `openapi.json`
 matches the code and that a breaking change to it is flagged, that the API survives property-based requests generated
 from its own schema (Schemathesis, run on fakes), that the layers hold, and that the agent files match the installed
-version.
+version. `basis check` builds the app on the fakes its service declares, from its settings' defaults alone, never the
+environment, and on the development key where it verifies tokens; Schemathesis then sends it, in the same process
+through `from_asgi`, 50 requests its document allows and 50 it refuses for each operation, the same on every run, so
+none is flaky. A 500, a status, content type or body the document does not list, or a refused request it accepts
+fails the check, with the `basis call` that makes the request again. Schemathesis is each API repo's development
+dependency, never basis-api's, so no image holds it.
 
 ## Jobs: basis.job
 
@@ -580,16 +594,30 @@ it. From phase 5, that file is the user's `qa.env`, which every repo shares, and
 `basis check` holds every generated repo's tests to the same gates:
 
 - **Coverage.** Unit tests must cover a floor of the branches, `[tool.basis] coverage = 90` in the repo's
-  `pyproject.toml`. Generators write 90, and a repo may change it, where its diff shows it. The floor counts unit tests
-  alone, and leaves out repository modules, which the integration tests cover. It is not 100%: Google calls 90%
-  exemplary, and finds that chasing 100% has diminishing returns.
+  `pyproject.toml`. Generators write 90, and a repo may change it, where its diff shows it; a repo without it fails
+  `basis check`, with that fix. The floor counts unit tests alone, and leaves out repository modules, which the
+  integration tests cover. It is not 100%: Google calls 90% exemplary, and finds that chasing 100% has diminishing
+  returns. pytest-cov, a development dependency of every generated repo, measures it as basis configures it, never
+  the repo's own `[tool.coverage]`: coverage.py's branch measure of every module under the repo's folder, one no test
+  imports among them, but tests and repository modules, leaving out no line but `if TYPE_CHECKING:`, a script's
+  `if __name__ == "__main__":` and what `# pragma: no cover` marks, its data in a temporary folder.
 - **No mocks.** `unittest.mock` and pytest-mock are refused in a repo's tests, and fakes are the only test double. A
-  file may opt out with a one-line comment that gives its reason.
-- **No network.** Unit tests cannot open sockets, so none can go flaky by reaching QA.
+  file may opt out with a one-line comment that gives its reason, `# basis: allow-mocks -- WHY`; one that gives no
+  reason is refused.
+- **No network.** Unit tests cannot open sockets, so none can go flaky by reaching QA. basis-core's pytest plugin,
+  which every repo's pytest loads, fails a test not marked `integration` that connects, binds or sends on an IPv4 or
+  IPv6 socket, from any thread, whatever the code does with the error. The socket pair an event loop makes to wake
+  itself, which Windows makes over 127.0.0.1, and Unix sockets stay open, and FastAPI's `TestClient`, which calls the
+  app in the process, needs nothing more. A driver that opens its sockets in C, as mssql-python's does, and a DNS
+  lookup are out of its sight.
 - **Mutation testing, as a report.** `basis check --full`, which the push hook runs, runs mutmut on the domain
   functions a change touches, and `basis review` reports what it found. It never blocks, and it runs in WSL or on
   Linux only, since mutmut needs `fork`. Coverage alone cannot tell an agent's empty test from a real one: Meta's ACH
-  found that 49% of the tests that caught mutants added no coverage.
+  found that 49% of the tests that caught mutants added no coverage. The change is what the commit holds against where
+  it branched, the merge base with the remote's default branch, `origin/HEAD`, or else the commit's parent, and every
+  domain function in a first commit; a domain module is one named `domain`, at any depth. mutmut runs from the repo's
+  development dependencies in a copy of its folder, so the repo gains no `mutants/`, and the record lists each mutant
+  that survived with what it changed.
 
 After each deploy, and from a desktop, `basis smoke --env ENV` checks the environment: the served `openapi.json` equals
 the committed one; the API is ready; each route that declares a read-only example, `smoke=`, answers it, and its
@@ -666,6 +694,8 @@ Each fact was checked on 2026-11-06 against the source named, unless it says sec
 | OpenAI's harness-engineering team kept `AGENTS.md` to about 100 lines and enforced its architecture with linters whose messages carry the fix | a third-party copy of OpenAI's post, since openai.com refuses automated fetches |
 | Anthropic measured a six-point spread on Terminal-Bench 2.0 from infrastructure alone, and advises skepticism of differences under three points | anthropic.com/engineering |
 | Every basis environment already holds PyJWT with its crypto extra, through mssql-python, azure-identity and msal (checked 2026-11-07) | `uv tree --invert --package pyjwt` |
+| mutmut 3.8 runs on Python 3.14, forking a process for each mutant, reads its settings from `[tool.mutmut]` and writes `mutants/` in the folder it runs in (checked 2026-11-07) | mutmut's `configuration.py`, and a run on the example |
+| Schemathesis 4.33 calls an ASGI app in its own process through `from_asgi`, starting the app's lifespan and keeping it until the process ends unless it is shut down (checked 2026-11-07) | `schemathesis/python/asgi.py` |
 
 ## Not yet verified
 

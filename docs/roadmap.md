@@ -224,7 +224,8 @@ Lane B. Needs step 1.3. Steps 2.3 and 2.4 run at once, and so do 2.5 and 2.9.
    Needs 2.5, 5.1 and 5.8, and step 2.11 needs it. Done when the example API passes them all, a copy of it that breaks
    any one fails `basis check` with that rule's fix, and `basis review` lists a mutant that survived.
 7. **2.7 New app.** `basis-api new app NAME` writes the API part in its layers (`service.py`, `handlers.py`,
-   `repository.py` and `domain.py`, with `resources.py` and `errors.py`) and `[tool.basis] coverage = 90`, adds jobs
+   `repository.py` and `domain.py`, with `resources.py` and `errors.py`), `[tool.basis] coverage = 90`, and the
+   development dependencies the gates run, pytest-cov, mutmut for Linux and Schemathesis, adds jobs
    through `basis.job`'s generator, and writes `basis.core`'s repo files. Needs 1.7, 2.6 and 5.1. Done when a
    generated repo with an API and a job passes `basis check --full`, and its image serves the API and runs the job.
 8. **2.8 Pilot (work).** Create a pilot API repo with `uvx basis-api new app pilot`, beside basis-ui's pilot UI repo,
