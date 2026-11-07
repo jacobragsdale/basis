@@ -91,10 +91,12 @@ jobs:
         with:
           name: dist
           path: dist
-      - uses: actions/checkout@v5  # scripts/release.py alone, for the feed
+      - uses: actions/checkout@v5  # scripts/release.py and the module it imports alone, for the feed
         with:
           path: source
-          sparse-checkout: scripts/release.py
+          sparse-checkout: |
+            scripts/release.py
+            scripts/shared.py
           sparse-checkout-cone-mode: false
       - uses: astral-sh/setup-uv@v7
         with:
