@@ -31,6 +31,7 @@ session's language to English (`SET LANGUAGE us_english`), so the messages are E
 defaults to."""
 
 import codecs
+import itertools
 import locale
 import logging
 import math
@@ -40,12 +41,16 @@ import time
 from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
+from decimal import Decimal
 
 import mssql_python
-import polars as pl
+import numpy as np
+import pandas as pd
 import pyarrow as pa
+import pyarrow.compute as pc
 from mssql_python.exceptions import sqlstate_to_exception
 
+from basis.core import frames
 from basis.core.databases.base import (
     FETCH_ROWS,
     LEDGER_COLUMNS,
@@ -60,12 +65,13 @@ from basis.core.databases.base import (
     ledger_values,
     lower_cased,
     naive_in_zone,
+    rows_of,
     slices,
     span,
     statement,
 )
 from basis.core.databases.failures import Boundary, ending, quietly
-from basis.core.destination import DestColumn, TableSpec, Unit, utf16_units
+from basis.core.destination import DestColumn, TableSpec, Unit
 from basis.core.errors import Conflict, Denied, Failed, Rejected, ServiceError, Timeout, Unavailable
 from basis.core.interval import Interval
 from basis.core.logs import ms_since
@@ -333,24 +339,24 @@ class MssqlReader:
     connection: Connection
     max_rows: int
 
-    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pl.DataFrame:
+    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pd.DataFrame:
         binds = binds_named(sql, _BIND, interval, what=what)
         with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql) as traced:
             if binds:
                 cursor.execute(sql, binds)
             else:
                 cursor.execute(sql)
-            reader = cursor.arrow_reader(batch_size=10_000)
-            frames: list[pl.DataFrame] = []
+            reader = cursor.arrow_reader(batch_size=FETCH_ROWS)
+            batches: list[pa.RecordBatch] = []
             rows = 0
             for batch in reader:
                 rows += batch.num_rows
                 if rows > self.max_rows:
                     reader.close()
                     raise TooManyRowsError(what, self.max_rows)
-                frames.append(_frame(batch))
+                batches.append(batch)
             traced.set_attribute("db.response.returned_rows", rows)
-            return pl.concat(frames) if frames else _frame(reader.schema.empty_table())
+            return frames.from_arrow(pa.Table.from_batches(batches, schema=reader.schema))
 
     def describe(self, table: str) -> TableSpec | None:
         with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, _DESCRIBE):
@@ -423,36 +429,52 @@ a character it cannot hold with another, as `?`, without an error, so `check_val
 (docs/spikes/sqlserver-json.md)."""
 
 
-def _frame(arrow: object) -> pl.DataFrame:
-    frame = pl.from_arrow(arrow)  # the driver's Arrow objects are untyped; from_arrow checks them
-    if not isinstance(frame, pl.DataFrame):
-        msg = "the driver returned a column, not a table"
-        raise TypeError(msg)
-    return frame
-
-
 INLINE_UNITS = 4_000
 """The longest string, in UTF-16 units, that binds as `nvarchar(n)`. A longer one binds only as `nvarchar(max)`, whose
 value mssql-python 1.17.0 streams: an `executemany` holding one runs each row by itself, and counts only the last."""
 
 
-def _units(target: Target, part: pl.DataFrame) -> pl.DataFrame:
-    """The length of each of `part`'s strings in UTF-16 units, a column for each string column, in one pass."""
-    return part.select(utf16_units(pl.col(name)) for name in part.columns if target.column(name).kind == "str")
+def _units(target: Target, part: pa.Table) -> pd.DataFrame:
+    """The length of each of `part`'s strings in UTF-16 units, a column for each string column, each in one pass."""
+    strings = frames.from_arrow(part.select([name for name in part.column_names if target.column(name).kind == "str"]))
+    return pd.DataFrame({name: frames.utf16_units(strings[name]) for name in strings.columns}, index=strings.index)
 
 
-def _long(units: pl.DataFrame, height: int) -> pl.Series:
-    """Which of the rows `units` measures hold a string longer than `INLINE_UNITS`."""
-    if not units.width:
-        return pl.repeat(False, height, eager=True)  # noqa: FBT003 -- polars' value to repeat, not a flag
-    return units.select(pl.any_horizontal(pl.all() > INLINE_UNITS)).to_series().fill_null(False)  # noqa: FBT003 -- as above
+def _long(units: pd.DataFrame, rows: int) -> np.ndarray:
+    """Which of the rows `units` measures hold a string longer than `INLINE_UNITS`; a null is no string."""
+    found = np.zeros(rows, dtype=bool)
+    for name in units.columns:
+        found |= units[name].fillna(0).to_numpy(dtype=np.int64) > INLINE_UNITS
+    return found
 
 
-def _bound(target: Target, part: pl.DataFrame) -> pl.DataFrame:
+def _runs(long: np.ndarray) -> Iterator[tuple[int, int, bool]]:
+    """Each run of rows alike, long or not, as its first row, the row after its last, and whether its rows are long."""
+    edges = [0, *(np.flatnonzero(long[1:] != long[:-1]) + 1).tolist(), len(long)]
+    for start, end in itertools.pairwise(edges):
+        yield start, end, bool(long[start])
+
+
+def _bound(target: Target, part: pa.Table) -> pa.Table:
     """`part` as it binds: each decimal as its text, which the server converts to the column's type exactly, as the
     driver binds most decimals in a batch itself."""
-    decimals = [name for name in part.columns if target.column(name).kind == "decimal"]
-    return part.with_columns(pl.col(decimals).cast(pl.String)) if decimals else part
+    for index, name in enumerate(part.column_names):
+        if target.column(name).kind == "decimal":
+            part = part.set_column(index, name, _plain(pc.cast(part.column(index), pa.string())))
+    return part
+
+
+def _plain(text: pa.ChunkedArray) -> pa.Array | pa.ChunkedArray:
+    """Decimal text in plain notation: Arrow writes a decimal below 10^-6 with an exponent, as `1E-10`, which SQL Server
+    cannot convert to a decimal; only text with one is rewritten, in Python."""
+    if not pc.call_function("any", [pc.call_function("match_substring", [text], pc.MatchSubstringOptions("E"))]).as_py():
+        return text
+    return pa.array([format(Decimal(value), "f") if value is not None and "E" in value else value for value in text.to_pylist()], pa.string())
+
+
+def _most(units: pd.DataFrame) -> dict[str, int | None]:
+    """The longest string of each column `units` measures, or None for a column of nulls."""
+    return {str(name): None if pd.isna(found := units[name].max()) else int(found) for name in units.columns}
 
 
 def _sizes(target: Target, columns: list[str], longest: Mapping[str, int | None]) -> list[int | tuple[object, ...]]:
@@ -470,7 +492,7 @@ def _text(units: int | None) -> tuple[int, int, int]:
 
 _NVARCHAR = int(mssql_python.SQL_WVARCHAR)
 _BINDS: dict[Kind, tuple[int, int, int]] = {
-    "decimal": (int(mssql_python.SQL_VARCHAR), 41, 0),  # the longest text of 38 digits, SQL Server's and polars' most: `-0.` and 38 places
+    "decimal": (int(mssql_python.SQL_VARCHAR), 41, 0),  # the longest text of 38 digits, SQL Server's and Arrow's decimal128's most: `-0.` and 38 places
     "int": (int(mssql_python.SQL_BIGINT), 19, 0),
     "float": (int(mssql_python.SQL_DOUBLE), 15, 0),
     "bool": (int(mssql_python.SQL_BIT), 1, 0),
@@ -507,13 +529,13 @@ class MssqlWriter(MssqlReader):
         deleted = upserted = inserted_new = inserted = 0
         if changes.delete is not None:
             deleted = self._delete(target, changes.delete)
-        if changes.upsert is not None and changes.upsert.height:
+        if changes.upsert is not None and len(changes.upsert):
             upserted = self._upsert(target, for_writing(target, changes.upsert))
-        if changes.insert_new is not None and changes.insert_new.height:
+        if changes.insert_new is not None and len(changes.insert_new):
             inserted_new = self._insert_new(target, for_writing(target, changes.insert_new))
-        if changes.insert is not None and changes.insert.height:
+        if changes.insert is not None and len(changes.insert):
             inserted = self._insert(target, target.table, for_writing(target, changes.insert))
-            check_count(f"the insert into {target.table}", changes.insert.height, inserted)
+            check_count(f"the insert into {target.table}", len(changes.insert), inserted)
         return Counts(deleted, upserted, inserted_new, inserted)
 
     def _execute(self, sql: str, binds: tuple[object, ...] = ()) -> int:
@@ -524,49 +546,48 @@ class MssqlWriter(MssqlReader):
                 cursor.execute(sql)
             return max(cursor.rowcount, 0)
 
-    def _insert(self, target: Target, table: str, frame: pl.DataFrame) -> int:
-        """Insert `frame`, whose columns are `target`'s, into `table`, and the rows its statements counted."""
+    def _insert(self, target: Target, table: str, values: pa.Table) -> int:
+        """Insert `values`, whose columns are `target`'s, into `table`, and the rows its statements counted."""
         with closing(self.connection.cursor()) as cursor:
-            return sum(self._send(cursor, target, table, part) for part in slices(frame))
+            return sum(self._send(cursor, target, table, part) for part in slices(values))
 
-    def _send(self, cursor: Cursor, target: Target, table: str, part: pl.DataFrame) -> int:
+    def _send(self, cursor: Cursor, target: Target, table: str, part: pa.Table) -> int:
         """Insert one slice, in its own order, and the rows its statements counted: each run of rows whose strings all
         bind as `nvarchar(n)` as one `executemany`, and each run of the others one row to a statement, every column's
         type given (`_sizes`). Each run is a span: a batch's records its `db.operation.batch.size`, and a run of rows
         one by one its `basis.statements`, so a trace shows what each row costs."""
-        sql = f"INSERT INTO {table} ({', '.join(part.columns)}) VALUES ({', '.join('?' * part.width)})"
+        sql = f"INSERT INTO {table} ({', '.join(part.column_names)}) VALUES ({', '.join('?' * part.num_columns)})"
         units = _units(target, part)
         bound = _bound(target, part)
-        written = start = 0
-        for length, alone in _long(units, part.height).rle().struct.unnest().iter_rows():
-            rows, lengths = bound.slice(start, length), units.slice(start, length)
-            start += length
+        written = 0
+        for start, end, alone in _runs(_long(units, part.num_rows)):
+            rows, lengths = bound.slice(start, end - start), units.iloc[start:end]
             with statement(self.database, _KIND, sql) as traced:
                 if alone:
-                    for row, longest in zip(rows.iter_rows(), lengths.iter_rows(named=True), strict=True):
-                        cursor.setinputsizes(_sizes(target, rows.columns, longest))
+                    for row, longest in zip(rows_of(rows), lengths.to_dict("records"), strict=True):
+                        cursor.setinputsizes(_sizes(target, rows.column_names, {str(name): None if pd.isna(found) else int(found) for name, found in longest.items()}))
                         cursor.execute(sql, row)
                         written += max(cursor.rowcount, 0)
-                    traced.set_attribute("basis.statements", length)
+                    traced.set_attribute("basis.statements", end - start)
                 else:
-                    cursor.setinputsizes(_sizes(target, rows.columns, lengths.max().row(0, named=True) if lengths.width else {}))
-                    cursor.executemany(sql, rows.rows())
+                    cursor.setinputsizes(_sizes(target, rows.column_names, _most(lengths)))
+                    cursor.executemany(sql, rows_of(rows))
                     written += max(cursor.rowcount, 0)
-                    traced.set_attribute("db.operation.batch.size", length)
+                    traced.set_attribute("db.operation.batch.size", end - start)
         return written
 
-    def _stage(self, name: str, target: Target, frame: pl.DataFrame) -> None:
-        """Stage `frame` in the `#temp` table `name`, counted by the server: the stage is this session's alone, so its
+    def _stage(self, name: str, target: Target, values: pa.Table) -> None:
+        """Stage `values` in the `#temp` table `name`, counted by the server: the stage is this session's alone, so its
         count is exactly the rows staged."""
-        self._execute(f"SELECT TOP 0 {', '.join(frame.columns)} INTO {name} FROM {target.table}")
+        self._execute(f"SELECT TOP 0 {', '.join(values.column_names)} INTO {name} FROM {target.table}")
         with closing(self.connection.cursor()) as cursor:
-            for part in slices(frame):
+            for part in slices(values):
                 self._send(cursor, target, name, part)
         sql = f"SELECT COUNT_BIG(*) FROM {name}"
         with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql):
             cursor.execute(sql)
             row = cursor.fetchone()
-        check_count(f"staging for {target.table}", frame.height, row[0] if row is not None else 0)
+        check_count(f"staging for {target.table}", values.num_rows, row[0] if row is not None else 0)
 
     def _delete(self, target: Target, delete: Delete) -> int:
         conditions: list[str] = []
@@ -585,21 +606,21 @@ class MssqlWriter(MssqlReader):
             self._execute(f"DROP TABLE {_MATCH}")
         return deleted
 
-    def _upsert(self, target: Target, frame: pl.DataFrame) -> int:
+    def _upsert(self, target: Target, rows: pa.Table) -> int:
         key = target.key or ()
-        self._stage(_STAGE, target, frame)
+        self._stage(_STAGE, target, rows)
         on = " AND ".join(f"t.{name} = s.{name}" for name in key)
         updated = 0
-        if values := [name for name in frame.columns if name not in key]:
+        if values := [name for name in rows.column_names if name not in key]:
             updated = self._execute(f"UPDATE t SET {', '.join(f't.{name} = s.{name}' for name in values)} FROM {target.table} AS t INNER JOIN {_STAGE} AS s ON {on}")
-        inserted = self._insert_missing(target.table, frame.columns, on)
+        inserted = self._insert_missing(target.table, rows.column_names, on)
         self._execute(f"DROP TABLE {_STAGE}")
-        check_count(f"the upsert into {target.table}", frame.height, updated + inserted)
+        check_count(f"the upsert into {target.table}", rows.num_rows, updated + inserted)
         return updated + inserted
 
-    def _insert_new(self, target: Target, frame: pl.DataFrame) -> int:
-        self._stage(_STAGE, target, frame)
-        inserted = self._insert_missing(target.table, frame.columns, " AND ".join(f"t.{name} = s.{name}" for name in target.key or ()))
+    def _insert_new(self, target: Target, rows: pa.Table) -> int:
+        self._stage(_STAGE, target, rows)
+        inserted = self._insert_missing(target.table, rows.column_names, " AND ".join(f"t.{name} = s.{name}" for name in target.key or ()))
         self._execute(f"DROP TABLE {_STAGE}")
         return inserted
 

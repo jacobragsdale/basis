@@ -3,14 +3,15 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
-import polars as pl
+import pandas as pd
+import pyarrow as pa
 import pytest
 
 from basis.core import snapshots
 from basis.core.snapshots import RunRecord, Status
 from basis.core.storage import Root
 
-PRICES = pl.DataFrame({"security_id": ["S1"], "price": [Decimal("100.5")]})
+PRICES = pd.DataFrame({"security_id": pd.Series(["S1"], dtype=pd.ArrowDtype(pa.string())), "price": pd.Series([Decimal("100.5")], dtype=pd.ArrowDtype(pa.decimal128(18, 4)))})
 
 
 def record(run_id: str = "01-run", status: Status = "checked") -> RunRecord:

@@ -28,9 +28,11 @@ from functools import partial
 from typing import Any
 
 import oracledb
-import polars as pl
+import pandas as pd
 import pyarrow as pa
+import pyarrow.compute as pc
 
+from basis.core import frames
 from basis.core.databases.base import (
     FETCH_ROWS,
     LEDGER_COLUMNS,
@@ -260,18 +262,18 @@ class OracleReader:
     connection: Connection
     max_rows: int
 
-    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pl.DataFrame:
+    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pd.DataFrame:
         binds = binds_named(sql, _BIND, interval, what=what)
-        frames: list[pl.DataFrame] = []
+        tables: list[pa.Table] = []
         rows = 0
         try:
             with statement(self.database, _KIND, sql) as traced:
-                for batch in self.connection.fetch_df_batches(sql, binds or None, size=10_000):
-                    frame = pl.DataFrame(batch)
-                    rows += frame.height
+                for batch in self.connection.fetch_df_batches(sql, binds or None, size=FETCH_ROWS):
+                    table = pa.table(batch)
+                    rows += table.num_rows
                     if rows > self.max_rows:
                         raise TooManyRowsError(what, self.max_rows)
-                    frames.append(frame)
+                    tables.append(table)
                 traced.set_attribute("db.response.returned_rows", rows)
         except ServiceError as error:
             if "ORA-01466" in str(error):
@@ -280,7 +282,7 @@ class OracleReader:
                     " run again, or set the database's ISOLATION=read_committed"
                 )
             raise
-        return pl.concat(frames) if len(frames) > 1 else frames[0]
+        return frames.from_arrow(pa.concat_tables(tables) if len(tables) > 1 else tables[0])
 
     def describe(self, table: str) -> TableSpec | None:
         owner, _, name = table.upper().rpartition(".")
@@ -370,24 +372,24 @@ class OracleWriter(OracleReader):
         deleted = upserted = inserted_new = inserted = 0
         if changes.delete is not None:
             deleted = self._delete(target, changes.delete, spec)
-        if changes.upsert is not None and changes.upsert.height:
+        if changes.upsert is not None and len(changes.upsert):
             upserted = self._merge(target, _bound(target, changes.upsert, spec), update=True)
-            check_count(f"the upsert into {target.table}", changes.upsert.height, upserted)
-        if changes.insert_new is not None and changes.insert_new.height:
+            check_count(f"the upsert into {target.table}", len(changes.upsert), upserted)
+        if changes.insert_new is not None and len(changes.insert_new):
             inserted_new = self._merge(target, _bound(target, changes.insert_new, spec), update=False)
-        if changes.insert is not None and changes.insert.height:
-            frame = _bound(target, changes.insert, spec)
-            inserted = self._many(f"INSERT INTO {target.table} ({', '.join(frame.columns)}) VALUES ({_positions(frame.width)})", frame)
-            check_count(f"the insert into {target.table}", changes.insert.height, inserted)
+        if changes.insert is not None and len(changes.insert):
+            values = _bound(target, changes.insert, spec)
+            inserted = self._many(f"INSERT INTO {target.table} ({', '.join(values.column_names)}) VALUES ({_positions(values.num_columns)})", values)
+            check_count(f"the insert into {target.table}", len(changes.insert), inserted)
         return Counts(deleted, upserted, inserted_new, inserted)
 
-    def _many(self, sql: str, frame: pl.DataFrame) -> int:
+    def _many(self, sql: str, values: pa.Table) -> int:
         written = 0
         with closing(self.connection.cursor()) as cursor:
-            for part in slices(frame):  # each batch a statement, and a span, of its own
+            for part in slices(values):  # each batch a statement, and a span, of its own, bound as Arrow
                 with statement(self.database, _KIND, sql) as traced:
                     cursor.executemany(sql, part)
-                    traced.set_attribute("db.operation.batch.size", part.height)
+                    traced.set_attribute("db.operation.batch.size", part.num_rows)
                 written += cursor.rowcount
         return written
 
@@ -407,21 +409,23 @@ class OracleWriter(OracleReader):
         if delete.matching is None:
             where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
             return self._execute(f"DELETE FROM {target.table}{where}", within)
-        matching = _bound(target, delete.matching.unique(), spec)
-        matches = [f"{name} = :{index}" for index, name in enumerate(matching.columns, 1)]
-        if within:
-            matching = matching.with_columns(pl.lit(within[0]).alias("#start"), pl.lit(within[1]).alias("#end"))
+        matching = _bound(target, delete.matching.drop_duplicates(), spec)
+        matches = [f"{name} = :{index}" for index, name in enumerate(matching.column_names, 1)]
+        if within:  # the range's ends, bound to each row's statement after its values
+            for name, moment in zip(("#start", "#end"), within, strict=True):
+                matching = matching.append_column(name, pa.array([moment] * matching.num_rows, pa.timestamp("us")))
         return self._many(f"DELETE FROM {target.table} WHERE {' AND '.join(matches + conditions)}", matching)
 
-    def _merge(self, target: Target, frame: pl.DataFrame, *, update: bool) -> int:
+    def _merge(self, target: Target, rows: pa.Table, *, update: bool) -> int:
         key = target.key or ()
-        source = ", ".join(f":{index} AS {name}" for index, name in enumerate(frame.columns, 1))
+        names = rows.column_names
+        source = ", ".join(f":{index} AS {name}" for index, name in enumerate(names, 1))
         on = " AND ".join(f"t.{name} = s.{name}" for name in key)
         sql = f"MERGE INTO {target.table} t USING (SELECT {source} FROM dual) s ON ({on})"
-        if update and (values := [name for name in frame.columns if name not in key]):
+        if update and (values := [name for name in names if name not in key]):
             sql += f" WHEN MATCHED THEN UPDATE SET {', '.join(f't.{name} = s.{name}' for name in values)}"
-        sql += f" WHEN NOT MATCHED THEN INSERT ({', '.join(frame.columns)}) VALUES ({', '.join(f's.{name}' for name in frame.columns)})"
-        return self._many(sql, frame)
+        sql += f" WHEN NOT MATCHED THEN INSERT ({', '.join(names)}) VALUES ({', '.join(f's.{name}' for name in names)})"
+        return self._many(sql, rows)
 
     def record(self, entry: LedgerEntry) -> None:
         values = ledger_values(entry)
@@ -477,11 +481,14 @@ class OracleStatements:
             raise RuntimeError(msg)
 
 
-def _bound(target: Target, frame: pl.DataFrame, spec: TableSpec) -> pl.DataFrame:
-    """A frame as Oracle binds it: datetimes naive in their zone, and booleans as 0 and 1 where the column is a NUMBER."""
-    frame = for_writing(target, frame)
-    numbers = [name for name in frame.columns if target.column(name).kind == "bool" and (found := spec.columns.get(name)) is not None and found.type == "NUMBER"]
-    return frame.with_columns(pl.col(numbers).cast(pl.Int8)) if numbers else frame
+def _bound(target: Target, frame: pd.DataFrame, spec: TableSpec) -> pa.Table:
+    """A frame as Oracle binds it, as Arrow: datetimes naive in their zone, and booleans as 0 and 1 where the column is
+    a NUMBER."""
+    values = for_writing(target, frame)
+    for index, name in enumerate(values.column_names):
+        if target.column(name).kind == "bool" and (found := spec.columns.get(name)) is not None and found.type == "NUMBER":
+            values = values.set_column(index, name, pc.cast(values.column(index), pa.int8()))
+    return values
 
 
 def _positions(count: int) -> str:

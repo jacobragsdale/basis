@@ -2,9 +2,10 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-import polars as pl
+import pandas as pd
 import pytest
 
+from basis.core import frames
 from basis.core.destination import DestColumn, TableSpec, Unit, check_table, check_values
 from basis.core.tables import Changes, Column
 
@@ -24,19 +25,19 @@ class Table:
 
 TARGET = Table(
     (
-        Column(name="day", kind="date", nullable=False, dtype=pl.Date()),
-        Column(name="security_id", kind="str", nullable=False, dtype=pl.String(), max_length=8),
-        Column(name="price", kind="decimal", nullable=False, dtype=pl.Decimal(18, 4), precision=18, scale=4),
-        Column(name="note", kind="str", nullable=True, dtype=pl.String()),
-        Column(name="booked_at", kind="datetime", nullable=True, dtype=pl.Datetime("us", "UTC"), zone="America/New_York"),
+        Column(name="day", kind="date", nullable=False),
+        Column(name="security_id", kind="str", nullable=False, max_length=8),
+        Column(name="price", kind="decimal", nullable=False, precision=18, scale=4),
+        Column(name="note", kind="str", nullable=True),
+        Column(name="booked_at", kind="datetime", nullable=True, zone="America/New_York"),
     )
 )
 PRICE: dict[str, object] = {"day": date(2026, 11, 5), "security_id": "S1", "price": Decimal(100), "note": None, "booked_at": None}
 
 
-def prices(*rows: dict[str, object]) -> pl.DataFrame:
+def prices(*rows: dict[str, object]) -> pd.DataFrame:
     """Rows of the target, each filled from a valid default row, so a test states only what it is about."""
-    return pl.DataFrame([PRICE | row for row in rows], schema={column.name: column.dtype for column in TARGET.columns})
+    return pd.DataFrame({column.name: pd.Series([(PRICE | row)[column.name] for row in rows], dtype=frames.dtype(column)) for column in TARGET.columns})
 
 
 def column(name: str, kind: str, *, length: int | None = None, digits: tuple[int, int] | None = None, nullable: bool = True) -> DestColumn:
@@ -98,9 +99,9 @@ def test_a_time_finer_than_the_column_keeps_is_refused() -> None:
 
 
 def test_an_integer_beyond_its_column_is_refused() -> None:
-    target = Table((Column(name="n", kind="int", nullable=False, dtype=pl.Int64()),), table="counts", key=None)
+    target = Table((Column(name="n", kind="int", nullable=False),), table="counts", key=None)
     spec = TableSpec("mssql", "counts", {"n": column("n", "SMALLINT")})
-    assert check_values(target, spec, Changes(insert=pl.DataFrame({"n": [40_000]}))) == ["insert: n: values from 40000 to 40000, beyond SMALLINT's -32768 to 32767"]
+    assert check_values(target, spec, Changes(insert=pd.DataFrame({"n": pd.Series([40_000], dtype="int64[pyarrow]")}))) == ["insert: n: values from 40000 to 40000, beyond SMALLINT's -32768 to 32767"]
 
 
 def text(type_: str, length: int | None, *, unit: Unit, encoding: str | None, charset: str | None, max_bytes: int | None = None) -> DestColumn:  # noqa: PLR0913 -- a column's storage, each by keyword

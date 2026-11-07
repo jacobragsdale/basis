@@ -20,11 +20,11 @@ from typing import Protocol
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-import polars as pl
+import pandas as pd
 import pyarrow as pa
 from opentelemetry.trace import Span, SpanKind
 
-from basis.core import traces
+from basis.core import frames, traces
 from basis.core.destination import TableSpec
 from basis.core.interval import Interval
 from basis.core.tables import Changes, Target
@@ -69,8 +69,9 @@ class LedgerEntry:
 
 
 class Reader(Protocol):
-    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pl.DataFrame:
-        """The rows a query returns, its columns as the driver typed them, binding the interval where it names it."""
+    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pd.DataFrame:
+        """The rows a query returns, its columns Arrow-backed, of the types the driver gave them, binding the interval
+        where it names it."""
         ...
 
     def describe(self, table: str) -> TableSpec | None:
@@ -169,14 +170,15 @@ def binds_named(sql: str, pattern: str, interval: Interval | None, *, what: str)
     return {name: binds[name] for name in names}
 
 
-def for_writing(target: Target, frame: pl.DataFrame) -> pl.DataFrame:
-    """A frame's values as the database stores them: each datetime as a naive time in its column's zone."""
-    converted = [
-        pl.col(column.name).dt.convert_time_zone(column.zone).dt.replace_time_zone(None)
-        for column in target.columns
-        if column.kind == "datetime" and column.name in frame.columns and column.zone is not None
-    ]
-    return frame.with_columns(converted) if converted else frame
+def for_writing(target: Target, frame: pd.DataFrame) -> pa.Table:
+    """A conformed frame's values as the database stores them, as Arrow (`frames.to_arrow`): each datetime as a naive
+    time in its column's zone."""
+    table = frames.to_arrow(frame)
+    for column in target.columns:
+        if column.kind == "datetime" and column.zone is not None and column.name in table.column_names:
+            index = table.column_names.index(column.name)
+            table = table.set_column(index, column.name, frames.local(table.column(index), column.zone))
+    return table
 
 
 def naive_in_zone(moment: datetime, zone: str | None) -> datetime:
@@ -190,8 +192,16 @@ def lower_cased(table: pa.Table) -> pa.Table:
     return table.rename_columns([name.lower() for name in table.column_names])
 
 
-def slices(frame: pl.DataFrame) -> Iterator[pl.DataFrame]:
-    yield from frame.iter_slices(WRITE_ROWS)
+def rows_of(table: pa.Table) -> list[tuple[object, ...]]:
+    """`table`'s rows as the values a driver binds: `Decimal`, `date`, naive `datetime`, `bool`, `int`, `float`,
+    `str` and None."""
+    return list(zip(*(column.to_pylist() for column in table.columns), strict=True))
+
+
+def slices(table: pa.Table) -> Iterator[pa.Table]:
+    """`table`, `WRITE_ROWS` rows at a time."""
+    for offset in range(0, table.num_rows, WRITE_ROWS):
+        yield table.slice(offset, WRITE_ROWS)
 
 
 def end_reading(database: str, roll_back: Callable[[], object]) -> None:

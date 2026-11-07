@@ -81,7 +81,7 @@ def test_a_distribution_that_is_not_installed_is_an_error_of_its_own_not_a_guess
 def locked(folder: Path, *packages: tuple[str, str]) -> Path:
     """A new repo's folder whose uv.lock locks each (name, git source) given, beside one from an index."""
     entries = [f'[[package]]\nname = "{name}"\nversion = "0.7.0"\nsource = {{ git = "{git}" }}\n' for name, git in packages]
-    entries.append('[[package]]\nname = "polars"\nversion = "2.1.0"\nsource = { registry = "https://pypi.org/simple" }\n')
+    entries.append('[[package]]\nname = "pandas"\nversion = "3.1.1"\nsource = { registry = "https://pypi.org/simple" }\n')
     (folder / "uv.lock").write_text("version = 1\n\n" + "\n".join(entries), encoding="utf-8")
     return folder
 

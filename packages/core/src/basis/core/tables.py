@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, Protocol
 
-import polars as pl
+import pandas as pd
 
 IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,127}$")
 """A column name: lower-case, so it reads the same unquoted in SQL Server and Oracle, and never needs quoting."""
@@ -20,11 +20,12 @@ type Kind = Literal["int", "float", "decimal", "str", "bool", "date", "datetime"
 
 @dataclass(frozen=True)
 class Column:
+    """A table's column. Its type in a frame follows from its kind, and a decimal's precision and scale, by the one
+    table in `basis.core.frames`."""
+
     name: str
     kind: Kind
     nullable: bool
-    dtype: pl.DataType
-    """The column's type in a frame."""
     max_length: int | None = None
     precision: int | None = None
     scale: int | None = None
@@ -53,7 +54,7 @@ class Delete:
     row."""
 
     within: Range | None = None
-    matching: pl.DataFrame | None = None
+    matching: pd.DataFrame | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -61,9 +62,9 @@ class Changes:
     """What a run does to one table, applied in this order."""
 
     delete: Delete | None = None
-    upsert: pl.DataFrame | None = None
-    insert_new: pl.DataFrame | None = None
-    insert: pl.DataFrame | None = None
+    upsert: pd.DataFrame | None = None
+    insert_new: pd.DataFrame | None = None
+    insert: pd.DataFrame | None = None
 
     @property
     def rerun_safe(self) -> bool:
@@ -71,7 +72,7 @@ class Changes:
         delete that covers every row it inserts, which the checks require."""
         return self.insert is None or self.delete is not None
 
-    def frames(self) -> dict[str, pl.DataFrame]:
+    def frames(self) -> dict[str, pd.DataFrame]:
         """Each operation's frame, by operation: what a snapshot stores."""
         found = {"upsert": self.upsert, "insert_new": self.insert_new, "insert": self.insert}
         if self.delete is not None and self.delete.matching is not None:

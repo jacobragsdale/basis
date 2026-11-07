@@ -13,7 +13,6 @@ dependencies = [
     "numpy>=2.5.4",
     "packaging>=26.3",  # a version's parts, as `optim new repo` reads them
     "pandas>=3.0.6",
-    "polars>=2.1.0",  # the frames basis-core's publishing writes, as basis-core takes them
     "pyarrow>=26.0.0",
     "pydantic>=2.14.1",
     "pydantic-settings>=2.16.0",

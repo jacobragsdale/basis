@@ -11,8 +11,9 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Literal
 
-import polars as pl
+import pandas as pd
 
+from basis.core import frames
 from basis.core.tables import Changes, Column, Kind, Target
 
 type Dialect = Literal["mssql", "oracle"]
@@ -125,23 +126,23 @@ def _type_problem(dialect: Dialect, column: Column, found: DestColumn) -> str | 
 def check_values(target: Target, spec: TableSpec, changes: Changes) -> list[str]:
     """Why the values the run writes do not fit the table."""
     reasons: list[str] = []
-    frames = {name: frame for name, frame in changes.frames().items() if frame.height}
-    for operation, frame in frames.items():
+    written = {name: frame for name, frame in changes.frames().items() if len(frame)}
+    for operation, frame in written.items():
         for name in frame.columns:
             found = spec.columns.get(name)
             if found is None:
                 continue
-            series = frame.get_column(name)
+            series = frame[name]
             reasons.extend(f"{operation}: {name}: {problem}" for problem in _value_problems(target.column(name), found, series, spec.dialect))
     return reasons
 
 
-def _value_problems(column: Column, found: DestColumn, series: pl.Series, dialect: Dialect) -> list[str]:
+def _value_problems(column: Column, found: DestColumn, series: pd.Series, dialect: Dialect) -> list[str]:
     problems: list[str] = []
-    values = series.drop_nulls()
-    if not found.nullable and (nulls := series.null_count()):
+    values = series.dropna()
+    if not found.nullable and (nulls := int(series.isna().sum())):
         problems.append(f"{nulls} nulls, and {found.type} column {found.name} is NOT NULL")
-    if not values.len():
+    if not len(values):
         return problems
     match column.kind:
         case "str":
@@ -155,31 +156,31 @@ def _value_problems(column: Column, found: DestColumn, series: pl.Series, dialec
             if _number(values.abs().max()) >= limit:
                 problems.append(f"values up to {values.abs().max()}, and {found.type}({found.precision},{found.scale}) holds less than {limit}")
         case "datetime" if found.type in _SECONDS_ONLY:
-            if (values.dt.microsecond() != 0).any():
+            if (values.dt.microsecond != 0).any():
                 problems.append(f"fractions of a second, which {found.type} does not keep")
-            if found.type == "SMALLDATETIME" and (values.dt.second() != 0).any():
+            if found.type == "SMALLDATETIME" and (values.dt.second != 0).any():
                 problems.append("seconds, which SMALLDATETIME does not keep")
         case _:
             pass
     return problems
 
 
-def _text_problems(found: DestColumn, values: pl.Series, dialect: Dialect) -> list[str]:
-    """Why a string column cannot store `values`: a character its encoding cannot store, or a value longer than the
-    column holds, in the column's own `unit`, and in bytes where it has `max_bytes` too. Each distinct value is encoded
-    once."""
+def _text_problems(found: DestColumn, values: pd.Series, dialect: Dialect) -> list[str]:
+    """Why a string column cannot store `values`, which hold no null: a character its encoding cannot store, or a
+    value longer than the column holds, in the column's own `unit`, and in bytes where it has `max_bytes` too. Each
+    distinct value is encoded once."""
     problems: list[str] = []
-    distinct = values.unique(maintain_order=True)
+    distinct = values.drop_duplicates()
     encoded = _Encoded.of(distinct, found.encoding) if found.encoding is not None and found.encoding not in UNICODE else None
     if encoded is not None and encoded.lost:
         problems.append(
-            f"{values.is_in(encoded.lost).sum()} values hold characters {found.charset or found.encoding} cannot store, such as"
+            f"{int(values.isin(encoded.lost).sum())} values hold characters {found.charset or found.encoding} cannot store, such as"
             f" {encoded.first!r}, which the database would replace without an error: {_UNICODE_COLUMN[dialect]}"
         )
-    if found.encoding is None and found.charset is not None and (beyond := values.filter(values.str.contains(_NOT_ASCII))).len():
-        first = next(character for character in str(beyond[0]) if not character.isascii())
+    if found.encoding is None and found.charset is not None and len(beyond := values[~_ascii(values)]):
+        first = next(character for character in str(beyond.iloc[0]) if not character.isascii())
         problems.append(
-            f"{beyond.len()} values hold characters beyond ASCII, such as {first!r}, and basis does not know which of them {found.charset}"
+            f"{len(beyond)} values hold characters beyond ASCII, such as {first!r}, and basis does not know which of them {found.charset}"
             f" stores, which the database would replace without an error: {_UNICODE_COLUMN[dialect]}, or add {found.charset} to"
             f" {_CHARSETS_AT[dialect]}"
         )
@@ -190,9 +191,6 @@ def _text_problems(found: DestColumn, values: pl.Series, dialect: Dialect) -> li
     return problems
 
 
-_NOT_ASCII = r"[^\x00-\x7F]"
-_ASTRAL = r"[\x{10000}-\x{10FFFF}]"
-"""A character outside Unicode's Basic Multilingual Plane, which UTF-16 writes as two units, as an emoji."""
 _UNICODE_COLUMN: dict[Dialect, str] = {
     "mssql": "store them in a Unicode column, NVARCHAR or a VARCHAR with a UTF-8 collation",
     "oracle": "store them in an NVARCHAR2 or NCLOB column, whose national character set is Unicode",
@@ -200,9 +198,9 @@ _UNICODE_COLUMN: dict[Dialect, str] = {
 _CHARSETS_AT: dict[Dialect, str] = {"mssql": "Python's codecs", "oracle": "basis.core.databases.oracle.CHARSETS"}
 
 
-def utf16_units(values: pl.Expr) -> pl.Expr:
-    """The length of each string in UTF-16 units, as SQL Server measures an `nvarchar`."""
-    return values.str.len_chars() + values.str.count_matches(_ASTRAL)
+def _ascii(values: pd.Series) -> pd.Series:
+    """Whether each of `values`, which hold no null, is ASCII alone, as a mask that indexes them."""
+    return frames.ascii_only(values).astype(bool)
 
 
 @dataclass(frozen=True)
@@ -215,10 +213,10 @@ class _Encoded:
     widest: int
 
     @classmethod
-    def of(cls, distinct: pl.Series, encoding: str) -> _Encoded:
+    def of(cls, distinct: pd.Series, encoding: str) -> _Encoded:
         lost: list[str] = []
         first, widest = "", 0
-        for value in distinct.filter(distinct.str.contains(_NOT_ASCII)):
+        for value in distinct[~_ascii(distinct)]:
             try:
                 widest = max(widest, len(str(value).encode(encoding)))
             except UnicodeEncodeError as error:
@@ -227,29 +225,28 @@ class _Encoded:
         return cls(lost, first, widest)
 
 
-def _longest(distinct: pl.Series, unit: Unit, encoding: str | None, encoded: _Encoded | None) -> int:
+def _longest(distinct: pd.Series, unit: Unit, encoding: str | None, encoded: _Encoded | None) -> int:
     """The longest of the values, in `unit`, and in bytes in `encoding`: ASCII is one byte in every code page."""
     match unit, encoding:
         case "characters", _:
-            lengths = distinct.str.len_chars()
+            lengths = distinct.str.len()
         case "UTF-16 units", _:
-            lengths = distinct.to_frame().select(utf16_units(pl.first())).to_series()
+            lengths = frames.utf16_units(distinct)
         case "bytes", "utf-8":
-            lengths = distinct.str.len_bytes()
+            lengths = frames.utf8_bytes(distinct)
         case "bytes", "utf-16-le" | "utf-16-be":
-            lengths = distinct.to_frame().select(utf16_units(pl.first()) * 2).to_series()
+            lengths = frames.utf16_units(distinct) * 2
         case "bytes", _:
-            ascii_only = distinct.filter(~distinct.str.contains(_NOT_ASCII)).str.len_chars()
-            return max(_most(ascii_only), encoded.widest if encoded is not None else 0)
+            return max(_most(distinct[_ascii(distinct)].str.len()), encoded.widest if encoded is not None else 0)
     return _most(lengths)
 
 
-def _most(lengths: pl.Series) -> int:
-    return int(_number(found)) if (found := lengths.max()) is not None else 0
+def _most(lengths: pd.Series) -> int:
+    return int(_number(lengths.max())) if len(lengths) else 0
 
 
 def _number(value: object) -> Decimal:
-    """A frame's min or max, which polars types as any scalar, as an exact number."""
+    """A column's min or max, which pandas types as any scalar, as an exact number."""
     match value:
         case bool():
             msg = f"{value!r} is not a number"

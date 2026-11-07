@@ -20,11 +20,10 @@ from decimal import Decimal
 from typing import Annotated, Literal, cast
 
 import pandas as pd
-import polars as pl
 from pydantic import StringConstraints
 
 import optim
-from basis.core import publish
+from basis.core import frames, publish
 from basis.core import settings as core
 from basis.core.databases import Database
 from basis.core.destination import Dialect, check_table
@@ -41,11 +40,11 @@ log = logging.getLogger(__name__)
 OUTPUT = "orders"
 """What the ledger calls the orders a run published, beside its model's module."""
 COLUMNS = (
-    Column("run_id", "str", nullable=False, dtype=pl.String(), max_length=36),
-    Column("portfolio_id", "str", nullable=False, dtype=pl.String(), max_length=64),
-    Column("security_id", "str", nullable=False, dtype=pl.String(), max_length=64),
-    Column("side", "str", nullable=False, dtype=pl.String(), max_length=4),
-    Column("quantity", "float", nullable=False, dtype=pl.Float64()),
+    Column("run_id", "str", nullable=False, max_length=36),
+    Column("portfolio_id", "str", nullable=False, max_length=64),
+    Column("security_id", "str", nullable=False, max_length=64),
+    Column("side", "str", nullable=False, max_length=4),
+    Column("quantity", "float", nullable=False),
 )
 """The orders table's columns, as optim 0.2.0 wrote them; portfolio_id may be aliased in a view of the books. The
 lengths are those of a run's id and of `optim.schema.Id`, for `basis ddl`; the table's own are what a publish checks."""
@@ -200,10 +199,10 @@ def interval(as_of_date: date) -> Interval:
     return Interval(start, start + timedelta(days=1))
 
 
-def rows(run_id: str, orders: pd.DataFrame) -> pl.DataFrame:
-    """`orders` as the table holds them: the run's id, then each order, in the table's column types."""
+def rows(run_id: str, orders: pd.DataFrame) -> pd.DataFrame:
+    """`orders` as the table holds them: the run's id, then each order, each column of its type in basis-core's frames."""
     values = {"run_id": [run_id] * len(orders)} | {name: orders[name].tolist() for name in OrderRow.model_fields}
-    return pl.DataFrame(values, schema={column.name: column.dtype for column in COLUMNS})
+    return pd.DataFrame({column.name: pd.Series(values[column.name], dtype=frames.dtype(column)) for column in COLUMNS})
 
 
 def _count(value: object) -> int:

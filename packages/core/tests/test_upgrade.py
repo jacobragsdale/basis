@@ -22,8 +22,8 @@ version = "{version}"
 source = {{ registry = "https://pkgs.example.com/simple" }}
 
 [[package]]
-name = "polars"
-version = "2.1.0"
+name = "pandas"
+version = "3.1.1"
 source = {{ registry = "https://pkgs.example.com/simple" }}
 """
 

@@ -3,7 +3,7 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import polars as pl
+import pandas as pd
 import pyarrow as pa
 import pytest
 
@@ -170,7 +170,7 @@ def test_a_repo_that_declares_no_qa_tier_has_none(tmp_path: Path) -> None:
 class FakeWriter:
     applied: list[str] = field(default_factory=list[str])
 
-    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pl.DataFrame:
+    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pd.DataFrame:
         raise NotImplementedError
 
     def describe(self, table: str) -> TableSpec | None:

@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 
 import mssql_python
 import oracledb
-import polars as pl
+import pandas as pd
 import pyarrow as pa
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
@@ -17,7 +17,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import Field, ValidationError
 
-from basis.core import traces
+from basis.core import frames, traces
 from basis.core.databases import Counts, mssql, open_database, oracle
 from basis.core.databases.base import end_reading
 from basis.core.databases.failures import Boundary, ending, failures
@@ -407,13 +407,7 @@ class _Target:
         return next(column for column in self.columns if column.name == name)
 
 
-DOCS = _Target(
-    (
-        Column(name="id", kind="int", nullable=False, dtype=pl.Int64()),
-        Column(name="body", kind="str", nullable=True, dtype=pl.String()),
-        Column(name="amount", kind="decimal", nullable=True, dtype=pl.Decimal(18, 4), precision=18, scale=4),
-    )
-)
+DOCS = _Target((Column(name="id", kind="int", nullable=False), Column(name="body", kind="str", nullable=True), Column(name="amount", kind="decimal", nullable=True, precision=18, scale=4)))
 DOCS_SPEC = TableSpec("mssql", "docs", {})  # unread by SQL Server's writer, which binds by the target's kinds
 
 
@@ -451,8 +445,9 @@ class _Server:
         pass
 
 
-def _docs(*rows: tuple[int, str | None]) -> pl.DataFrame:
-    return pl.DataFrame({"id": [row[0] for row in rows], "body": [row[1] for row in rows], "amount": [Decimal("1.5")] * len(rows)}, schema={column.name: column.dtype for column in DOCS.columns})
+def _docs(*rows: tuple[int, str | None]) -> pd.DataFrame:
+    values = {"id": [row[0] for row in rows], "body": [row[1] for row in rows], "amount": [Decimal("1.5")] * len(rows)}
+    return pd.DataFrame({column.name: pd.Series(values[column.name], dtype=frames.dtype(column)) for column in DOCS.columns})
 
 
 def test_every_column_binds_by_its_kind_and_a_row_past_4000_utf16_units_goes_by_itself_in_its_place() -> None:
@@ -545,3 +540,9 @@ def test_an_oracle_column_stores_text_in_its_character_set(column: tuple[object,
     assert spec is not None
     found = spec.columns["note"]
     assert (found.length, found.unit, found.max_bytes, found.encoding, found.charset) == storage
+
+
+def test_a_decimals_text_is_plain_since_sql_server_cannot_convert_one_with_an_exponent() -> None:
+    """Arrow writes a decimal below 10^-6 as `1E-10`, which SQL Server refuses to convert to a decimal."""
+    text = pa.chunked_array([pa.array(["1E-10", "1.000E-7", "0E-10", "-12.5", None])])
+    assert mssql._plain(text).to_pylist() == ["0.0000000001", "0.0000001000", "0.0000000000", "-12.5", None]  # noqa: SLF001 -- the writer's own step

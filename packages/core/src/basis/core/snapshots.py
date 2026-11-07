@@ -19,9 +19,10 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-import polars as pl
+import pandas as pd
 from pydantic import AwareDatetime, Field
 
+from basis.core import frames
 from basis.core.interval import Interval
 from basis.core.model import Model
 from basis.core.storage import DIGEST, Root, Store
@@ -134,7 +135,7 @@ class Snapshot:
     def params_json(self) -> str:
         return self.manifest.params
 
-    def inputs(self) -> dict[str, pl.DataFrame]:
+    def inputs(self) -> dict[str, pd.DataFrame]:
         return {key.removeprefix("inputs/"): self._dataset(key) for key in self.manifest.datasets if key.startswith("inputs/")}
 
     def changes(self) -> dict[str, Changes]:
@@ -142,7 +143,7 @@ class Snapshot:
         return {name: self._changes(name, output) for name, output in self.manifest.outputs.items() if output.rows or output.delete is not None}
 
     def _changes(self, name: str, output: OutputRecord) -> Changes:
-        def frame(operation: str) -> pl.DataFrame | None:
+        def frame(operation: str) -> pd.DataFrame | None:
             return self._dataset(f"outputs/{name}/{operation}") if operation in output.rows else None
 
         delete = None
@@ -151,7 +152,7 @@ class Snapshot:
             delete = Delete(within, frame("delete_matching") if record.matching else None)
         return Changes(delete, frame("upsert"), frame("insert_new"), frame("insert"))
 
-    def _dataset(self, key: str) -> pl.DataFrame:
+    def _dataset(self, key: str) -> pd.DataFrame:
         if (found := self.manifest.datasets.get(key)) is None:
             msg = f"run {self.run_id}'s manifest {self.path.location} names no dataset {key}, which its record says it saved"
             raise LookupError(msg)
@@ -181,17 +182,19 @@ def _read(store: Store, path: Root) -> Snapshot:
     return Snapshot(store, path, manifest)
 
 
-def write(root: Root, record: RunRecord, params_json: str, inputs: Mapping[str, pl.DataFrame], changes: Mapping[str, Changes], *, package: str) -> Snapshot:  # noqa: PLR0913 -- the run, and the part whose run it is, by keyword
+def write(root: Root, record: RunRecord, params_json: str, inputs: Mapping[str, pd.DataFrame], changes: Mapping[str, Changes], *, package: str) -> Snapshot:  # noqa: PLR0913 -- the run, and the part whose run it is, by keyword
     """Save a new run in the store at `root`, under the part `package`: each dataset the store does not hold yet, then
-    the run's manifest. A run id the store holds already is refused: only `Snapshot.save_record` saves a run again."""
+    the run's manifest. Each frame is one conformed to its declared columns, and is stored as `frames.to_arrow` makes
+    it, so the same rows are always the same object. A run id the store holds already is refused: only
+    `Snapshot.save_record` saves a run again."""
     store = Store(root)
     path = store.manifest(package, record.job, record.run_id)
     if path.exists():
         msg = f"run {record.run_id} is in the store already, at {path.location}: a new run takes a new id"
         raise FileExistsError(msg)
-    frames = {f"inputs/{name}": frame for name, frame in inputs.items()}
-    frames |= {f"outputs/{name}/{operation}": frame for name, table in changes.items() for operation, frame in table.frames().items()}
-    manifest = _manifest(record, params_json, {key: store.put(frame.to_arrow()) for key, frame in frames.items()})
+    datasets = {f"inputs/{name}": frame for name, frame in inputs.items()}
+    datasets |= {f"outputs/{name}/{operation}": frame for name, table in changes.items() for operation, frame in table.frames().items()}
+    manifest = _manifest(record, params_json, {key: store.put(frames.to_arrow(frame)) for key, frame in datasets.items()})
     path.write_bytes(manifest.model_dump_json(indent=2).encode())
     return Snapshot(store, path, manifest)
 
@@ -208,7 +211,7 @@ def output_record(database: str, table: str, write_mode: str, changes: Changes |
             end=within.end if within is not None else None,
             matching=changes.delete.matching is not None,
         )
-    return OutputRecord(database=database, table=table, write=write_mode, delete=delete, rows={name: frame.height for name, frame in changes.frames().items()})
+    return OutputRecord(database=database, table=table, write=write_mode, delete=delete, rows={name: len(frame) for name, frame in changes.frames().items()})
 
 
 def find(root: Root, run_id: str, name: str | None = None) -> Snapshot:
