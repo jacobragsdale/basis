@@ -203,7 +203,8 @@ def _extras(record: logging.LogRecord) -> dict[str, object]:
 
 def _fallback(value: object) -> object:
     """A value JSON has no type for. A part's frames are known by their shape, since basis-core imports neither pandas
-    nor numpy: a frame logs as its size and columns, and a series, an index or a numpy value as its `tolist()`."""
+    nor numpy: a frame logs as its size and columns, a pandas series as its values by its index, and an index or a
+    numpy value as its `tolist()`."""
     match value:
         case pl.DataFrame():
             return {"rows": value.height, "columns": value.columns}
@@ -211,6 +212,8 @@ def _fallback(value: object) -> object:
             return value.to_list()
         case _ if isinstance(shape := getattr(value, "shape", None), tuple) and shape and (columns := getattr(value, "columns", None)) is not None:
             return {"rows": shape[0], "columns": [str(column) for column in columns]}  # a pandas frame
+        case _ if callable(to_dict := getattr(value, "to_dict", None)) and getattr(value, "index", None) is not None:
+            return to_dict()  # a pandas series, whose index says what each value is
         case _ if callable(tolist := getattr(value, "tolist", None)):
             return tolist()
         case _:

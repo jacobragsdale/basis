@@ -148,3 +148,22 @@ def test_a_name_that_could_leave_its_folder_is_refused(tmp_path: Path, name: str
 def test_an_object_is_named_only_by_a_hash(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="is not a dataset's hash"):
         Store(Root.at(tmp_path)).object("../runs/job/prices/01-run")
+
+
+def test_a_file_written_through_a_stream_appears_whole_when_the_block_ends_and_never_when_it_fails(tmp_path: Path) -> None:
+    target = Root.at(tmp_path / "entries" / "a.parquet")
+
+    def write_half() -> None:
+        with target.writing() as stream:
+            stream.write(b"half of a file")
+            msg = "stopped"
+            raise RuntimeError(msg)
+
+    with target.writing() as stream:
+        pq.write_table(table(), stream)
+        assert not target.exists()  # no reader sees half of it
+    with pytest.raises(RuntimeError, match="stopped"):
+        write_half()
+
+    assert target.read_table().equals(table())  # the failed write left the file as it was
+    assert [path.name for path in (tmp_path / "entries").iterdir()] == ["a.parquet"]  # and no temporary file
