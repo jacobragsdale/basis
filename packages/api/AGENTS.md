@@ -18,8 +18,8 @@ Paths are under `src/basis/api/`.
 | `compute.py` | `compute`, which declares a pure function a route runs in the process pool, and `Compute`, what a handler gets for it. Its docstring is the reference. |
 | `resources.py` | The resources a service declares (`database`, `http`, `cache`, `clock`, `ids`), a database's `outbox`, what a handler gets for each (`Reader`, `Writer`, `Client`, `Cache`, `Clock`, `Ids`), with `Client.send`, and `DeadlineExceededError` and `CallFailedError`. Its docstring is the reference. |
 | `opened.py` | Each resource as the app opens it, through basis-core's databases, httpx2, memory and the system's clock, or a fake: every call's deadline and span, a request's transaction with its outbox rows, the calls made after its commit, and the checks at build and startup. |
-| `outboxes.py` | The outbox: a row's life from `send` to `done` or `expired`, its backoff, its statements in each dialect (`Sql`) and its table's DDL. Its docstring is the reference. |
-| `relay.py` | `basis relay`: one run over a service's outboxes, which claims each due row, makes its call and records it, and fails, naming each call that aged out. |
+| `outboxes.py` | The outbox: a row's life from `send` to `done`, `refused` or `expired`, the 4xx a call is retried after, its backoff, its one compare-and-set change (`Table.update`) and the transitions built on it, its statements in each dialect (`Sql`), and its table's DDL. Its docstring is the reference. |
+| `relay.py` | `basis relay`: one run over a service's outboxes, which claims each due row, makes its call and records it, and reports each refused one, each statement with a span and a deadline, a failure stopping only its row; it fails, naming each call refused or expired, and each row a failure stopped. |
 | `deadlines.py` | A route's deadline, which caps each call its request makes: `limit`, how long one call may take, and whose deadline sets it. |
 | `pool.py` | The process pool, spawned at startup: each compute call's deadline, span and log fields, and the in-process runs of `fakes.Compute`. |
 | `routes.py` | Each route as the app serves it: its deadline, its request read strictly before FastAPI's handler, its undeclared errors refused, and its errors in the OpenAPI document as `application/problem+json`. |
@@ -66,11 +66,15 @@ Paths are under `src/basis/api/`.
   fails, misses its deadline or is cancelled is never followed by a commit, and the request answers an error, not a
   2xx. Each database's statements run on its own thread pool; the commit and the rollback have its deadline too.
 - A call that changes another service's state, `Client.send` with its `Idempotency-Key`, is a row of the outbox of the
-  database its route writes, in the request's transaction, and is made only once that commits, within the route's
-  deadline; its failure then changes nothing the request answers, and `basis relay`, run by the repo's scheduler and
-  never in the API, makes it again until it is accepted or ages out. A route that writes no database makes it at once.
-  `outboxes.py`'s docstring says what each row's `status` and `next_at` mean; every change to a row but its insert
-  holds only while it is `pending`, and the relay claims a row before its call.
+  database its route writes, in the request's transaction, and is made only once that commits, at once with the
+  request's other calls and within the route's deadline; its failure then changes nothing the request answers, and
+  `basis relay`, run by the repo's scheduler and never in the API, makes it again until it is accepted, refused for
+  good by a 4xx but 408, 409, 425 or 429, or ages out. A route that writes no database makes it at once. Only the
+  route whose transaction it is sends through it (`opened._WRITING`, set with the route's deadline and reset when the
+  transaction ends), so another app reached in the process never does. `outboxes.py`'s docstring says what each row's
+  `status` and `next_at` mean; every change to a row but its insert is one compare-and-set on its status and attempts,
+  in the SQL and in the fake, and an outbox's `max_age_s` outlasts the deadline, and a backoff, of every route that
+  writes its database, which the service checks.
 - How the app reaches another service is its settings' alone: its URL, CA bundle and proxy, never `SSL_CERT_FILE`,
   `HTTP_PROXY` or any other variable of the environment's.
 - Every error a client sees is a problem from `errors.problem`. A new kind of error is a case there, or an `Error`

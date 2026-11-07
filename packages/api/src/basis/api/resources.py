@@ -42,7 +42,7 @@ import math
 import re
 import types
 import typing
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -65,6 +65,9 @@ type Bind = str | int | float | Decimal | bool | date | datetime | UUID | bytes 
 type HttpMethod = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
 type SendMethod = Literal["POST", "PUT", "PATCH", "DELETE"]
 """The methods of a call that changes another service's state, which `Client.send` makes."""
+TABLE_LENGTH = 125
+"""The longest name of an outbox's table, after its schema, so that its key's constraint, `pk_NAME`, has the 128
+characters SQL Server and Oracle allow a name."""
 type QueryValue = str | int | float | Decimal | bool | date | datetime | UUID
 type Body = BaseModel | JsonValue
 
@@ -79,7 +82,8 @@ class Outbox:
     in the database, which the routes' write login writes."""
     max_age_s: float
     """Seconds from a call's commit in which it is still made: one its service has not accepted by then ages out, and
-    `basis relay` makes it no more, and fails, naming the call and its key."""
+    `basis relay` makes it no more, and fails, naming the call and its key. It must be longer than the deadline of each
+    route that writes the database, and a backoff after it, which the service checks."""
     backoff_s: float
     """Seconds after a call's first failed attempt before `basis relay` makes it again; each failure after doubles the
     wait, up to `max_backoff_s`."""
@@ -158,6 +162,9 @@ def outbox(table: str, *, max_age_s: float, backoff_s: float, max_backoff_s: flo
     if not isinstance(table, str) or not re.fullmatch(TABLE, table):
         msg = f"api.outbox({table!r}): an outbox's table is a name, or schema.name, of letters, digits, underscores and $, which its SQL names unquoted"
         raise ServiceError(msg)
+    if len(bare := table.rpartition(".")[2]) > TABLE_LENGTH:
+        msg = f"outbox {table}'s name is {len(bare)} characters: give it {TABLE_LENGTH} at most, after its schema, so its key's constraint, pk_NAME, fits the 128 both databases allow"
+        raise ServiceError(msg)
     for field, seconds in (("max_age_s", max_age_s), ("backoff_s", backoff_s), ("max_backoff_s", max_backoff_s)):
         if isinstance(seconds, bool) or not isinstance(seconds, int | float) or not 0 < seconds < math.inf:
             msg = f"outbox {table}'s {field} is {seconds!r}: give it the seconds, above 0"
@@ -166,6 +173,21 @@ def outbox(table: str, *, max_age_s: float, backoff_s: float, max_backoff_s: flo
         msg = f"outbox {table} waits {backoff_s:g}s after a first failure, longer than its max_backoff_s of {max_backoff_s:g}s: give max_backoff_s at least backoff_s"
         raise ServiceError(msg)
     return Outbox(table, max_age_s, backoff_s, max_backoff_s)
+
+
+def check_outboxes(service: str, written: Iterable[tuple[str, float, DatabaseResource]]) -> None:
+    """That each outbox leaves room past the deadline of every route that writes its database, each `(route, deadline,
+    database)`: a call whose request could not make it is due to `basis relay` when the route's deadline passes, and
+    again a backoff after a failed attempt, so an outbox whose calls age out before then would have none made by the
+    relay."""
+    for route, deadline_s, database in written:
+        if (declared := database.outbox) is not None and declared.max_age_s <= deadline_s + declared.backoff_s:
+            msg = (
+                f"service {service}'s outbox {declared.table} ages its calls out after {declared.max_age_s:g}s, and route {route}, which writes {database.name},"
+                f" has {deadline_s:g}s to answer, after which a call it sent waits a backoff of {declared.backoff_s:g}s for basis relay:"
+                f" give the outbox a max_age_s above {deadline_s + declared.backoff_s:g}s"
+            )
+            raise ServiceError(msg)
 
 
 def http(name: str, *, deadline_s: float) -> HttpResource:
@@ -288,9 +310,9 @@ class Client(Protocol):
         In a route that writes a database, the call is a row of that database's outbox, written in the request's
         transaction, so it commits or rolls back with the writes: once they commit, the call is made, still within the
         route's deadline, and if the service does not accept it then, `basis relay` makes it again until the service
-        does, or until it ages out. The request answers as if the call was made either way, and a call whose writes
-        roll back is never made. In a route that writes no database, the call is made at once, and fails as `call` does.
-        The reply's body is never read."""
+        does, until it ages out, or until a 4xx but 408, 409, 425 or 429 refuses it for good. The request answers as if
+        the call was made either way, and a call whose writes roll back is never made. In a route that writes no
+        database, the call is made at once, and fails as `call` does. The reply's body is never read."""
         ...
 
 

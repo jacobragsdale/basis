@@ -85,6 +85,7 @@ from basis.api.resources import (
     Resource,
     Session,
     Writer,
+    check_outboxes,
 )
 from basis.api.settings import Settings
 
@@ -315,6 +316,7 @@ class Service:
                     msg = f"{route.name} asks for {ask.given.name}, which service {self.name} does not declare: add it to the service's resources=[...]"
                     raise ServiceError(msg)
         _check_user(self.name, self.user, routes)
+        check_outboxes(self.name, [(route.name, route.deadline_s, route.writes) for route in routes if route.writes is not None])
         seen: dict[tuple[Method, str], Route] = {}
         for route in routes:
             if (first := seen.get(route.shape)) is not None:

@@ -37,8 +37,9 @@ Rules to keep:
   service drops a duplicate by. In a route that writes, it waits in the outbox of the database the route writes,
   declared as `api.database(..., outbox=api.outbox(TABLE, max_age_s=..., backoff_s=..., max_backoff_s=...))`, and is
   made only once the writes commit; if it fails then, the request still answers as it would, and `basis relay`, which
-  the repo's scheduler runs, makes it again until it is accepted or ages out. Never make such a call with `post` in a
-  route that writes: one made before the commit cannot be rolled back. `basis ddl` prints the outbox's table.
+  the repo's scheduler runs, makes it again until it is accepted or ages out. A 4xx but 408, 409, 425 or 429 refuses
+  it for good, and fails the next relay, as an aged-out call does. Never make such a call with `post` in a route that
+  writes: one made before the commit cannot be rolled back. `basis ddl` prints the outbox's table.
 - Another service's URL, CA bundle and proxy are its settings, `BASIS_HTTP__NAME__URL`, `__CA_BUNDLE` and `__PROXY`;
   basis reads no `SSL_CERT_FILE` or `HTTP_PROXY`.
 - A service whose callers sign in declares `user=User`, its subclass of `api.User` with a field for each claim it

@@ -30,10 +30,10 @@ import logging
 import ssl
 import time
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable, Coroutine, Generator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Coroutine, Generator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, ExitStack, contextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -120,7 +120,6 @@ def plan(service: Service, settings: Settings, given: fakes.Fakes) -> Plan:
                 asked[ask.given] = None
     compute = tuple(asked)
     in_process: set[ComputeFunction[..., object]] = set()
-    by_name: dict[str, fakes.Fake] = {}
     for resource, fake in given.items():
         if isinstance(resource, ComputeFunction):
             if resource not in compute:
@@ -130,14 +129,8 @@ def plan(service: Service, settings: Settings, given: fakes.Fakes) -> Plan:
                 msg = f"the compute function {resource.name} is given a fakes.{type(fake).__name__}: give it fakes.Compute()"
                 raise ServiceError(msg)
             in_process.add(resource)
-            continue
-        if resource not in service.resources:
-            msg = f"a fake is given for {resource.name}, which service {service.name} does not declare: fake the service's own resources"
-            raise ServiceError(msg)
-        if not fits(resource, fake):
-            msg = f"{resource.name} is given a fakes.{type(fake).__name__}, which does not fake its kind of resource: give it the fake of its kind"
-            raise ServiceError(msg)
-        by_name[resource.name] = fake
+    outside = f"which service {service.name} does not declare: fake the service's own resources"
+    by_name = faked({resource: fake for resource, fake in given.items() if not isinstance(resource, ComputeFunction)}, service.resources, outside)
     written = {route.writes.name for route in service.routes if route.writes is not None}
     unset = [found for resource in service.resources if resource.name not in by_name and (found := unconfigured(resource, settings, written=resource.name in written)) is not None]
     if settings.compute is None and (pooled := [declared.name for declared in compute if declared not in in_process]):
@@ -164,6 +157,21 @@ def unconfigured(resource: Resource, settings: Settings, *, written: bool) -> st
             return None
         case unreachable:
             assert_never(unreachable)
+
+
+def faked(given: fakes.Fakes, reached: Collection[Resource], outside: str) -> dict[str, fakes.Fake]:
+    """Each fake `given`, by its resource's name, after checking that it fakes one of the resources `reached`, of its
+    kind; `outside` says why a fake of any other is refused, and the fix."""
+    by_name: dict[str, fakes.Fake] = {}
+    for resource, fake in given.items():
+        if isinstance(resource, ComputeFunction) or resource not in reached:
+            msg = f"a fake is given for {resource.name}, {outside}"
+            raise ServiceError(msg)
+        if not fits(resource, fake):
+            msg = f"{resource.name} is given a fakes.{type(fake).__name__}, which does not fake its kind of resource: give it the fake of its kind"
+            raise ServiceError(msg)
+        by_name[resource.name] = fake
+    return by_name
 
 
 def fits(resource: Resource, fake: fakes.Fake) -> bool:
@@ -304,10 +312,10 @@ class Resources:
 
     def session(self, resource: DatabaseResource, *, writes: bool) -> DatabaseSession:
         """The request's transaction in `resource`, which, where the route writes it, the calls its handler sends go
-        through: `_given` sets it in the request's context, which the handler runs in."""
+        through until it ends."""
         session = DatabaseSession(self._databases[resource.name], writes=writes)
         if writes:
-            _WRITING.set(session)
+            session.take_sends()
         return session
 
     def handle(self, resource: HttpResource | CacheResource[object] | ClockResource | IdsResource) -> object:
@@ -341,9 +349,10 @@ def open_one(resource: DatabaseResource, settings: Settings, fake: fakes.Fake | 
     return OpenDatabase(resource, open_database(settings, resource.name), _SYSTEMS[kind], tracer, closing, kind)
 
 
-_WRITING: ContextVar[DatabaseSession | None] = ContextVar("basis.api.opened.writing", default=None)
-"""The transaction of the database the current request's route writes, which `Client.send` writes its calls in; None
-where the route writes none."""
+_WRITING: ContextVar[tuple[deadlines.Deadline, DatabaseSession] | None] = ContextVar("basis.api.opened.writing", default=None)
+"""The transaction of the database the route serving the request writes, which `Client.send` writes its calls in, with
+that route's deadline: a route that writes none, as another app's that the request reaches in this process, finds a
+deadline of its own, not this one, and sends its calls itself. None where no route writes."""
 
 
 async def _answers(database: OpenDatabase, *, writes: bool) -> None:
@@ -396,6 +405,22 @@ class DatabaseSession:
         self._ended = False
         self._sent: list[tuple[outboxes.Row, HttpClient]] = []
         """The calls the handler sent, each a row of the outbox in this transaction, with the client to make it with."""
+        self._sending: Token[tuple[deadlines.Deadline, DatabaseSession] | None] | None = None
+        """Set while the calls the route's handler sends go through this transaction."""
+
+    def take_sends(self) -> None:
+        """Take the calls the handler of the route serving the request sends, until the transaction ends."""
+        if (serving := deadlines.serving()) is not None:
+            self._sending = _WRITING.set((serving, self))
+
+    def _stop_taking_sends(self) -> None:
+        if (token := self._sending) is None:
+            return
+        self._sending = None
+        try:
+            _WRITING.reset(token)
+        except ValueError:  # ended from another context, as a dependency closed without being finished is: its own copy ends with it
+            log.debug("the transaction ended outside the context that took its sends", extra={"resource": self._database.resource.name})
 
     async def fetch[R](self, row: type[R], sql: str, /, **binds: Bind) -> list[R]:
         table = await self._call("fetch", sql, lambda statements, timeout_s: statements.query(sql, binds, timeout_s=timeout_s))
@@ -436,7 +461,7 @@ class DatabaseSession:
             raise RuntimeError(msg)
         now = _utc_now()
         expires_at = now + timedelta(seconds=declared.max_age_s)
-        due_at = min(now + timedelta(seconds=max(serving.at - time.monotonic(), 0.0)), expires_at)
+        due_at = now + timedelta(seconds=max(serving.at - time.monotonic(), 0.0))  # the route's deadline, which `max_age_s` outlasts
         request_id = logs.bound().get("request_id")
         row = outboxes.Row(
             id=str(uuid7()), service=client.name, method=method, path=path, body=body, idempotency_key=key, route=serving.route[: outboxes.ROUTE_LENGTH],
@@ -511,6 +536,7 @@ class DatabaseSession:
             raise RuntimeError(msg)
 
     async def end(self, *, commit: bool) -> None:
+        self._stop_taking_sends()
         async with self._turn:
             if self._ended:
                 return
@@ -593,19 +619,11 @@ class DatabaseSession:
         whose row is not recorded done."""
         if not self._sent:
             return
-        outcomes: list[tuple[outboxes.Row, str | None]] = []
-        for row, client in self._sent:
-            try:
-                failure = await client.deliver(row)
-            except Exception as error:  # a defect, logged with its traceback: the writes have committed, so the request still succeeds
-                log.exception("making %s after its commit failed with a defect: basis relay makes it again", row.named(), extra=_fields(row))
-                failure = f"{type(error).__name__}: {error}"
-            if failure is not None:
-                log.warning("%s did not accept %s after its commit: basis relay makes it again", row.service, row.named(), extra=_fields(row) | {"error": failure})
-            outcomes.append((row, failure))
-        await self._record(outcomes)
+        async with asyncio.TaskGroup() as calls:  # each within what is left of the route's deadline, so a slow one leaves the others theirs
+            made = [calls.create_task(_made(row, client)) for row, client in self._sent]
+        await self._record([(row, call.result()) for (row, _), call in zip(self._sent, made, strict=True)])
 
-    async def _record(self, outcomes: Sequence[tuple[outboxes.Row, str | None]]) -> None:
+    async def _record(self, outcomes: Sequence[tuple[outboxes.Row, outboxes.Failure | None]]) -> None:
         """Record each call the request made after its commit, `done` or one failed attempt, in a transaction of its
         own, within what is left of the route's deadline. A record that does not happen leaves the call to the relay."""
         database = self._database
@@ -619,12 +637,9 @@ class DatabaseSession:
         def record() -> None:
             with database.port.statements(writes=True) as statements:
                 table = database.table(statements)
-                for row, failure in outcomes:
+                for row, failure in outcomes:  # each only while no relay has begun an attempt since the row's insert
                     left_s = _left(deadline_at, f"the calls' record in {resource.name}")
-                    if failure is None:
-                        table.accepted(row.id, attempts=1, at=at, timeout_s=left_s)
-                    else:
-                        table.refused(row.id, attempts=1, next_at=outboxes.again_at(declared, row, 1, at), error=failure, timeout_s=left_s)
+                    outboxes.record(table, declared, row, failure, seen=0, attempts=1, at=at, reported=False, timeout_s=left_s)
                 statements.commit()
 
         with database.span("outbox record", **{"basis.outbox.calls": len(outcomes)}) as span:
@@ -642,6 +657,7 @@ class DatabaseSession:
                 log.warning("could not record the calls the request made after its commit: basis relay makes them again", exc_info=error, extra={"resource": resource.name, "calls": len(outcomes)})
 
     def abandon(self) -> None:
+        self._stop_taking_sends()
         if self._ended:
             return
         self._ended = True
@@ -653,6 +669,20 @@ class DatabaseSession:
             await running
         if (stack := self._stack) is not None:
             await self._roll_back(stack)
+
+
+async def _made(row: outboxes.Row, client: HttpClient) -> outboxes.Failure | None:
+    """Make the call `row` holds, after its commit, once: None when the service accepted it, and otherwise why not. It
+    never raises but when cancelled, since the request's writes have committed."""
+    try:
+        failure = await client.deliver(row)
+    except Exception as error:  # a defect, logged with its traceback: the writes have committed, so the request still succeeds
+        log.exception("making %s after its commit failed with a defect: basis relay makes it again", row.named(), extra=_fields(row))
+        return outboxes.Failure(f"{type(error).__name__}: {error}", None)
+    if failure is not None:
+        then = "it is made no more" if failure.permanent else "basis relay makes it again"
+        log.warning("%s did not accept %s after its commit: %s", row.service, row.named(), then, extra=_fields(row) | {"error": failure.error, "reply": failure.reply})
+    return failure
 
 
 def _left(deadline_at: float, what: str) -> float:
@@ -723,14 +753,16 @@ class HttpClient:
     async def send(self, method: SendMethod, path: str, body: Body = None, /, *, key: str) -> None:
         outboxes.checked(path, key)
         content = _content(body)
-        if (session := _WRITING.get()) is not None:
-            await session.enqueue(self, method, path, content.decode() if content is not None else None, key)
+        writing, serving = _WRITING.get(), deadlines.serving()
+        if writing is not None and serving is not None and writing[0] is serving:  # the route serving this request writes
+            await writing[1].enqueue(self, method, path, content.decode() if content is not None else None, key)
             return
         with self._span(method, path, key) as span:
             await self._exchange(span, method, path, content=content, key=key)
 
-    async def deliver(self, row: outboxes.Row) -> str | None:
-        """Make the call an outbox's row holds, once: None when the service accepts it, and otherwise why it did not."""
+    async def deliver(self, row: outboxes.Row) -> outboxes.Failure | None:
+        """Make the call an outbox's row holds, once: None when the service accepts it, and otherwise why it did not,
+        with the status it answered."""
         with self._span(row.method, row.path, row.idempotency_key) as span:
             span.set_attribute("basis.outbox.row", row.id)
             try:
@@ -738,7 +770,7 @@ class HttpClient:
             except (CallFailedError, DeadlineExceededError) as failed:
                 span.record_exception(failed)
                 span.set_status(StatusCode.ERROR, str(failed))
-                return str(failed)
+                return outboxes.Failure(str(failed), failed.reply if isinstance(failed, CallFailedError) else None)
         return None
 
     async def call[T](self, method: HttpMethod, path: str, reply: type[T], /, *, query: Mapping[str, QueryValue | Sequence[QueryValue]] | None = None, body: Body = None) -> T:
@@ -793,7 +825,7 @@ class HttpClient:
             raise
         except httpx2.TimeoutException as error:  # one of the client's own timeouts, each the deadline
             raise limit.exceeded() from error
-        except httpx2.TransportError as error:
+        except httpx2.RequestError as error:  # a transport's, or one such as a redirect loop or a body that does not decode
             msg = f"{resource.name} could not be reached for {method} {path}: {type(error).__name__}"
             raise CallFailedError(msg, resource=resource.name, reply=None) from error
         span.set_attribute("http.response.status_code", response.status_code)

@@ -37,6 +37,7 @@ from basis import api
 from basis.api import fakes, outboxes, relay
 from basis.api.example import service as example
 from basis.api.outboxes import Row
+from basis.api.resources import DatabaseResource
 from basis.core import command
 from basis.core.databases import Statements, open_database
 from basis.core.settings import GivenSettings
@@ -444,6 +445,11 @@ class Outboxed:
     table: str
     service: api.Service
 
+    @property
+    def outbox(self) -> api.Outbox:
+        [declared] = [resource.outbox for resource in self.service.resources if isinstance(resource, DatabaseResource) and resource.outbox is not None]
+        return declared
+
     def app(self, ledger: Ledger) -> api.App:
         return api.build(self.service, settings=self.settings, fakes={LEDGER: fakes.Http(ledger.app)})
 
@@ -522,7 +528,7 @@ def test_a_call_that_fails_after_its_commit_reaches_the_service_through_the_rela
     ledger.status = HTTPStatus.CREATED
     [answered] = outboxed.run_relay(ledger, after=timedelta(seconds=61 + 121))
     [row] = outboxed.rows()
-    assert ((still_down.refused, still_down.accepted), (answered.refused, answered.accepted)) == ((1, 0), (0, 1))
+    assert ((still_down.retried, still_down.accepted), (answered.retried, answered.accepted)) == ((1, 0), (0, 1))
     assert ledger.seen == [(KEY, BOOKED)] * 3  # after the commit, then the relay's two attempts, each with its key
     assert (row.status, row.attempts, row.next_at, row.idempotency_key) == ("done", 3, None, KEY)
 
@@ -539,6 +545,20 @@ def test_a_call_that_ages_out_is_made_no_more_and_fails_the_relay(outboxed: Outb
     assert f"POST /bookings to ledger with Idempotency-Key {KEY}" in failed[0]
 
 
+def test_a_call_its_service_refuses_for_good_after_its_commit_is_made_no_more_and_the_relay_reports_it_once(outboxed: Outboxed) -> None:
+    ledger = Ledger(status=HTTPStatus.UNPROCESSABLE_CONTENT)
+    with TestClient(outboxed.app(ledger).asgi) as client:
+        assert client.post("/book", json=PRICE).status_code == HTTPStatus.OK
+    [after_commit] = outboxed.rows()
+    assert (after_commit.status, after_commit.attempts, after_commit.last_error) == ("refused", 1, "ledger answered 422 to POST /bookings")
+    first, again = outboxed.run_relay(ledger, after=timedelta(seconds=1)), outboxed.run_relay(ledger, after=timedelta(seconds=2))
+    reported = relay.failure(first, "booking")
+    assert reported is not None
+    assert f"POST /bookings to ledger with Idempotency-Key {KEY}" in reported[0]
+    assert "refused with: ledger answered 422 to POST /bookings" in reported[0]
+    assert (relay.failure(again, "booking"), len(ledger.seen), [(row.status, row.next_at) for row in outboxed.rows()]) == (None, 1, [("refused", None)])
+
+
 def test_two_relays_claim_a_call_once(outboxed: Outboxed) -> None:
     with TestClient(outboxed.app(Ledger(status=HTTPStatus.SERVICE_UNAVAILABLE)).asgi) as client:
         assert client.post("/book", json=PRICE).status_code == HTTPStatus.OK
@@ -548,12 +568,13 @@ def test_two_relays_claim_a_call_once(outboxed: Outboxed) -> None:
     with database.statements(writes=True) as first, database.statements(writes=True) as second:
         tables = [outboxes.Sql(statements, outboxed.table, outboxed.scratch.dialect) for statements in (first, second)]
         [due], [seen_too] = (table.due(later, 10, timeout_s=10) for table in tables)
-        claimed.append(tables[0].claim(due, later + timedelta(seconds=30), timeout_s=10))
+        claimed.append(outboxes.claim(tables[0], due, later + timedelta(seconds=30), timeout_s=10))
         first.commit()
-        claimed.append(tables[1].claim(seen_too, later + timedelta(seconds=30), timeout_s=10))
+        claimed.append(outboxes.claim(tables[1], seen_too, later + timedelta(seconds=30), timeout_s=10))
+        late = outboxes.record(tables[1], outboxed.outbox, due, None, seen=0, attempts=1, at=later, reported=False, timeout_s=10)  # a request's record, too late
         second.commit()
     [row] = outboxed.rows()
-    assert (claimed, row.attempts) == ([True, False], 2)
+    assert (claimed, late, row.attempts, row.status) == ([True, False], None, 2, "pending")
 
 
 def test_an_app_whose_outbox_table_is_missing_does_not_start(scratch: Scratch) -> None:
@@ -593,9 +614,10 @@ def test_relay_fails_with_one_error_line_naming_a_call_that_aged_out(outboxed: O
     monkeypatch.setenv("BASIS_HTTP", json.dumps({"ledger": {"url": "http://127.0.0.1:9"}}))  # the discard port: an aged-out call is never made
     assert command.run(["relay", module], cwd=tmp_path, installed=command.installed()) == 1
     out, err = capsys.readouterr()
-    assert json.loads(out)["outboxes"] == [{"database": "warehouse", "table": outboxed.table, "accepted": 0, "refused": 0, "taken": 0, "expired": 1}]
+    expected = {"database": "warehouse", "table": outboxed.table, "accepted": 0, "retried": 0, "taken": 0, "refused": 0, "expired": 1, "failed": 0}
+    assert json.loads(out)["outboxes"] == [expected]
     lines = err.splitlines()
     assert json.loads(lines[-2])["message"] == "finished relay"
-    assert lines[-1].startswith(f"ERROR: a call in service booking's outbox aged out before its service accepted it, and is made no more: POST /bookings to ledger with Idempotency-Key {KEY}")
+    assert lines[-1].startswith(f"ERROR: service booking's outbox has a call aged out, and made no more: POST /bookings to ledger with Idempotency-Key {KEY}")
     assert [row.status for row in outboxed.rows()] == ["expired"]
     del sys.modules[module]
