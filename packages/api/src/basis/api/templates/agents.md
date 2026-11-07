@@ -36,8 +36,9 @@ Rules to keep:
   basis reads no `SSL_CERT_FILE` or `HTTP_PROXY`.
 - A service whose callers sign in declares `user=User`, its subclass of `api.User` with a field for each claim it
   needs beside the subject, and a handler asks for `Annotated[User | None, api.given(User)]`: None is an anonymous
-  request, and a route that needs a user raises `api.SignInRequiredError`. basis verifies every request's bearer token
-  from the `BASIS_IDENTITY__*` settings; a handler never reads the `Authorization` header or decodes a token itself.
+  request, and a route that needs a user raises `api.SignInRequiredError`, which basis adds to the errors of every
+  route that asks for the user, so it is never declared. basis verifies every request's bearer token from the
+  `BASIS_IDENTITY__*` settings; a handler never reads the `Authorization` header or decodes a token itself.
 - A handler fails by raising a subclass of `api.Error` that declares its `status` and `title`, and the caller gets a
   problem details response. Any other exception is a bare 500, logged once with its traceback.
 - Settings are `BASIS_*` variables, read once at startup; one that is missing stops the API with one `ERROR` line.

@@ -26,6 +26,7 @@ from starlette.types import Receive, Scope, Send
 
 from basis.api import deadlines, strict
 from basis.api.errors import MEDIA_TYPE, Error, Problem
+from basis.api.identity import SignInRequiredError
 from basis.api.service import Route
 
 _INVALID = "invalid-request: The request is not valid"
@@ -109,7 +110,12 @@ class Served(APIRoute):
                 return await handle(given)
             except Error as error:
                 if not isinstance(error, declared.answers):
-                    msg = f"{declared.name} raised {type(error).__qualname__}, which its route does not declare: add it to the route's errors=[...], or raise one it declares"
+                    fix = (
+                        "ask for the user in its parameters, as Annotated[User | None, api.given(User)], which adds it to the route's errors"
+                        if isinstance(error, SignInRequiredError)
+                        else "add it to the route's errors=[...], or raise one it declares"
+                    )
+                    msg = f"{declared.name} raised {type(error).__qualname__}, which its route does not declare: {fix}"
                     raise UndeclaredError(msg) from error
                 raise
             except HTTPException as error:

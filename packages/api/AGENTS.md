@@ -46,7 +46,7 @@ Paths are under `src/basis/api/`.
   one, across the pool's processes by pickling.
 - Every route declares `deadline_s`, `response` (its handler's return annotation) and `errors`, with no default for
   any. A route answers only the errors in `Route.answers`: its own, and basis's that it can meet, which `service._met`
-  derives from what it asks for. Any other `api.Error`, or an `HTTPException`, is a defect, a 500. A new error that
+  derives from what it asks for, `SignInRequiredError` among them where it asks for the user. Any other `api.Error`, or an `HTTPException`, is a defect, a 500. A new error that
   basis raises inside a route joins `BASIS_ERRORS` and `_met`.
 - A request is read strictly before FastAPI sees it (`strict.py`): a key nothing declares is refused, a body's values
   have their own JSON types, a decimal is a string, a time has its offset, and query and path text reads by its type's

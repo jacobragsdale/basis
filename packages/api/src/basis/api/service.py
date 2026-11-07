@@ -23,7 +23,8 @@ Every route declares three things, none of which has a default, so a route that 
 - `errors`, every `api.Error` its handler may raise. Each appears in the OpenAPI document under its status, and an
   error the route does not declare, or an `HTTPException`, answers 500 as the defect it is. basis adds its own: an
   invalid request's 422 on every route, a deadline's 504 on one that asks for a resource or a compute function, and
-  another service's 502 on one that asks for an `api.http`. `Route.answers` holds them all.
+  another service's 502 on one that asks for an `api.http`. It adds `api.SignInRequiredError`, the 401 a handler
+  raises for an anonymous request, to each route whose parameters ask for the user. `Route.answers` holds them all.
 
 A route reads its request strictly (see `strict.py`): no unknown key, and no value coerced, in its body, its query or
 its path.
@@ -66,7 +67,7 @@ from starlette.routing import Route as StarletteRoute
 from basis.api import strict
 from basis.api.compute import Compute, ComputeFunction
 from basis.api.errors import Error, NotReadyError, ServiceError
-from basis.api.identity import GivenUser, User, annotation_refusal
+from basis.api.identity import GivenUser, SignInRequiredError, User, annotation_refusal
 from basis.api.resources import (
     Cache,
     CacheResource,
@@ -235,6 +236,9 @@ def _declared_errors(name: str, declared: object) -> tuple[type[Error], ...]:
         if error in BASIS_ERRORS:
             msg = f"{name} declares {error.__qualname__}, which basis raises itself and adds to each route that can meet it: remove it from errors=[...]"
             raise ServiceError(msg)
+        if error is SignInRequiredError:
+            msg = f"{name} declares SignInRequiredError, which basis adds to each route whose parameters ask for the user: remove it from errors=[...]"
+            raise ServiceError(msg)
         if vars(error).get("_abstract", False):
             msg = f"{name} declares {error.__qualname__}, a base that is never raised itself: declare each of its subclasses the handler raises"
             raise ServiceError(msg)
@@ -246,12 +250,15 @@ def _declared_errors(name: str, declared: object) -> tuple[type[Error], ...]:
 
 
 def _met(asks: Sequence[Ask]) -> Iterator[type[Error]]:
-    """The errors of basis's own that a route which asks for `asks` can meet."""
+    """The errors of basis's own that a route which asks for `asks` can meet, and `SignInRequiredError` where it asks for
+    the user, which its handler raises for an anonymous request that needs one."""
     given = [ask.given for ask in asks if not isinstance(ask.given, type)]
     if any(not isinstance(found, ClockResource | IdsResource) for found in given):
         yield DeadlineExceededError
     if any(isinstance(found, HttpResource) for found in given):
         yield CallFailedError
+    if any(isinstance(ask.given, type) and issubclass(ask.given, User) for ask in asks):
+        yield SignInRequiredError
 
 
 get, post, put, patch, delete = _route("GET"), _route("POST"), _route("PUT"), _route("PATCH"), _route("DELETE")

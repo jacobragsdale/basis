@@ -11,7 +11,7 @@ from fastapi import Depends
 from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from pydantic import AliasChoices, AliasPath, ConfigDict, Field
+from pydantic import AliasChoices, AliasPath, ConfigDict, Field, JsonValue, TypeAdapter
 from pydantic.alias_generators import to_camel
 
 from basis import api
@@ -56,7 +56,7 @@ SERVICE = api.Service(
     settings=api.Settings,
     user=Trader,
     routes=[
-        api.get("/me", me, deadline_s=5, response=dict[str, object], errors=[api.SignInRequiredError]),
+        api.get("/me", me, deadline_s=5, response=dict[str, object], errors=[]),
         api.get("/greeting", greeting, deadline_s=5, response=dict[str, str], errors=[]),
         api.get("/ping", ping, deadline_s=5, response=dict[str, str], errors=[]),
     ],
@@ -327,6 +327,56 @@ def _allowing() -> object:
 def test_a_user_names_each_claim_by_its_field_or_a_plain_alias_alone(declare: Callable[[], object], message: str) -> None:
     with pytest.raises(api.ServiceError, match=message):
         declare()
+
+
+_JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
+
+
+def test_a_route_whose_parameters_ask_for_the_user_answers_sign_in_required_without_declaring_it() -> None:
+    assert api.SignInRequiredError in api.get("/me", me, deadline_s=5, response=dict[str, object], errors=[]).answers
+    assert api.SignInRequiredError in api.get("/anyone", anyone, deadline_s=5, response=dict[str, str], errors=[]).answers  # a base of the user
+    assert api.SignInRequiredError not in api.get("/ping", ping, deadline_s=5, response=dict[str, str], errors=[]).answers
+
+
+def test_sign_in_required_is_in_the_openapi_document_of_each_route_that_asks_for_the_user_alone() -> None:
+    document = _JSON.validate_python(_app().asgi.openapi())
+    assert isinstance(document, dict)
+    paths = document["paths"]
+    assert isinstance(paths, dict)
+
+    def responses(path: str) -> dict[str, JsonValue]:
+        found = paths[path]
+        assert isinstance(found, dict)
+        operation = found["get"]
+        assert isinstance(operation, dict)
+        answered = operation["responses"]
+        assert isinstance(answered, dict)
+        return answered
+
+    problem = {"application/problem+json": {"schema": {"$ref": "#/components/schemas/Problem"}}}
+    assert responses("/me")["401"] == responses("/greeting")["401"] == {"description": "sign-in-required: Sign-in is required", "content": problem}
+    assert "401" not in responses("/ping")
+
+
+def test_a_route_that_declares_sign_in_required_is_refused_since_basis_adds_it() -> None:
+    with pytest.raises(api.ServiceError, match=r"me declares SignInRequiredError, which basis adds to each route whose parameters ask for the user: remove it from errors=\[\.\.\.\]"):
+        api.get("/me", me, deadline_s=5, response=dict[str, object], errors=[api.SignInRequiredError])
+
+
+def gatekeeper() -> dict[str, str]:
+    msg = "positions are shown to a signed-in user"
+    raise api.SignInRequiredError(msg)
+
+
+def test_sign_in_required_from_a_route_that_does_not_ask_for_the_user_is_a_500_whose_log_says_to_ask(logged: Records) -> None:
+    service = api.Service(name="positions", settings=api.Settings, user=Trader, routes=[api.get("/gate", gatekeeper, deadline_s=5, response=dict[str, str], errors=[])])
+    with TestClient(api.build(service, settings=api.Settings.given(identity=DEVELOPMENT)).asgi) as client:
+        assert client.get("/gate").status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+    [failure] = [record for record in logged() if "traceback" in record]
+    assert failure["error"] == (
+        "basis.api.routes.UndeclaredError: gatekeeper raised SignInRequiredError, which its route does not declare:"
+        " ask for the user in its parameters, as Annotated[User | None, api.given(User)], which adds it to the route's errors"
+    )
 
 
 def test_a_route_may_ask_for_a_base_of_the_services_user() -> None:

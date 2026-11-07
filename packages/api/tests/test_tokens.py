@@ -55,7 +55,7 @@ def me(user: Annotated[Trader | None, api.given(Trader)]) -> dict[str, str]:
     return {"subject": user.subject, "desk": user.desk}
 
 
-SERVICE = api.Service(name="positions", settings=api.Settings, user=Trader, routes=[api.get("/me", me, deadline_s=5, response=dict[str, str], errors=[api.SignInRequiredError])])
+SERVICE = api.Service(name="positions", settings=api.Settings, user=Trader, routes=[api.get("/me", me, deadline_s=5, response=dict[str, str], errors=[])])
 
 
 def token(key: object, *, algorithm: str = "RS256", headers: Mapping[str, object] | None = None, **claims: object) -> str:
