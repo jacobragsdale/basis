@@ -139,7 +139,8 @@ def test_a_value_that_does_not_fit_its_column_is_refused_before_any_write(scratc
 
     scratch.execute(ddl.create_table(Target(NarrowNote, "warehouse", table, etl.Upsert(), KEY), scratch.dialect))
     result = run(price_job(table, etl.Upsert()), {"warehouse": scratch}, prices({"note": "too long"}), tmp_path)
-    assert result.record.reasons == ["prices: upsert: note: values up to 8 characters, and the column holds 2"]
+    unit = "UTF-16 units" if scratch.dialect == "mssql" else "characters"  # an NVARCHAR(2), and a VARCHAR2(2 CHAR)
+    assert result.record.reasons == [f"prices: upsert: note: values up to 8 {unit}, and the column holds 2"]
     assert contents(scratch, table) == []
 
 

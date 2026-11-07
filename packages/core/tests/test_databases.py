@@ -435,12 +435,12 @@ class _Server:
         self.calls.append(("setinputsizes", sizes))
 
     def executemany(self, sql: str, rows: list[tuple[object, ...]]) -> None:
-        self.calls.append(("executemany", [row[0] for row in rows]))
+        self.calls.append(("executemany", rows))
         self.staged += len(rows) if "#etl_stage" in sql else 0
         self.rowcount = self.reported(len(rows))
 
     def execute(self, sql: str, binds: tuple[object, ...] = ()) -> None:
-        self.calls.append(("execute", binds[0] if binds else sql.split(None, 1)[0]))
+        self.calls.append(("execute", binds or sql.split(None, 1)[0]))
         self.staged += 1 if binds and "#etl_stage" in sql else 0
         self.rowcount = 0 if sql.startswith(("UPDATE", "DROP")) else self.staged if sql.startswith("INSERT INTO docs") and "SELECT" in sql else 1
 
@@ -455,15 +455,35 @@ def _docs(*rows: tuple[int, str | None]) -> pl.DataFrame:
     return pl.DataFrame({"id": [row[0] for row in rows], "body": [row[1] for row in rows], "amount": [Decimal("1.5")] * len(rows)}, schema={column.name: column.dtype for column in DOCS.columns})
 
 
-def test_a_string_binds_as_nvarchar_sized_in_utf16_units_and_a_row_past_4000_goes_by_itself() -> None:
+def test_every_column_binds_by_its_kind_and_a_row_past_4000_utf16_units_goes_by_itself_in_its_place() -> None:
     """mssql-python 1.17.0 typed each column by its longest value, binding one whose longest is ASCII as `varchar`,
-    which the database's code page converts, and counted only the last row of a batch holding a longer string."""
+    which the database's code page converts, and counted only the last row of a batch holding a longer string. A long
+    row binds its long string as `nvarchar(max)`, its others as a batch does, and keeps its place among the rows."""
     server = _Server()
     writer = MssqlWriter("warehouse", server, 10, "etl.publishes")  # ty: ignore[invalid-argument-type] -- a fake connection
     frame = _docs((1, "hello world"), (2, "日本\U0001f600"), (3, "a" * 3999 + "\U0001f600"), (4, "\U0001f600" * 2000), (5, None))
     assert writer.apply(DOCS, Changes(insert=frame), DOCS_SPEC) == Counts(inserted=5)
-    sizes = [(mssql_python.SQL_BIGINT, 19, 0), (mssql_python.SQL_WVARCHAR, 4000, 0), (mssql_python.SQL_VARCHAR, 41, 0)]
-    assert server.calls == [("setinputsizes", sizes), ("executemany", [1, 2, 4, 5]), ("execute", 3)]
+    bigint, text = (mssql_python.SQL_BIGINT, 19, 0), (mssql_python.SQL_VARCHAR, 41, 0)
+    assert server.calls == [
+        ("setinputsizes", [bigint, (mssql_python.SQL_WVARCHAR, 11, 0), text]),
+        ("executemany", [(1, "hello world", "1.5000"), (2, "日本\U0001f600", "1.5000")]),
+        ("setinputsizes", [bigint, (mssql_python.SQL_WVARCHAR, 0, 0), text]),
+        ("execute", (3, "a" * 3999 + "\U0001f600", "1.5000")),
+        ("setinputsizes", [bigint, (mssql_python.SQL_WVARCHAR, 4000, 0), text]),
+        ("executemany", [(4, "\U0001f600" * 2000, "1.5000"), (5, None, "1.5000")]),
+    ]
+
+
+def test_each_run_of_rows_is_a_span_and_a_run_one_by_one_counts_its_statements() -> None:
+    """A trace shows what each row past 4,000 UTF-16 units costs: its run's span, over the statements it ran."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    writer = MssqlWriter("warehouse", _Server(), 10, "etl.publishes")  # ty: ignore[invalid-argument-type] -- a fake connection
+    with traces.tracing(provider.get_tracer("test")):
+        writer.apply(DOCS, Changes(insert=_docs((1, "x"), (2, "a" * 4001), (3, "a" * 5000), (4, "y"))), DOCS_SPEC)
+    runs = [{key: value for key, value in (span.attributes or {}).items() if key in {"db.operation.batch.size", "basis.statements"}} for span in exporter.get_finished_spans()]
+    assert runs == [{"db.operation.batch.size": 1}, {"basis.statements": 2}, {"db.operation.batch.size": 1}]
 
 
 @pytest.mark.parametrize(("lost", "error"), [(0, None), (1, "staging for docs wrote 2 rows, and the run computed 3: nothing is committed")], ids=["counted", "short"])
@@ -477,3 +497,51 @@ def test_a_stage_is_counted_by_the_server_whatever_the_driver_reports(lost: int,
     with pytest.raises(RuntimeError) as raised:
         writer.apply(DOCS, Changes(upsert=frame), DOCS_SPEC)
     assert str(raised.value) == error
+
+
+ORACLE_SETS = {"NLS_CHARACTERSET": "AL32UTF8", "NLS_NCHAR_CHARACTERSET": "AL16UTF16"}
+
+
+class _Describing:
+    """An Oracle connection whose `all_tab_cols` has one column, `note`, and whose character sets are `sets`."""
+
+    def __init__(self, column: tuple[object, ...], sets: dict[str, str]) -> None:
+        self.column, self.sets, self.sql = column, sets, ""
+
+    def cursor(self) -> _Describing:
+        return self
+
+    def execute(self, sql: str, binds: object = None) -> None:
+        del binds
+        self.sql = sql
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        return list(self.sets.items()) if "nls_database_parameters" in self.sql else [("NOTE", *self.column)]
+
+    def close(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    ("column", "sets", "storage"),
+    [
+        (("VARCHAR2", 1000, None, None, "Y", None, "NO", "NO", 4000, "C"), ORACLE_SETS, (1000, "characters", 4000, "utf-8", "AL32UTF8")),
+        (("VARCHAR2", 10, None, None, "Y", None, "NO", "NO", 10, "B"), ORACLE_SETS | {"NLS_CHARACTERSET": "WE8MSWIN1252"}, (10, "bytes", None, "cp1252", "WE8MSWIN1252")),
+        (("CHAR", 5, None, None, "Y", None, "NO", "NO", 5, "C"), ORACLE_SETS | {"NLS_CHARACTERSET": "WE8ISO8859P1"}, (5, "characters", 5, "latin-1", "WE8ISO8859P1")),
+        (("VARCHAR2", 10, None, None, "Y", None, "NO", "NO", 30, "C"), ORACLE_SETS | {"NLS_CHARACTERSET": "UTF8"}, (10, "characters", 30, "utf-8", "UTF8")),
+        (("NVARCHAR2", 10, None, None, "Y", None, "NO", "NO", 20, "C"), ORACLE_SETS | {"NLS_CHARACTERSET": "WE8MSWIN1252"}, (10, "characters", 20, "utf-16-be", "AL16UTF16")),
+        (("CLOB", 0, None, None, "Y", None, "NO", "NO", 4000, None), ORACLE_SETS | {"NLS_CHARACTERSET": "WE8MSWIN1252"}, (None, "characters", None, "cp1252", "WE8MSWIN1252")),
+        (("VARCHAR2", 10, None, None, "Y", None, "NO", "NO", 10, "C"), ORACLE_SETS | {"NLS_CHARACTERSET": "EE8ISO8859P2"}, (10, "characters", 10, None, "EE8ISO8859P2")),
+        (("NUMBER", None, 18, 4, "Y", None, "NO", "NO", 22, None), ORACLE_SETS, (None, "characters", None, None, None)),
+    ],
+    ids=["varchar2-char-al32utf8", "varchar2-byte-we8mswin1252", "char-we8iso8859p1", "varchar2-utf8", "nvarchar2-national", "clob", "a-set-basis-does-not-know", "number"],
+)
+def test_an_oracle_column_stores_text_in_its_character_set(column: tuple[object, ...], sets: dict[str, str], storage: tuple[object, ...]) -> None:
+    """Oracle replaces a character its set cannot hold without an error, as SQL Server's code pages do: a `CHAR`,
+    `VARCHAR2` or `CLOB` stores text in the database's set, an `NCHAR`, `NVARCHAR2` or `NCLOB` in the national one, and
+    a column in characters holds its bytes too. No live test can show it: CI's Oracle is AL32UTF8, which holds every
+    character."""
+    spec = OracleReader("ledger", _Describing(column, sets), 10).describe("prices")  # ty: ignore[invalid-argument-type] -- a fake connection
+    assert spec is not None
+    found = spec.columns["note"]
+    assert (found.length, found.unit, found.max_bytes, found.encoding, found.charset) == storage

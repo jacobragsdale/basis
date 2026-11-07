@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 import polars as pl
 import pytest
 
+from basis.core import publish as publishing
 from basis.core.databases import Counts, LedgerEntry, Reader, Statements, Writer
 from basis.core.destination import DestColumn, TableSpec
 from basis.core.interval import Interval
@@ -102,11 +103,11 @@ def databases(*names: str, missing: str | None = None) -> dict[str, Ledger]:
     return {name: Ledger(name, {} if f"{name}.prices" == missing else {f"{name}.prices": TableSpec("mssql", f"{name}.prices", SPEC)}) for name in names}
 
 
-def run(found: Mapping[str, Ledger], *, run_id: str = "R1", again: bool = False, insert: pl.DataFrame | None = None) -> dict[str, PublishRecord]:
+def run(found: Mapping[str, Ledger], *, run_id: str = "R1", again: bool = False, insert: pl.DataFrame | None = None, checked: Mapping[str, TableSpec] | None = None) -> dict[str, PublishRecord]:
     targets = {f"{name}_prices": Table(f"{name}.prices", name) for name in found}
     frame = insert if insert is not None else pl.DataFrame({"security_id": ["A", "B"], "price": [1.5, 2.0]})
     changes = {output: Changes(insert=frame) for output in targets}
-    return publish(Publication(run_id, "prices", DAY, "0.0.0", again, lambda: AT), targets, changes, lambda name: FakeDatabase(found[name]))
+    return publish(Publication(run_id, "prices", DAY, "0.0.0", again, lambda: AT), targets, changes, lambda name: FakeDatabase(found[name]), checked)
 
 
 def test_each_database_commits_its_tables_with_a_ledger_row_for_each_in_name_order() -> None:
@@ -148,3 +149,23 @@ def test_a_second_plain_insert_of_an_interval_is_refused_unless_the_run_is_told_
     records = run(found, run_id="R2", again=again)
     assert records["warehouse"].status == status
     assert refused_overlap(records) is not again
+
+
+def test_values_the_run_checked_against_the_same_table_are_not_checked_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A run checks its values against each table as its read login describes it, and the publish describes the table
+    again in its transaction: where the two are the same, the values are not checked a second time."""
+    checked: list[str] = []
+    real = publishing.check_values
+
+    def counting(target: Target, spec: TableSpec, changes: Changes) -> list[str]:
+        checked.append(spec.table)
+        return real(target, spec, changes)
+
+    monkeypatch.setattr(publishing, "check_values", counting)
+    found = databases("warehouse")
+    same = found["warehouse"].specs["warehouse.prices"]
+    assert run(found, checked={"warehouse_prices": same})["warehouse"].status == "committed"
+    assert checked == []
+    changed = TableSpec("mssql", "warehouse.prices", SPEC | {"price": DestColumn("price", "REAL", None, None, None, nullable=False, generated=False, defaulted=False)})
+    assert run(databases("warehouse"), checked={"warehouse_prices": changed})["warehouse"].status == "committed"
+    assert checked == ["warehouse.prices"]

@@ -9,12 +9,13 @@ connection of its own, outside the run's transaction. Upserts are an UPDATE then
 never `MERGE`, whose history of defects in SQL Server is long; the INSERT locks the keys it checks, so two writers never
 insert one key twice.
 
-Rows are inserted by `executemany`, with each column's type given (`_sizes`), since mssql-python 1.17.0 types a column
-by one value of it, its longest, and binds the whole column as `varchar` when that value is ASCII: the server then
-converts every value through the database's code page, and `日本` arrives as `??`, with no error. A string column binds
-as `nvarchar`, sized to its longest value in UTF-16 units. A row holding a string longer than 4,000 units, which only
-`nvarchar(max)` binds, goes as a statement of its own (`_long`): the driver streams such a value, and in a batch it
-then runs each row by itself and counts only the last (docs/spikes/sqlserver-json.md, section 3).
+Rows are inserted with each column's type given (`_sizes`), since mssql-python 1.17.0 types a column by one value of
+it, its longest, and binds the whole column as `varchar` when that value is ASCII: the server then converts every value
+through the database's code page, and `日本` arrives as `??`, with no error. A string binds as `nvarchar`, sized in
+UTF-16 units, and a decimal as its text. Rows go in the frame's order: each run of rows whose strings all bind as
+`nvarchar(n)` as one `executemany`, and each row holding a string longer than 4,000 units, which only `nvarchar(max)`
+binds, as a statement of its own, since the driver streams such a value, and in a batch then runs each row by itself
+and counts only the last (docs/spikes/sqlserver-json.md, section 3).
 
 Each statement a reader or a writer runs has a span, and so does each commit and rollback (`base.span`). `statements`
 runs a caller's own SQL, binding `%(name)s` by name: each statement's deadline is the driver's query timeout, in whole
@@ -29,6 +30,7 @@ Server's error 4060 says of a database the login cannot open, and `Failed` other
 session's language to English (`SET LANGUAGE us_english`), so the messages are English whatever language a login
 defaults to."""
 
+import codecs
 import locale
 import logging
 import math
@@ -63,7 +65,7 @@ from basis.core.databases.base import (
     statement,
 )
 from basis.core.databases.failures import Boundary, ending, quietly
-from basis.core.destination import DestColumn, TableSpec
+from basis.core.destination import DestColumn, TableSpec, Unit, utf16_units
 from basis.core.errors import Conflict, Denied, Failed, Rejected, ServiceError, Timeout, Unavailable
 from basis.core.interval import Interval
 from basis.core.logs import ms_since
@@ -122,10 +124,9 @@ class Cursor:
     def executemany(self, sql: str, rows: Sequence[Sequence[object]]) -> None:
         self.boundary.call(self.raw.executemany, sql, rows)
 
-    def setinputsizes(self, sizes: list[tuple[int, int, int]]) -> None:
+    def setinputsizes(self, sizes: list[int | tuple[object, ...]]) -> None:
         """Each parameter's SQL type, size and decimal digits, for the next statement alone."""
-        given: list[int | tuple[object, ...]] = list(sizes)
-        self.boundary.call(self.raw.setinputsizes, given)
+        self.boundary.call(self.raw.setinputsizes, sizes)
 
     def fetchone(self) -> mssql_python.Row | None:
         return self.boundary.call(self.raw.fetchone)
@@ -361,38 +362,65 @@ class MssqlReader:
 
 
 _DESCRIBE = """
-SELECT c.name, t.name, c.max_length, c.precision, c.scale, c.is_nullable, c.is_identity, c.is_computed, c.default_object_id,
-    CAST(COLLATIONPROPERTY(c.collation_name, 'CodePage') AS int)
+SELECT c.name, COALESCE(TYPE_NAME(c.system_type_id), t.name), c.max_length, c.precision, c.scale, c.is_nullable,
+    c.is_identity, c.is_computed, c.default_object_id, CAST(COLLATIONPROPERTY(c.collation_name, 'CodePage') AS int)
 FROM sys.columns AS c JOIN sys.types AS t ON c.user_type_id = t.user_type_id
 WHERE c.object_id = OBJECT_ID(%(table)s)
 ORDER BY c.column_id
 """
+"""Each column's type is its system type's, so a column of an alias type, as `CREATE TYPE code FROM varchar(50)`, or
+`sysname`, is the `varchar` or `nvarchar` it is; a CLR type, as `hierarchyid`, has no system type's name, and keeps
+its own."""
 
 
 def _column(row: Sequence[object]) -> DestColumn:
     name, type_name, max_length, precision, scale, nullable, identity, computed, default, code_page = row
     kind = str(type_name).upper()
     length = int(str(max_length))
-    chars = None if length == -1 or kind in {"TEXT", "NTEXT"} else length // 2 if kind in {"NCHAR", "NVARCHAR"} else length
     numeric = kind in {"DECIMAL", "NUMERIC"}
+    unit, encoding, charset = _storage(kind, code_page)
+    bounded = encoding is not None and length != -1 and kind not in {"TEXT", "NTEXT"}
     return DestColumn(
         name=str(name).lower(),
         type=kind,
-        length=chars if kind in {"CHAR", "VARCHAR", "NCHAR", "NVARCHAR", "TEXT", "NTEXT"} else None,
+        length=(length // 2 if unit == "UTF-16 units" else length) if bounded else None,
         precision=int(str(precision)) if numeric else None,
         scale=int(str(scale)) if numeric else None,
         nullable=bool(nullable),
         generated=bool(identity) or bool(computed) or kind in {"TIMESTAMP", "ROWVERSION"},
         defaulted=int(str(default)) != 0,
-        encoding=f"cp{code_page}" if kind in {"CHAR", "VARCHAR", "TEXT"} and code_page not in {None, 0, _UTF8} else None,
+        unit=unit,
+        encoding=encoding,
+        charset=charset,
     )
 
 
+def _storage(kind: str, code_page: object) -> tuple[Unit, str | None, str | None]:
+    """How a column of `kind` measures and stores text: an `nchar`, `nvarchar` or `ntext` in UTF-16 units, and a
+    `char`, `varchar` or `text` in bytes of its collation's code page."""
+    if kind in {"NCHAR", "NVARCHAR", "NTEXT"}:
+        return "UTF-16 units", "utf-16-le", "UTF-16"
+    if kind in {"CHAR", "VARCHAR", "TEXT"}:
+        return ("bytes", "utf-8", "UTF-8") if code_page == _UTF8 else ("bytes", _codec(f"cp{code_page}"), f"code page {code_page}")
+    return "characters", None, None
+
+
+def _codec(name: str) -> str | None:
+    """`name`, where Python has the codec, which it has for every code page SQL Server 2022 has; None otherwise, and a
+    column in it refuses text beyond ASCII."""
+    try:
+        codecs.lookup(name)
+    except LookupError:
+        return None
+    return name
+
+
 _UTF8 = 65001
-"""The code page of a `_UTF8` collation, whose `char` and `varchar` hold any Unicode text. Every other code page SQL
-Server has is one of Python's codecs, as `cp1252`, and the server replaces a character it cannot hold with another, as
-`?`, without an error: so `check_values` refuses one first. Python's `cp1252` refuses U+0081, U+008D, U+008F, U+0090
-and U+009D, which SQL Server keeps, and holds nothing SQL Server loses (docs/spikes/sqlserver-json.md)."""
+"""The code page of a `_UTF8` collation, whose `char` and `varchar` hold any Unicode text, and measure it in UTF-8's
+bytes. Every other code page SQL Server has is one of Python's codecs, as `cp1252` and `cp932`, and the server replaces
+a character it cannot hold with another, as `?`, without an error, so `check_values` refuses one first. Python's
+`cp1252` refuses U+0081, U+008D, U+008F, U+0090 and U+009D, which SQL Server keeps, and holds nothing SQL Server loses
+(docs/spikes/sqlserver-json.md)."""
 
 
 def _frame(arrow: object) -> pl.DataFrame:
@@ -406,40 +434,41 @@ def _frame(arrow: object) -> pl.DataFrame:
 INLINE_UNITS = 4_000
 """The longest string, in UTF-16 units, that binds as `nvarchar(n)`. A longer one binds only as `nvarchar(max)`, whose
 value mssql-python 1.17.0 streams: an `executemany` holding one runs each row by itself, and counts only the last."""
-_ASTRAL = r"[\x{10000}-\x{10FFFF}]"
-"""A character outside Unicode's Basic Multilingual Plane, which UTF-16 writes as two units, as an emoji."""
 
 
-def _units(name: str) -> pl.Expr:
-    """The length of each of a string column's values in UTF-16 units, as SQL Server measures an `nvarchar`."""
-    return pl.col(name).str.len_chars() + pl.col(name).str.count_matches(_ASTRAL)
+def _units(target: Target, part: pl.DataFrame) -> pl.DataFrame:
+    """The length of each of `part`'s strings in UTF-16 units, a column for each string column, in one pass."""
+    return part.select(utf16_units(pl.col(name)) for name in part.columns if target.column(name).kind == "str")
 
 
-def _texts(target: Target, frame: pl.DataFrame) -> list[str]:
-    return [name for name in frame.columns if target.column(name).kind == "str"]
+def _long(units: pl.DataFrame, height: int) -> pl.Series:
+    """Which of the rows `units` measures hold a string longer than `INLINE_UNITS`."""
+    if not units.width:
+        return pl.repeat(False, height, eager=True)  # noqa: FBT003 -- polars' value to repeat, not a flag
+    return units.select(pl.any_horizontal(pl.all() > INLINE_UNITS)).to_series().fill_null(False)  # noqa: FBT003 -- as above
 
 
-def _long(target: Target, frame: pl.DataFrame) -> pl.Series:
-    """Which of `frame`'s rows hold a string longer than `INLINE_UNITS`."""
-    if not (texts := _texts(target, frame)):
-        return pl.repeat(False, frame.height, eager=True)  # noqa: FBT003 -- polars' value to repeat, not a flag
-    return frame.select(pl.any_horizontal(_units(name) > INLINE_UNITS for name in texts).fill_null(False)).to_series()  # noqa: FBT003 -- as above
+def _bound(target: Target, part: pl.DataFrame) -> pl.DataFrame:
+    """`part` as it binds: each decimal as its text, which the server converts to the column's type exactly, as the
+    driver binds most decimals in a batch itself."""
+    decimals = [name for name in part.columns if target.column(name).kind == "decimal"]
+    return part.with_columns(pl.col(decimals).cast(pl.String)) if decimals else part
 
 
-def _sizes(target: Target, batch: pl.DataFrame) -> list[tuple[int, int, int]]:
-    """Each of `batch`'s columns' SQL type, size and decimal digits, as `executemany` binds them: a string as `nvarchar`,
-    sized to the batch's longest in UTF-16 units, which no row passes `INLINE_UNITS`; a decimal as its text, which the
-    server converts to the column's type exactly, as the driver binds most decimals in a batch; and every other kind as
-    the driver types it, an integer as a `bigint` whatever its size."""
-    texts = _texts(target, batch)
-    longest = batch.select(_units(name).max() for name in texts).row(0, named=True) if texts else {}
-    return [_text(longest.get(name)) if (kind := target.column(name).kind) == "str" else _BINDS[kind] for name in batch.columns]
+def _sizes(target: Target, columns: list[str], longest: Mapping[str, int | None]) -> list[int | tuple[object, ...]]:
+    """Each column's SQL type, size and decimal digits, as a statement binds them: a string as `nvarchar`, sized to the
+    longest of it the statement binds, in UTF-16 units, or `nvarchar(max)` past `INLINE_UNITS`; a decimal as its text;
+    and every other kind as the driver types it, an integer as a `bigint` whatever its size."""
+    return [_text(longest.get(name)) if (kind := target.column(name).kind) == "str" else _BINDS[kind] for name in columns]
 
 
-def _text(longest: object) -> tuple[int, int, int]:
-    return (int(mssql_python.SQL_WVARCHAR), max(int(str(longest or 0)), 1), 0)
+def _text(units: int | None) -> tuple[int, int, int]:
+    if units is not None and units > INLINE_UNITS:
+        return (_NVARCHAR, 0, 0)  # nvarchar(max), which the driver streams
+    return (_NVARCHAR, max(units or 0, 1), 0)
 
 
+_NVARCHAR = int(mssql_python.SQL_WVARCHAR)
 _BINDS: dict[Kind, tuple[int, int, int]] = {
     "decimal": (int(mssql_python.SQL_VARCHAR), 41, 0),  # the longest text of 38 digits, SQL Server's and polars' most: `-0.` and 38 places
     "int": (int(mssql_python.SQL_BIGINT), 19, 0),
@@ -448,7 +477,7 @@ _BINDS: dict[Kind, tuple[int, int, int]] = {
     "date": (int(mssql_python.SQL_DATE), 10, 0),
     "datetime": (int(mssql_python.SQL_TIMESTAMP), 26, 6),  # naive, to the microsecond, as `for_writing` leaves it
 }
-"""How `executemany` binds each kind but a string, whose size is its batch's."""
+"""How a statement binds each kind but a string, whose size is its own."""
 
 
 @dataclass
@@ -496,39 +525,48 @@ class MssqlWriter(MssqlReader):
             return max(cursor.rowcount, 0)
 
     def _insert(self, target: Target, table: str, frame: pl.DataFrame) -> int:
-        """Insert `frame`, whose columns are `target`'s, into `table`, the destination or a stage, and the rows the
-        statements counted: each batch's `executemany`, with every column's type given, and each row a long string
-        keeps out of it, which goes as a statement of its own, typing each value by itself, as the driver would have
-        typed the whole batch."""
-        sql = f"INSERT INTO {table} ({', '.join(frame.columns)}) VALUES ({', '.join('?' * frame.width)})"
-        written = 0
+        """Insert `frame`, whose columns are `target`'s, into `table`, and the rows its statements counted."""
         with closing(self.connection.cursor()) as cursor:
-            for part in slices(frame):  # each batch a statement, and a span, of its own
-                long = _long(target, part)
-                if (batch := part.filter(~long)).height:
-                    with statement(self.database, _KIND, sql) as traced:
-                        cursor.setinputsizes(_sizes(target, batch))
-                        cursor.executemany(sql, batch.rows())
-                        traced.set_attribute("db.operation.batch.size", batch.height)
+            return sum(self._send(cursor, target, table, part) for part in slices(frame))
+
+    def _send(self, cursor: Cursor, target: Target, table: str, part: pl.DataFrame) -> int:
+        """Insert one slice, in its own order, and the rows its statements counted: each run of rows whose strings all
+        bind as `nvarchar(n)` as one `executemany`, and each run of the others one row to a statement, every column's
+        type given (`_sizes`). Each run is a span: a batch's records its `db.operation.batch.size`, and a run of rows
+        one by one its `basis.statements`, so a trace shows what each row costs."""
+        sql = f"INSERT INTO {table} ({', '.join(part.columns)}) VALUES ({', '.join('?' * part.width)})"
+        units = _units(target, part)
+        bound = _bound(target, part)
+        written = start = 0
+        for length, alone in _long(units, part.height).rle().struct.unnest().iter_rows():
+            rows, lengths = bound.slice(start, length), units.slice(start, length)
+            start += length
+            with statement(self.database, _KIND, sql) as traced:
+                if alone:
+                    for row, longest in zip(rows.iter_rows(), lengths.iter_rows(named=True), strict=True):
+                        cursor.setinputsizes(_sizes(target, rows.columns, longest))
+                        cursor.execute(sql, row)
+                        written += max(cursor.rowcount, 0)
+                    traced.set_attribute("basis.statements", length)
+                else:
+                    cursor.setinputsizes(_sizes(target, rows.columns, lengths.max().row(0, named=True) if lengths.width else {}))
+                    cursor.executemany(sql, rows.rows())
                     written += max(cursor.rowcount, 0)
-                if (alone := part.filter(long)).height:
-                    with statement(self.database, _KIND, sql) as traced:
-                        for row in alone.iter_rows():
-                            cursor.execute(sql, row)
-                            written += max(cursor.rowcount, 0)
-                        traced.set_attribute("db.operation.batch.size", alone.height)
+                    traced.set_attribute("db.operation.batch.size", length)
         return written
 
     def _stage(self, name: str, target: Target, frame: pl.DataFrame) -> None:
         """Stage `frame` in the `#temp` table `name`, counted by the server: the stage is this session's alone, so its
         count is exactly the rows staged."""
         self._execute(f"SELECT TOP 0 {', '.join(frame.columns)} INTO {name} FROM {target.table}")
-        self._insert(target, name, frame)
+        with closing(self.connection.cursor()) as cursor:
+            for part in slices(frame):
+                self._send(cursor, target, name, part)
         sql = f"SELECT COUNT_BIG(*) FROM {name}"
         with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql):
             cursor.execute(sql)
             row = cursor.fetchone()
-        check_count(f"staging for {target.table}", frame.height, int(str(row[0])) if row is not None else 0)
+        check_count(f"staging for {target.table}", frame.height, row[0] if row is not None else 0)
 
     def _delete(self, target: Target, delete: Delete) -> int:
         conditions: list[str] = []

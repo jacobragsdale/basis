@@ -179,7 +179,7 @@ def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
         return result
     changes = {name: entry.changes for name, entry in planned.items() if entry.changes is not None}
     publication = publish.Publication(run_id, job.name, request.interval, VERSION, request.again, clock)
-    publishes = publish.publish(publication, targets, changes, databases)
+    publishes = publish.publish(publication, targets, changes, databases, checked=specs)
     final = record.done(core_runs.status_of(publishes, len({target.database for target in targets.values()})), reasons=[], finished_at=clock(), publishes=publishes)
     snapshot = result.snapshot.save_record(final)
     _summary(final)

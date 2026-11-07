@@ -284,35 +284,60 @@ class OracleReader:
 
     def describe(self, table: str) -> TableSpec | None:
         owner, _, name = table.upper().rpartition(".")
-        with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, _DESCRIBE):
-            cursor.execute(_DESCRIBE, {"owner": owner or None, "name": name})
-            rows = cursor.fetchall()
-        if not rows:
-            return None
-        return TableSpec("oracle", table, {column.name: column for column in (_column(tuple(row)) for row in rows)})
+        with closing(self.connection.cursor()) as cursor:
+            with statement(self.database, _KIND, _DESCRIBE):
+                cursor.execute(_DESCRIBE, {"owner": owner or None, "name": name})
+                rows = cursor.fetchall()
+            if not rows:
+                return None
+            with statement(self.database, _KIND, _CHARACTER_SETS):
+                cursor.execute(_CHARACTER_SETS)
+                sets = {str(parameter): str(value) for parameter, value in cursor.fetchall()}
+        return TableSpec("oracle", table, {column.name: column for column in (_column(tuple(row), sets) for row in rows)})
 
 
 _DESCRIBE = """
-SELECT column_name, data_type, char_length, data_precision, data_scale, nullable, data_default, identity_column, virtual_column
+SELECT column_name, data_type, char_length, data_precision, data_scale, nullable, data_default, identity_column, virtual_column,
+    data_length, char_used
 FROM all_tab_cols
 WHERE owner = COALESCE(:owner, SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA')) AND table_name = :name AND hidden_column = 'NO'
 ORDER BY column_id
 """
+_CHARACTER_SETS = "SELECT parameter, value FROM nls_database_parameters WHERE parameter IN ('NLS_CHARACTERSET', 'NLS_NCHAR_CHARACTERSET')"
+CHARSETS: dict[str, str] = {
+    "AL32UTF8": "utf-8",
+    "UTF8": "utf-8",  # CESU-8, whose 6 bytes for a character outside the Basic Multilingual Plane UTF-8 counts as 4
+    "AL16UTF16": "utf-16-be",
+    "WE8MSWIN1252": "cp1252",
+    "WE8ISO8859P1": "latin-1",
+    "US7ASCII": "ascii",
+}
+"""Python's codec for each Oracle character set basis knows. A column in another refuses text beyond ASCII, naming the
+set, since Oracle replaces a character its set cannot hold with another, without an error."""
 
 
-def _column(row: Sequence[object]) -> DestColumn:
-    name, data_type, char_length, precision, scale, nullable, default, identity, virtual = row
+def _column(row: Sequence[object], sets: Mapping[str, str]) -> DestColumn:
+    """A column as `all_tab_cols` describes it, its text stored in the database's character set (`CHAR`, `VARCHAR2`,
+    `CLOB`) or its national one (`NCHAR`, `NVARCHAR2`, `NCLOB`), from `sets`, by their `nls_database_parameters`."""
+    name, data_type, char_length, precision, scale, nullable, default, identity, virtual, data_length, char_used = row
     kind = str(data_type).upper().split("(", 1)[0] + (" WITH TIME ZONE" if "WITH TIME ZONE" in str(data_type).upper() else "")
-    text = kind in {"CHAR", "NCHAR", "VARCHAR2", "NVARCHAR2"}
+    national, text = kind in {"NCHAR", "NVARCHAR2", "NCLOB"}, kind in {"CHAR", "VARCHAR2", "CLOB"}
+    charset = sets.get("NLS_NCHAR_CHARACTERSET" if national else "NLS_CHARACTERSET") if national or text else None
+    bounded = kind in {"CHAR", "NCHAR", "VARCHAR2", "NVARCHAR2"}
+    in_bytes = bounded and char_used == "B"
     return DestColumn(
         name=str(name).lower(),
         type=kind,
-        length=int(str(char_length)) if text else None,
+        length=int(str(data_length if in_bytes else char_length)) if bounded else None,
         precision=int(str(precision)) if precision is not None else None,
         scale=int(str(scale)) if scale is not None else None,
         nullable=nullable == "Y",
         generated=identity == "YES" or virtual == "YES",
         defaulted=default is not None and bool(str(default).strip()),
+        unit="bytes" if in_bytes else "characters",
+        max_bytes=int(str(data_length)) if bounded and not in_bytes else None,
+        encoding=CHARSETS.get(charset) if charset is not None else None,
+        charset=charset,
     )
 
 
