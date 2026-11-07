@@ -33,7 +33,7 @@ time finer than a microsecond; the rest it would allow, a time of day dropped fr
 or 1 made a boolean, are checked here."""
 
 from collections.abc import Callable, Sequence
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from typing import Any, Literal, cast
 
 import pandas as pd
@@ -203,8 +203,6 @@ def _numeric(array: Array, column: Column, _naive: Naive) -> _Converted:
     found, target = array.type, arrow_type(column)
     if not (pa.types.is_integer(found) or pa.types.is_floating(found) or pa.types.is_decimal(found)):
         return None, f"{found} cannot become {target}"
-    if pa.types.is_floating(found) and not _all(_call("is_finite", array)):
-        return None, "NaN or infinite values"
     if column.kind != "float" and pa.types.is_floating(found):
         return None, f"{found} is inexact: convert it to {target} in the transform, rounding as the data needs"
     try:
@@ -227,7 +225,10 @@ def _keeps(value: float | Decimal, column: Column) -> bool:
             return value == int(value) and -(2**63) <= value < 2**63
         case "decimal" if column.precision is not None and column.scale is not None:
             exact = Decimal(value)
-            return exact == exact.quantize(Decimal(1).scaleb(-column.scale)) and abs(exact) < 10 ** (column.precision - column.scale)
+            # Room for every digit the value keeps at the column's scale, and one a rounding carries: Python's default
+            # context holds 28, fewer than a decimal of 38 digits needs.
+            with localcontext(prec=max(exact.adjusted() + 1, 1) + column.scale + 1):
+                return exact == exact.quantize(Decimal(1).scaleb(-column.scale)) and abs(exact) < 10 ** (column.precision - column.scale)
         case _:
             return float(value) == value
 
@@ -241,12 +242,14 @@ def _boolean(array: Array, column: Column, _naive: Naive) -> _Converted:
 
 
 def _date(array: Array, column: Column, _naive: Naive) -> _Converted:
-    """Oracle's DATE holds a time of day too: a value at midnight is a date, and one with a time is not."""
+    """Oracle's DATE holds a time of day too: a value at midnight is a date, and one with a time is not. A datetime
+    with a zone is a date where it is midnight in its own zone, and the date is the one there."""
     if pa.types.is_date(array.type):
         as_date = pc.cast(array, pa.date32())
     elif pa.types.is_timestamp(array.type):
-        as_date = pc.cast(array, pa.date32())
-        if not _all(_call("equal", pc.cast(as_date, array.type), array)):
+        local = _call("local_timestamp", array) if array.type.tz is not None else array
+        as_date = pc.cast(local, pa.date32())
+        if not _all(_call("equal", pc.cast(as_date, local.type), local)):
             return None, "datetimes with a time of day are not dates"
     else:
         return None, f"{array.type} cannot become {arrow_type(column)}"

@@ -94,6 +94,12 @@ def test_the_same_rows_are_the_same_object_in_another_process() -> None:
         (Column("t", "datetime", nullable=True, zone="UTC"), pd.Series(pd.to_datetime(["2026-11-05 09:30"]).tz_localize("America/New_York")), [datetime(2026, 11, 5, 14, 30, tzinfo=UTC)]),
         (Column("b", "bool", nullable=True), pd.Series([0, 1, None], dtype="Int8"), [False, True, None]),
         (Column("b", "bool", nullable=True), pd.Series(["TRUE", "0", None]), [True, False, None]),
+        (Column("d", "date", nullable=True), pd.Series(pd.to_datetime(["2024-01-01 00:00-05:00"])), [date(2024, 1, 1)]),
+        (
+            Column("q", "decimal", nullable=True, precision=38, scale=4),
+            pd.Series([Decimal("1234567890123456789012345678901234.5")], dtype=object),
+            [Decimal("1234567890123456789012345678901234.5000")],
+        ),
     ],
     ids=[
         "a-masked-int",
@@ -106,6 +112,8 @@ def test_the_same_rows_are_the_same_object_in_another_process() -> None:
         "an-aware-datetime",
         "0-and-1",
         "boolean-text",
+        "midnight-in-its-own-zone",
+        "a-decimal-of-38-digits",
     ],
 )
 def test_a_value_converts_to_its_column_where_nothing_is_lost(column: Column, given: pd.Series, expected: list[object]) -> None:
@@ -128,6 +136,17 @@ def test_a_value_converts_to_its_column_where_nothing_is_lost(column: Column, gi
         (Column("x", "float", nullable=True), pd.Series([float("inf")]), "NaN or infinite values"),
         (Column("b", "bool", nullable=True), pd.Series([2]), "int64 values other than 0 and 1 are not booleans"),
         (Column("d", "date", nullable=True), pd.Series([datetime(2026, 11, 5, 9)]), "datetimes with a time of day are not dates"),
+        (Column("d", "date", nullable=True), pd.Series(pd.to_datetime(["2024-01-01 00:00Z"]).tz_convert("America/New_York")), "datetimes with a time of day are not dates"),
+        (
+            Column("q", "decimal", nullable=True, precision=38, scale=4),
+            pd.Series([Decimal("12345678901234567890123456789012.123456"), Decimal("1.5"), Decimal("-99999999999999999999999999999999.99995")], dtype=object),
+            "2 of 3 values change when stored as decimal128(38, 4)",
+        ),
+        (
+            Column("q", "decimal", nullable=True, precision=38, scale=20),
+            pd.Series([Decimal("1234567890123456.1234567890123456789012"), Decimal("1234567890123456789.5")], dtype=object),
+            "2 of 2 values change when stored as decimal128(38, 20)",
+        ),
         (Column("t", "datetime", nullable=True, zone="UTC"), pd.Series(pd.to_datetime([1001], unit="ns", utc=True)), "times finer than a microsecond"),
         (Column("t", "datetime", nullable=True, zone="UTC"), pd.Series([datetime(2026, 11, 5, 9)]), "naive datetimes: give them a zone, as .dt.tz_localize('UTC')"),
         (Column("s", "str", nullable=True), pd.Series(["a", 1], dtype=object), "values Arrow cannot type as one column"),
@@ -142,6 +161,9 @@ def test_a_value_converts_to_its_column_where_nothing_is_lost(column: Column, gi
         "infinity",
         "two-as-a-boolean",
         "a-time-of-day-as-a-date",
+        "utcs-midnight-is-evening-in-new-york",
+        "a-wide-decimal-that-rounds",
+        "a-wide-decimal-that-rounds-or-overflows",
         "nanoseconds",
         "a-naive-time-in-an-output",
         "mixed-objects",
