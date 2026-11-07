@@ -63,24 +63,27 @@ but the snapshot. Your run id differs.
 
 ## Read the snapshot
 
-The run saved everything it read and everything it would write under `snapshots/prices/RUN_ID/`:
+The run saved everything it read and everything it would write in the run store, `snapshots/`: each dataset as an
+object named by the hash of its content, and the run's manifest, which names them:
 
 ```sh
-ls snapshots/prices/*/ snapshots/prices/*/outputs/*
+ls snapshots/objects snapshots/runs/job/prices
 ```
 
 ```text
-snapshots/prices/01a1b3f7-9b1f-724c-96ad-0d10e4f6ef1d/:
-inputs  outputs  params.json  run.json
+snapshots/objects:
+729ed00c58f16282a3a74bf14fbadd2321114dbe04a063c3b27e44e8983ea92e.parquet
+779e71690c12df24660503de41b6e49bc3dd0ebea0e2dfdf34d8795c8e4a29f2.parquet
+aadf28a7f5d81ba6e700c00df4a6796e73d38acfccb7e125a3a7d458be9121c5.parquet
+e9ca584af4a3956775edcb28840c37371dd94dbe56d74e21264fe565814df75b.parquet
 
-snapshots/prices/01a1b3f7-9b1f-724c-96ad-0d10e4f6ef1d/outputs/activity:
-upsert.parquet
-
-snapshots/prices/01a1b3f7-9b1f-724c-96ad-0d10e4f6ef1d/outputs/positions:
-insert.parquet
+snapshots/runs/job/prices:
+01a1b3f7-9b1f-724c-96ad-0d10e4f6ef1d.json
 ```
 
-Open `run.json`. Its `outputs.positions` entry says the run would delete the interval's trade dates from the
+Your hashes may differ. Open the manifest. Its `datasets` name the four objects: the two inputs, `inputs/trades` and
+`inputs/accounts`, and the frames of the two tables, `outputs/positions/insert` and `outputs/activity/upsert`. Its
+`outputs.positions` entry says the run would delete the interval's trade dates from the
 `daily_positions` table of the database the job calls `warehouse`, and insert three rows, because the job writes
 positions with `ReplaceWhere(interval="trade_date")`:
 
@@ -103,7 +106,7 @@ file leaves out keeps its default:
 echo '{"include_closed_accounts": true}' > jobs/prices/params/closed.json
 ```
 
-Replay the saved run with it. RUN_ID is the folder name under `snapshots/prices/`:
+Replay the saved run with it. RUN_ID is the manifest's name under `snapshots/runs/job/prices/`, without `.json`:
 
 ```sh
 uv run --env-file .env etl replay prices RUN_ID --params jobs/prices/params/closed.json 2>/dev/null
@@ -125,8 +128,9 @@ The replay prints what changed:
 ```
 
 Notice that the replay read nothing: it ran the transform again on the inputs the first run saved. The closed
-account's trade adds one position and one activity row. The replay saved a snapshot of its own beside the run's, under
-its own run id.
+account's trade adds one position and one activity row. The replay saved a manifest of its own beside the run's,
+under its own run id, and stored only the two frames that changed: its inputs are the run's own objects, so
+`snapshots/objects/` holds six datasets, not eight.
 
 ## Watch a check stop a run
 

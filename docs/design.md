@@ -234,6 +234,16 @@ Parquet file at `objects/HASH.parquet`. The morning's holdings, loaded by twenty
 There is one store per environment, a path or URL read through `pyarrow.fs` as optim's and etl-framework's snapshot
 roots are, and DuckDB reads the manifests and the Parquet directly when someone wants to query across runs.
 
+A dataset's hash is the SHA-256 of its Arrow table written as Parquet with fixed settings that are basis's own, not
+the stored object's: no compression, dictionaries or statistics, and the Arrow schema kept. Parquet writes no bytes
+under a null and keeps none of a table's chunking, both of which Arrow's IPC stream does, so equal data gets one
+hash however it sits in memory, and the stored objects' compression can change without renaming any of them. A
+column's name, order and type are part of the hash, so two datasets share an object only when it reads back as each
+of them. The hash holds for one pyarrow version, whose name the file records; a new version may store a dataset once
+more, which costs space and never reads wrong data. An object is written once, and every file in the store goes to a
+hidden name that is renamed into place, the objects before the manifest that names them, so a reader never sees half
+a file or a manifest whose objects are missing.
+
 A manifest with a label, such as a regress set, keeps its objects. Deleting old runs is garbage collection, as in git:
 delete the manifests a retention policy no longer keeps, then delete every object that no remaining manifest names.
 Writing that policy is out of scope here.

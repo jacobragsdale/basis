@@ -163,7 +163,7 @@ def test_a_run_that_committed_to_one_database_resumes_on_the_other(both: tuple[S
     assert resumed.status == "published"
     assert len(contents(alpha, table)) == 2
     assert len(contents(beta, table)) == 2
-    assert snapshots.Snapshot(partial.snapshot.root).record().status == "published"
+    assert snapshots.find(partial.snapshot.store.root, partial.record.run_id).record().status == "published"
 
 
 def test_the_ledger_records_each_publish_with_what_the_database_counted(scratch: Scratch, tmp_path: Path) -> None:

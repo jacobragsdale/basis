@@ -73,7 +73,8 @@ Every run saves what it read, what it would write, its params and its outcome, b
 fails keeps its inputs, so it can be replayed on a laptop with production's data and the code of the day, without
 production credentials beyond reading the snapshot. A replay with other params reads the same snapshot, which is why a
 query binds only the run's interval and never a param: a param that changed a query would need data the snapshot does
-not hold.
+not hold. Each dataset is stored once, named by the hash of its content, so the inputs that a day's runs share, and
+those a replay reruns, take no more space.
 
 Regression is replay at scale: `etl regress` replays a job's recent published runs with a branch's code and diffs each
 table's changes by key. A change that alters production output shows up as rows added, removed and changed, by

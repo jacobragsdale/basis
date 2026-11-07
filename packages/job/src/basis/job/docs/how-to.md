@@ -43,7 +43,7 @@ database counted.
 ## Finish a run that published partly
 
 A run that writes to two databases commits each in its own transaction, so a failure after the first commit leaves
-`status` as `partial` in its `run.json`. Resume it, after fixing what failed:
+`status` as `partial` in its manifest. Resume it, after fixing what failed:
 
 ```sh
 uv run --env-file .env.prod etl resume prices RUN_ID
@@ -65,7 +65,7 @@ To rerun an interval without duplicating it, write the table with `ReplaceWhere(
 
 ## Find out why a run failed
 
-Every log record carries the run's `run_id`. The run's `run.json` is under `ETL_SNAPSHOT_ROOT/JOB/RUN_ID/`:
+Every log record carries the run's `run_id`. The run's manifest is `ETL_SNAPSHOT_ROOT/runs/job/JOB/RUN_ID.json`:
 
 - `status` says how the run ended, `error` holds an error that stopped it, and `reasons` lists every reason it did
   not write: a row that does not match, a table that has drifted, a value that does not fit, or the job's own check.

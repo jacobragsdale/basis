@@ -1,28 +1,28 @@
-"""The snapshot of a run, under the snapshot root:
+"""A run as the run store keeps it (see `basis.core.storage.Store`): a manifest at `runs/PACKAGE/JOB/RUN_ID.json`,
+which holds the run's record, the params as the run read them, and the hash of each dataset it saved:
 
-    JOB/RUN_ID/
-      run.json                   the record: the request, each input's source, each output's changes, every reason
-                                 not to write, and each database's publish
-      params.json                the params, as the run read them
-      inputs/NAME.parquet        each input as it was loaded
-      outputs/NAME/OPERATION.parquet   each table's frames: upsert, insert_new, insert and delete_matching
+    inputs/NAME                   each input as it was loaded
+    outputs/NAME/OPERATION        each table's frames: upsert, insert_new, insert and delete_matching
 
-It is written whole, under a hidden name renamed into place, before anything is written to a database, so a run that
-fails leaves what it read for a replay. After publishing, `run.json` is rewritten with each database's outcome. Inputs
-are stored as loaded, never derived frames: a replay runs the transform again on them, with the code of the day."""
+Each dataset is an object the store holds once, however many runs save it: a replay in the same store stores only
+the outputs that changed. A run is saved before anything is written to a database, its objects first and its manifest
+last, so a run that fails leaves what it read for a replay. After publishing, the manifest is rewritten with each
+database's outcome; its params and datasets never change. Inputs are stored as loaded, never derived frames: a replay
+runs the transform again on them, with the code of the day."""
 
 import hashlib
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 import polars as pl
 from pydantic import Field
 
 from basis.core.interval import Interval
 from basis.core.model import Model
-from basis.core.storage import Root
+from basis.core.storage import DIGEST, Root, Store
 from basis.core.tables import Changes, Delete, Range
 
 type Status = Literal["failed", "checked", "published", "partial"]
@@ -42,7 +42,7 @@ class DeleteRecord(Model):
     start: datetime | None = None
     end: datetime | None = None
     matching: bool = False
-    """Whether `outputs/NAME/delete_matching.parquet` holds the values it matches."""
+    """Whether the dataset `outputs/NAME/delete_matching` holds the values it matches."""
 
 
 class OutputRecord(Model):
@@ -97,29 +97,46 @@ def new_run_id() -> str:
     return str(uuid.uuid7())
 
 
+class Manifest(RunRecord):
+    """A run's record as the store keeps it, with what a replay or a resume reads besides."""
+
+    params: str
+    """The params, as the run read them."""
+    datasets: dict[str, Annotated[str, Field(pattern=f"^{DIGEST.pattern}$")]]
+    """Each dataset the run saved, `inputs/NAME` and `outputs/NAME/OPERATION`, by its object's hash."""
+
+
 @dataclass(frozen=True)
 class Snapshot:
-    root: Root
-    """The run's folder."""
+    store: Store
+    path: Root
+    """The run's manifest."""
+
+    @property
+    def run_id(self) -> str:
+        return self.path.name.removesuffix(".json")
+
+    def manifest(self) -> Manifest:
+        return Manifest.model_validate_json(self.path.read_bytes())
 
     def record(self) -> RunRecord:
-        return RunRecord.model_validate_json((self.root / "run.json").read_bytes())
+        return _record(self.manifest())
 
     def params_json(self) -> str:
-        return (self.root / "params.json").read_bytes().decode()
+        return self.manifest().params
 
     def inputs(self) -> dict[str, pl.DataFrame]:
-        return {child.name.removesuffix(".parquet"): child.read_frame() for child in (self.root / "inputs").children() if child.name.endswith(".parquet")}
+        manifest = self.manifest()
+        return {key.removeprefix("inputs/"): self._dataset(manifest, key) for key in manifest.datasets if key.startswith("inputs/")}
 
     def changes(self) -> dict[str, Changes]:
         """Each table's changes, as the run computed them."""
-        return {name: self._changes(name, output) for name, output in self.record().outputs.items() if output.rows or output.delete is not None}
+        manifest = self.manifest()
+        return {name: self._changes(manifest, name, output) for name, output in manifest.outputs.items() if output.rows or output.delete is not None}
 
-    def _changes(self, name: str, output: OutputRecord) -> Changes:
-        folder = self.root / "outputs" / name
-
+    def _changes(self, manifest: Manifest, name: str, output: OutputRecord) -> Changes:
         def frame(operation: str) -> pl.DataFrame | None:
-            return (folder / f"{operation}.parquet").read_frame() if operation in output.rows else None
+            return self._dataset(manifest, f"outputs/{name}/{operation}") if operation in output.rows else None
 
         delete = None
         if (record := output.delete) is not None:
@@ -127,29 +144,39 @@ class Snapshot:
             delete = Delete(within, frame("delete_matching") if record.matching else None)
         return Changes(delete, frame("upsert"), frame("insert_new"), frame("insert"))
 
+    def _dataset(self, manifest: Manifest, key: str) -> pl.DataFrame:
+        if (found := manifest.datasets.get(key)) is None:
+            msg = f"run {manifest.run_id}'s manifest {self.path.location} names no dataset {key}, which its record says it saved"
+            raise LookupError(msg)
+        return self.store.object(found).read_frame()
+
     def save_record(self, record: RunRecord) -> None:
-        (self.root / "run.json").write_bytes(record.model_dump_json(indent=2).encode())
+        """Save the run's record again, as after publishing, with the params and datasets it was saved with."""
+        saved = self.manifest()
+        if record.run_id != saved.run_id:
+            msg = f"the record of run {record.run_id} cannot replace run {saved.run_id}'s"
+            raise ValueError(msg)
+        self.path.write_bytes(_manifest(record, saved.params, saved.datasets).model_dump_json(indent=2).encode())
 
 
-def write(root: Root, record: RunRecord, params_json: str, inputs: dict[str, pl.DataFrame], changes: dict[str, Changes]) -> Snapshot:
-    """Write a run's snapshot whole, and return it."""
-    final = root / record.job / record.run_id
-    staging = root / record.job / f".{record.run_id}.tmp"
-    staging.make_dir()
-    try:
-        (staging / "params.json").write_bytes(params_json.encode())
-        for name, frame in inputs.items():
-            (staging / "inputs" / f"{name}.parquet").write_frame(frame)
-        for name, table in changes.items():
-            for operation, frame in table.frames().items():
-                (staging / "outputs" / name / f"{operation}.parquet").write_frame(frame)
-        (staging / "run.json").write_bytes(record.model_dump_json(indent=2).encode())
-    except BaseException:
-        if staging.exists():
-            staging.delete_dir()
-        raise
-    staging.move_to(final)
-    return Snapshot(final)
+def _record(manifest: Manifest) -> RunRecord:
+    return RunRecord.model_validate(manifest.model_dump(exclude=set(Manifest.model_fields) - set(RunRecord.model_fields)))
+
+
+def _manifest(record: RunRecord, params_json: str, datasets: Mapping[str, str]) -> Manifest:
+    return Manifest.model_validate(record.model_dump() | {"params": params_json, "datasets": dict(datasets)})
+
+
+def write(root: Root, record: RunRecord, params_json: str, inputs: Mapping[str, pl.DataFrame], changes: Mapping[str, Changes], *, package: str) -> Snapshot:  # noqa: PLR0913 -- the run, and the part whose run it is, by keyword
+    """Save a run in the store at `root`, under the part `package`: each dataset the store does not hold yet, then the
+    run's manifest."""
+    store = Store(root)
+    frames = {f"inputs/{name}": frame for name, frame in inputs.items()}
+    frames |= {f"outputs/{name}/{operation}": frame for name, table in changes.items() for operation, frame in table.frames().items()}
+    datasets = {key: store.put(frame.to_arrow()) for key, frame in frames.items()}
+    path = store.manifest(package, record.job, record.run_id)
+    path.write_bytes(_manifest(record, params_json, datasets).model_dump_json(indent=2).encode())
+    return Snapshot(store, path)
 
 
 def output_record(database: str, table: str, write_mode: str, changes: Changes | None) -> OutputRecord:
@@ -167,21 +194,16 @@ def output_record(database: str, table: str, write_mode: str, changes: Changes |
     return OutputRecord(database=database, table=table, write=write_mode, delete=delete, rows={name: frame.height for name, frame in changes.frames().items()})
 
 
-def find(root: Root, run_id: str, job: str | None = None) -> Snapshot:
-    """A run's snapshot by its id, under `root/JOB/`, for any job unless `job` is given."""
-    folders = [root / job] if job is not None else root.children()
-    for folder in folders:
-        if (candidate := folder / run_id).is_dir() and (candidate / "run.json").exists():
-            return Snapshot(candidate)
-    msg = f"no run {run_id} under {root.location}: is it the right snapshot root?"
-    raise LookupError(msg)
+def find(root: Root, run_id: str, name: str | None = None) -> Snapshot:
+    """A run by its id, in the store at `root`, of any part and name unless `name` is given."""
+    store = Store(root)
+    return Snapshot(store, store.find(run_id, name))
 
 
-def runs_of(root: Root, job: str) -> list[Snapshot]:
-    """A job's runs, newest first."""
-    folder = root / job
-    found = [Snapshot(child) for child in folder.children() if not child.name.startswith(".") and (child / "run.json").exists()]
-    return sorted(found, key=lambda snapshot: snapshot.root.name, reverse=True)
+def runs_of(root: Root, name: str, *, package: str) -> list[Snapshot]:
+    """The runs of `package`'s `name`, newest first."""
+    store = Store(root)
+    return [Snapshot(store, path) for path in store.manifests(package, name)]
 
 
 def params_digest(text: str) -> str:
