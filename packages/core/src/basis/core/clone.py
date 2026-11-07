@@ -13,11 +13,13 @@ _LOCATION = frozenset({"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_
 """The variables that point git at a clone other than the one its working directory is in."""
 
 
-def output(git: str, root: Path, *argv: str) -> str | None:
-    """What `git ARGV` prints, run in `root` with the git at `git`, or None when it fails."""
+def output(git: str, root: Path, *argv: str, raw: bool = False) -> str | None:
+    """What `git ARGV` prints, run in `root` with the git at `git`, stripped unless `raw`, or None when it fails."""
     environment = {name: value for name, value in os.environ.items() if name not in _LOCATION}
     found = subprocess.run([git, *argv], cwd=root, env=environment, capture_output=True, text=True, check=False)
-    return found.stdout.strip() if found.returncode == 0 else None
+    if found.returncode != 0:
+        return None
+    return found.stdout if raw else found.stdout.strip()
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,22 @@ class Clone:
     def commit(self, ref: str) -> str | None:
         """The full id of the commit `ref` names, or None when it names none."""
         return output(self.git, self.root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+
+    def changed(self) -> list[str] | None:
+        """Each path in the repo's folder that holds a change its commit does not, relative to the folder, as git
+        names it: a renamed file by its new name. None when git fails."""
+        printed = output(self.git, self.root, "status", "--porcelain", "-z", "--untracked-files=all", "--", ".", raw=True)
+        if printed is None:
+            return None
+        fields, paths = printed.split("\0"), list[str]()
+        while fields:
+            entry = fields.pop(0)
+            if not entry:
+                continue
+            paths.append(entry[3:].removeprefix(self.prefix))  # `XY PATH`, PATH from the clone's top, never quoted with -z
+            if "R" in entry[:2] or "C" in entry[:2]:
+                fields.pop(0)  # a rename or a copy names the path it came from next
+        return paths
 
     def clean(self) -> bool:
         """Whether the repo's folder holds nothing its commit does not: no change, staged or not, and no file git does

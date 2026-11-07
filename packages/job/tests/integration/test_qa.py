@@ -91,7 +91,10 @@ def test_a_qa_run_publishes_to_the_tables_the_repo_allows_and_saves_in_the_qa_st
 def test_a_write_to_a_table_the_repo_does_not_allow_is_refused_before_it_writes(repo: Path, scratch: Scratch) -> None:
     declared = qa.declared(repo / "pyproject.toml", {"job": Part(qa=job_qa.plan)})
     assert declared is not None
-    context = qa.context(declared, read(repo / ".env.qa"), repo=repo, folder=repo, commit="C1", part="job")
+    settings = read(repo / ".env.qa")
+    store = qa.store(settings, repo)
+    assert isinstance(store, Root)
+    context = qa.context(declared, settings, store=store, repo=repo, commit="C1", part="job")
     job = price_job(repo / "source.sql", f"other_{scratch.suffix}")  # a table the plan would refuse, written past it
     request = runs.Request(repo / "params.json", etl.Interval.parse("2026-11-05..2026-11-06"), publish=True)
     result = runs.run(job, context.settings, request, snapshot_root=context.store, databases=context.databases)

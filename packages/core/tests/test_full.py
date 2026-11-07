@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from basis.core import clone, full, hooks, review, sync
+from basis.core import clone, command, full, hooks, review, sync
 from basis.core.errors import BasisError
 from basis.core.verbs import Difference, Part, Qa, QaPlan, QaRun, Regress, Regressed, Regressions, Runs, Shared
 
@@ -55,12 +55,8 @@ def regressing(*found: Regressed, failures: Sequence[Exception] = ()) -> tuple[l
     return asked, Runs("job", lambda: {"prices": "prices.job"}, regress=Shared("replay recent published runs", lambda _: 0), regressions=regress)
 
 
-def reported(error: Exception) -> str:
-    return str(error)
-
-
 def checked(repo: Path, part: Part, *, run: Callable[[Sequence[str], Path], int] = passing) -> int:
-    return full.full(repo, [], {"alpha": part}, run=run, report=reported, folder=repo, clock=lambda: AT)
+    return full.full(repo, [], {"alpha": part}, run=run, report=command.reported, folder=repo, clock=lambda: AT)
 
 
 def record(repo: Path) -> review.Record:
@@ -115,7 +111,7 @@ def test_a_part_that_gives_no_regressions_is_skipped_by_name_and_the_others_stil
     monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", str(repo.parent / "store"))
     asked, runs = regressing(SAME)
     models = Runs("model", lambda: {"income": "models.income"}, regress=Shared("replay a model's recent runs", lambda _: 0))
-    code = full.full(repo, [], {"alpha": Part(runs=runs), "beta": Part(runs=models)}, run=passing, report=reported, folder=repo, clock=lambda: AT)
+    code = full.full(repo, [], {"alpha": Part(runs=runs), "beta": Part(runs=models)}, run=passing, report=command.reported, folder=repo, clock=lambda: AT)
     assert code == 0
     assert lines(capsys)[:2] == [
         "SKIPPED: regress of the beta part: it gives `basis check --full` no regressions to record: `uv run basis regress` replays its models",
@@ -132,11 +128,26 @@ def test_a_failure_to_regress_fails_the_check(repo: Path, monkeypatch: pytest.Mo
     assert record(repo).regress.failures == ["while regressing prices: no job named 'prices': give one"]
 
 
+def test_a_part_whose_regress_raises_is_one_failure_and_the_record_is_kept(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", str(repo))
+
+    def regress(_: Regress) -> Regressions:
+        msg = "no module named 'jobs.prices'"
+        raise ImportError(msg)
+
+    assert checked(repo, Part(runs=Runs("job", lambda: {"prices": "prices.job"}, regress=Shared("replay recent published runs", lambda _: 0), regressions=regress))) == 1
+    assert record(repo).regress.failures == ["ImportError: while regressing the alpha part's runs: no module named 'jobs.prices': a defect"]
+
+
 def test_a_failing_check_skips_regress_and_the_qa_tier_and_records_that_the_commit_failed(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", str(repo))
     asked, runs = regressing()
     assert checked(repo, Part(runs=runs), run=failing) == 1
-    assert [line for line in lines(capsys) if line.startswith("SKIPPED")] == ["SKIPPED: regress: basis check failed, as above", "SKIPPED: the QA tier: basis check failed, as above"]
+    assert [line for line in lines(capsys) if line.startswith("SKIPPED")] == [
+        "SKIPPED: regress: basis check failed, as above",
+        "SKIPPED: the QA tier: basis check failed, as above",
+        "SKIPPED: the contract diffs: basis check failed, as above",
+    ]
     assert asked == []
     assert not record(repo).passed
 
@@ -182,6 +193,53 @@ def test_the_qa_tier_runs_and_what_it_ran_is_recorded(declared: Path, capsys: py
     assert checked(declared, qa_part()) == 0
     assert "basis check --full: the QA tier ran alpha prices as run Q1: published: prices (3 inserted)" in lines(capsys)
     assert [(run.part, run.run_id, run.summary) for run in record(declared).qa.runs] == [("alpha", "Q1", "published: prices (3 inserted)")]
+
+
+def redeclare(repo: Path, git: Git, store: str) -> None:
+    """Make `store` the repo's one QA store, and the settings file's, and commit it."""
+    text = (repo / "pyproject.toml").read_text(encoding="utf-8").replace('stores = ["runs-qa"]', f'stores = ["{store}"]')
+    (repo / "pyproject.toml").write_text(text, encoding="utf-8")
+    (repo / ".env.qa").write_text(f"BASIS_SNAPSHOT_ROOT={store}\n", encoding="utf-8")
+    git(repo, "commit", "--quiet", "--no-verify", "--all", "--message", "Another QA store")
+
+
+def test_a_qa_store_that_cannot_be_opened_is_one_failure_and_regress_is_still_recorded(declared: Path, git: Git, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    redeclare(declared, git, "nosuch://runs-qa")
+    monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", str(declared))
+    _, runs = regressing(SAME)
+    assert checked(declared, Part(runs=runs, qa=qa_part().qa)) == 1
+    refused, ran = [line for line in lines(capsys) if line.startswith("ERROR")]
+    assert refused.startswith("ERROR: the QA store nosuch://runs-qa cannot be opened (")
+    assert ran == "ERROR: the QA tier ran nothing, for the reasons above: fix each, and check again"
+    found = record(declared)
+    assert ([entry.run_id for entry in found.regress.replayed], found.qa.runs) == (["R2"], [])
+    assert found.qa.refused[0].startswith("the QA store nosuch://runs-qa cannot be opened (")
+
+
+def test_a_qa_tier_whatever_it_raises_is_one_failure_and_the_record_is_kept(declared: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    def plan(_: Qa) -> QaPlan:
+        msg = "cannot import name 'Prices' from 'jobs.prices.rows'"
+        raise ImportError(msg)
+
+    assert checked(declared, Part(qa=plan)) == 1
+    assert [line for line in lines(capsys) if line.startswith("ERROR")][-1].startswith("ERROR: ImportError: while running the QA tier: cannot import name 'Prices'")
+    assert record(declared).qa.refused == ["ImportError: while running the QA tier: cannot import name 'Prices' from 'jobs.prices.rows': a defect"]
+
+
+def test_upgrades_check_leaves_the_qa_tier_to_the_push(declared: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    def plan(_: Qa) -> QaPlan:
+        pytest.fail("the QA tier ran")
+
+    assert full.full(declared, [], {"alpha": Part(qa=plan)}, run=passing, report=command.reported, folder=declared, clock=lambda: AT, with_qa=False) == 0
+    assert "SKIPPED: the QA tier: it runs when you push, once the change is committed" in lines(capsys)
+
+
+def test_without_a_part_that_offers_a_contract_the_diff_is_skipped_and_review_says_why(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert checked(repo, Part()) == 0
+    skipped = "no part of this repo offers a contract, such as an API's openapi.json, so there is no diff to show"
+    assert f"SKIPPED: the contract diffs: {skipped}" in lines(capsys)
+    assert review.review(repo, "HEAD") == 0
+    assert f"### Contracts\n\nSkipped: {skipped}.\n" in capsys.readouterr().out
 
 
 def test_a_qa_tier_that_refuses_or_a_qa_run_that_fails_fails_the_check(declared: Path, capsys: pytest.CaptureFixture[str]) -> None:

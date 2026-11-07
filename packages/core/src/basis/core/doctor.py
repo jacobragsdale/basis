@@ -240,7 +240,7 @@ def _environment(repo: Path, desktop: Desktop, describe: Describe) -> list[Found
     except (ValidationError, BasisError) as error:
         return [Found("the settings", _split(describe(error)))]
     if configured is not None:
-        location = configured if "://" in configured or Path(configured).is_absolute() else (repo / configured).as_posix()
+        location = settings.locate(configured, repo)
         try:
             reachable = Root.at(location).is_dir()
         except (OSError, ValueError) as error:

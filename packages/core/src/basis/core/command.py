@@ -35,13 +35,12 @@ from typing import Literal, NoReturn, override
 
 from pydantic import ValidationError
 
-from basis.core import check, ddl, doctor, full, hooks, logs, qa, review, settings, sync, upgrade
+from basis.core import check, ddl, doctor, full, hooks, invalid, logs, qa, review, settings, sync, upgrade
 from basis.core.destination import Dialect
 from basis.core.errors import BasisError
 from basis.core.logs import utc_now
-from basis.core.verbs import Part, Runs, Shared, Verb, error_line, fail, holding
+from basis.core.verbs import GROUP, Part, Runs, Shared, Verb, error_line, fail, holding
 
-GROUP = "basis.verbs"
 PACKAGES = {"job": "basis-job", "api": "basis-api", "optim": "optim"}
 """The package each part comes in, for the fix when a repo declares a part that is not installed."""
 CORE = ("check", "review", "new", "sync", "upgrade", "doctor", "docs")
@@ -126,12 +125,16 @@ def _run(argv: Sequence[str], *, cwd: Path, installed: Installed) -> int:
             sys.stdout.write(f"{versions()}\n")
             return 0
         if list(argv[:1]) == ["doctor"]:  # which runs outside a repo too, and says what is wrong with one
-            return _doctor(argv, cwd, installed)
-        settings.refuse_renamed(os.environ)
-        repo = find(cwd, installed)
-        for part in repo.parts.values():
-            if part.renamed is not None:
-                part.renamed(os.environ)
+            found, unread = _for_doctor(cwd, installed)
+            if found is None:
+                return _doctor_outside(argv, unread)
+            repo = found
+        else:
+            settings.refuse_renamed(os.environ)
+            repo = find(cwd, installed)
+            for part in repo.parts.values():
+                if part.renamed is not None:
+                    part.renamed(os.environ)
         groups = _groups(repo)
         verbs = {verb.name: verb for _, group in groups for verb in group}
         _refuse_undeclared(argv, repo, verbs, installed)
@@ -172,9 +175,14 @@ def versions() -> str:
     return ", ".join(f"{name} {number}" for name, number in review.versions().items())
 
 
+def _nearest(cwd: Path) -> Path | None:
+    """The `pyproject.toml` in `cwd` or the nearest folder above it, if any."""
+    return next((folder / "pyproject.toml" for folder in (cwd, *cwd.parents) if (folder / "pyproject.toml").is_file()), None)
+
+
 def find(cwd: Path, installed: Installed) -> Repo:
     """The repo at or above `cwd`, with each part it declares loaded."""
-    pyproject = next((folder / "pyproject.toml" for folder in (cwd, *cwd.parents) if (folder / "pyproject.toml").is_file()), None)
+    pyproject = _nearest(cwd)
     if pyproject is None:
         msg = f"no pyproject.toml in {cwd} or a folder above it, so it is in no basis repo: run basis in one, or make one, as `uvx basis-job new repo NAME` does"
         raise CommandError(msg)
@@ -270,15 +278,15 @@ def _core(repo: Repo) -> list[Verb]:
         return [read() for read in files]
 
     def run_check(n: argparse.Namespace) -> int:
-        args = CheckArgs(staged=bool(n.staged), full=bool(n.full), settings_from=n.settings_from)
+        args = CheckArgs(staged=bool(n.staged), full=bool(n.full), settings_from=n.settings_from, with_qa=not n.no_qa)
         if not args.full:
-            if args.settings_from is not None:
-                return fail("--settings-from names where `basis check --full` reads its settings files, and was given without --full", "give --full too, or leave it out")
+            if args.settings_from is not None or not args.with_qa:
+                return fail("--settings-from and --no-qa change what `basis check --full` does, and were given without --full", "give --full too, or leave them out")
             return check.check(repo.root, agent_files(), run=check.run_command, staged=args.staged)
         if args.staged:
             return fail("--staged checks a commit's staged files, and --full a commit being pushed", "give one of them")
         folder = args.settings_from.resolve() if args.settings_from is not None else repo.root
-        return full.full(repo.root, agent_files(), repo.parts, run=check.run_command, report=reported, folder=folder, clock=utc_now)
+        return full.full(repo.root, agent_files(), repo.parts, run=check.run_command, report=reported, folder=folder, clock=utc_now, with_qa=args.with_qa)
 
     def run_sync(n: argparse.Namespace) -> int:
         return _sync(repo.root, agent_files(), SyncArgs(adopt=bool(n.adopt)))
@@ -287,7 +295,7 @@ def _core(repo: Repo) -> list[Verb]:
         "check": Verb("check", "lint, format check, type check and test the repo, and check its framework files and hooks; --full adds regress and the QA tier", _check_arguments, run_check),
         "review": Verb("review", "print the pull request's summary of what basis check --full found on a commit, as Markdown", _review_arguments, lambda n: review.review(repo.root, str(n.commit))),
         "upgrade": Verb("upgrade", "relock basis's packages, sync, check in full, and print what changed", _no_arguments, lambda _: _upgrade(repo)),
-        "doctor": Verb("doctor", DOCTOR, _no_arguments, lambda _: doctor.doctor(repo.root, repo.parts, doctor.Desktop.here(), describe=one_line)),
+        "doctor": Verb("doctor", DOCTOR, _no_arguments, lambda _: _diagnose(repo, None)),
         "new": Verb("new", f"add a {' or a '.join(kinds)} to the repo", partial(_new_arguments, kinds), lambda n: _new(repo, kinds[str(n.kind)], str(n.name))),
         "sync": Verb("sync", "rewrite the repo's framework and agent files from the installed version", _sync_arguments, run_sync),
         "docs": Verb("docs", "list the docs of the installed parts, or print one", _docs_arguments, lambda n: _docs(_pages(repo), n.page)),
@@ -541,21 +549,31 @@ def _upgrade(repo: Repo) -> int:
 DOCTOR = "check this desktop's uv, git, hooks, feed and settings, with the fix for each problem"
 
 
-def _doctor(argv: Sequence[str], cwd: Path, installed: Installed) -> int:
-    """`basis doctor`, which runs in the repo at or above `cwd`, or outside any, and reports a folder whose
-    `pyproject.toml` basis cannot read as one of its problems."""
+def _diagnose(repo: Repo | None, unread: str | None) -> int:
+    """`basis doctor`: the desktop, and the repo when it runs in one; `unread` says why the folder's `pyproject.toml`
+    is a basis repo's that basis cannot read."""
+    return doctor.doctor(repo.root if repo is not None else None, repo.parts if repo is not None else {}, doctor.Desktop.here(), describe=one_line, unread=unread)
 
-    def handle(_: argparse.Namespace) -> int:
-        repo: Repo | None = None
-        unread: str | None = None
+
+def _for_doctor(cwd: Path, installed: Installed) -> tuple[Repo | None, str | None]:
+    """The basis repo at or above `cwd`, or None, with why basis cannot read it when it is one. A folder in no
+    project, or in an ordinary Python project whose `pyproject.toml` has no `[tool.basis]`, is no basis repo, and
+    doctor checks the desktop alone there."""
+    if (pyproject := _nearest(cwd)) is None:
+        return None, None
+    try:
+        return find(cwd, installed), None
+    except CommandError as error:
         try:
-            repo = find(cwd, installed)
-        except CommandError as error:
-            if any((folder / "pyproject.toml").is_file() for folder in (cwd, *cwd.parents)):
-                unread = str(error)
-        return doctor.doctor(repo.root if repo is not None else None, repo.parts if repo is not None else {}, doctor.Desktop.here(), describe=one_line, unread=unread)
+            data: object = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        except tomllib.TOMLDecodeError:
+            return None, str(error)
+        return None, str(error) if _table(_table(data, "tool"), "basis") is not None else None
 
-    verb = Verb("doctor", DOCTOR, _no_arguments, handle)
+
+def _doctor_outside(argv: Sequence[str], unread: str | None) -> int:
+    """`basis doctor` where there is no basis repo basis can read, which parses as it does in one."""
+    verb = Verb("doctor", DOCTOR, _no_arguments, lambda _: _diagnose(None, unread))
     return _execute(_parser("basis", "Check this desktop's setup for basis.", [verb]), {"doctor": verb}, argv)
 
 
@@ -573,6 +591,9 @@ class CheckArgs:
     """Whether to add regress, the QA tier and the contract diffs, as the push hook does."""
     settings_from: Path | None
     """The clone's own folder, where the files git does not track are, for a check in another worktree."""
+    with_qa: bool
+    """Whether `--full` runs the QA tier, which `basis upgrade` leaves to the push, since its relock is not yet a
+    commit."""
 
 
 @dataclass(frozen=True)
@@ -623,6 +644,7 @@ def _check_arguments(parser: argparse.ArgumentParser) -> None:
         metavar="DIR",
         help="with --full, read the QA settings file and a relative BASIS_SNAPSHOT_ROOT from DIR, the clone's own folder: for a commit the push hook checks in a worktree of its own",
     )
+    parser.add_argument("--no-qa", action="store_true", help="with --full, leave the QA tier to the push, as basis upgrade does for a relock not yet committed")
 
 
 def _review_arguments(parser: argparse.ArgumentParser) -> None:
@@ -754,21 +776,10 @@ def report(error: Exception) -> int:
 def one_line(error: BaseException) -> str:
     """`error`'s message, with the notes added on its way up, on one line."""
     if isinstance(error, ValidationError):
-        text = _invalid(error)
+        text = invalid.explain(error)
     elif isinstance(error, FileNotFoundError) and error.filename is not None:
         text = f"no file or folder {error.filename}: give a path that exists"
     else:
         text = str(error) or type(error).__name__
     notes = [str(note) for note in getattr(error, "__notes__", [])]
     return " ".join(": ".join([*notes, text]).split())
-
-
-def _invalid(error: ValidationError) -> str:
-    """A validation error as each value it refuses: for settings, the variable that sets it."""
-    variable = {"Settings": settings.variable, "FileSettings": settings.variable, "LogSettings": logs.variable}.get(error.title)
-    problems = error.errors(include_url=False, include_input=False)
-    if variable is not None:
-        named = "; ".join(f"{variable(problem['loc'])}: {problem['msg']}" for problem in problems)
-        return f"the settings are not valid: {named}: set each variable named, as .env.example shows"
-    named = "; ".join(f"{'.'.join(map(str, problem['loc'])) or 'the value'}: {problem['msg']}" for problem in problems)
-    return f"{error.title} is not valid: {named}: fix each value named"

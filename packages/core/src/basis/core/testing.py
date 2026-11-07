@@ -8,7 +8,7 @@ import grimp
 
 FORBIDDEN = (
     "basis.core.check", "basis.core.clone", "basis.core.command", "basis.core.databases", "basis.core.doctor", "basis.core.full", "basis.core.hooks",
-    "basis.core.hygiene", "basis.core.new", "basis.core.publish", "basis.core.qa", "basis.core.review", "basis.core.runs", "basis.core.settings",
+    "basis.core.hygiene", "basis.core.invalid", "basis.core.new", "basis.core.publish", "basis.core.qa", "basis.core.review", "basis.core.runs", "basis.core.settings",
     "basis.core.snapshots", "basis.core.storage", "basis.core.sync", "basis.core.testing", "basis.core.upgrade", "basis.core.verbs",
     "mssql_python", "oracledb",
     "pyodbc", "pymssql", "cx_Oracle", "sqlalchemy", "psycopg", "psycopg2", "snowflake", "httpx", "httpx2", "requests", "urllib3",

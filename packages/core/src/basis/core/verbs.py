@@ -63,6 +63,9 @@ from basis.core.settings import Settings
 from basis.core.storage import Root
 from basis.core.sync import AgentFiles, Problem
 
+GROUP = "basis.verbs"
+"""The entry point group each part lists its `Part` in, by the part's name."""
+
 
 @dataclass(frozen=True)
 class Verb:

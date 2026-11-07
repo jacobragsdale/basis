@@ -1,9 +1,12 @@
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
 
 from basis.core import upgrade
+
+type Git = Callable[..., str]
+"""conftest's `git` fixture."""
 
 PACKAGES = {"basis-core", "basis-job", "basis-api", "optim"}
 LOCK = """version = 1
@@ -23,6 +26,9 @@ name = "polars"
 version = "2.1.0"
 source = {{ registry = "https://pkgs.example.com/simple" }}
 """
+
+
+PUSH = "basis upgrade: commit the upgrade and push it: the push hook runs the QA tier on it, and records the check for `uv run basis review`"
 
 
 class Desktop:
@@ -62,9 +68,9 @@ def test_upgrade_relocks_basis_syncs_checks_in_full_and_says_what_changed(repo: 
     found = Desktop(repo, newest="0.1.1")
     code, said = upgraded(repo, found)
     assert code == 0
-    assert found.ran == ["uv lock --quiet --upgrade-package basis-core --upgrade-package basis-job", "uv run --locked --quiet basis sync", "uv run --locked --quiet basis check --full"]
+    assert found.ran == ["uv lock --quiet --upgrade-package basis-core --upgrade-package basis-job", "uv run --locked --quiet basis sync", "uv run --locked --quiet basis check --full --no-qa"]
     registry = "(registry https://pkgs.example.com/simple)"
-    assert said == [f"basis upgrade: basis-core 0.1.0 {registry} -> 0.1.1 {registry}; basis-job 0.1.0 {registry} -> 0.1.1 {registry}", "basis upgrade: changed uv.lock, AGENTS.md"]
+    assert said == [f"basis upgrade: basis-core 0.1.0 {registry} -> 0.1.1 {registry}; basis-job 0.1.0 {registry} -> 0.1.1 {registry}", "basis upgrade: changed uv.lock, AGENTS.md", PUSH]
 
 
 def test_upgrade_with_nothing_newer_says_so_and_still_syncs_and_checks(repo: Path) -> None:
@@ -86,5 +92,20 @@ def test_upgrade_refuses_a_folder_with_changes_no_commit_holds(repo: Path, capsy
 def test_a_repo_that_fails_its_full_check_after_the_upgrade_fails_and_says_how_to_set_it_aside(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     code, said = upgraded(repo, Desktop(repo, newest="0.1.1", codes={"check": 1}))
     assert code == 1
-    assert said[-1] == "basis upgrade: changed uv.lock, AGENTS.md"
+    assert said[-2:] == ["basis upgrade: changed uv.lock, AGENTS.md", PUSH]
     assert capsys.readouterr().err.endswith("fix what it says, or set the upgrade aside with `git stash --include-untracked`\n")
+
+
+def test_the_files_an_upgrade_changed_are_named_from_the_repos_folder_as_git_names_them(tmp_path: Path, git: Git) -> None:
+    git(tmp_path, "init", "--quiet")
+    repo = tmp_path / "services" / "pricing"
+    repo.mkdir(parents=True)
+    (repo / "old.txt").write_text("a\n", encoding="utf-8")
+    (tmp_path / "elsewhere.txt").write_text("b\n", encoding="utf-8")
+    git(tmp_path, "add", "--all")
+    git(tmp_path, "commit", "--quiet", "--no-verify", "--message", "First commit")
+    assert upgrade.changed_files(repo) == []
+    git(repo, "mv", "old.txt", "new name é.txt")
+    (repo / 'quote"d.txt').write_text("c\n", encoding="utf-8")
+    (tmp_path / "elsewhere.txt").write_text("changed\n", encoding="utf-8")
+    assert sorted(upgrade.changed_files(repo) or []) == ["new name é.txt", 'quote"d.txt']

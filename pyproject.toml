@@ -163,7 +163,7 @@ forbidden_modules = [
     "basis.job.qa",
     "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.storage",
     "basis.core.settings", "basis.core.new", "basis.core.sync", "basis.core.testing", "basis.core.command",
-    "basis.core.check", "basis.core.verbs", "basis.core.hooks", "basis.core.hygiene", "basis.core.clone", "basis.core.full",
+    "basis.core.check", "basis.core.verbs", "basis.core.hooks", "basis.core.hygiene", "basis.core.clone", "basis.core.full", "basis.core.invalid",
     "basis.core.qa", "basis.core.review", "basis.core.doctor", "basis.core.upgrade", "mssql_python", "oracledb",
 ]
 ignore_imports = [

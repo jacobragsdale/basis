@@ -11,7 +11,7 @@ from basis.core.databases import Counts, LedgerEntry, Reader, Writer
 from basis.core.destination import TableSpec
 from basis.core.errors import BasisError
 from basis.core.interval import Interval
-from basis.core.settings import GivenSettings
+from basis.core.settings import GivenSettings, locate
 from basis.core.tables import Changes, Column, Target
 from basis.core.verbs import Part, Qa, QaPlan, QaRun
 
@@ -58,8 +58,28 @@ def problems(found: GivenSettings, declared: qa.Declared) -> list[str]:
         ("PWD={x;Server=sqlqa};Server=prod", [("pwd", "x;Server=sqlqa"), ("server", "prod")]),
         ('PWD="a""b";Server=prod', [("pwd", 'a"b'), ("server", "prod")]),
         ("PWD={a}}b};Server=prod", [("pwd", "a}b"), ("server", "prod")]),
+        ("Server=a;;Server=b", [("server", "a"), ("server", "b")]),
+        (";Server=a", [("server", "a")]),
+        ("junk;Server=prod", [("server", "prod")]),
+        (" ; ;Server = a ; ;Database= b;; ", [("server", "a"), ("database", "b")]),
+        ("Server=;Database=b", [("server", ""), ("database", "b")]),
+        ("Server=a;trailing", [("server", "a")]),
+        ("", []),
     ],
-    ids=["plain", "spaces-and-synonyms", "a-brace-holds-a-semicolon", "a-quote-escaped", "a-brace-escaped"],
+    ids=[
+        "plain",
+        "spaces-and-synonyms",
+        "a-brace-holds-a-semicolon",
+        "a-quote-escaped",
+        "a-brace-escaped",
+        "an-empty-segment",
+        "a-leading-semicolon",
+        "a-segment-with-no-equals",
+        "spaces-and-empty-segments",
+        "an-empty-value",
+        "trailing-junk",
+        "empty",
+    ],
 )
 def test_a_connection_strings_keywords_are_read_as_odbc_reads_them(connection_string: str, pairs: list[tuple[str, str]]) -> None:
     assert qa.keywords(connection_string) == pairs
@@ -81,6 +101,7 @@ def test_settings_whose_every_database_and_store_carry_the_marker_are_safe(decla
         ),
         (settings(warehouse=mssql("PWD={;Server=sqlqa};Server=prod")), "BASIS_DATABASES__WAREHOUSE__CONNECTION_STRING in .env.qa names server prod, and neither contains"),
         (settings(warehouse=mssql("Server=sqlqa;Server=prod")), "BASIS_DATABASES__WAREHOUSE__CONNECTION_STRING in .env.qa names 2 servers and 0 databases"),
+        (settings(warehouse=mssql("Server=sqlqa;;Server=prod;Database=qa")), "BASIS_DATABASES__WAREHOUSE__CONNECTION_STRING in .env.qa names 2 servers and 1 databases"),
         (settings(warehouse=mssql("Database=Trading_QA")), "BASIS_DATABASES__WAREHOUSE__CONNECTION_STRING in .env.qa names 0 servers and 1 databases"),
         (
             settings(markets={"kind": "oracle", "dsn": "ora01:1521/MARKETS", "user": "u", "password": "p", "mode": "thin", "isolation": "read_only", "timeout_s": 5, "max_rows": 5}),
@@ -91,10 +112,31 @@ def test_settings_whose_every_database_and_store_carry_the_marker_are_safe(decla
         (settings("//files/runs"), "BASIS_SNAPSHOT_ROOT in .env.qa is //files/runs, which [tool.basis.qa] stores does not list"),
         (settings(warehouse=mssql(ledger="etl.ledger")), "BASIS_DATABASES__WAREHOUSE__WRITE__LEDGER in .env.qa is etl.ledger, which [tool.basis.qa] writes does not list for warehouse"),
     ],
-    ids=["a-server", "a-write-block-elsewhere", "a-brace-hides-no-server", "two-servers", "no-server", "an-oracle-dsn", "no-store", "a-store-not-listed", "an-unmarked-store", "a-ledger"],
+    ids=[
+        "a-server",
+        "a-write-block-elsewhere",
+        "a-brace-hides-no-server",
+        "two-servers",
+        "a-second-server-after-an-empty-segment",
+        "no-server",
+        "an-oracle-dsn",
+        "no-store",
+        "a-store-not-listed",
+        "an-unmarked-store",
+        "a-ledger",
+    ],
 )
 def test_a_setting_that_does_not_point_at_qa_is_refused_by_name(declared: qa.Declared, found: GivenSettings, problem: str) -> None:
     assert any(reason.startswith(problem) for reason in problems(found, declared)), problems(found, declared)
+
+
+@pytest.mark.parametrize(
+    ("location", "found"),
+    [("runs-qa", "/repo/runs-qa"), ("/srv/runs-qa", "/srv/runs-qa"), ("abfs://runs@qa.dfs.core.windows.net/x", "abfs://runs@qa.dfs.core.windows.net/x")],
+    ids=["relative", "absolute", "a-url"],
+)
+def test_a_store_is_found_where_the_command_reads_it(location: str, found: str) -> None:
+    assert locate(location, Path("/repo")) == found
 
 
 def test_a_database_no_run_uses_must_carry_the_marker_too(declared: qa.Declared) -> None:

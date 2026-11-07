@@ -157,3 +157,24 @@ def test_basis_doctor_runs_outside_a_repo_and_checks_the_desktop_alone(tmp_path:
     printed = capsys.readouterr().out
     assert "hooks" not in printed
     assert printed.startswith("ok: ")
+
+
+def test_in_an_ordinary_python_project_doctor_checks_the_desktop_alone(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "notebook-tools"\n', encoding="utf-8")
+    command.run(["doctor"], cwd=tmp_path, installed={})
+    captured = capsys.readouterr()
+    assert "pyproject.toml" not in captured.err
+    assert "hooks" not in captured.out
+
+
+def test_a_basis_table_that_is_not_valid_is_a_problem_doctor_names(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    (tmp_path / "pyproject.toml").write_text('[tool.basis]\nparts = "alpha"\n', encoding="utf-8")
+    assert command.run(["doctor"], cwd=tmp_path, installed={}) == 1
+    assert f"ERROR: {tmp_path / 'pyproject.toml'}'s [tool.basis] parts is not a list of part names: give [tool.basis] parts" in capsys.readouterr().err
+
+
+def test_doctor_in_a_repo_checks_its_hooks_and_settings_too(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    command.run(["doctor"], cwd=repo, installed={"alpha": Part})
+    printed = capsys.readouterr().out.splitlines()
+    assert "ok: the clone runs the repo's hooks from .githooks/" in printed
+    assert "note: the repo declares no QA tier, so the push hook runs none" in printed

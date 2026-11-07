@@ -16,9 +16,7 @@ from pydantic import Field
 
 from basis.core import clone
 from basis.core.model import Model
-from basis.core.verbs import fail
-
-GROUP = "basis.verbs"
+from basis.core.verbs import GROUP, fail
 
 
 class DifferenceRecord(Model):
@@ -79,6 +77,8 @@ class Record(Model):
     qa: QaRecord
     contracts: dict[str, str | None] = Field(default_factory=dict)
     """Each part's contract diff, by the part's name, or None when its contract has not changed."""
+    contracts_skipped: str | None = None
+    """Why there are no contract diffs, when there are none: no part offers a contract, or `basis check` failed."""
 
 
 def versions() -> dict[str, str]:
@@ -133,6 +133,8 @@ def markdown(record: Record) -> str:
         lines += ["", "`basis check` failed, so neither regress nor the QA tier ran."]
     lines += ["", "### What regress saw change", "", *_regress(record.regress)]
     lines += ["", "### The QA tier", "", *_qa(record.qa)]
+    if record.contracts_skipped is not None:
+        lines += ["", "### Contracts", "", f"Skipped: {record.contracts_skipped}."]
     for part, diff in record.contracts.items():
         lines += ["", f"### The {part} contract", "", diff if diff is not None else "Unchanged since the last release."]
     lines += ["", "### Versions", "", *(f"- {name} {number}" for name, number in record.versions.items())]

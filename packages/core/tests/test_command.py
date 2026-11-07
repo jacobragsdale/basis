@@ -499,3 +499,9 @@ def test_a_verb_of_more_than_one_installed_part_the_repo_does_not_declare_names_
     assert error_line(capsys).endswith(
         f"`basis replay` comes with the alpha and beta parts, which {tmp_path / 'pyproject.toml'} does not declare: add the one the repo has, 'alpha' or 'beta', to its [tool.basis] parts"
     )
+
+
+@pytest.mark.parametrize("option", [["--no-qa"], ["--settings-from", "."]], ids=["no-qa", "settings-from"])
+def test_the_options_of_a_full_check_are_refused_without_full(tmp_path: Path, capsys: pytest.CaptureFixture[str], option: list[str]) -> None:
+    assert basis(repo(tmp_path), "check", *option) == 1
+    assert error_line(capsys).startswith("ERROR: --settings-from and --no-qa change what `basis check --full` does, and were given without --full")

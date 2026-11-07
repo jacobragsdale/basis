@@ -26,25 +26,26 @@ writing, a table `writes` does not list. A connection string's login can still r
 three-part name in a query, which no check of its settings can see: give QA's logins access to QA alone."""
 
 import tomllib
-from collections.abc import Generator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated
 
 import polars as pl
-from pydantic import Field, ValidationError
+from pydantic import ConfigDict, Field, ValidationError
 
+from basis.core import invalid
 from basis.core.databases import Counts, Database, LedgerEntry, Reader, Writer, open_database
 from basis.core.destination import TableSpec
 from basis.core.errors import BasisError
 from basis.core.interval import Interval
 from basis.core.model import Model
-from basis.core.settings import LEDGER, MssqlSettings, OracleSettings, Settings, read
+from basis.core.settings import LEDGER, MssqlSettings, OracleSettings, Settings, locate, read
 from basis.core.storage import Root
 from basis.core.sync import Problem
 from basis.core.tables import IDENTIFIER, Changes, Target
-from basis.core.verbs import Part, Qa, QaRun
+from basis.core.verbs import Part, Qa, QaPlan, QaRun
 
 KEY = "qa"
 """The `[tool.basis]` table that declares the tier."""
@@ -60,6 +61,8 @@ class QaError(BasisError, PermissionError):
 
 class Declaration(Model):
     """`[tool.basis.qa]`, but for the parts' own tables."""
+
+    model_config = ConfigDict(title=f"pyproject.toml's {_SECTION}")
 
     settings: Annotated[str, Field(min_length=1)]
     """The settings file, relative to the repo, such as `.env.qa`."""
@@ -115,8 +118,7 @@ def declared(pyproject: Path, parts: Mapping[str, Part]) -> Declared | None:
     try:
         declaration = Declaration.model_validate({key: value for key, value in entries.items() if key in fields})
     except ValidationError as error:
-        problems = "; ".join(f"{'.'.join(map(str, problem['loc'])) or 'it'}: {problem['msg']}" for problem in error.errors(include_url=False, include_input=False))
-        msg = f"{pyproject}'s {_SECTION} is not valid: {problems}: give {_EXAMPLE}"
+        msg = f"{invalid.explain(error)}, as {_EXAMPLE}"
         raise BasisError(msg) from error
     if unmarked := [store for store in declaration.stores if not carries(store, declaration.marker)]:
         msg = f"{pyproject}'s {_SECTION} stores has {', '.join(unmarked)}, whose name does not contain the marker {declaration.marker!r}: list only QA's stores, each named so"
@@ -130,14 +132,18 @@ def carries(name: str, marker: str) -> bool:
 
 def keywords(connection_string: str) -> list[tuple[str, str]]:
     """A connection string's keywords and values, in order, each keyword in lower case: `KEY=VALUE` pairs split at
-    `;`, where a value in braces, `{...}` with `}}` for a brace, or in double quotes, may hold a `;`."""
+    `;`, where a value in braces, `{...}` with `}}` for a brace, or in double quotes, may hold a `;`. Empty segments
+    and segments with no `=` are skipped, so neither hides the keyword after it."""
     pairs: list[tuple[str, str]] = []
     text = connection_string
-    while text:
-        key, separator, text = text.partition("=")
-        if not separator:
+    while text := text.lstrip("; \t"):  # an empty segment, `;;`, is nothing
+        equals, semicolon = text.find("="), text.find(";")
+        if equals == -1:
             break
-        text = text.lstrip()
+        if semicolon != -1 and semicolon < equals:  # a segment with no `=` is no keyword, and hides none after it
+            text = text[semicolon + 1 :]
+            continue
+        key, text = text[:equals], text[equals + 1 :].lstrip()
         if text[:1] in {"{", '"'}:
             value, text = _quoted(text)
             _, _, text = text.partition(";")
@@ -225,20 +231,27 @@ def problems(settings: Settings, declared: Declared, *, source: Path) -> list[Pr
     return found
 
 
-def context(declared: Declared, settings: Settings, *, repo: Path, folder: Path, commit: str | None, part: str) -> Qa:  # noqa: PLR0913 -- what the tier found, by keyword
-    """What the tier gives the part `part`: settings `problems` found safe, a store that a relative path finds in
-    `folder`, as the settings file is, and databases that refuse what `writes` does not list."""
+def store(settings: Settings, folder: Path) -> Root | Problem:
+    """The QA store the settings name, which a relative path finds in `folder`, as the settings file is; or why it
+    cannot be opened, and the fix."""
     if settings.snapshot_root is None:
-        msg = "the QA tier has no store: a defect, since `problems` refuses settings without one"
-        raise AssertionError(msg)
+        return "the QA settings name no store", "set BASIS_SNAPSHOT_ROOT in them to one of [tool.basis.qa] stores"
+    location = locate(settings.snapshot_root, folder)
+    try:
+        return Root.at(location)
+    except (OSError, ValueError) as error:  # pyarrow's errors for a store it cannot open are OSError and ValueError
+        return f"the QA store {location} cannot be opened ({' '.join(str(error).split())})", "fix BASIS_SNAPSHOT_ROOT in the QA settings, or reach the store from this machine"
+
+
+def context(declared: Declared, settings: Settings, *, store: Root, repo: Path, commit: str | None, part: str) -> Qa:  # noqa: PLR0913 -- what the tier found, by keyword
+    """What the tier gives the part `part`: settings `problems` found safe, the QA store, and databases that refuse
+    what `writes` does not list."""
     tables = declared.tables()
-    store = Path(settings.snapshot_root)
-    location = settings.snapshot_root if "://" in settings.snapshot_root or store.is_absolute() else (folder / store).as_posix()
 
     def databases(name: str) -> Database:
         return _Guarded(open_database(settings, name), tables.get(name, frozenset()))
 
-    return Qa(repo, commit, settings, Root.at(location), tables, declared.parts.get(part, {}), databases)
+    return Qa(repo, commit, settings, store, tables, declared.parts.get(part, {}), databases)
 
 
 @dataclass(frozen=True)
@@ -270,10 +283,19 @@ def tier(repo: Path, parts: Mapping[str, Part], *, commit: str | None, folder: P
     source = found.settings_file(folder)
     if not source.is_file():
         return Outcome(skipped=f"this machine has no {source}, the settings file {_SECTION} names: copy .env.example to it, and fill in QA's databases and store")
-    settings = read(source)
+    return _safely(found, read(source), planning, source=source, repo=repo, folder=folder, commit=commit)
+
+
+def _safely(  # noqa: PLR0913 -- what the tier found, by keyword
+    found: Declared, settings: Settings, planning: Mapping[str, Callable[[Qa], QaPlan]], *, source: Path, repo: Path, folder: Path, commit: str | None
+) -> Outcome:
+    """Each part's runs, once the settings read from `source` are safe, the store opens, and no plan is refused."""
     if refused := problems(settings, found, source=source):
         return Outcome(refused=tuple(refused))
-    plans = {name: plan(context(found, settings, repo=repo, folder=folder, commit=commit, part=name)) for name, plan in planning.items()}
+    opened = store(settings, folder)
+    if not isinstance(opened, Root):
+        return Outcome(refused=(opened,))
+    plans = {name: plan(context(found, settings, store=opened, repo=repo, commit=commit, part=name)) for name, plan in planning.items()}
     if refused := [problem for plan in plans.values() for problem in plan.problems]:
         return Outcome(refused=tuple(refused), store=settings.snapshot_root)
     return Outcome(runs=tuple((name, run) for name, plan in plans.items() for run in plan.run()), store=settings.snapshot_root)

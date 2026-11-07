@@ -7,7 +7,9 @@ the reviewer. A failure to regress, a QA tier that refuses or a QA run that fail
 `regress` reads the store `basis regress` reads, the process's `BASIS_SNAPSHOT_ROOT`, and writes nothing. When the
 push hook checks a commit in a worktree of its own, it names the clone's own folder (`folder`), where the files git
 does not track are: the QA settings file, and a run store a relative path names. What the check found is recorded for
-`basis review` when the repo's folder holds no change its commit does not."""
+`basis review` when the repo's folder holds no change its commit does not. A failure in a piece, whatever it raises, is
+its `ERROR` line, and the pieces after it still run and are recorded. `basis upgrade` leaves the QA tier out, since
+its relock is not yet a commit: the push runs it."""
 
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -19,7 +21,7 @@ from pydantic import ValidationError
 from basis.core import check, clone, qa, review
 from basis.core.check import Runner
 from basis.core.errors import BasisError
-from basis.core.settings import Settings
+from basis.core.settings import Settings, locate
 from basis.core.storage import Root
 from basis.core.sync import AgentFiles
 from basis.core.verbs import Part, Regress, fail
@@ -31,31 +33,45 @@ type Report = Callable[[Exception], str]
 """Prints a failure as its one line, with its traceback first if it is a defect, and returns the line."""
 
 
+QA_LATER = "it runs when you push, once the change is committed"
+"""Why `basis upgrade`'s check leaves the QA tier out."""
+
+
 def full(  # noqa: PLR0913 -- the repo, its parts, and how the check reaches the world, by keyword
-    repo: Path, files: Sequence[AgentFiles], parts: Mapping[str, Part], *, run: Runner, report: Report, folder: Path, clock: Callable[[], datetime]
+    repo: Path, files: Sequence[AgentFiles], parts: Mapping[str, Part], *, run: Runner, report: Report, folder: Path, clock: Callable[[], datetime], with_qa: bool = True
 ) -> int:
-    """Run `basis check --full` on the repo at `repo`, whose untracked files are in `folder`; 0 when every piece that
-    ran passed."""
+    """Run `basis check --full` on the repo at `repo`, whose untracked files are in `folder`, and with `with_qa` the QA
+    tier; 0 when every piece that ran passed."""
     found = clone.of(repo)
     commit = found.head() if found is not None else None
     clean = found is not None and found.clean()  # before the check, which may write what git does not ignore
     checked = check.check(repo, files, run=run) == 0
     if checked:
         regressed = _regress(parts, folder, report)
-        tier = _qa(repo, parts, commit=commit, folder=folder, report=report)
-        contracts, broken = _contracts(repo, parts, report)
+        tier = _qa(repo, parts, commit=commit, folder=folder, report=report) if with_qa else _skip_qa(QA_LATER)
+        contracts, broken, unoffered = _contracts(repo, parts, report)
     else:
         why = "basis check failed, as above"
-        regressed, tier, contracts, broken = review.RegressRecord(skipped=why), review.QaRecord(skipped=why), {}, 0
-        _skipped("regress", why)
-        _skipped("the QA tier", why)
+        regressed, tier, contracts, broken, unoffered = _skip_regress(why), _skip_qa(why), {}, 0, why
+        _skipped("the contract diffs", why)
     passed = checked and not regressed.failures and not tier.refused and not any(run.failure for run in tier.runs) and not broken
     if found is None or commit is None:
         _skipped("the record for basis review", "the repo is in no clone with a commit")
     elif not clean:
         _skipped("the record for basis review", "the repo's folder has changes no commit holds, so no commit is what was checked: commit them, and check again")
     else:
-        record = review.Record(commit=commit, folder=found.prefix, checked_at=clock(), checked=checked, passed=passed, versions=review.versions(), regress=regressed, qa=tier, contracts=contracts)
+        record = review.Record(
+            commit=commit,
+            folder=found.prefix,
+            checked_at=clock(),
+            checked=checked,
+            passed=passed,
+            versions=review.versions(),
+            regress=regressed,
+            qa=tier,
+            contracts=contracts,
+            contracts_skipped=unoffered,
+        )
         review.save(found, record)
         _said(f"recorded that commit {commit} {'passed' if passed else 'failed'}, for `uv run basis review`")
     return 0 if passed else 1
@@ -71,7 +87,7 @@ def _regress(parts: Mapping[str, Part], folder: Path, report: Report) -> review.
         return review.RegressRecord(failures=[report(error)])
     if configured is None:
         return _skip_regress("BASIS_SNAPSHOT_ROOT is not set, so there is no run store to replay: set it, where git runs the push hook, to the store whose published runs to replay")
-    location = configured if "://" in configured or Path(configured).is_absolute() else (folder / configured).as_posix()
+    location = locate(configured, folder)
     try:
         reachable = Root.at(location).is_dir()
     except (OSError, ValueError) as error:  # pyarrow's errors for a store it cannot reach are OSError and ValueError
@@ -84,7 +100,12 @@ def _regress(parts: Mapping[str, Part], folder: Path, report: Report) -> review.
         if runs.regressions is None:
             _skipped(f"regress of the {name} part", f"it gives `basis check --full` no regressions to record: `uv run basis regress` replays its {runs.noun}s")
             continue
-        found = runs.regressions(Regress(None, LAST, {}, location))
+        try:
+            found = runs.regressions(Regress(None, LAST, {}, location))
+        except Exception as error:  # noqa: BLE001 -- one part's failure is its own line, and the check goes on
+            error.add_note(f"while regressing the {name} part's runs")
+            failures.append(report(error))
+            continue
         failures += [report(error) for error in found.failures]
         replayed += [
             review.RegressedRecord(
@@ -107,14 +128,19 @@ def _skip_regress(why: str) -> review.RegressRecord:
     return review.RegressRecord(skipped=why)
 
 
+def _skip_qa(why: str) -> review.QaRecord:
+    _skipped("the QA tier", why)
+    return review.QaRecord(skipped=why)
+
+
 def _qa(repo: Path, parts: Mapping[str, Part], *, commit: str | None, folder: Path, report: Report) -> review.QaRecord:
     try:
         outcome = qa.tier(repo, parts, commit=commit, folder=folder)
-    except (ValidationError, BasisError) as error:
+    except Exception as error:  # noqa: BLE001 -- the tier's failure is its line; what regress found is still recorded
+        error.add_note("while running the QA tier")
         return review.QaRecord(refused=[report(error)])
     if outcome.skipped is not None:
-        _skipped("the QA tier", outcome.skipped)
-        return review.QaRecord(skipped=outcome.skipped)
+        return _skip_qa(outcome.skipped)
     for problem in outcome.refused:
         fail(*problem)
     if outcome.refused:
@@ -130,8 +156,15 @@ def _qa(repo: Path, parts: Mapping[str, Part], *, commit: str | None, folder: Pa
     return review.QaRecord(store=outcome.store, refused=[f"{reason}: {fix}" for reason, fix in outcome.refused], runs=runs)
 
 
-def _contracts(repo: Path, parts: Mapping[str, Part], report: Report) -> tuple[dict[str, str | None], int]:
-    """Each part's contract diff, by the part's name, and how many parts failed to give theirs."""
+NO_CONTRACT = "no part of this repo offers a contract, such as an API's openapi.json, so there is no diff to show"
+
+
+def _contracts(repo: Path, parts: Mapping[str, Part], report: Report) -> tuple[dict[str, str | None], int, str | None]:
+    """Each part's contract diff, by the part's name, how many parts failed to give theirs, and why there are none
+    when no part offers one."""
+    if not any(part.contract is not None for part in parts.values()):
+        _skipped("the contract diffs", NO_CONTRACT)
+        return {}, 0, NO_CONTRACT
     found: dict[str, str | None] = {}
     broken = 0
     for name, part in parts.items():
@@ -145,7 +178,7 @@ def _contracts(repo: Path, parts: Mapping[str, Part], report: Report) -> tuple[d
             broken += 1
             continue
         _said(f"the {name} part's contract {'is unchanged' if found[name] is None else 'changed, as `uv run basis review` shows'}")
-    return found, broken
+    return found, broken, None
 
 
 def _skipped(piece: str, why: str) -> None:

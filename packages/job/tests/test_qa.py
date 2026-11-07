@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -82,3 +82,36 @@ def test_a_published_run_says_what_it_wrote_to_each_table() -> None:
         }
     )  # fmt: skip
     assert qa.summary(record) == "published: dbo.prices (3 upserted)"
+
+
+def raising(error: Exception) -> Callable[[str], Job]:
+    def load(_: str) -> Job:
+        raise error
+
+    return load
+
+
+@pytest.mark.parametrize(
+    ("error", "problem"),
+    [
+        (ImportError("cannot import name 'Price' from 'jobs.prices.rows'"), "the QA run of prices cannot load the job: ImportError: cannot import name 'Price'"),
+        (AttributeError("module 'polars' has no attribute 'col_'"), "the QA run of prices cannot load the job: AttributeError: module 'polars' has no attribute 'col_'"),
+        (SyntaxError("invalid syntax"), "the QA run of prices cannot load the job: SyntaxError: invalid syntax"),
+    ],
+    ids=["an-import", "an-attribute", "a-syntax-error"],
+)
+def test_a_job_that_does_not_load_whatever_it_raises_is_a_refused_run(repo: Path, error: Exception, problem: str) -> None:
+    [(reason, _)] = qa.plan(context(repo, DECLARED), listed=lambda: {"prices": "jobs.prices.job"}, load=raising(error)).problems
+    assert reason.startswith(problem)
+
+
+def test_params_that_are_not_utf8_are_a_refused_run(repo: Path) -> None:
+    (repo / "params.json").write_bytes(b'{"scale": "\xff"}')
+    [problem] = problems(context(repo, DECLARED))
+    assert problem.startswith("[tool.basis.qa.job] prices's params, params.json, cannot be read: UnicodeDecodeError: ")
+
+
+def test_params_the_job_does_not_accept_are_a_refused_run_that_names_each_value(repo: Path) -> None:
+    (repo / "params.json").write_text('{"scale": "big"}', encoding="utf-8")
+    [problem] = problems(context(repo, DECLARED))
+    assert problem.startswith("[tool.basis.qa.job] prices's params, params.json, are not valid: scale: Input should be a valid integer")

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 from pydantic import ValidationError
 
-from basis.core.errors import BasisError
+from basis.core import invalid
 from basis.core.interval import Interval
 from basis.core.model import Model
 from basis.core.snapshots import RunRecord
@@ -56,8 +56,7 @@ def plan(qa: Qa, *, listed: Callable[[], Mapping[str, str]] = jobs.listed, load:
         try:
             declared[name] = Declared.model_validate(value)
         except ValidationError as error:
-            wrong = "; ".join(f"{'.'.join(map(str, problem['loc'])) or 'it'}: {problem['msg']}" for problem in error.errors(include_url=False, include_input=False))
-            problems.append((f"{_TABLE} {name} is not valid: {wrong}", f'give it as {name} = {{ params = "jobs/{name}/params/default.json", interval = "START..END" }}'))
+            problems.append((f"{_TABLE} {name} is not valid: {invalid.named(error)}", f'give it as {name} = {{ params = "jobs/{name}/params/default.json", interval = "START..END" }}'))
     names = sorted(listed())
     others = f"remove it, or give one of {', '.join(names) or 'the jobs pyproject.toml lists'}"
     problems += [(f"{_TABLE} declares a QA run of {name}, which the repo does not list", others) for name in sorted(set(declared) - set(names))]
@@ -83,14 +82,17 @@ def _planned(qa: Qa, name: str, declared: Declared, load: Callable[[str], jobs.J
     """The job's run, if it can be made, and every reason it would be unsafe or could not run."""
     try:
         job = load(name)
-    except BasisError as error:
-        return None, [(f"the QA run of {name} cannot load the job: {error}", "fix the job, as `uv run basis check` says")]
+    except Exception as error:  # noqa: BLE001 -- a job that does not load, whatever it raises, is a run the tier refuses
+        return None, [(f"the QA run of {name} cannot load the job: {_headline(error)}", "fix the job, as `uv run basis check` says")]
     problems: list[Problem] = []
     params = qa.repo / declared.params
+    fix = "give a params file, relative to the repo, of UTF-8 JSON that the job's Params accept"
     try:
         runs.read_params(job, params)
-    except (OSError, ValidationError) as error:
-        problems.append((f"{_TABLE} {name}'s params, {declared.params}, cannot be read: {' '.join(str(error).split())}", "give a params file, relative to the repo, that the job's Params accept"))
+    except ValidationError as error:
+        problems.append((f"{_TABLE} {name}'s params, {declared.params}, are not valid: {invalid.named(error)}", fix))
+    except (OSError, ValueError) as error:  # a file that is missing or unreadable, or not UTF-8
+        problems.append((f"{_TABLE} {name}'s params, {declared.params}, cannot be read: {_headline(error)}", fix))
     try:
         interval = Interval.parse(declared.interval) if declared.interval is not None else None
     except ValueError as error:
@@ -112,13 +114,17 @@ def _planned(qa: Qa, name: str, declared: Declared, load: Callable[[str], jobs.J
     return (_Planned(job, request) if not problems else None), problems
 
 
+def _headline(error: BaseException) -> str:
+    return f"{type(error).__name__}: {' '.join(str(error).split())}"
+
+
 def _run(qa: Qa, planned: _Planned) -> QaRun:
     job = planned.job
     try:
         result = runs.run(job, qa.settings, planned.request, snapshot_root=qa.store, databases=qa.databases)
     except Exception as error:
         log.exception("the QA run of %s failed", job.name)
-        return QaRun(job.name, None, "did not run", (f"the QA run of {job.name} failed: {type(error).__name__}: {' '.join(str(error).split())}", "fix it, and check again"))
+        return QaRun(job.name, None, "did not run", (f"the QA run of {job.name} failed: {_headline(error)}", "fix it, and check again"))
     record = result.record
     return QaRun(job.name, record.run_id, summary(record), runs.failure_of(record, publish=True))
 

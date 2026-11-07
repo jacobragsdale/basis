@@ -5,7 +5,8 @@ them, so this is how a repo takes one; its `regress` says whether the repo still
 
 It starts from a folder with no uncommitted change, so what it changed is a diff of its own, for a commit of its own.
 `basis sync` and `basis check --full` run through `uv run`, so the newly locked basis does them, not the one that
-started the upgrade."""
+started the upgrade. The check leaves the QA tier out, since the relock is not yet a commit, and QA would publish a
+run of it that no record names, then publish again when it is pushed: the push hook runs QA once it is committed."""
 
 import tomllib
 from collections.abc import Callable, Collection, Sequence
@@ -48,10 +49,7 @@ def locked(lockfile: Path, names: Collection[str]) -> dict[str, Locked]:
 def changed_files(repo: Path) -> list[str] | None:
     """The paths the repo's folder has changed, relative to it, or None outside a clone."""
     found = clone.of(repo)
-    if found is None:
-        return None
-    printed = clone.output(found.git, repo, "status", "--porcelain", "--untracked-files=all", "--", ".")
-    return [line[3:] for line in printed.splitlines()] if printed is not None else None
+    return found.changed() if found is not None else None
 
 
 def upgrade(repo: Path, packages: Collection[str], *, run: Runner, changed: Changed = changed_files, write: Callable[[str], None]) -> int:
@@ -70,9 +68,11 @@ def upgrade(repo: Path, packages: Collection[str], *, run: Runner, changed: Chan
         write(f"basis upgrade: the lock already holds the newest basis pyproject.toml allows: {', '.join(f'{name} {found}' for name, found in after.items())}")
     if run(_uv_run("sync"), repo) != 0:
         return fail("basis sync failed after relocking, as it says above", "fix what it says, and run `uv run basis sync`, then `uv run basis check --full`")
-    checked = run(_uv_run("check", "--full"), repo)
+    checked = run(_uv_run("check", "--full", "--no-qa"), repo)
     files = changed(repo) or []
     write(f"basis upgrade: changed {', '.join(files)}" if files else "basis upgrade: changed no file")
+    if files:
+        write("basis upgrade: commit the upgrade and push it: the push hook runs the QA tier on it, and records the check for `uv run basis review`")
     if checked != 0:
         return fail("the repo fails basis check --full after the upgrade, as above", "fix what it says, or set the upgrade aside with `git stash --include-untracked`")
     return 0
