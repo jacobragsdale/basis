@@ -101,7 +101,9 @@ Its `pyproject.toml` takes basis-job from the tag, as
 Publishing to the firm's internal feed needs the firm's environment, and waits on spike 0.1 in
 [the roadmap](roadmap.md#phase-0-spikes), which says how the firm's desktops and pipelines reach the feed. The files
 to publish are the release's, `gh release download v0.1.0 --repo jacobragsdale/basis`, checked with
-`sha256sum --check SHA256SUMS`.
+`sha256sum --check SHA256SUMS`. Public PyPI has an unrelated `basis-core` at 0.1.0, so a feed that proxies PyPI could
+serve it in place of basis's: once published, a repo made from the feed must lock `basis_core-0.1.0-py3-none-any.whl`
+with the hash `SHA256SUMS` gives it.
 
 ## What the dry run proves
 
@@ -117,7 +119,7 @@ jobs:
 | `build` | `release.py check`. Each published package's wheel and sdist, built with `uv build --no-sources --package NAME`, as an install from an index would build it, and no other file. |
 | `verify` | With no checkout of the workspace: the wheels in one clean environment and the sdists in another, where `basis --version` names each package at the version and `basis --help` loads every part's verbs. A job repo made with `uvx --from` the basis-job wheel and `--index` naming a stand-in feed on the runner, which serves the files and sends every other name to PyPI, as the firm's feed proxies it: its lock holds basis-job and basis-core at the version, from that feed, and it passes `basis check`. A job repo made with `uvx` installing basis-job from that feed: without `--index` it fails with one `ERROR` line, since uv does not record which index a package came from, and with `--index` it passes `basis check`. |
 | `from-git` | A scratch clone of the commit on the runner, tagged there as the version's release and never pushed: a job repo made with `uvx --from 'git+URL@vX.Y.Z#subdirectory=packages/job'` depends on that tag, and passes `basis check`. |
-| `one-version` | The release script's tests. `release.py version minor` moves every member, each pin and the lock, `release.py check` then passes, and so does every unit test, at the next version. |
+| `one-version` | `release.py version minor` moves every member, each pin and the lock, `release.py check` then passes, and so does every unit test, the release script's among them, at the next version. |
 
 Only the tag's run proves three things. `from-git` clones the tag from github.com, not from a scratch clone. A job
 repo made from the basis-job wheel with no `--index` takes the release's tag from GitHub: a wheel's file, unlike an

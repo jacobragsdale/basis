@@ -108,8 +108,8 @@ error-on-warning = true
 # registers for the repos it makes, stays out of this session (`-p no:NAME`), so one part's code never runs in
 # another's tests; pytester's own sessions still load it.
 addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration' --ignore-glob=packages/*/src/*/templates -p pytester -p no:optim"
-testpaths = ["packages/*/tests", "packages/*/src/*/example", "packages/*/src/basis/*/example"]  # every member's tests, and its example's
-pythonpath = ["packages/job/tests", "packages/optim/tests"]  # each member's shared test modules, such as basis-job's `builders`; a missing path adds nothing
+testpaths = ["packages/*/tests", "packages/*/src/*/example", "packages/*/src/basis/*/example", "scripts/tests"]  # every member's tests, its example's, and the release script's
+pythonpath = ["packages/job/tests", "packages/optim/tests", "scripts"]  # each member's shared test modules, such as basis-job's `builders`, and scripts/release.py; a missing path adds nothing
 xfail_strict = true  # An xfail that starts passing is a failure, not a silent pass.
 filterwarnings = [
     "error",  # A warning is a defect until someone decides otherwise.

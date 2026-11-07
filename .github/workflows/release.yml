@@ -180,9 +180,7 @@ jobs:
         with:
           version: "0.13.7"
       - run: uv sync --locked --all-packages
-      - name: The release script's own tests
-        run: uv run pytest -o pythonpath=scripts scripts/tests
-      - name: Set the next minor version, which every member, each basis-core pin and the lock follow, and run every unit test at it
+      - name: Set the next minor version, which every member, each basis-core pin and the lock follow, and run every unit test at it, the release script's among them
         run: |
           uv run scripts/release.py version minor
           git diff --stat
