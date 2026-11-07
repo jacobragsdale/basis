@@ -67,6 +67,15 @@ def pid() -> int:
     return os.getpid()
 
 
+def hold(started: str, release: str) -> int:
+    """Busy, as a solver is, from writing `started` until `release` exists, which the test writes."""
+    Path(started).write_text("started", encoding="utf-8")
+    turns = 0
+    while not Path(release).exists():
+        turns += 1
+    return turns
+
+
 def scale(amount: Amount) -> Amount:
     return amount * 2
 
@@ -103,8 +112,8 @@ def _declared(workloads: ModuleType, name: str) -> api.ComputeFunction[..., obje
 
 def _service(workloads: ModuleType, *, deadline_s: float = 5) -> tuple[api.Service, dict[str, api.ComputeFunction[..., object]]]:
     """A service that runs each workload by a route of its name, and answers `/now` without computing."""
-    declared = {name: _declared(workloads, name) for name in ("spin", "tell", "die", "identity", "mark", "pid")}
-    spin, tell, die, identity, mark, pid = (declared[name] for name in ("spin", "tell", "die", "identity", "mark", "pid"))
+    declared = {name: _declared(workloads, name) for name in ("spin", "tell", "die", "identity", "mark", "pid", "hold")}
+    spin, tell, die, identity, mark, pid, hold = (declared[name] for name in ("spin", "tell", "die", "identity", "mark", "pid", "hold"))
 
     async def spun(seconds: float, run: Annotated[api.Compute[[float], int], api.given(spin)]) -> dict[str, int]:
         return {"turns": await run(seconds)}
@@ -127,6 +136,9 @@ def _service(workloads: ModuleType, *, deadline_s: float = 5) -> tuple[api.Servi
     async def which(run: Annotated[api.Compute[[], int], api.given(pid)]) -> dict[str, int]:
         return {"pid": await run()}
 
+    async def held(started: str, release: str, run: Annotated[api.Compute[[str, str], int], api.given(hold)]) -> dict[str, int]:
+        return {"turns": await run(started, release)}
+
     def now() -> dict[str, float]:
         return {"at": time.monotonic()}
 
@@ -137,6 +149,7 @@ def _service(workloads: ModuleType, *, deadline_s: float = 5) -> tuple[api.Servi
         api.get("/lock", lock, deadline_s=deadline_s, response=dict[str, str], errors=[]),
         api.get("/mark", marked, deadline_s=deadline_s, response=dict[str, int], errors=[]),
         api.get("/pid", which, deadline_s=deadline_s, response=dict[str, int], errors=[]),
+        api.get("/hold", held, deadline_s=deadline_s, response=dict[str, int], errors=[]),
         api.get("/now", now, deadline_s=deadline_s, response=dict[str, float], errors=[]),
     ]
     return api.Service(name="workloads", settings=api.Settings, routes=routes), declared
@@ -226,7 +239,7 @@ def test_a_compute_function_reaches_no_resource(workloads: ModuleType) -> None:
 
 def test_a_service_with_compute_needs_its_pool_unless_a_test_fakes_it(workloads: ModuleType) -> None:
     service, declared = _service(workloads)
-    with pytest.raises(SettingsError, match="set BASIS_COMPUTE__WORKERS, the processes the compute functions spin, tell, die, identity, mark, pid run in"):
+    with pytest.raises(SettingsError, match="set BASIS_COMPUTE__WORKERS, the processes the compute functions spin, tell, die, identity, mark, pid, hold run in"):
         api.build(service, settings=api.Settings.given())
     api.build(service, settings=api.Settings.given(), fakes=dict.fromkeys(declared.values(), fakes.Compute()))
 
@@ -238,19 +251,27 @@ def test_a_fake_runs_the_function_here_and_still_pickles_what_crosses(workloads:
         assert client.get("/lock").status_code == HTTPStatus.INTERNAL_SERVER_ERROR  # a lock cannot cross to a process
 
 
-def test_cpu_bound_compute_leaves_the_event_loop_free(workloads: ModuleType) -> None:
-    """While one request spends 1.5s of CPU in the pool, others are answered at once."""
-    with TestClient(_pooled(workloads).asgi) as client, ThreadPoolExecutor(1) as thread:
-        computing = thread.submit(client.get, "/spin", params={"seconds": "1.5"})
-        time.sleep(0.3)
-        answered = []
-        for _ in range(5):
-            started = time.monotonic()
-            client.get("/now").raise_for_status()
-            answered.append(time.monotonic() - started)
-        assert not computing.done()
-        assert computing.result().json()["turns"] > 0
-    assert max(answered) < 0.5
+def test_cpu_bound_compute_leaves_the_event_loop_free(workloads: ModuleType, tmp_path: Path) -> None:
+    """While one request spins in the pool until the test releases it, others are answered: were the event loop held,
+    they would wait for the spin, which never ends before they do, and the guard of 10s on each would fail the test."""
+    started, release = tmp_path / "started", tmp_path / "release"
+    with TestClient(_pooled(workloads).asgi) as client, ThreadPoolExecutor(2) as threads:
+        computing = threads.submit(client.get, "/hold", params={"started": str(started), "release": str(release)})
+        _until(started.exists)
+        answered = [threads.submit(client.get, "/now").result(timeout=10).status_code for _ in range(5)]
+        spinning = not computing.done()
+        release.write_text("go", encoding="utf-8")
+        turns = computing.result(timeout=10).json()["turns"]
+    assert (answered, spinning, turns > 0) == ([HTTPStatus.OK] * 5, True, True)
+
+
+def _until(done: Callable[[], bool]) -> None:
+    """Wait until `done`, for 10s at the most, which guards against a hang and never decides an outcome."""
+    for _ in range(1000):
+        if done():
+            return
+        time.sleep(0.01)
+    pytest.fail("what the test waited for never happened")
 
 
 def test_a_call_past_its_routes_deadline_is_a_504_and_shutdown_kills_it(workloads: ModuleType, tmp_path: Path, logged: Callable[[], list[dict[str, object]]]) -> None:

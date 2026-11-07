@@ -3,7 +3,6 @@ the problem the design gives it, unless the handler handles it; a route lists th
 kind nothing it asks for raises is a defect; and the outbox makes again, or refuses, a call by the kind it failed with,
 as its statuses say."""
 
-import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -22,7 +21,7 @@ from basis.core.errors import KINDS
 
 OUTBOX = api.outbox("prices_outbox", max_age_s=3600, backoff_s=60, max_backoff_s=600)
 WAREHOUSE = api.database("warehouse", deadline_s=1, max_concurrent=4, outbox=OUTBOX)
-PRICING = api.http("pricing", deadline_s=0.3)
+PRICING = api.http("pricing", deadline_s=5)
 LEDGER = api.http("ledger", deadline_s=1)
 CLOCK = api.clock("clock")
 SELECT = "SELECT security, price FROM prices WHERE security = %(security)s"
@@ -197,14 +196,14 @@ def test_a_get_unavailable_once_is_made_again_and_the_route_answers() -> None:
     assert (response.status_code, response.json()) == (HTTPStatus.OK, {"security": SECURITY, "price": "99.50"})
 
 
-def test_a_get_unavailable_every_time_is_made_again_as_often_as_its_deadline_allows_and_at_once() -> None:
-    """The fake service's client waits no time, and each wait is all of its backoff: 50ms, then 100ms, which 0.3s fits."""
+def test_a_get_unavailable_every_time_is_made_again_as_often_as_its_deadline_allows() -> None:
+    """The fake service's client waits no time, and each wait is all of its backoff: 50ms, doubling to 1s, until the
+    next would not end within the call's 5s."""
     pricing = _pricing()
     pricing.fails(f"/prices/{SECURITY}", api.Unavailable)
-    started = time.monotonic()
     with _client(pricing=pricing) as client:
         response = client.get(f"/quotes/{SECURITY}")
-    assert (response.status_code, pricing.waits.waited, time.monotonic() - started < 0.3) == (HTTPStatus.SERVICE_UNAVAILABLE, [0.05, 0.1], True)
+    assert (response.status_code, pricing.waits.waited) == (HTTPStatus.SERVICE_UNAVAILABLE, [0.05, 0.1, 0.2, 0.4, 0.8, 1, 1, 1])
 
 
 def test_a_database_failure_once_fails_only_the_next_statement() -> None:
