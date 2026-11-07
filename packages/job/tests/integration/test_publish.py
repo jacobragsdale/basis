@@ -8,7 +8,6 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Annotated
 
-import polars as pl
 import pytest
 from builders import Price, prices
 from integration.scratch import Scratch, run
@@ -149,7 +148,7 @@ def test_a_datetime_is_stored_naive_in_its_columns_zone(scratch: Scratch, tmp_pa
     create(scratch, table)
     run(price_job(table, etl.Upsert()), {"warehouse": scratch}, prices({"booked_at": datetime(2026, 11, 5, 9, 30)}), tmp_path)
     assert scratch.rows(f"SELECT booked_at FROM {table}") == [(datetime(2026, 11, 5, 9, 30),)]
-    assert prices({"booked_at": datetime(2026, 11, 5, 9, 30)}).get_column("booked_at").to_list() == [datetime(2026, 11, 5, 14, 30, tzinfo=UTC)]
+    assert prices({"booked_at": datetime(2026, 11, 5, 9, 30)})["booked_at"].tolist() == [datetime(2026, 11, 5, 14, 30, tzinfo=UTC)]
 
 
 def two_databases(table: str) -> Job:
@@ -199,7 +198,7 @@ def test_the_ledger_records_each_publish_with_what_the_database_counted(scratch:
 
 
 def test_frames_shared_by_both_dialects_round_trip_exactly() -> None:
-    assert pl.DataFrame(TODAY).equals(TODAY)
+    assert TODAY.copy().equals(TODAY)
 
 
 def test_a_run_told_again_that_committed_to_one_database_resumes_again_on_the_other(

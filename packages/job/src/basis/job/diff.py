@@ -1,10 +1,10 @@
 """How two runs' changes to a table differ, as `basis replay` and `basis regress` report it. With a key, rows are matched
 by it, and a matched row that differs in any column counts as changed, by column; without one, rows are compared as
-a multiset, so a row repeated once more is one added."""
+a multiset, so a row repeated once more is one added. Two nulls are equal, in a key and in a value alike."""
 
 from dataclasses import dataclass, field
 
-import polars as pl
+import pandas as pd
 
 from basis.core.tables import Changes
 from basis.job.outputs import Target
@@ -47,29 +47,39 @@ def _delete_of(changes: Changes | None) -> tuple[object, ...] | None:
     return (within.column, within.start, within.end) if within is not None else (None,)
 
 
-def diff_frames(output: str, operation: str, before: pl.DataFrame | None, after: pl.DataFrame | None, key: tuple[str, ...] | None) -> OperationDiff:
+def diff_frames(output: str, operation: str, before: pd.DataFrame | None, after: pd.DataFrame | None, key: tuple[str, ...] | None) -> OperationDiff:
     if before is None or after is None:
         rows = after if after is not None else before
-        count = rows.height if rows is not None else 0
+        count = len(rows) if rows is not None else 0
         return OperationDiff(output, operation, added=count if after is not None else 0, removed=count if before is not None else 0, changed=0)
     if key is None:
         return _multiset(output, operation, before, after)
     on = list(key)
-    added = after.join(before, on=on, how="anti", nulls_equal=True).height
-    removed = before.join(after, on=on, how="anti", nulls_equal=True).height
-    values = [name for name in before.columns if name not in key]
-    both = before.join(after, on=on, how="inner", suffix="#after", nulls_equal=True)
-    differs = {name: pl.col(name).ne_missing(pl.col(f"{name}#after")) for name in values}
-    columns = {name: int(both.select(expression.sum()).item()) for name, expression in differs.items()}
-    changed = both.filter(pl.any_horizontal(differs.values())).height if differs else 0
+    sides = before[on].merge(after[on], on=on, how="outer", indicator=_SIDE)[_SIDE]
+    added, removed = int((sides == "right_only").sum()), int((sides == "left_only").sum())
+    values = [str(name) for name in before.columns if name not in key]
+    both = before.merge(after, on=on, how="inner", suffixes=("", _AFTER))
+    differs = {name: ~_same(both[name], both[f"{name}{_AFTER}"]) for name in values}
+    columns = {name: int(changed.sum()) for name, changed in differs.items()}
+    changed = int(pd.concat(differs.values(), axis=1).any(axis=1).sum()) if differs else 0
     return OperationDiff(output, operation, added=added, removed=removed, changed=changed, columns={name: count for name, count in columns.items() if count})
 
 
-def _multiset(output: str, operation: str, before: pl.DataFrame, after: pl.DataFrame) -> OperationDiff:
-    columns = before.columns
-    old = before.group_by(columns).agg(pl.len().cast(pl.Int64).alias("#before"))  # pl.len() is unsigned: a difference would wrap
-    new = after.group_by(columns).agg(pl.len().cast(pl.Int64).alias("#after"))
-    joined = old.join(new, on=columns, how="full", coalesce=True, nulls_equal=True).fill_null(0)
-    added = int(joined.select((pl.col("#after") - pl.col("#before")).clip(lower_bound=0).sum()).item())
-    removed = int(joined.select((pl.col("#before") - pl.col("#after")).clip(lower_bound=0).sum()).item())
+_SIDE = "#side"  # never a row's column, whose name is lower-case letters, digits and underscores
+_AFTER = "#after"
+
+
+def _same(before: pd.Series, after: pd.Series) -> pd.Series:
+    """Whether each pair of values is equal, two nulls being equal."""
+    return ((before == after).fillna(value=False) | (before.isna() & after.isna())).astype(bool)
+
+
+def _multiset(output: str, operation: str, before: pd.DataFrame, after: pd.DataFrame) -> OperationDiff:
+    columns = [str(name) for name in before.columns]
+    old = before.groupby(columns, dropna=False, sort=False).size().rename("#before").reset_index()
+    new = after.groupby(columns, dropna=False, sort=False).size().rename("#after").reset_index()
+    joined = old.merge(new, on=columns, how="outer")
+    counts = joined[["#before", "#after"]].fillna(0).astype("int64")
+    added = int((counts["#after"] - counts["#before"]).clip(lower=0).sum())
+    removed = int((counts["#before"] - counts["#after"]).clip(lower=0).sum())
     return OperationDiff(output, operation, added=added, removed=removed, changed=0)

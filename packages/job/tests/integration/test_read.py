@@ -73,10 +73,10 @@ def test_a_query_reads_the_intervals_rows_as_the_row_declares_them(source: Scrat
     )
     result = load(source, tmp_path)
     assert result.record.status == "checked", result.record
-    frame = result.inputs["prices"].sort("security_id")
+    frame = result.inputs["prices"].sort_values("security_id", ignore_index=True)
     expected = prices({"security_id": "S1", "price": Decimal("100.1234"), "note": "é note", "booked_at": datetime(2026, 11, 5, 9, 30)}, {"security_id": "S2", "price": Decimal("0.5")})
     assert frame.equals(expected)
-    assert frame.get_column("booked_at").to_list()[0] == datetime(2026, 11, 5, 14, 30, tzinfo=UTC)
+    assert frame["booked_at"].tolist()[0] == datetime(2026, 11, 5, 14, 30, tzinfo=UTC)
 
 
 def test_a_query_that_returns_more_than_its_cap_fails_the_run(source: Scratch, tmp_path: Path) -> None:

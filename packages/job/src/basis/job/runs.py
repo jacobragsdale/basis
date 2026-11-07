@@ -28,7 +28,7 @@ from pathlib import Path
 from uuid import UUID
 
 import httpx2
-import polars as pl
+import pandas as pd
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Tracer
 from pydantic import ValidationError
@@ -80,7 +80,7 @@ class Request:
 class Result:
     record: RunRecord
     snapshot: Snapshot | None
-    inputs: dict[str, pl.DataFrame]
+    inputs: dict[str, pd.DataFrame]
     planned: dict[str, Planned]
 
     @property
@@ -275,7 +275,7 @@ def _check_destinations(targets: Mapping[str, Target], settings: Settings, datab
     return specs, reasons
 
 
-def _transform(job: Job, params: Params, frames: Mapping[str, pl.DataFrame], interval: Interval | None, kept: Kept) -> tuple[dict[str, Planned], list[str]]:
+def _transform(job: Job, params: Params, frames: Mapping[str, pd.DataFrame], interval: Interval | None, kept: Kept) -> tuple[dict[str, Planned], list[str]]:
     """Each table's changes, and every reason not to write them. A transform or check that raises is a reason that
     names the line of job code that raised; the log holds its traceback."""
     inputs = job.inputs(frames, interval=interval, handles=kept.handles)
@@ -349,7 +349,7 @@ class _Record:
         )  # fmt: skip
 
 
-def _finish(record: RunRecord, root: Root | None, params_text: str, frames: Mapping[str, pl.DataFrame], planned: Mapping[str, Planned]) -> Result:
+def _finish(record: RunRecord, root: Root | None, params_text: str, frames: Mapping[str, pd.DataFrame], planned: Mapping[str, Planned]) -> Result:
     changes = {name: entry.changes for name, entry in planned.items() if entry.changes is not None}
     snapshot = snapshots.write(root, record, params_text, frames, changes, package=PACKAGE) if root is not None else None
     if snapshot is not None:
@@ -413,7 +413,7 @@ def _replayed(job: Job, source: Snapshot, opened: core_runs.Replay[Params], *, s
         run_id=opened.run_id, job=job.name, module=job.module, version=VERSION, git_sha=None, started_at=clock(), interval=original.interval,
         params_path=opened.params_path, params_sha256=snapshots.params_digest(opened.params_text),
         labels={"replay_of": original.run_id}, data=None, replay_of=original.run_id,
-        inputs={name: InputRecord(source=f"snapshot: {original.run_id}", rows=frame.height, read_ms=0.0) for name, frame in opened.saved.items()},
+        inputs={name: InputRecord(source=f"snapshot: {original.run_id}", rows=len(frame), read_ms=0.0) for name, frame in opened.saved.items()},
     )  # fmt: skip
     frames = {name: opened.saved[name] for name in job.inputs.declared()}
     kept = handles.replayed(job.inputs, original, tracer)

@@ -95,7 +95,7 @@ def raising(error: Exception) -> Callable[[str], Job]:
     ("error", "problem"),
     [
         (ImportError("cannot import name 'Price' from 'jobs.prices.rows'"), "the QA run of prices cannot load the job: ImportError: cannot import name 'Price'"),
-        (AttributeError("module 'polars' has no attribute 'col_'"), "the QA run of prices cannot load the job: AttributeError: module 'polars' has no attribute 'col_'"),
+        (AttributeError("module 'pandas' has no attribute 'merge_'"), "the QA run of prices cannot load the job: AttributeError: module 'pandas' has no attribute 'merge_'"),
         (SyntaxError("invalid syntax"), "the QA run of prices cannot load the job: SyntaxError: invalid syntax"),
     ],
     ids=["an-import", "an-attribute", "a-syntax-error"],

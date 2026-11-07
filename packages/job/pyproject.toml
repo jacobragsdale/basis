@@ -8,7 +8,7 @@ license = "MIT"
 requires-python = ">=3.14"
 dependencies = [
     "basis-core==0.0.0",  # every basis package depends on basis-core at exactly its own version
-    "polars>=2.1.0",
+    "pandas>=3.1.1",  # a job's frames, which its transform and check read and return
     "pydantic>=2.14.3",
     "python-dotenv>=1.2.1",
     "tzdata>=2025.2; sys_platform == 'win32'",  # zoneinfo has no time zone database of its own on Windows

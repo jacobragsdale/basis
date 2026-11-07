@@ -2,7 +2,7 @@
 name = "{repo}"
 version = "0.1.0"
 requires-python = ">=3.14"
-dependencies = ["basis-job>={version},<0.{next_minor}", "polars>=2.1.0"]  # jobs build frames with polars
+dependencies = ["basis-job>={version},<0.{next_minor}", "pandas>=3.1.1"]  # jobs build frames with pandas
 
 [project.entry-points."basis.jobs"]
 {job} = "jobs.{job}.job"

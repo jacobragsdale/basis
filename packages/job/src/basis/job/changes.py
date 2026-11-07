@@ -8,8 +8,9 @@ a rerun cannot add it twice, and a delete that matches on values has no nulls, w
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, date, datetime, time, timedelta
 
-import polars as pl
+import pandas as pd
 
 from basis.core.interval import Interval
 from basis.core.tables import Changes, Delete, Range
@@ -30,10 +31,10 @@ class Planned:
 
 def plan(outputs: Outputs, interval: Interval | None) -> dict[str, Planned]:
     """Every declared table's changes, by output name."""
-    return {name: _plan(name, table.target, outputs.values[name], interval) for name, table in outputs.declared().items()}
+    return {name: _plan(name, table.target, outputs.values[name], interval) for name, table in outputs.declared().items()}  # noqa: PD011 -- the outputs by name, no frame's values
 
 
-def _plan(name: str, target: Target, value: pl.DataFrame | Changes, interval: Interval | None) -> Planned:
+def _plan(name: str, target: Target, value: pd.DataFrame | Changes, interval: Interval | None) -> Planned:
     try:
         changes = _conformed(name, target, build(target, value, interval))
     except (SchemaError, ValueError) as error:
@@ -41,26 +42,26 @@ def _plan(name: str, target: Target, value: pl.DataFrame | Changes, interval: In
     return Planned(name, target, changes, [f"{name}: {reason}" for reason in check(target, changes)])
 
 
-def build(target: Target, value: pl.DataFrame | Changes, interval: Interval | None) -> Changes:
+def build(target: Target, value: pd.DataFrame | Changes, interval: Interval | None) -> Changes:
     """The changes a write mode makes of a frame; `Manual()` takes the transform's own."""
     match target.write, value:
         case Manual(), Changes():
             return value
-        case Append(), pl.DataFrame():
+        case Append(), pd.DataFrame():
             return Changes(insert=value)
-        case Replace(), pl.DataFrame():
+        case Replace(), pd.DataFrame():
             return Changes(delete=Delete(), insert=value)
-        case ReplaceWhere(interval=column, matching=matching), pl.DataFrame():
+        case ReplaceWhere(interval=column, matching=matching), pd.DataFrame():
             within = None
             if column is not None:
                 if interval is None:
                     msg = f"ReplaceWhere(interval={column!r}) replaces the run's interval, and this run has none: give it one"
                     raise ValueError(msg)
                 within = Range(column, interval.start, interval.end)
-            return Changes(delete=Delete(within, value.select(matching).unique() if matching else None), insert=value)
-        case Upsert(), pl.DataFrame():
+            return Changes(delete=Delete(within, value[list(matching)].drop_duplicates(ignore_index=True) if matching else None), insert=value)
+        case Upsert(), pd.DataFrame():
             return Changes(upsert=value)
-        case InsertNew(), pl.DataFrame():
+        case InsertNew(), pd.DataFrame():
             return Changes(insert_new=value)
         case _:
             msg = f"{type(target.write).__name__}() takes a {'Changes' if isinstance(target.write, Manual) else 'DataFrame'}, not a {type(value).__name__}"
@@ -71,7 +72,7 @@ def _conformed(name: str, target: Target, changes: Changes) -> Changes:
     """The changes with every frame conformed to the row: `SchemaError` lists every problem in all of them."""
     problems: list[str] = []
 
-    def conformed(frame: pl.DataFrame | None, operation: str) -> pl.DataFrame | None:
+    def conformed(frame: pd.DataFrame | None, operation: str) -> pd.DataFrame | None:
         if frame is None:
             return None
         try:
@@ -83,7 +84,7 @@ def _conformed(name: str, target: Target, changes: Changes) -> Changes:
     delete = changes.delete
     if delete is not None and delete.matching is not None:
         try:
-            columns = [target.row.column(column.lower()) for column in delete.matching.columns]
+            columns = [target.row.column(str(column).lower()) for column in delete.matching.columns]
             delete = Delete(delete.within, conform_columns(delete.matching, columns, what=f"{name}'s delete", naive="reject"))
         except (SchemaError, KeyError) as error:
             problems.extend(f"delete: {problem}" for problem in (error.problems if isinstance(error, SchemaError) else [str(error)]))
@@ -101,13 +102,13 @@ def check(target: Target, changes: Changes) -> list[str]:
     if (changes.upsert is not None or changes.insert_new is not None) and target.key is None:
         reasons.append("an upsert or an insert of new rows needs the table's key, as key=('id',)")
     if target.key is not None and present:
-        keys = pl.concat([frame.select(target.key) for frame in present.values()])
-        if (repeated := keys.filter(keys.is_duplicated())).height:
-            reasons.append(f"{repeated.unique().height} keys appear more than once in what the run writes, such as {_example(repeated)}")
+        keys = pd.concat([frame[list(target.key)] for frame in present.values()], ignore_index=True)
+        if len(repeated := keys[keys.duplicated(keep=False)]):
+            reasons.append(f"{len(repeated.drop_duplicates())} keys appear more than once in what the run writes, such as {_example(repeated)}")
     if changes.delete is not None:
         reasons.extend(_delete_problems(target, changes.delete))
-        if changes.insert is not None and (uncovered := uncovered_rows(target, changes.insert, changes.delete)).height:
-            reasons.append(f"{uncovered.height} inserted rows are outside what the delete removes, so a rerun would insert them twice, such as {_example(uncovered)}")
+        if changes.insert is not None and len(uncovered := uncovered_rows(target, changes.insert, changes.delete)):
+            reasons.append(f"{len(uncovered)} inserted rows are outside what the delete removes, so a rerun would insert them twice, such as {_example(uncovered)}")
     return reasons
 
 
@@ -121,36 +122,49 @@ def _delete_problems(target: Target, delete: Delete) -> list[str]:
         elif delete.within.start >= delete.within.end:
             reasons.append(f"the delete's range starts at {delete.within.start}, not before its end {delete.within.end}")
     if delete.matching is not None:
-        if not delete.matching.width:
+        if not len(delete.matching.columns):
             reasons.append("the delete matches on no columns: Delete() with neither within nor matching deletes every row")
-        elif nulls := sum(delete.matching.null_count().row(0)):
+        elif nulls := int(delete.matching.isna().sum().sum()):
             reasons.append(f"the delete matches on {nulls} nulls, which match nothing")
     return reasons
 
 
-def uncovered_rows(target: Target, insert: pl.DataFrame, delete: Delete) -> pl.DataFrame:
+def uncovered_rows(target: Target, insert: pd.DataFrame, delete: Delete) -> pd.DataFrame:
     """The rows of `insert` that `delete` would not remove, were they in the table."""
-    indexed = insert.with_row_index(_ROW)
-    covered = indexed
+    covered = pd.Series(data=True, index=insert.index, dtype=bool)
     if delete.within is not None and delete.within.column in insert.columns:
-        covered = covered.filter(_within(target, delete.within))
-    if delete.matching is not None and delete.matching.width:
-        covered = covered.join(delete.matching.unique(), on=delete.matching.columns, how="semi")
-    return indexed.join(covered.select(_ROW), on=_ROW, how="anti").drop(_ROW)
+        covered &= _within(target, insert[delete.within.column], delete.within)
+    if delete.matching is not None and len(delete.matching.columns):
+        covered &= _matched(insert, delete.matching)
+    return insert[~covered].reset_index(drop=True)
 
 
-_ROW = "#row"  # never a row's column, whose name is lower-case letters, digits and underscores
+_MATCHED = "#matched"  # never a row's column, whose name is lower-case letters, digits and underscores
 
 
-def _within(target: Target, within: Range) -> pl.Expr:
-    column = pl.col(within.column)
-    if target.row.column(within.column).kind == "date":
-        column = column.cast(pl.Datetime("us")).dt.replace_time_zone("UTC")
-    return (column >= within.start) & (column < within.end)
+def _within(target: Target, values: pd.Series, within: Range) -> pd.Series:
+    """Whether each value is in the range; a null is not. A date is its midnight UTC, so it is in the range from the
+    first date whose midnight is at or after the range's start, until the first at or after its end."""
+    start, end = (_first_date(within.start), _first_date(within.end)) if target.row.column(within.column).kind == "date" else (within.start, within.end)
+    return ((values >= start) & (values < end)).fillna(value=False).astype(bool)
 
 
-def _example(frame: pl.DataFrame) -> str:
-    return ", ".join(f"{key}={value!r}" for key, value in frame.row(0, named=True).items())
+def _first_date(moment: datetime) -> date:
+    """The first date whose midnight UTC is at or after `moment`, an instant in UTC, as a range's ends are."""
+    day = moment.date()
+    return day if moment == datetime.combine(day, time(), UTC) else day + timedelta(days=1)
+
+
+def _matched(insert: pd.DataFrame, matching: pd.DataFrame) -> pd.Series:
+    """Whether each row of `insert` equals a row of `matching` in each of its columns; a null matches nothing."""
+    names = [str(name) for name in matching.columns]
+    keys = matching.dropna().drop_duplicates()
+    merged = insert[names].merge(keys, on=names, how="left", indicator=_MATCHED)
+    return pd.Series((merged[_MATCHED] == "both").to_numpy(), index=insert.index)
+
+
+def _example(frame: pd.DataFrame) -> str:
+    return ", ".join(f"{key}={value!r}" for key, value in frame.iloc[0].to_dict().items())
 
 
 def summary(planned: Mapping[str, Planned]) -> dict[str, dict[str, object]]:
@@ -166,7 +180,7 @@ def describe(target: Target, changes: Changes | None) -> dict[str, object]:
         found["delete"] = _describe_delete(changes.delete)
     for operation, frame in (("upsert", changes.upsert), ("insert_new", changes.insert_new), ("insert", changes.insert)):
         if frame is not None:
-            found[operation] = frame.height
+            found[operation] = len(frame)
     return found
 
 
@@ -175,5 +189,5 @@ def _describe_delete(delete: Delete) -> str:
     if delete.within is not None:
         parts.append(f"{delete.within.column} in {Interval(delete.within.start, delete.within.end)}")
     if delete.matching is not None:
-        parts.append(f"{delete.matching.height} values of ({', '.join(delete.matching.columns)})")
+        parts.append(f"{len(delete.matching)} values of ({', '.join(str(name) for name in delete.matching.columns)})")
     return " and ".join(parts) if parts else "every row"

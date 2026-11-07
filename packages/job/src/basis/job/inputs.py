@@ -23,7 +23,7 @@ from typing import Literal, Protocol, Self, overload, override
 from urllib.parse import quote
 from uuid import UUID
 
-import polars as pl
+import pandas as pd
 
 from basis.core import resources
 from basis.core.interval import Interval
@@ -67,8 +67,8 @@ class Dataset:
     @overload
     def __get__(self, instance: None, owner: type) -> Self: ...
     @overload
-    def __get__(self, instance: Inputs, owner: type) -> pl.DataFrame: ...
-    def __get__(self, instance: Inputs | None, owner: type) -> Self | pl.DataFrame:
+    def __get__(self, instance: Inputs, owner: type) -> pd.DataFrame: ...
+    def __get__(self, instance: Inputs | None, owner: type) -> Self | pd.DataFrame:
         if instance is None:
             return self
         return instance.frames[self.name]
@@ -282,7 +282,7 @@ class Inputs:
     """Base for a job's `Inputs`. Each class attribute that is a `Query`, a `Fetch` or a `File` is a dataset the job
     reads, and each that is a `Clock` or `Ids` gives it the time or new ids."""
 
-    def __init__(self, frames: Mapping[str, pl.DataFrame], *, interval: Interval | None, handles: Handles | None = None) -> None:
+    def __init__(self, frames: Mapping[str, pd.DataFrame], *, interval: Interval | None, handles: Handles | None = None) -> None:
         self.frames = dict(frames)
         """Each dataset's frame, by its name."""
         self.interval = interval

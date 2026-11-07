@@ -12,8 +12,8 @@ from basis.job.params import Params
 from basis.job.testing import check_fixture, check_imports, inputs
 
 
-@pytest.mark.parametrize("statement", ["import pyarrow.fs", "from pyarrow import fs", "from pyarrow.fs import LocalFileSystem"])
-def test_a_job_that_imports_pyarrows_filesystem_is_caught(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, statement: str) -> None:
+@pytest.mark.parametrize("statement", ["import pyarrow.fs", "from pyarrow import fs", "from pyarrow.fs import LocalFileSystem", "import pyarrow as pa"])
+def test_a_job_that_imports_pyarrow_itself_is_caught_though_basis_frames_types_come_from_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, statement: str) -> None:
     package = tmp_path / "leaky_jobs"
     package.mkdir()
     (package / "__init__.py").write_text("", encoding="utf-8")
@@ -33,7 +33,7 @@ class _Stamped(etl.Inputs):
 def test_a_transforms_inputs_give_the_time_a_test_names_and_ids_that_count_up() -> None:
     at = datetime(2026, 11, 6, 6, 0, tzinfo=UTC)
     given = inputs(_Stamped, now=at)
-    assert (given.clock.now(), given.ids.new(), given.ids.new(2), given.prices.height) == (
+    assert (given.clock.now(), given.ids.new(), given.ids.new(2), len(given.prices)) == (
         at, UUID("00000000-0000-7000-8000-000000000001"), [UUID("00000000-0000-7000-8000-000000000002"), UUID("00000000-0000-7000-8000-000000000003")], 0,
     )  # fmt: skip
     with pytest.raises(ValueError, match=r"_Stamped\.clock is a clock, and no time is given for it to read: give it, as inputs\(\.\.\., now="):

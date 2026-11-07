@@ -28,7 +28,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Annotated
 
-import polars as pl
+import pandas as pd
 import pytest
 from integration.scratch import Scratch, configured, mssql, oracle
 
@@ -105,7 +105,7 @@ def values(index: int, text: str | None, *, latin: bool, amount: Decimal) -> dic
     }  # fmt: skip
 
 
-def docs(texts: list[str | None], *, latin: bool, amount: Decimal = AMOUNT) -> pl.DataFrame:
+def docs(texts: list[str | None], *, latin: bool, amount: Decimal = AMOUNT) -> pd.DataFrame:
     """A row for each text, in the Unicode columns and, where `latin`, the code page 1252 one, with every other kind."""
     return frame(Doc, *(values(index, text, latin=latin, amount=amount) for index, text in zip(ids(texts), texts, strict=True)))
 
@@ -134,10 +134,10 @@ def table_of(scratch: Scratch) -> str:
     return f"etl_it_docs_{scratch.suffix}"
 
 
-def publish(scratch: Scratch, write: FrameWrite, rows: pl.DataFrame, root: Path, *, row: type[etl.Row] = Doc, table: str | None = None) -> runs.Result:  # noqa: PLR0913 -- a test's knobs, each by keyword
+def publish(scratch: Scratch, write: FrameWrite, rows: pd.DataFrame, root: Path, *, row: type[etl.Row] = Doc, table: str | None = None) -> runs.Result:  # noqa: PLR0913 -- a test's knobs, each by keyword
     data = root / "data"
     data.mkdir(parents=True)
-    rows.write_parquet(data / "docs.parquet")
+    rows.to_parquet(data / "docs.parquet", index=False)
 
     class Inputs(etl.Inputs):
         docs = etl.File(row, path="docs.parquet", empty="fail")

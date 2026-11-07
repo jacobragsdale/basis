@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-import polars as pl
+import pandas as pd
 import pytest
 from builders import DAY, Price, prices
 
@@ -15,7 +15,7 @@ def target(write: Write, key: tuple[str, ...] | None = ("day", "security_id")) -
     return Target(Price, "warehouse", "prices", write, key)
 
 
-def planned(write: Write, value: pl.DataFrame | Changes, *, key: tuple[str, ...] | None = ("day", "security_id"), interval: etl.Interval | None = DAY) -> Planned:
+def planned(write: Write, value: pd.DataFrame | Changes, *, key: tuple[str, ...] | None = ("day", "security_id"), interval: etl.Interval | None = DAY) -> Planned:
     class Outputs(etl.Outputs):
         prices = etl.Table(Price, database="warehouse", table="prices", write=write, key=key)
 
@@ -57,7 +57,7 @@ def test_an_inserted_row_outside_the_replaced_interval_is_refused(day: date, *, 
 
 
 def test_a_manual_insert_outside_its_matching_delete_is_refused() -> None:
-    changes = Changes(delete=Delete(matching=pl.DataFrame({"security_id": ["S1"]})), insert=prices({"security_id": "S1"}, {"security_id": "S2"}))
+    changes = Changes(delete=Delete(matching=pd.DataFrame({"security_id": ["S1"]})), insert=prices({"security_id": "S1"}, {"security_id": "S2"}))
     [reason] = planned(etl.Manual(), changes).reasons
     assert reason.startswith("prices: 1 inserted rows are outside what the delete removes, so a rerun would insert them twice")
     assert "security_id='S2'" in reason
@@ -69,15 +69,15 @@ def test_a_key_repeated_across_operations_is_refused() -> None:
 
 
 def test_a_delete_matching_a_null_is_refused() -> None:
-    changes = Changes(delete=Delete(matching=pl.DataFrame({"note": [None]}, schema={"note": pl.String})))
+    changes = Changes(delete=Delete(matching=pd.DataFrame({"note": pd.Series([None], dtype="string[pyarrow]")})))
     assert planned(etl.Manual(), changes).reasons == ["prices: the delete matches on 1 nulls, which match nothing"]
 
 
 def test_every_frame_is_conformed_to_the_row() -> None:
-    bad = prices({}).with_columns(pl.lit(Decimal("1.23456")).alias("price"))
+    bad = prices({}).assign(price=pd.Series([Decimal("1.23456")], dtype=object))
     reasons = planned(etl.Append(), bad).reasons
     assert len(reasons) == 1
-    assert "insert: price: 1 of 1 values change when stored as Decimal(precision=18, scale=4)" in reasons[0]
+    assert "insert: price: 1 of 1 values change when stored as decimal128(18, 4)" in reasons[0]
 
 
 def test_an_empty_replace_deletes_every_row_and_inserts_none() -> None:

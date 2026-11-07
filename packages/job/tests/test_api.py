@@ -39,7 +39,7 @@ from datetime import date, datetime
 from typing import Annotated
 
 import basis.job as etl
-import polars as pl
+import pandas as pd
 
 
 class Day(etl.Row):
@@ -66,7 +66,7 @@ class Outputs(etl.Outputs):
 
 
 def transform(inputs: Inputs, params: Params) -> Outputs:
-    return Outputs(stamps=pl.DataFrame({"stamped_at": [inputs.clock.now()], "stamp_id": [str(inputs.ids.new())]}))
+    return Outputs(stamps=pd.DataFrame({"stamped_at": [inputs.clock.now()], "stamp_id": [str(inputs.ids.new())]}))
 """
 
 

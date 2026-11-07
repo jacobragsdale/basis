@@ -22,7 +22,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Self, overload
 
-import polars as pl
+import pandas as pd
 
 from basis.core.tables import IDENTIFIER, Changes, Column
 from basis.job.rows import Row
@@ -97,14 +97,14 @@ class Target:
         return self.row.column(name)
 
 
-class Table[V: (pl.DataFrame, Changes)]:
+class Table[V: (pd.DataFrame, Changes)]:
     """A declared output, named by its attribute on the job's `Outputs`. On an instance, its value is the frame the
     transform returned, or for `Manual()`, the `Changes`."""
 
     @overload
     def __init__(self: Table[Changes], row: type[Row], *, database: str, table: str, write: Manual, key: tuple[str, ...] | None = None) -> None: ...
     @overload
-    def __init__(self: Table[pl.DataFrame], row: type[Row], *, database: str, table: str, write: FrameWrite, key: tuple[str, ...] | None = None) -> None: ...
+    def __init__(self: Table[pd.DataFrame], row: type[Row], *, database: str, table: str, write: FrameWrite, key: tuple[str, ...] | None = None) -> None: ...
     def __init__(self, row: type[Row], *, database: str, table: str, write: Write, key: tuple[str, ...] | None = None) -> None:
         self.target = Target(row, database, table, write, key)
         self._name: str | None = None
@@ -133,8 +133,8 @@ class Table[V: (pl.DataFrame, Changes)]:
     def __get__(self, instance: Outputs | None, owner: type) -> Self | V:
         if instance is None:
             return self
-        value = instance.values[self.name]
-        expected = Changes if isinstance(self.target.write, Manual) else pl.DataFrame
+        value = instance.values[self.name]  # noqa: PD011 -- the outputs by name, no frame's values
+        expected = Changes if isinstance(self.target.write, Manual) else pd.DataFrame
         if not isinstance(value, expected):
             msg = f"{self.name} holds a {type(value).__name__}, not a {expected.__name__}"
             raise TypeError(msg)
@@ -181,7 +181,7 @@ class Outputs:
     """Base for a job's `Outputs`. Each class attribute that is a `Table` is one the job writes. The transform returns
     an instance with every output, by name: `Outputs(positions=frame)`."""
 
-    def __init__(self, **values: pl.DataFrame | Changes) -> None:
+    def __init__(self, **values: pd.DataFrame | Changes) -> None:
         declared = self.declared()
         if missing := sorted(set(declared) - set(values)):
             msg = f"{type(self).__qualname__} is missing outputs {missing}: give every output it declares"
@@ -190,12 +190,12 @@ class Outputs:
             msg = f"{type(self).__qualname__} declares no outputs named {unknown}; it declares {sorted(declared)}"
             raise TypeError(msg)
         for name, table in declared.items():
-            expected = Changes if isinstance(table.target.write, Manual) else pl.DataFrame
+            expected = Changes if isinstance(table.target.write, Manual) else pd.DataFrame
             if not isinstance(values[name], expected):
                 msg = f"{name} is written with {type(table.target.write).__name__}(), so its value is a {expected.__name__}, not a {type(values[name]).__name__}"
                 raise TypeError(msg)
-        self.values: Mapping[str, pl.DataFrame | Changes] = values
+        self.values: Mapping[str, pd.DataFrame | Changes] = values
 
     @classmethod
-    def declared(cls) -> dict[str, Table[pl.DataFrame] | Table[Changes]]:
+    def declared(cls) -> dict[str, Table[pd.DataFrame] | Table[Changes]]:
         return {name: value for klass in reversed(cls.__mro__) for name, value in vars(klass).items() if isinstance(value, Table)}

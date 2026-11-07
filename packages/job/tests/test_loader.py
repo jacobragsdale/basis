@@ -7,7 +7,7 @@ from typing import Any
 from urllib.parse import parse_qs
 
 import httpx2
-import polars as pl
+import pandas as pd
 import pytest
 from builders import DAY, Price, make_job, prices
 from opentelemetry.trace import NoOpTracer
@@ -42,7 +42,7 @@ def reaching(fake: fakes.Http) -> Reach:
 
 def load(
     datasets: Mapping[str, Dataset], interval: Interval | None, *, open_database: Callable[[str], Database], data: Path | None, reach: Reach = no_services
-) -> tuple[dict[str, pl.DataFrame], dict[str, InputRecord]]:
+) -> tuple[dict[str, pd.DataFrame], dict[str, InputRecord]]:
     return loading(datasets, interval, open_database=open_database, reach=reach, tracer=NoOpTracer(), data=data)
 
 
@@ -61,8 +61,8 @@ def answering(body: object, seen: list[str]) -> fakes.Http:
 def test_a_csv_reads_as_text_its_row_converts_and_an_empty_field_is_null(tmp_path: Path) -> None:
     (tmp_path / "prices.csv").write_text("day,security_id,price,note,booked_at\n2026-11-05,S1,100.5,,\n", encoding="utf-8")
     frames, records = load(make_job(write=etl.Append()).inputs.declared(), DAY, open_database=no_databases, data=tmp_path)
-    assert frames["prices"].row(0, named=True)["note"] is None
-    assert frames["prices"].schema == prices({}).schema
+    assert frames["prices"]["note"].tolist() == [pd.NA]
+    assert frames["prices"].dtypes.equals(prices({}).dtypes)
     assert records["prices"].source == f"data: {tmp_path / 'prices.csv'}"
 
 
@@ -109,6 +109,12 @@ def test_a_fetchs_rows_are_a_list_of_flat_objects_of_its_rows_columns(body: byte
         json_rows(body, Price, what="dataset prices")
 
 
+def test_a_csvs_text_is_never_read_as_a_null_or_a_number_unless_its_row_says_so(tmp_path: Path) -> None:
+    (tmp_path / "prices.csv").write_text("day,security_id,price,note,booked_at\n2026-11-05,0012,100.5,NA,\n2026-11-05,S2,100.5,null,\n", encoding="utf-8")
+    frames, _ = load(make_job(write=etl.Append()).inputs.declared(), DAY, open_database=no_databases, data=tmp_path)
+    assert (frames["prices"]["security_id"].tolist(), frames["prices"]["note"].tolist()) == (["0012", "S2"], ["NA", "null"])
+
+
 def test_a_fetchs_empty_list_fails_unless_its_dataset_allows_it(tmp_path: Path) -> None:
     with pytest.raises(EmptyInputError, match="prices returned no rows"):
         load(Fetched.declared(), DAY, open_database=no_databases, data=tmp_path, reach=reaching(answering([], [])))
@@ -117,7 +123,7 @@ def test_a_fetchs_empty_list_fails_unless_its_dataset_allows_it(tmp_path: Path) 
 def test_a_fixtures_file_stands_in_for_a_fetch(tmp_path: Path) -> None:
     (tmp_path / "prices.csv").write_text("day,security_id,price,note,booked_at\n2026-11-05,S1,100.5,,\n", encoding="utf-8")
     frames, _ = load(Fetched.declared(), DAY, open_database=no_databases, data=tmp_path)
-    assert frames["prices"].get_column("price").to_list() == [Decimal("100.5")]
+    assert frames["prices"]["price"].tolist() == [Decimal("100.5")]
 
 
 def test_a_fetch_declares_its_service_and_its_deadline() -> None:

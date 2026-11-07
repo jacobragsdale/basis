@@ -19,16 +19,18 @@ ids do.
 
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 from types import ModuleType
 
-import polars as pl
+import pandas as pd
 from opentelemetry.trace import NoOpTracer
 
 from basis.core import testing as core_testing
 from basis.core.interval import Interval
 from basis.core.settings import GivenSettings
 from basis.core.storage import Root
+from basis.core.tables import Column
 from basis.core.testing import ContractError
 from basis.job import api, handles, runs
 from basis.job import job as jobs
@@ -102,7 +104,7 @@ def check_imports(job: jobs.Job) -> None:
         raise ContractError(msg)
 
 
-def frame(row: type[Row], *rows: Mapping[str, object]) -> pl.DataFrame:
+def frame(row: type[Row], *rows: Mapping[str, object]) -> pd.DataFrame:
     """`rows` as `row`'s frame, conformed as a load conforms it: a column a row leaves out is null, a naive datetime is
     in its column's zone, and a `Decimal`, `date` or `str` converts as it would from a database or a CSV."""
     if unknown := sorted({name for values in rows for name in values} - set(row.names())):
@@ -110,20 +112,19 @@ def frame(row: type[Row], *rows: Mapping[str, object]) -> pl.DataFrame:
         raise TypeError(msg)
     if not rows:
         return row.empty()
-    columns = {name: pl.Series(name, [values.get(name) for values in rows], dtype=_loose(row, name), strict=False) for name in row.names()}
-    return conform(pl.DataFrame(list(columns.values())), row, what=f"a {row.__qualname__} frame", naive="in_zone")
+    columns = {column.name: pd.Series([_loose(column, values.get(column.name)) for values in rows], dtype=object) for column in row.columns}
+    return conform(pd.DataFrame(columns), row, what=f"a {row.__qualname__} frame", naive="in_zone")
 
 
-def _loose(row: type[Row], name: str) -> pl.DataType | None:
-    """The type a builder's Python values are read as, before conforming: decimals at their row's scale, so a value
-    given as an int or a str is exact; datetimes naive, for the column's zone; the rest as polars infers them."""
-    column = row.column(name)
-    if column.kind == "decimal":
-        return column.dtype
-    return None
+def _loose(column: Column, value: object) -> object:
+    """A builder's Python value as it is read, before conforming: a decimal's int or str as a `Decimal`, so it is
+    exact; the rest as given, a naive datetime for the column's zone."""
+    if column.kind == "decimal" and isinstance(value, int | str) and not isinstance(value, bool):
+        return Decimal(value)
+    return value
 
 
-def inputs[I: Inputs](cls: type[I], *, interval: Interval | str | None = None, now: datetime | None = None, **frames: pl.DataFrame) -> I:
+def inputs[I: Inputs](cls: type[I], *, interval: Interval | str | None = None, now: datetime | None = None, **frames: pd.DataFrame) -> I:
     """A job's `Inputs` from frames by dataset name; a dataset not given has no rows. Each clock the inputs declare
     gives `now`, and each ids counts up from 1, as basis-core's fake does."""
     declared = cls.declared()

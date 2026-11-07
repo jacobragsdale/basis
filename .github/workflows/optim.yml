@@ -68,7 +68,7 @@ jobs:
           pyproject = Path("pyproject.toml")
           text = pyproject.read_text(encoding="utf-8")
           for old, new in [
-              ('dependencies = ["optim', 'dependencies = ["basis-job", "polars>=2.1.0", "optim'),
+              ('dependencies = ["optim', 'dependencies = ["basis-job", "pandas>=3.1.1", "optim'),
               ('parts = ["optim"]', 'parts = ["optim", "job"]'),
               ('[project.entry-points."optim.models"]', '[project.entry-points."basis.jobs"]\n\n[project.entry-points."optim.models"]'),
               ('module-name = "models"', 'module-name = ["models", "jobs"]'),

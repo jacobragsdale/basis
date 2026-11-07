@@ -10,12 +10,14 @@ from collections.abc import Iterator
 from contextlib import closing
 from pathlib import Path
 
-import polars as pl
+import pandas as pd
 import pytest
 from integration.scratch import Scratch, configured, mssql
 
 import basis.job as etl
+from basis.core import frames
 from basis.core.databases import open_database
+from basis.core.databases.base import rows_of
 from basis.core.databases.mssql import MssqlReader
 from basis.core.interval import Interval
 from basis.core.settings import GivenSettings
@@ -71,7 +73,12 @@ class Text(etl.Row):
     euro_full: str | None
 
 
-def texts() -> pl.DataFrame:
+def rows(frame_: pd.DataFrame) -> list[tuple[object, ...]]:
+    """A frame's rows as a driver gives them back, each null None."""
+    return rows_of(frames.to_arrow(frame_))
+
+
+def texts() -> pd.DataFrame:
     return frame(Text, *({"id": index, "varchar_max": text, "varchar_n": text, "nvarchar_max": text, "latin": LATIN} | FULL for index, text in enumerate(TEXTS, 1)))
 
 
@@ -91,10 +98,10 @@ def source() -> Iterator[Scratch]:
     scratch.drop(source_table(scratch), scratch.ledger())
 
 
-def insert(scratch: Scratch, values: pl.DataFrame) -> None:
+def insert(scratch: Scratch, values: pd.DataFrame) -> None:
     connection = scratch.connect()
     try:
-        connection.cursor().executemany(f"INSERT INTO {source_table(scratch)} VALUES ({', '.join('?' * values.width)})", values.rows())
+        connection.cursor().executemany(f"INSERT INTO {source_table(scratch)} VALUES ({', '.join('?' * len(values.columns))})", rows(values))
         connection.commit()
     finally:
         connection.close()
@@ -130,17 +137,16 @@ def test_a_job_reads_and_publishes_text_exactly(source: Scratch, tmp_path: Path,
     try:
         result = runs.run(copying_job(source_table(source), table, write, tmp_path), database(source), request, snapshot_root=Root.at(tmp_path))
         assert result.record.status == "published", result.record
-        assert result.inputs["texts"].sort("id").rows() == texts().rows()
-        assert source.rows(EXACT.format(table=table)) == texts().rows()
+        assert rows(result.inputs["texts"].sort_values("id")) == rows(texts())
+        assert source.rows(EXACT.format(table=table)) == rows(texts())
     finally:
         source.drop(table)
 
 
 def test_an_apis_query_reads_text_exactly(source: Scratch) -> None:
     with open_database(database(source), "warehouse").statements(writes=False) as statements:
-        read = pl.from_arrow(statements.query(f"SELECT {NAMES} FROM {source_table(source)} ORDER BY id", {}, timeout_s=60))
-    assert isinstance(read, pl.DataFrame)
-    assert read.rows() == texts().rows()
+        read = statements.query(f"SELECT {NAMES} FROM {source_table(source)} ORDER BY id", {}, timeout_s=60)
+    assert rows_of(read) == rows(texts())
 
 
 def test_a_cursor_on_a_basis_connection_reads_text_exactly(source: Scratch) -> None:
@@ -152,7 +158,7 @@ def test_a_cursor_on_a_basis_connection_reads_text_exactly(source: Scratch) -> N
         with closing(reader.connection.cursor()) as cursor:
             cursor.execute(f"SELECT {NAMES} FROM {source_table(source)} ORDER BY id")
             read = [tuple(row) for row in cursor.fetchall()]
-    assert read == texts().rows() + long.rows()
+    assert read == rows(texts()) + rows(long)
 
 
 def test_a_json_column_reads_exactly() -> None:
@@ -174,7 +180,7 @@ def test_a_json_column_reads_exactly() -> None:
             connection.close()
         with open_database(database(scratch), "warehouse").reading() as reader:
             assert isinstance(reader, MssqlReader)
-            arrowed = reader.fetch(f"SELECT doc FROM {table}", None, what="a json column").item()
+            arrowed = reader.fetch(f"SELECT doc FROM {table}", None, what="a json column").iloc[0, 0]
             with closing(reader.connection.cursor()) as cursor:
                 cursor.execute(f"SELECT doc FROM {table}")
                 fetched = [tuple(row) for row in cursor.fetchall()]

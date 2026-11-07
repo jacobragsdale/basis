@@ -11,7 +11,7 @@ from release import CORE, FeedServer, Member, ReleaseError, Run, Workspace, gate
 
 VERSION = "0.4.0"
 BASE = Member(CORE, "packages/core", VERSION, ("pydantic>=2.14.3",), publish=True)
-JOB = Member("basis-job", "packages/job", VERSION, (f"{CORE}=={VERSION}", "polars>=2.1.0"), publish=True)
+JOB = Member("basis-job", "packages/job", VERSION, (f"{CORE}=={VERSION}", "pandas>=3.1.1"), publish=True)
 KEPT = Member("other-part", "packages/other", VERSION, (f"{CORE}=={VERSION}",), publish=False)
 """A member that every release builds and checks at the one version, and none publishes."""
 
@@ -33,7 +33,7 @@ def with_(member: Member, *, version: str | None = None, dependencies: tuple[str
         (workspace(BASE, with_(JOB, version="0.3.0"), locked={CORE: VERSION, "basis-job": VERSION}), ["packages/job/pyproject.toml gives basis-job version 0.3.0"]),
         (workspace(BASE, with_(JOB, dependencies=("basis-core==0.3.0",))), ["packages/job/pyproject.toml pins basis-core as `basis-core==0.3.0`"]),
         (workspace(BASE, with_(JOB, dependencies=(f"basis-core>={VERSION}",))), [f"pins basis-core as `basis-core>={VERSION}`"]),
-        (workspace(BASE, with_(JOB, dependencies=("polars>=2.1.0",))), ["pins basis-core as nothing"]),
+        (workspace(BASE, with_(JOB, dependencies=("pandas>=3.1.1",))), ["pins basis-core as nothing"]),
         (workspace(BASE, JOB, with_(KEPT, publish=None)), ["packages/other/pyproject.toml does not say whether a release publishes other-part"]),
         (workspace(BASE, JOB, locked={CORE: VERSION, "basis-job": "0.3.0"}), ["uv.lock holds basis-job at 0.3.0"]),
         (workspace(BASE, JOB, locked={CORE: VERSION}), ["uv.lock holds basis-job at no version"]),
@@ -42,7 +42,7 @@ def with_(member: Member, *, version: str | None = None, dependencies: tuple[str
             workspace(with_(BASE, publish=False), JOB, releases=(CORE, "basis-job")),
             ["a release publishes basis-job, which depends on basis-core, which it does not publish", "list basis-core, which says a release does not publish it"],
         ),
-        (workspace(BASE, JOB, KEPT, releases=(CORE, "basis-job", "other-part", "polars>=2.1.0")), ["dependencies, which are what basis releases, list other-part, which says"]),
+        (workspace(BASE, JOB, KEPT, releases=(CORE, "basis-job", "other-part", "pandas>=3.1.1")), ["dependencies, which are what basis releases, list other-part, which says"]),
         (workspace(BASE, JOB, KEPT, releases=(CORE,)), ["basis-job says a release publishes it, and the root pyproject.toml's dependencies, which are what basis releases, do not list it"]),
         (workspace(JOB), ["no member of the workspace is basis-core"]),
         (workspace(BASE, JOB, version="0.4"), ["the root pyproject.toml's version, '0.4', is not MAJOR.MINOR.PATCH"]),
@@ -102,7 +102,7 @@ version = "0.3.0"  # the one version
 dependencies = [
     "basis-core==0.3.0",  # exactly its own version
     "basis-core-extras>=1.0",
-    "polars>=2.1.0",
+    "pandas>=3.1.1",
 ]
 
 [tool.other]
@@ -141,7 +141,7 @@ description = """A job's package.
 """
 dependencies = [
     # [not a table], in a comment
-    "polars>=2.1.0",
+    "pandas>=3.1.1",
     "basis-core==0.3.0",  # exactly its own version
 ]
 version = "0.3.0"
@@ -348,8 +348,8 @@ def test_the_feed_serves_its_files_by_their_hash_and_sends_every_other_name_to_p
     served.request("GET", f"/files/{WHEEL}")
     assert served.getresponse().read() == WHEEL.encode()
     assert get(served, f"/files/{WHEEL}", "HEAD").status == 200  # uv asks for a wheel's headers first
-    redirected = get(served, "/simple/polars/")
-    assert (redirected.status, redirected.getheader("Location")) == (302, "https://pypi.org/simple/polars/")
+    redirected = get(served, "/simple/pandas/")
+    assert (redirected.status, redirected.getheader("Location")) == (302, "https://pypi.org/simple/pandas/")
     assert get(served, "/files/SHA256SUMS").status == 404  # only a distribution is served, and only under /files/
     assert get(served, f"/{WHEEL}").status == 404
 
