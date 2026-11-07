@@ -1,0 +1,38 @@
+# A stub for the firm's Azure DevOps pipeline framework: replace each placeholder with its template.
+trigger:
+  branches:
+    include: [main]
+
+stages:
+  - stage: test
+    jobs:
+      - job: test
+        strategy:
+          matrix:
+            linux: {vmImage: ubuntu-latest}
+            windows: {vmImage: windows-latest}
+        pool:
+          vmImage: $(vmImage)
+        steps:
+          # - template: <the framework's uv setup template>
+          - script: uv sync --locked
+          - script: uv run ruff check . && uv run ruff format --check . && uv run ty check
+          - script: uv run pytest  # behaviour and contract tests
+
+  - stage: image
+    dependsOn: test
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: build
+        steps:
+          # - template: <the framework's image build and push template>, with --build-arg GIT_SHA=$(Build.SourceVersion)
+          - script: echo "build and push the image"
+
+  - stage: e2e
+    dependsOn: image
+    jobs:
+      - job: qa
+        steps:
+          # - template: <the framework's QA environment template>, which writes the QA OPTIM_* settings to .env.qa
+          # pyproject.toml's optim_e2e_command runs the image built above, such as docker run --rm --env-file .env.qa IMAGE
+          - script: uv run --env-file .env.qa pytest -m e2e  # refuses to run unless every source and destination is QA's

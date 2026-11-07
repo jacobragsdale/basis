@@ -1,0 +1,11 @@
+{
+  "max_bond_weight": 0.05,
+  "max_issuer_weight": 0.1,
+  "sector_caps": {},
+  "max_turnover": 0.25,
+  "cost_bps": 5.0,
+  "min_rating": "A-",
+  "exclude_sectors": [],
+  "exclude_issuers": [],
+  "solve": {"solver": "HIGHS", "time_limit_s": 30.0, "mip_gap": 0.001}
+}

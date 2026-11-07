@@ -1,0 +1,9 @@
+# The example sorts its imports as the model repos it is copied into do: optim is a dependency there, and the
+# example's own modules are the repo's. `optim new` leaves this file out.
+extend = "../../../pyproject.toml"
+cache-dir = "../../../.ruff_cache"
+
+[lint.isort]
+detect-same-package = false
+known-third-party = ["optim"]
+known-first-party = ["optim.example"]

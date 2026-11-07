@@ -1,0 +1,7 @@
+# The templates sort their imports as the model repos they are copied into do: optim is a dependency there.
+extend = "../../../pyproject.toml"
+cache-dir = "../../../.ruff_cache"
+
+[lint.isort]
+detect-same-package = false
+known-third-party = ["optim"]

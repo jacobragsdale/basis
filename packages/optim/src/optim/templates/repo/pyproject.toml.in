@@ -1,0 +1,80 @@
+[project]
+name = "{{repo}}"
+version = "0.1.0"
+description = "Portfolio models that run on optim"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = ["{{optim}}"]
+
+# Each model by name: its folder's model.py, which `optim run NAME` and a replay find it by.
+[project.entry-points."optim.models"]
+{{model}} = "models.{{module}}.model"
+
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13.0"]
+build-backend = "uv_build"
+
+# The package is `models`, at the repo's root, installed in editable mode, so `from models.MODEL import model` works
+# whichever folder a file runs from.
+[tool.uv.build-backend]
+module-name = "models"
+module-root = ""
+
+[dependency-groups]
+dev = [
+    "pandas-stubs>=3.0.5.260914",
+    "pytest>=9.1.1",
+    "ruff>=0.17.1",
+    "scipy-stubs>=1.18.1.1",
+    "ty>=0.0.89",
+]
+{{source}}
+[tool.ruff]
+line-length = 200
+force-exclude = true
+
+[tool.ruff.lint]
+select = ["ALL"]  # every rule, `print` (T20) included, since models log; opt out below, with a reason
+ignore = [
+    "D",  # module docstrings are prose, not pydocstyle sections
+    "CPY",  # no copyright headers
+    "COM812",  # conflicts with the formatter
+    "TC",  # annotations are lazy on 3.14, and pydantic needs its types at runtime
+    "PLR2004",  # 0.05 and friends read better inline than as constants
+    "PLR0913",  # keyword-only arguments are clearer than a parameter object
+    "FBT003",  # stdlib calls take positional booleans
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "INP001"]  # pytest asserts; tests/ is not a package
+"models/*/tests/**" = ["S101"]  # pytest asserts
+"models/*/{model.py,rules/**}" = ["ARG001"]  # hooks and rules share their signatures, so most leave an argument unused
+
+[tool.ruff.lint.isort]
+split-on-trailing-comma = false
+
+[tool.ruff.format]
+docstring-code-format = true
+skip-magic-trailing-comma = true
+
+[tool.ty.rules]
+blanket-ignore-comment = "error"
+missing-override-decorator = "error"
+missing-type-argument = "error"
+unsound-return-statement = "error"
+
+[tool.ty.analysis]
+respect-type-ignore-comments = false  # a specific `# ty: ignore[rule]`, with a reason
+
+[tool.ty.terminal]
+error-on-warning = true
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not e2e'"
+testpaths = ["models", "tests"]
+xfail_strict = true
+filterwarnings = ["error"]
+# The e2e suite (`uv run --env-file .env.qa pytest -m e2e`) runs only where every source and destination contains a QA
+# marker, and writes only to these: list the QA snapshot root and orders table, exactly as the QA environment sets them.
+optim_qa_markers = ["qa"]
+optim_e2e_writes = []

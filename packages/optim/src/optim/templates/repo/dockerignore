@@ -1,0 +1,13 @@
+# The image needs the code, the params and the lockfile: never local secrets, snapshots of client data, or caches.
+.env
+.env.*
+!.env.example
+.git/
+.venv/
+snapshots/
+cache/
+old/
+**/__pycache__/
+.pytest_cache/
+.ruff_cache/
+.grimp_cache/
