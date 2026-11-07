@@ -12,6 +12,7 @@ dependencies = ["optim>={version},<0.{next_minor}"]  # 0.x: a minor release may 
 
 [tool.basis]
 parts = ["optim"]  # the parts this repo has, whose verbs `basis` offers; basis never infers one from a folder
+coverage = 90  # the percentage of the code's lines and branches the unit tests must cover, which `basis check` holds them to
 
 [build-system]
 requires = ["uv_build>=0.13.6,<0.14"]
@@ -25,9 +26,13 @@ module-root = ""
 
 {source}
 [dependency-groups]
+# pytest-cov measures the coverage `basis check` holds the unit tests to, and mutmut tests mutants in `basis check
+# --full`, which needs fork: WSL or Linux.
 dev = [
+    "mutmut>=3.8.1; sys_platform == 'linux'",
     "pandas-stubs>=3.0.5.260914",
     "pytest>=9.2.0",
+    "pytest-cov>=7.1.0",
     "ruff==0.17.4",
     "scipy-stubs>=1.18.1.1",
     "ty==0.0.99",

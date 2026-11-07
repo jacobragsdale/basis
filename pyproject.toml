@@ -24,6 +24,7 @@ basis-job = { workspace = true }
 [dependency-groups]
 dev = [
     "import-linter>=2.16",
+    "mutmut>=3.8.1; sys_platform == 'linux'",  # what `basis check --full` tests mutants with, which needs fork: basis.core.mutation
     "pre-commit>=4.7.0",
     "pytest>=9.2.0",
     "pytest-cov>=7.1.0",
@@ -109,8 +110,10 @@ error-on-warning = true
 # templates are a generated repo's files, whose tests run in that repo. pytester runs pytest itself, in the throwaway
 # repos a member's tests make; a conftest below the root cannot load it. A part's pytest plugin, which its package
 # registers for the repos it makes, stays out of this session (`-p no:NAME`), so one part's code never runs in
-# another's tests; pytester's own sessions still load it.
-addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration' --ignore-glob=packages/*/src/*/templates -p pytester -p no:optim"
+# another's tests; pytester's own sessions still load it. So does basis-core's, `basis`, which keeps a repo's unit tests
+# off sockets: this workspace's own tests serve and reach real servers on sockets, by design, and the example's run
+# under it as a repo's do, in the tests of basis-api's checks.
+addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration' --ignore-glob=packages/*/src/*/templates -p pytester -p no:optim -p no:basis"
 testpaths = ["packages/*/tests", "packages/*/src/*/example", "packages/*/src/basis/*/example", "scripts/tests"]  # every member's tests, its example's, and the release script's
 pythonpath = ["packages/job/tests", "packages/optim/tests", "scripts"]  # each member's shared test modules, such as basis-job's `builders`, and scripts/release.py; a missing path adds nothing
 xfail_strict = true  # An xfail that starts passing is a failure, not a silent pass.
@@ -172,7 +175,7 @@ forbidden_modules = [
     "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.storage",
     "basis.core.settings", "basis.core.new", "basis.core.sync", "basis.core.testing", "basis.core.command",
     "basis.core.check", "basis.core.verbs", "basis.core.hooks", "basis.core.hygiene", "basis.core.clone", "basis.core.full", "basis.core.invalid",
-    "basis.core.qa", "basis.core.review", "basis.core.doctor", "basis.core.upgrade", "basis.core.opened", "basis.core.fakes", "basis.core.traces",
+    "basis.core.gates", "basis.core.mutation", "basis.core.pytest_plugin", "basis.core.qa", "basis.core.review", "basis.core.doctor", "basis.core.upgrade", "basis.core.opened", "basis.core.fakes", "basis.core.traces",
     "mssql_python", "oracledb", "httpx2",
 ]
 ignore_imports = [
@@ -192,8 +195,8 @@ forbidden_modules = [
     "jwt", "cryptography", "uvicorn",
     "basis.api.openapi", "basis.api.contract", "basis.api.arrow",
     "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.command", "basis.core.check", "basis.core.hooks",
-    "basis.core.hygiene", "basis.core.sync", "basis.core.opened", "basis.core.fakes", "basis.core.traces",
-    "mssql_python", "oracledb", "httpx", "httpx2", "requests", "urllib3", "aiohttp",
+    "basis.core.hygiene", "basis.core.sync", "basis.core.opened", "basis.core.fakes", "basis.core.traces", "basis.core.gates", "basis.core.mutation",
+    "basis.core.pytest_plugin", "mssql_python", "oracledb", "httpx", "httpx2", "requests", "urllib3", "aiohttp",
 ]
 ignore_imports = [
     "basis.api -> basis.api.app",  # `api.build` loads on first use, which a service's modules never make
