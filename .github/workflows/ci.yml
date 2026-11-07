@@ -94,7 +94,29 @@ jobs:
           git add jobs/rates/totals.py
           if git commit --quiet --message "A lint error"; then echo "the commit hook let a lint error through" >&2; exit 1; fi
           git reset --quiet --hard
+          printf -- '-----BEGIN OPENSSH %s-----\nb3BlbnNzaC1rZXk=\n' 'PRIVATE KEY' > deploy_key  # in pieces, so this file holds none
+          git add deploy_key
+          if git commit --quiet --message "A private key"; then echo "the commit hook let a private key through" >&2; exit 1; fi
+          git rm --quiet --cached deploy_key && rm deploy_key
           uv run basis sync && test -z "$(git status --porcelain)"
+      - name: Push through its hook, which checks a commit pushed from a changed tree in a worktree of its own
+        working-directory: ${{ runner.temp }}/pricing-etl
+        run: |
+          git init --quiet --bare "$RUNNER_TEMP/remote.git"
+          echo "A change not yet committed." >> README.md
+          git push --quiet "$RUNNER_TEMP/remote.git" main
+          test "$(git -C "$RUNNER_TEMP/remote.git" rev-parse main)" = "$(git rev-parse HEAD)"
+          test "$(git worktree list | wc -l)" = 1 && ! ls -d .git/basis-push* 2>/dev/null
+          git checkout --quiet -- README.md
+      - name: Leave a Dockerfile of the repo's own alone until it is adopted
+        working-directory: ${{ runner.temp }}/pricing-etl
+        run: |
+          printf 'FROM python:3.14-slim\n' > Dockerfile
+          if uv run basis sync; then echo "basis sync overwrote a Dockerfile of the repo's own" >&2; exit 1; fi
+          test "$(cat Dockerfile)" = "FROM python:3.14-slim"
+          uv run basis sync --adopt
+          test "$(cat Dockerfile.before-basis)" = "FROM python:3.14-slim"
+          rm Dockerfile.before-basis && test -z "$(git status --porcelain)"
 
   job-image:
     # The repo a developer makes with uvx, from this commit on GitHub: its checks, its image, and its example job
@@ -125,6 +147,19 @@ jobs:
           git add --all && git commit --quiet --message "First commit"
       - name: Build its image
         run: cd "$RUNNER_TEMP/loads" && docker build --tag loads --build-arg GIT_SHA="$(git rev-parse HEAD)" .
+      - name: Build it again for another commit, which takes every layer but the last few from the cache
+        run: |
+          cd "$RUNNER_TEMP/loads"
+          docker build --progress=plain --tag loads-again --build-arg GIT_SHA=0123456789abcdef0123456789abcdef01234567 . 2> "$RUNNER_TEMP/again.log"
+          python3 - "$RUNNER_TEMP/again.log" <<'PY'
+          import re, sys
+          log = open(sys.argv[1], encoding="utf-8").read()
+          steps = dict(re.findall(r"^#(\d+) \[[^\]]+\] (RUN .*)$", log, re.MULTILINE))
+          slow = {number: step for number, step in steps.items() if "uv sync" in step or "apt-get install" in step}
+          assert len(slow) == 4, slow
+          missed = [step for number, step in slow.items() if not re.search(rf"^#{number} CACHED$", log, re.MULTILINE)]
+          assert not missed, f"a new commit rebuilt {missed}"
+          PY
       - name: Make the database, with the example's sources from its fixture, and its tables and ledger from basis ddl
         run: |
           cd "$RUNNER_TEMP"

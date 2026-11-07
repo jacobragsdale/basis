@@ -4,8 +4,9 @@ basis packages come from, so a new repo matches the basis version that made it. 
 import json
 import re
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 
@@ -51,17 +52,32 @@ def installed_from(name: str) -> Commit | None:
         recorded = distribution(name).read_text("direct_url.json")
     except PackageNotFoundError:
         return None
-    return commit_of(recorded) if recorded is not None else None
+    return commit_of(recorded, name) if recorded is not None else None
 
 
-def commit_of(direct_url: str) -> Commit | None:
-    """The commit a distribution's `direct_url.json` (PEP 610) names, or None when it names none: the distribution was
-    installed from a folder or an archive, or from another version control system."""
-    data: object = json.loads(direct_url)
-    if not isinstance(data, dict) or not isinstance(url := data.get("url"), str) or not isinstance(vcs := data.get("vcs_info"), dict):
+def commit_of(direct_url: str, name: str) -> Commit | None:
+    """The commit the distribution `name`'s `direct_url.json` (PEP 610) names, or None when it was installed from a
+    folder, an archive, or another version control system. A file that is not what PEP 610 describes, such as a git
+    install with no full commit id, is refused, since where the repo's packages come from would be a guess."""
+    fix = f"reinstall {name}, as `uvx --refresh --from 'git+URL@REF#subdirectory=FOLDER' {name}` does, or give --index or --framework-path"
+    try:
+        data: object = json.loads(direct_url)
+    except json.JSONDecodeError as error:
+        msg = f"{name}'s direct_url.json, which says where it was installed from, is not JSON ({error}): {fix}"
+        raise NewError(msg) from error
+    if not isinstance(data, dict) or not isinstance(url := data.get("url"), str):
+        msg = f"{name}'s direct_url.json, which says where it was installed from, gives no url: {fix}"
+        raise NewError(msg)
+    if (vcs := data.get("vcs_info")) is None:
         return None
-    if vcs.get("vcs") != "git" or not isinstance(commit := vcs.get("commit_id"), str) or not _COMMIT.match(commit):
+    if not isinstance(vcs, dict) or not isinstance(kind := vcs.get("vcs"), str):
+        msg = f"{name}'s direct_url.json has a vcs_info that names no version control system: {fix}"
+        raise NewError(msg)
+    if kind != "git":
         return None
+    if not isinstance(commit := vcs.get("commit_id"), str) or not _COMMIT.match(commit):
+        msg = f"{name}'s direct_url.json says it came from git, and gives no full commit id: {fix}"
+        raise NewError(msg)
     return Commit(url, commit)
 
 
@@ -77,16 +93,16 @@ def repo(  # noqa: PLR0913 -- the part says what it adds and where its packages 
     if not _REPO.match(path.name):
         msg = f"{path.name!r} is no repo's name: give one of lower-case letters, digits, '.', '_' and '-'"
         raise NewError(msg)
-    source = sources(distributions, version=version, index=index, checkout=checkout, commit=installed_from(next(iter(distributions))))
+    source = sources(distributions, version=version, index=index, checkout=checkout, installed=partial(installed_from, next(iter(distributions))))
     path.mkdir(parents=True)
     for folder in (TEMPLATES, templates):
         write_templates(path, folder, {**values, "source": source})
 
 
-def sources(distributions: Mapping[str, str], *, version: str, index: str | None, checkout: Path | None, commit: Commit | None) -> str:
+def sources(distributions: Mapping[str, str], *, version: str, index: str | None, checkout: Path | None, installed: Callable[[], Commit | None]) -> str:
     """The `pyproject.toml` lines that say where a repo's basis packages come from: `index`; a checkout of basis at
-    `checkout`, installed editable; or, with neither, `commit`, the commit the part was installed from, or else basis's
-    GitHub repository at `version`'s tag, which needs a release. `distributions` are the part's packages, by name, each
+    `checkout`, installed editable; or, with neither, the commit the part was installed from, which `installed` reads
+    only then, or else basis's GitHub repository at `version`'s tag, which needs a release. `distributions` are the part's packages, by name, each
     with its folder in a checkout. basis-core is not among them: no repo depends on it by name, and each part's own
     workspace source brings it from the same checkout or commit, so a source for it would go unused.
 
@@ -104,7 +120,7 @@ def sources(distributions: Mapping[str, str], *, version: str, index: str | None
             msg = f"{checkout} is not a checkout of basis: it has no {', '.join(missing)}; give the folder that holds packages/"
             raise NewError(msg)
         lines = [f'{name} = {{ path = "{(root / folder).as_posix()}", editable = true }}' for name, folder in distributions.items()]
-    elif commit is not None:
+    elif (commit := installed()) is not None:
         lines = [f'{name} = {{ git = "{commit.url}", subdirectory = "{folder}", rev = "{commit.commit}" }}' for name, folder in distributions.items()]
     elif version == UNRELEASED:
         name, folder = next(iter(distributions.items()))

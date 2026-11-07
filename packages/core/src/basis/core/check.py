@@ -1,8 +1,10 @@
-"""`basis check`: what a repo's code must pass before a commit, with no network, database or Docker. The files `basis
-sync` owns are compared with what basis and the declared parts write, the clone is checked to run the repo's hooks,
-then the lockfile, ruff's lint and format, ty and pytest run through uv, in the repo's own locked environment. Every
-step runs, so one check finds every problem; each tool lists its own findings, and each step that fails ends with one
-`ERROR` line that says how to fix it."""
+"""`basis check`: what a repo's code must pass before a commit, with no network, database or Docker. With `--staged`,
+which the commit hook gives, the staged files are checked first (`basis.core.hygiene`). The files `basis sync` owns
+are compared with what basis and the declared parts write, the clone is pointed at the repo's hooks if it names none
+and checked to run them, then the lockfile, ruff's lint and format, ty and pytest run through uv, in the repo's own
+locked environment. Every step runs, so one check finds every problem: a file basis cannot read, or one of the repo's
+own at a path basis writes, is one line, and every other file is still compared. Each tool lists its own findings,
+and each step that fails ends with one `ERROR` line that says how to fix it."""
 
 import subprocess
 import sys
@@ -10,7 +12,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from basis.core import hooks, sync
+from basis.core import hooks, hygiene, sync
 from basis.core.errors import BasisError
 from basis.core.sync import AgentFiles
 from basis.core.verbs import fail
@@ -42,15 +44,14 @@ STEPS = (
 )
 
 
-def check(repo: Path, files: Sequence[AgentFiles], *, run: Runner) -> int:
-    """Run every check on the repo at `repo`, whose parts' agent files are `files`; 0 when every one passes."""
-    failures = 0
-    try:
-        stale = sync.stale(repo, files)
-    except sync.SyncError as error:  # a file basis writes part of, which it cannot read; every other step still runs
-        sys.stderr.write(f"ERROR: {error}\n")
-        failures, stale = 1, []
-    if stale:
+def check(repo: Path, files: Sequence[AgentFiles], *, run: Runner, staged: bool = False) -> int:
+    """Run every check on the repo at `repo`, whose parts' agent files are `files`, and with `staged` on the files
+    staged for a commit; 0 when every one passes."""
+    hooks.ensure(repo)
+    failures = sum(fail(*problem) for problem in hygiene.problems(repo)) if staged else 0
+    found = sync.plan(repo, files)
+    failures += sum(fail(*problem) for problem in found.problems())
+    if stale := found.stale():
         names = ", ".join(path.relative_to(repo).as_posix() for path in stale)
         failures += fail(f"{names} {'does' if len(stale) == 1 else 'do'} not match what the installed basis writes", "run `uv run basis sync`, which rewrites or removes each")
     if (found := hooks.problem(repo)) is not None:

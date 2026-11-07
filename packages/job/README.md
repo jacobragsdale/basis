@@ -37,7 +37,7 @@ To work on basis itself, make a repo from a checkout instead, which it installs 
 The repo holds one job, `jobs/prices/`, copied from the package's example: daily positions from trades. Around it are
 a README that maps each kind of change to the file it goes in, a `.env.example`, and the framework files `basis sync`
 keeps current: the `Dockerfile`, the deploy pipeline in `azure-pipelines.yml`, the commit and push hooks in
-`.githooks/`, which every `basis` command turns on, `.gitattributes`, and the agent files. Its `pyproject.toml` declares the job part, as `[tool.basis] parts = ["job"]`, so its one
+`.githooks/`, which `basis check`, `sync` and `new` turn on, `.gitattributes`, and the agent files. Its `pyproject.toml` declares the job part, as `[tool.basis] parts = ["job"]`, so its one
 command, `basis`, offers the job verbs: `uv run basis --help` lists them, and `uv run basis new job NAME` adds a job.
 To take every package from an internal package index instead, pass `--index URL`: it replaces PyPI for the whole repo,
 so it must proxy PyPI.

@@ -73,9 +73,16 @@ holds the interface, and its docstring is the reference.
   of `AGENTS.md` and each part's, `CLAUDE.md`, each `.agents/skills/PART-*` folder and its copy in `.claude/skills/`,
   the deny rules in `.claude/settings.json`, and each file whose first lines carry `basis.core.sync.MARKER`. It writes
   them with LF line endings, removes those nothing writes now, and `basis check` reports any that differ, byte for
-  byte. A part adds its lines of the Dockerfile as its `AgentFiles.image`.
-- Every `basis` command points a clone that names no hooks folder at the repo's `.githooks/`
-  (`basis.core.hooks.ensure`), and `basis check` fails, with the fix, when the clone runs other hooks or is no clone.
-  The hooks are POSIX sh, which Git for Windows runs too.
+  byte. A part adds its lines of the Dockerfile as its `AgentFiles.image`, and a repo its Debian packages as
+  `[tool.basis] apt-packages`. `sync.plan` works this out once per call.
+- A file of the repo's own at a path basis writes (one without the marker, a `CLAUDE.md` holding anything else, or
+  settings with none of basis's rules) is left alone, and a file basis cannot read, such as settings that are not
+  JSON, is one `ERROR` line; every other file is still checked and written. `basis sync --adopt` saves each file of
+  the repo's own as `NAME.before-basis` and writes basis's.
+- `basis check`, `sync` and `new` point a clone that names no hooks folder at the repo's `.githooks/`
+  (`basis.core.hooks.ensure`); the verbs a container runs, such as `run`, leave git alone. `basis check` fails, with
+  the fix, when the clone runs other hooks or is no clone. The hooks are POSIX sh, which Git for Windows runs too. The
+  commit hook ends with `basis check --staged`, whose checks of the staged files are `basis.core.hygiene`'s; the push
+  hook checks each pushed commit, in a temporary worktree inside the git folder when it is not a clean HEAD.
 - A command that runs before a repo exists, such as `basis-job new repo NAME`, is a `standalone` command in
   `basis.core.command`, with the same failures.

@@ -31,5 +31,5 @@ def stale(repo: Path) -> list[Path]:
 
 
 def write(repo: Path) -> list[Path]:
-    """Rewrite every stale agent file, and return them."""
-    return core_sync.write(repo, [agent_files()])
+    """Rewrite every stale file basis writes, and return them."""
+    return core_sync.write(repo, [agent_files()]).changed

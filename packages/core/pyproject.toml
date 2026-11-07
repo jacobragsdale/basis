@@ -12,6 +12,7 @@ dependencies = [
     "pyarrow>=26.0.1",
     "pydantic>=2.14.3",
     "pydantic-settings>=2.16.2",
+    "pyyaml>=6.0.3",  # `basis check --staged` parses each staged YAML file
     "tzdata>=2025.2; sys_platform == 'win32'",  # zoneinfo has no time zone database of its own on Windows
 ]
 

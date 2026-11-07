@@ -270,12 +270,38 @@ def test_sync_writes_each_declared_parts_agent_files(tmp_path: Path) -> None:
     assert (folder / ".agents/skills/alpha-new/SKILL.md").read_text(encoding="utf-8") == "# Make one\n"
 
 
-def test_any_command_points_a_clone_that_names_no_hooks_folder_at_the_repos_hooks(tmp_path: Path, git: Callable[..., str]) -> None:
+@pytest.mark.parametrize("argv", [["--help"], ["serve"], ["sync", "--help"]], ids=["help", "a-parts-verb", "a-verbs-help"])
+def test_a_verb_a_container_or_scheduler_runs_leaves_git_alone(tmp_path: Path, git: Callable[..., str], argv: list[str]) -> None:
     folder = repo(tmp_path)
     sync.write(folder, [])
     git(folder, "init", "--quiet")
-    assert basis(folder, "--help") == 0
+    assert basis(folder, *argv) == 0
+    assert git(folder, "config", "--default", "unset", "core.hooksPath") == "unset\n"
+
+
+def test_new_points_a_clone_that_names_no_hooks_folder_at_the_repos_hooks(tmp_path: Path, git: Callable[..., str]) -> None:
+    folder = repo(tmp_path)
+    sync.write(folder, [])
+    git(folder, "init", "--quiet")
+    assert basis(folder, "new", "job", "rates", installed={"alpha": lambda: Part(new={"job": lambda root, name: root / name})}) == 0
     assert git(folder, "config", "core.hooksPath") == ".githooks\n"
+
+
+def test_sync_refuses_a_file_of_the_repos_own_and_adopt_replaces_it_after_saving_it(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    folder = repo(tmp_path)
+    (folder / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+    assert basis(folder, "sync") == 1
+    assert error_line(capsys).startswith("ERROR: Dockerfile is the repo's own, at a path basis writes, so basis leaves it alone: run `uv run basis sync --adopt`")
+    assert (folder / "Dockerfile").read_text(encoding="utf-8") == "FROM scratch\n"
+    assert basis(folder, "sync", "--adopt") == 0
+    assert (folder / "Dockerfile.before-basis").read_text(encoding="utf-8") == "FROM scratch\n"
+    assert basis(folder, "sync") == 0
+
+
+def test_a_repo_may_name_the_apt_packages_its_image_needs(tmp_path: Path) -> None:
+    folder = repo(tmp_path, ALPHA + 'apt-packages = ["libpq5"]\n')
+    assert basis(folder, "sync") == 0
+    assert " tini libpq5 " in (folder / "Dockerfile").read_text(encoding="utf-8")
 
 
 def test_sync_points_the_clone_at_the_hooks_it_writes(tmp_path: Path, git: Callable[..., str]) -> None:

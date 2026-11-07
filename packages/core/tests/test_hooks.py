@@ -15,11 +15,11 @@ GIT = shutil.which("git") or "git"
 
 UV = """#!/bin/sh
 # A stand-in for uv: it records each command, "formats" each Python file it is given, and passes `basis check` unless
-# CHECK fails it.
+# CHECK fails it, recording the folder and the commit it checked.
 printf '%s\\n' "$*" >> "$UV_LOG"
 case "$*" in
     *"ruff format"*) for file in "$@"; do case "$file" in *.py) printf '# formatted\\n' >> "$file" ;; esac; done ;;
-    *"basis check"*) exit "${CHECK:-0}" ;;
+    *"basis check"*) printf '%s %s\\n' "$PWD" "$(git rev-parse --verify --quiet HEAD || echo none)" >> "$UV_LOG.checks"; exit "${CHECK:-0}" ;;
 esac
 """
 
@@ -91,46 +91,70 @@ def test_without_git_ensure_does_nothing_and_problem_says_to_install_it(tmp_path
 @pytest.fixture
 def hooked(clone: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """`clone`, pointed at its hooks, with the stand-in uv first on the PATH; it logs to `uv.log` beside the clone."""
+    return stand_in_uv(clone, tmp_path, monkeypatch)
+
+
+def stand_in_uv(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     if os.name == "nt":
         pytest.skip("the hooks run in Git for Windows' sh, which these tests do not set up")
-    hooks.ensure(clone)
+    hooks.ensure(repo)
     tools = tmp_path / "tools"
     tools.mkdir()
     (tools / "uv").write_text(UV, encoding="utf-8")
     (tools / "uv").chmod(0o755)
     monkeypatch.setenv("PATH", f"{tools}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("UV_LOG", str(tmp_path / "uv.log"))
-    return clone
+    return repo
 
 
-def committed(repo: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([GIT, "commit", "--quiet", "--message", "a change"], cwd=repo, capture_output=True, text=True, check=False)
+def committed(repo: Path, *argv: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run([GIT, "commit", "--quiet", "--message", "a change", *argv], cwd=repo, capture_output=True, text=True, check=False)
 
 
-def uv_ran(repo: Path) -> list[str]:
-    log = repo.parent / "uv.log"
+def uv_ran(tmp_path: Path) -> list[str]:
+    log = tmp_path / "uv.log"
     return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
 
 
-def test_the_commit_hook_fixes_and_formats_the_staged_python_files_stages_them_again_and_runs_basis_check(hooked: Path, git: Git) -> None:
+def checks(tmp_path: Path) -> list[tuple[Path, str]]:
+    """Each `basis check` the hooks ran: the folder it ran in, and the commit checked out there."""
+    log = tmp_path / "uv.log.checks"
+    return [(Path(folder), commit) for folder, commit in (line.rsplit(" ", 1) for line in log.read_text(encoding="utf-8").splitlines())] if log.exists() else []
+
+
+RUFF = ["run --frozen --quiet ruff check --fix --force-exclude --exit-zero --silent -- jobs/prices.py", "run --frozen --quiet ruff format --force-exclude --silent -- jobs/prices.py"]
+
+
+def test_the_commit_hook_fixes_and_formats_the_staged_python_files_stages_them_again_and_runs_basis_check(hooked: Path, tmp_path: Path, git: Git) -> None:
     (hooked / "jobs").mkdir()
     (hooked / "jobs/prices.py").write_text("x = 1\n", encoding="utf-8")
     (hooked / "notes.md").write_text("# Notes\n", encoding="utf-8")
     git(hooked, "add", "--all")
     assert committed(hooked).returncode == 0
-    assert uv_ran(hooked) == [
-        "run --frozen --quiet ruff check --fix --exit-zero --silent -- jobs/prices.py",
-        "run --frozen --quiet ruff format --silent -- jobs/prices.py",
-        "run --frozen --quiet basis check",
-    ]
+    assert uv_ran(tmp_path) == [*RUFF, "run --frozen --quiet basis check --staged"]
     assert git(hooked, "show", "HEAD:jobs/prices.py") == "x = 1\n# formatted\n"
     assert git(hooked, "status", "--porcelain") == ""
 
 
-def test_a_commit_of_no_python_files_runs_only_basis_check(hooked: Path, git: Git) -> None:
+def test_the_commit_hook_of_a_repo_in_a_folder_of_its_clone_fixes_its_staged_files(tmp_path: Path, git: Git, monkeypatch: pytest.MonkeyPatch) -> None:
+    top = tmp_path / "clone"
+    repo = top / "services" / "prices"
+    repo.mkdir(parents=True)
+    git(top, "init", "--quiet")
+    sync.write(repo, [])
+    stand_in_uv(repo, tmp_path, monkeypatch)
+    (repo / "jobs").mkdir()
+    (repo / "jobs/prices.py").write_text("x = 1\n", encoding="utf-8")
+    git(top, "add", "--all")
+    assert committed(top).returncode == 0
+    assert uv_ran(tmp_path)[:2] == RUFF
+    assert git(top, "show", "HEAD:services/prices/jobs/prices.py") == "x = 1\n# formatted\n"
+
+
+def test_a_commit_of_no_python_files_runs_only_basis_check(hooked: Path, tmp_path: Path, git: Git) -> None:
     git(hooked, "add", "--all")
     assert committed(hooked).returncode == 0
-    assert uv_ran(hooked) == ["run --frozen --quiet basis check"]
+    assert uv_ran(tmp_path) == ["run --frozen --quiet basis check --staged"]
 
 
 def test_a_failing_basis_check_stops_the_commit(hooked: Path, git: Git, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -140,7 +164,7 @@ def test_a_failing_basis_check_stops_the_commit(hooked: Path, git: Git, monkeypa
     assert git(hooked, "rev-list", "--all") == ""
 
 
-def test_a_python_file_changed_since_it_was_staged_stops_the_commit_before_ruff_touches_it(hooked: Path, git: Git) -> None:
+def test_a_python_file_changed_since_it_was_staged_stops_the_commit_before_ruff_touches_it(hooked: Path, tmp_path: Path, git: Git) -> None:
     (hooked / "prices.py").write_text("x = 1\n", encoding="utf-8")
     git(hooked, "add", "--all")
     (hooked / "prices.py").write_text("x = 2\n", encoding="utf-8")
@@ -149,7 +173,7 @@ def test_a_python_file_changed_since_it_was_staged_stops_the_commit_before_ruff_
     assert found.stderr.splitlines() == [
         "ERROR: prices.py also changed since it was staged, and the hook would stage that with ruff's fixes: stage all of it, or stash the rest with `git stash push --keep-index`, and commit again"
     ]
-    assert uv_ran(hooked) == []
+    assert uv_ran(tmp_path) == []
 
 
 def test_staged_whitespace_errors_stop_the_commit(hooked: Path, git: Git) -> None:
@@ -161,14 +185,77 @@ def test_staged_whitespace_errors_stop_the_commit(hooked: Path, git: Git) -> Non
     assert found.stderr.splitlines()[-1].startswith("ERROR: the staged changes add the whitespace errors or conflict markers listed above")
 
 
-@pytest.mark.parametrize(("check", "pushed"), [("0", True), ("1", False)])
-def test_the_push_hook_runs_basis_check_and_a_failure_stops_the_push(hooked: Path, git: Git, monkeypatch: pytest.MonkeyPatch, check: str, *, pushed: bool) -> None:
+@pytest.fixture
+def pushing(hooked: Path, tmp_path: Path, git: Git) -> Path:
+    """`hooked` with two commits on main, a branch `older` at the first, and a bare remote beside it."""
     git(hooked, "add", "--all")
-    assert committed(hooked).returncode == 0
-    remote = hooked.parent / "remote.git"
-    git(hooked.parent, "init", "--quiet", "--bare", remote.name)
-    monkeypatch.setenv("CHECK", check)
-    push = subprocess.run([GIT, "push", "--quiet", str(remote), "main"], cwd=hooked, capture_output=True, check=False)
-    assert (push.returncode == 0) is pushed
-    assert uv_ran(hooked)[-1] == "run --frozen --quiet basis check"
-    assert (git(remote, "rev-list", "--all") != "") is pushed
+    assert committed(hooked, "--no-verify").returncode == 0
+    git(hooked, "branch", "older")
+    (hooked / "notes.md").write_text("# Notes\n", encoding="utf-8")
+    git(hooked, "add", "--all")
+    assert committed(hooked, "--no-verify").returncode == 0
+    git(tmp_path, "init", "--quiet", "--bare", "remote.git")
+    return hooked
+
+
+def pushed(repo: Path, *refs: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run([GIT, "push", "--quiet", str(repo.parent / "remote.git"), *refs], cwd=repo, capture_output=True, text=True, check=False)
+
+
+def worktrees(repo: Path, git: Git) -> list[str]:
+    """The clone's worktrees, and anything the push hook left beside it."""
+    return [line for line in git(repo, "worktree", "list", "--porcelain").splitlines() if line.startswith("worktree ")] + [path.name for path in repo.parent.glob(f".{repo.name}.push.*")]
+
+
+def test_the_push_hook_checks_head_in_place_when_the_tree_is_clean(pushing: Path, tmp_path: Path, git: Git) -> None:
+    assert pushed(pushing, "main").returncode == 0
+    assert checks(tmp_path) == [(pushing, git(pushing, "rev-parse", "HEAD").strip())]
+
+
+@pytest.mark.parametrize("dirty", ["a change", "a new file"])
+def test_the_push_hook_checks_head_in_a_worktree_of_its_own_when_the_tree_has_changes(pushing: Path, tmp_path: Path, git: Git, dirty: str) -> None:
+    (pushing / ("notes.md" if dirty == "a change" else "draft.md")).write_text("# Not yet\n", encoding="utf-8")
+    assert pushed(pushing, "main").returncode == 0
+    [(folder, commit)] = checks(tmp_path)
+    assert folder.parent == pushing.parent
+    assert folder.name.startswith(f".{pushing.name}.push.")
+    assert commit == git(pushing, "rev-parse", "HEAD").strip()
+    assert worktrees(pushing, git) == [f"worktree {pushing}"]
+
+
+def test_the_push_hook_checks_each_pushed_commit_once_and_skips_a_deletion(pushing: Path, tmp_path: Path, git: Git) -> None:
+    assert pushed(pushing, "main", "older", "main:copy").returncode == 0
+    found = checks(tmp_path)
+    assert [commit for _, commit in found] == [git(pushing, "rev-parse", ref).strip() for ref in ("main", "older")]
+    assert found[0][0] == pushing
+    assert pushed(pushing, ":older", ":copy").returncode == 0
+    assert len(checks(tmp_path)) == 2
+    assert worktrees(pushing, git) == [f"worktree {pushing}"]
+
+
+@pytest.mark.parametrize("ref", ["main", "older"])
+def test_a_failing_check_stops_the_push_and_leaves_no_worktree(pushing: Path, tmp_path: Path, git: Git, monkeypatch: pytest.MonkeyPatch, ref: str) -> None:
+    monkeypatch.setenv("CHECK", "1")
+    found = pushed(pushing, ref)
+    assert found.returncode == 1
+    assert "ERROR: a commit being pushed fails basis check, as above: fix it, commit, and push again" in found.stderr.splitlines()  # before git's own line
+    assert git(tmp_path / "remote.git", "rev-list", "--all") == ""
+    assert worktrees(pushing, git) == [f"worktree {pushing}"]
+
+
+def test_the_push_hook_of_a_repo_in_a_folder_of_its_clone_checks_that_folder_of_the_worktree(tmp_path: Path, git: Git, monkeypatch: pytest.MonkeyPatch) -> None:
+    top = tmp_path / "clone"
+    repo = top / "services" / "prices"
+    repo.mkdir(parents=True)
+    git(top, "init", "--quiet", "--initial-branch=main")
+    sync.write(repo, [])
+    stand_in_uv(repo, tmp_path, monkeypatch)
+    git(top, "add", "--all")
+    assert committed(top, "--no-verify").returncode == 0
+    (repo / "draft.md").write_text("# Not yet\n", encoding="utf-8")
+    git(tmp_path, "init", "--quiet", "--bare", "remote.git")
+    assert subprocess.run([GIT, "push", "--quiet", str(tmp_path / "remote.git"), "main"], cwd=top, capture_output=True, check=False).returncode == 0
+    [(folder, _)] = checks(tmp_path)
+    assert folder.relative_to(folder.parents[1]) == Path("services/prices")
+    assert folder.parents[1].name.startswith(".clone.push.")
+    assert worktrees(top, git) == [f"worktree {top}"]

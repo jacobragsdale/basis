@@ -1,13 +1,55 @@
 #!/bin/sh
 # This file is managed by basis: `basis sync` rewrites it from the installed version, and `basis check` fails when it differs.
-# The push hook: `basis check`, on what is about to be pushed. `basis check --full`, which adds `regress` where the run
-# store is reachable and the QA tier where QA settings exist, takes its place once basis has it. Never skip it with
-# `git push --no-verify`: fix what each ERROR line says, and push again.
+# The push hook: `basis check` on each commit being pushed, so what reaches the remote has passed it, whatever was
+# committed with --no-verify. A commit that is HEAD, in a clean working tree, is checked in place; any other, in a
+# temporary worktree of that commit beside the clone, removed after: at the clone's depth, a path the lockfile gives
+# relative to the repo, such as a checkout of basis, holds there too. `basis check --full`, which adds
+# `regress` where the run store is reachable and the QA tier where QA settings exist, takes its place once basis has
+# it. Never skip it with `git push --no-verify`: fix what each ERROR line says, and push again.
 set -eu
 cd "$(dirname "$0")/.."
 
-if ! command -v uv >/dev/null 2>&1; then
-    printf 'ERROR: %s\n' "uv is not on the PATH git runs hooks with, and the hooks run every check through it: install uv, as https://docs.astral.sh/uv/ says, or put its folder on the PATH" >&2
+fail() {
+    printf 'ERROR: %s\n' "$1" >&2
     exit 1
-fi
-exec uv run --frozen --quiet basis check
+}
+
+command -v uv >/dev/null 2>&1 || fail "uv is not on the PATH git runs hooks with, and the hooks run every check through it: install uv, as https://docs.astral.sh/uv/ says, or put its folder on the PATH"
+
+tree=""
+cleanup() {
+    if [ -n "$tree" ]; then
+        git worktree remove --force "$tree" </dev/null >/dev/null 2>&1 || rm -rf "$tree"
+        git worktree prune </dev/null
+        tree=""
+    fi
+}
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT TERM
+
+head=$(git rev-parse --verify --quiet HEAD || :)
+top=$(git rev-parse --show-toplevel)
+prefix=$(git rev-parse --show-prefix) # the repo's folder in its clone, empty at the top
+refs=$(cat) # each line: LOCAL_REF LOCAL_COMMIT REMOTE_REF REMOTE_COMMIT
+checked=" "
+failed=0
+while read -r _ commit _ _; do
+    case "$commit" in
+        *[!0]*) ;;
+        *) continue ;; # a deletion, which pushes no commit
+    esac
+    case "$checked" in *" $commit "*) continue ;; esac
+    checked="$checked$commit "
+    if [ "$commit" = "$head" ] && [ -z "$(git status --porcelain </dev/null)" ]; then
+        uv run --frozen --quiet basis check </dev/null || failed=1
+    else
+        printf 'basis: checking %s, as it is pushed, in a temporary worktree\n' "$commit" >&2
+        tree=$(mktemp -d "$(dirname "$top")/.$(basename "$top").push.XXXXXX")
+        git worktree add --quiet --detach "$tree" "$commit" </dev/null
+        (cd "$tree/$prefix" && unset VIRTUAL_ENV && uv run --frozen --quiet basis check) </dev/null || failed=1
+        cleanup
+    fi
+done <<EOF
+$refs
+EOF
+[ "$failed" = 0 ] || fail "a commit being pushed fails basis check, as above: fix it, commit, and push again"

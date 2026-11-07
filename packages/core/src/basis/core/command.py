@@ -1,10 +1,11 @@
 """The `basis` command, which basis-core provides and each part adds its verbs to, as `basis.core.verbs` describes.
 
 It finds its repo, the nearest folder at or above the working directory with a `pyproject.toml`, reads the parts that
-file declares as `[tool.basis] parts = ["job"]`, loads each one's entry point in the `basis.verbs` group, points a
-clone that names no hooks folder at the repo's hooks (`basis.core.hooks.ensure`), and runs one verb: a part's own, or
-one of core's, which reach the parts through their `Part`. A verb of a part the repo does not declare is refused,
-never offered.
+file declares as `[tool.basis] parts = ["job"]`, loads each one's entry point in the `basis.verbs` group, and runs
+one verb: a part's own, or one of core's, which reach the parts through their `Part`. A verb of a part the repo does
+not declare is refused, never offered. The verbs a developer runs on a clone, `check`, `sync` and `new`, point a clone
+that names no hooks folder at the repo's hooks (`basis.core.hooks.ensure`); `run` and the rest, which a container or a
+scheduler runs, leave git alone.
 
 Every failure is one line on stderr, `ERROR: REASON: FIX`, and the exit code is 1, or 2 for a command line that does
 not parse. A `BasisError`, which basis raises on purpose with the fix in its message, prints as that line alone, as
@@ -81,7 +82,6 @@ def run(argv: Sequence[str], *, cwd: Path, installed: Installed) -> int:
             return 0
         settings.refuse_renamed(os.environ)
         repo = find(cwd, installed)
-        hooks.ensure(repo.root)
         groups = _groups(repo)
         verbs = {verb.name: verb for _, group in groups for verb in group}
         _refuse_undeclared(argv, repo, verbs, installed)
@@ -137,8 +137,8 @@ def declared(pyproject: Path) -> list[str]:
     if table is None:
         msg = f"{pyproject} declares no basis parts: add {example}"
         raise CommandError(msg)
-    if unknown := sorted(set(table) - {"parts"}):
-        msg = f"{pyproject}'s [tool.basis] has {', '.join(unknown)}, which basis does not read: remove it, and give {example}"
+    if unknown := sorted(set(table) - {"parts", sync.APT}):
+        msg = f"{pyproject}'s [tool.basis] has {', '.join(unknown)}, which basis does not read: remove it; basis reads parts, as {example}, and {sync.APT}"
         raise CommandError(msg)
     names = table.get("parts")
     if not isinstance(names, list) or not names or not all(isinstance(name, str) for name in names):
@@ -205,8 +205,12 @@ def _core(repo: Repo) -> list[Verb]:
     def agent_files() -> list[sync.AgentFiles]:
         return [read() for read in files]
 
-    def run_check(_: argparse.Namespace) -> int:
-        return check.check(repo.root, agent_files(), run=check.run_command)
+    def run_check(n: argparse.Namespace) -> int:
+        args = CheckArgs(staged=bool(n.staged))
+        return check.check(repo.root, agent_files(), run=check.run_command, staged=args.staged)
+
+    def run_sync(n: argparse.Namespace) -> int:
+        return _sync(repo.root, agent_files(), SyncArgs(adopt=bool(n.adopt)))
 
     def replay(n: argparse.Namespace) -> int:
         return _owner(saving, n.name).replay(Replay(n.name, str(n.run_id), n.params))
@@ -215,11 +219,11 @@ def _core(repo: Repo) -> list[Verb]:
         return _regress(saving, Regress(n.name, n.last, dict(n.label), n.snapshots))
 
     offered = {
-        "check": Verb("check", "lint, format check, type check and test the repo, and check its framework files and hooks", _no_arguments, run_check),
+        "check": Verb("check", "lint, format check, type check and test the repo, and check its framework files and hooks", _check_arguments, run_check),
         "replay": Verb("replay", "rerun a saved run's transform with today's code, and print how its outputs differ", _replay_arguments, replay),
         "regress": Verb("regress", "replay recent published runs with today's code, and list what changed", _regress_arguments, regress),
         "new": Verb("new", f"add a {' or a '.join(kinds)} to the repo", partial(_new_arguments, kinds), lambda n: _new(repo, kinds[str(n.kind)], str(n.name))),
-        "sync": Verb("sync", "rewrite the repo's framework and agent files from the installed version", _no_arguments, lambda _: _sync(repo.root, agent_files())),
+        "sync": Verb("sync", "rewrite the repo's framework and agent files from the installed version", _sync_arguments, run_sync),
         "docs": Verb("docs", "list the docs of the installed parts, or print one", _docs_arguments, lambda n: _docs(_pages(repo), n.page)),
     }
     given = {"check", "sync"}.union(*map(_gives, parts))
@@ -291,14 +295,30 @@ def _regress(saving: Mapping[str, Runs], args: Regress) -> int:
 
 def _new(repo: Repo, make: Callable[[Path, str], Path], name: str) -> int:
     log.info("made %s", make(repo.root, name))
+    hooks.ensure(repo.root)
     return 0
 
 
-def _sync(root: Path, files: Sequence[sync.AgentFiles]) -> int:
-    for path in sync.write(root, files):
+@dataclass(frozen=True)
+class CheckArgs:
+    staged: bool
+    """Whether to check the files staged for a commit as well, as the commit hook does."""
+
+
+@dataclass(frozen=True)
+class SyncArgs:
+    adopt: bool
+    """Whether to replace each file of the repo's own at a path basis writes, after saving it as NAME.before-basis."""
+
+
+def _sync(root: Path, files: Sequence[sync.AgentFiles], args: SyncArgs) -> int:
+    done = sync.write(root, files, adopt=args.adopt)
+    for path in done.changed:
         log.info("synced %s", path)
-    hooks.ensure(root)  # which did nothing before the command if the hooks were not written yet
-    return 0
+    for path in done.adopted:
+        log.info("adopted %s, and saved what it held as %s%s, for you to compare and delete", path, path.name, sync.BEFORE)
+    hooks.ensure(root)  # once the hooks are written
+    return 1 if sum(fail(*problem) for problem in done.problems()) else 0
 
 
 def _pages(repo: Repo) -> dict[str, Path]:
@@ -320,8 +340,12 @@ def _docs(pages: Mapping[str, Path], page: str | None) -> int:
     return fail(f"no page {page!r}", f"give one of {', '.join(pages)}")
 
 
-def _no_arguments(_: argparse.ArgumentParser) -> None:
-    pass
+def _check_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--staged", action="store_true", help="also check the files staged for a commit, as the commit hook does: no private key, none over 500 KB, YAML and TOML that parse")
+
+
+def _sync_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--adopt", action="store_true", help="replace each file of the repo's own at a path basis writes, after saving it as NAME.before-basis")
 
 
 def label(value: str) -> tuple[str, str]:

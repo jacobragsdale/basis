@@ -1,7 +1,8 @@
 """The git setting that makes a clone run a basis repo's commit and push hooks, which `basis sync` writes in `.githooks/`.
 git runs a clone's hooks from `.git/hooks` unless `core.hooksPath` names another folder, and a clone never carries
-its settings, so every `basis` command calls `ensure` first: a fresh clone runs its hooks from its first `basis`
-command. `problem` says why a clone would not run them, which `basis check` reports with the fix.
+its settings, so the verbs a developer runs on a clone, `basis check`, `sync` and `new`, call `ensure`: a fresh clone
+runs its hooks from its first check. The verbs a container or a scheduler runs never touch git. `problem` says why a
+clone would not run them, which `basis check` reports with the fix.
 
 git finds the clone from the repo's folder, never from a `GIT_DIR` that a hook or `git rebase --exec` exports, so a
 `basis` command run from inside one never writes another clone's settings."""

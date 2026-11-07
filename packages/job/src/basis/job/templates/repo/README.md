@@ -13,7 +13,9 @@ uv run python jobs/{job}/main.py   # run a job, from your IDE or here; it never 
 
 `uv run basis --help` lists every command this repo has, `uv run basis check` runs every check a commit must pass,
 `uv run basis docs` lists the framework's docs, and `uv run basis docs job/tutorial` prints the tutorial. The hooks in
-`.githooks/`, which any `basis` command turns on, run `basis check` on every commit and push.
+`.githooks/`, which `basis check` turns on, run `basis check` on every commit and on each commit pushed. A Debian
+package the image needs goes in `pyproject.toml`'s `[tool.basis] apt-packages`, and `uv run basis sync` writes it
+into the Dockerfile.
 
 ## Where each change goes
 
