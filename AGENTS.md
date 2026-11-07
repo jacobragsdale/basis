@@ -21,15 +21,25 @@ its docs.
 - A step marked **(work)** needs the firm's environment. Hand it to the maintainer as the commands to run and what to
   send back.
 - Write "the firm", never a firm's real name, and use placeholder names in examples. This repo is public.
+- grimp's and import-linter's caches stay off (`cache_dir=None`, `lint-imports --no-cache`), here and in generated
+  repos: their folders clutter every checkout, and the graphs build fresh in well under a second.
 
 ## Checks
 
 ```sh
 uv sync
 uv run pre-commit install           # once per clone: the commit hook runs the checks below
-uv run pre-commit run --all-files   # ruff, ty with every rule an error, the lockfile, file hygiene
-uv run pytest packages/core
-(cd packages/job && uv run pytest)   # until step 1.3, packages/job runs with its own pytest settings
+uv run pre-commit run --all-files   # ruff, ty with every rule an error, the lockfile, the import contracts, file hygiene
+uv run pytest                       # every package's unit tests, from the root
+uv run pytest -m integration        # real SQL Server and Oracle: packages/job/tests/integration/README.md
+```
+
+To check what `etl new` generates, from the root:
+
+```sh
+uv run etl new repo pricing-etl prices --dir SCRATCH --framework-path .
+cd SCRATCH/pricing-etl && uv run etl new job rates
+uv run pytest && uv run ruff check . && uv run ruff format --check . && uv run ty check
 ```
 
 CI runs the same on every pull request that changes more than docs.

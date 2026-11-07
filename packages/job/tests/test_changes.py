@@ -5,16 +5,17 @@ import polars as pl
 import pytest
 from builders import DAY, Price, prices
 
-import etl_framework as etl
-from etl_framework.changes import Planned, build, plan
-from etl_framework.outputs import Changes, Delete, Range, Target
+import basis.job as etl
+from basis.core.tables import Changes, Delete, Range
+from basis.job.changes import Planned, build, plan
+from basis.job.outputs import FrameWrite, Target, Write
 
 
-def target(write: etl.outputs.Write, key: tuple[str, ...] | None = ("day", "security_id")) -> Target:
+def target(write: Write, key: tuple[str, ...] | None = ("day", "security_id")) -> Target:
     return Target(Price, "warehouse", "prices", write, key)
 
 
-def planned(write: etl.outputs.Write, value: pl.DataFrame | Changes, *, key: tuple[str, ...] | None = ("day", "security_id"), interval: etl.Interval | None = DAY) -> Planned:
+def planned(write: Write, value: pl.DataFrame | Changes, *, key: tuple[str, ...] | None = ("day", "security_id"), interval: etl.Interval | None = DAY) -> Planned:
     class Outputs(etl.Outputs):
         prices = etl.Table(Price, database="warehouse", table="prices", write=write, key=key)
 
@@ -32,7 +33,7 @@ def planned(write: etl.outputs.Write, value: pl.DataFrame | Changes, *, key: tup
         (etl.InsertNew(), {"insert_new"}, True),
     ],
 )
-def test_each_write_mode_builds_its_operations(write: etl.outputs.FrameWrite, operations: set[str], *, rerun_safe: bool) -> None:
+def test_each_write_mode_builds_its_operations(write: FrameWrite, operations: set[str], *, rerun_safe: bool) -> None:
     changes = build(target(write), prices({}), DAY)
     assert set(changes.frames()) == operations
     assert changes.rerun_safe is rerun_safe
@@ -98,7 +99,7 @@ def test_an_empty_replace_deletes_every_row_and_inserts_none() -> None:
         (etl.ReplaceWhere(matching=("note",)), None, "null matches nothing"),
     ],
 )
-def test_a_table_declaration_that_cannot_be_written_is_refused(write: etl.outputs.FrameWrite, key: tuple[str, ...] | None, message: str) -> None:
+def test_a_table_declaration_that_cannot_be_written_is_refused(write: FrameWrite, key: tuple[str, ...] | None, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         etl.Table(Price, database="warehouse", table="prices", write=write, key=key)
 

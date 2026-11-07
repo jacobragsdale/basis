@@ -8,10 +8,10 @@ from typing import Annotated
 
 import polars as pl
 
-import etl_framework as etl
-from etl_framework.job import Job
-from etl_framework.outputs import FrameWrite
-from etl_framework.testing import frame
+import basis.job as etl
+from basis.job.job import Job
+from basis.job.outputs import FrameWrite
+from basis.job.testing import frame
 
 DAY = etl.Interval.parse("2026-11-05..2026-11-06")
 

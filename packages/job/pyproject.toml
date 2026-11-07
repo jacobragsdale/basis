@@ -1,125 +1,28 @@
 [project]
-name = "etl-framework"
-version = "0.1.0"
+name = "basis-job"
+version = "0.0.0"
 description = "The run loop that ETL jobs share: typed inputs and outputs, a pure transform, checks before any write, all-or-nothing publishing to SQL Server and Oracle, and snapshots that replay"
 readme = "README.md"
 authors = [{ name = "Jacob Ragsdale", email = "jacobragsdale@pm.me" }]
 license = "MIT"
 requires-python = ">=3.14"
 dependencies = [
-    "grimp>=3.19",
-    "mssql-python>=1.17.0",
-    "oracledb>=26.1.0",
+    "basis-core==0.0.0",  # every basis package depends on basis-core at exactly its own version
     "polars>=2.1.0",
-    "pyarrow>=26.0.1",
     "pydantic>=2.14.3",
-    "pydantic-settings>=2.16.2",
     "python-dotenv>=1.2.1",
     "tzdata>=2025.2; sys_platform == 'win32'",  # zoneinfo has no time zone database of its own on Windows
 ]
 
 [project.scripts]
-etl = "etl_framework.cli:main"
+etl = "basis.job.cli:main"
+
+[tool.uv.sources]
+basis-core = { workspace = true }
 
 [build-system]
 requires = ["uv_build>=0.13.6,<0.14"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = "etl_framework"
-
-[dependency-groups]
-dev = [
-    "import-linter>=2.16",
-    "pre-commit>=4.7.0",
-    "pytest>=9.2.0",
-    "pytest-cov>=7.1.0",
-    "pytest-randomly>=5.0.0",
-    "ruff==0.17.4",
-    "ty==0.0.99",
-]
-
-[tool.ruff]
-line-length = 200
-required-version = ">=0.17.4"
-force-exclude = true
-show-fixes = true
-unsafe-fixes = false
-
-[tool.ruff.lint]
-select = ["ALL"]  # Every stable rule; preview rules stay off. Upgrades are deliberate because the version is pinned.
-ignore = [
-    # Each entry is a rule that cannot be fixed, only turned off. Fix everything else.
-    "COM812",  # Conflicts with the formatter; Ruff's docs say to disable it alongside ruff format.
-    "ISC001",  # Conflicts with the formatter; Ruff's docs say to disable it alongside ruff format.
-    "S603",  # Flags every subprocess call; there is no fix, only review. Pass argv lists, never shell=True (S602).
-    "TC001",  # Moving imports under TYPE_CHECKING breaks code that reads annotations at runtime (Pydantic, FastAPI).
-    "TC002",  # Moving imports under TYPE_CHECKING breaks code that reads annotations at runtime (Pydantic, FastAPI).
-    "TC003",  # Moving imports under TYPE_CHECKING breaks code that reads annotations at runtime (Pydantic, FastAPI).
-    "CPY001",  # A copyright header is a legal decision per repository, not a lint fix.
-    "D",  # Agents read this code. A required docstring gets written to satisfy the rule; write one only where it says what code and types cannot.
-]
-
-[tool.ruff.lint.per-file-ignores]
-# pytest's assert is its API, and a test compares against literal expected values. tests/ is not a package, and a
-# naive datetime in a test stands for a database's value, in its column's zone.
-"**/tests/**" = ["S101", "PLR2004", "INP001", "DTZ001"]
-# The integration tier builds SQL around the scratch tables each test makes and names.
-"tests/integration/**" = ["S101", "PLR2004", "INP001", "DTZ001", "S608"]
-"**/test_*.py" = ["S101", "PLR2004"]
-"**/conftest.py" = ["S101", "PLR2004"]
-# A job's hooks share their signatures, so a hook may leave an argument unused.
-"src/etl_framework/example/job.py" = ["ARG001"]
-# Statements name tables and columns, which the row and table patterns restrict to letters, digits, underscores and $,
-# so they can only be built as strings; every value is bound. The rule cannot tell an identifier from a value.
-"src/etl_framework/databases/*.py" = ["S608"]
-# A job repo's files, which the generator copies; they are not part of this package.
-"src/etl_framework/templates/**" = ["INP001"]
-
-[tool.ruff.lint.isort]
-split-on-trailing-comma = false  # Do not preserve comma-forced import line breaks.
-
-[tool.ruff.lint.mccabe]
-max-complexity = 15
-
-[tool.ruff.format]
-docstring-code-format = true
-skip-magic-trailing-comma = true  # Collapse comma-forced multiline constructs when they fit.
-
-[tool.ty.rules]
-all = "error"  # Every rule is an error, including those ty leaves off by default. Opt out one rule at a time, with a reason.
-
-[tool.ty.environment]
-extra-paths = ["tests"]  # as pytest's `pythonpath`, so test modules can import `builders`
-
-[tool.ty.analysis]
-respect-type-ignore-comments = false  # Require a specific `# ty: ignore[rule]` suppression.
-strict-generic-narrowing = true  # isinstance on a generic narrows to its top materialization, e.g. list[object].
-strict-equality-semantics = true  # Do not narrow from ==, in, or match value patterns; a subclass can compare equal.
-
-[tool.ty.terminal]
-error-on-warning = true
-
-[tool.pytest.ini_options]
-addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration' --ignore=src/etl_framework/templates"  # templates are a job repo's files
-testpaths = ["tests", "src/etl_framework/example"]
-pythonpath = ["tests"]  # test modules share `conftest` builders
-xfail_strict = true  # An xfail that starts passing is a failure, not a silent pass.
-filterwarnings = [
-    "error",  # A warning is a defect until someone decides otherwise.
-    # Add narrow, dated `ignore::` entries with a reason for third-party
-    # deprecations you do not control. Never widen this back to "default".
-]
-markers = [
-    "integration: needs a real SQL Server or Oracle (see tests/integration/README.md); excluded from the default run",
-]
-
-[tool.coverage.run]
-branch = true  # Statement coverage hides the untaken half of every condition.
-source = ["src/etl_framework"]
-
-[tool.coverage.report]
-show_missing = true
-skip_covered = true
-exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "@overload"]
-# Deliberately no fail_under: coverage is a diagnostic here, not a CI gate.
+module-name = "basis.job"

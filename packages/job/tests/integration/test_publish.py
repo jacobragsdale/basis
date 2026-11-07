@@ -12,11 +12,12 @@ import pytest
 from builders import Price, prices
 from integration.scratch import Scratch, run
 
-import etl_framework as etl
-from etl_framework import ddl, runs, snapshots
-from etl_framework.job import Job
-from etl_framework.outputs import FrameWrite, Target
-from etl_framework.settings import GivenSettings
+import basis.job as etl
+from basis.core import snapshots
+from basis.core.settings import GivenSettings
+from basis.job import ddl, runs
+from basis.job.job import Job
+from basis.job.outputs import FrameWrite, Target
 
 pytestmark = pytest.mark.integration
 

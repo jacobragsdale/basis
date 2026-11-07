@@ -1,0 +1,129 @@
+"""What is done with a saved run, whichever part made it: finding it, opening it to replay, finishing a publish that
+failed partway (`resume`), and replaying recent published runs (`regress`). The part runs its own code, and these are
+the steps around it that every part takes the same way."""
+
+import logging
+import time
+from collections.abc import Callable, Collection, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import datetime
+from functools import cache
+from pathlib import Path
+
+import polars as pl
+
+from basis.core import logs, publish, snapshots
+from basis.core.databases import Database, open_database
+from basis.core.settings import Settings
+from basis.core.snapshots import PublishRecord, RunRecord, Snapshot, Status
+from basis.core.storage import Root
+from basis.core.tables import Target
+
+log = logging.getLogger(__name__)
+
+
+def opener(settings: Settings) -> Callable[[str], Database]:
+    """Each database a run names, as the settings configure it, opened once however often the run asks."""
+
+    @cache
+    def opened(name: str) -> Database:
+        return open_database(settings, name)
+
+    return opened
+
+
+def status_of(publishes: Mapping[str, PublishRecord], databases: int) -> Status:
+    """A run's status from its publishes, of the `databases` it writes: `published` when every one committed, and
+    `partial` when some did."""
+    committed = sum(record.status == "committed" for record in publishes.values())
+    if committed == databases:
+        return "published"
+    return "partial" if committed else "failed"
+
+
+def find(roots: Sequence[Root], run_id: str, name: str) -> Snapshot:
+    """A run of `name` by its id, from the first of `roots` that holds it."""
+    for root in roots:
+        try:
+            return snapshots.find(root, run_id, name)
+        except LookupError:
+            continue
+    msg = f"no run {run_id} of {name} under {', '.join(root.location for root in roots)}"
+    raise LookupError(msg)
+
+
+@dataclass(frozen=True)
+class Replay[P]:
+    """A saved run, opened to run again: its record, the params to run with, what it saved, and the replay's own id."""
+
+    original: RunRecord
+    run_id: str
+    params: P
+    params_text: str
+    params_path: str
+    """Where the params came from: the file given, or the run's own `RUN_ID/params.json`."""
+    saved: dict[str, pl.DataFrame]
+    """Every input the run saved, by name."""
+
+
+def replaying[P](source: Snapshot, *, name: str, module: str, params: Path | None, parse: Callable[[str], P], reads: Collection[str]) -> Replay[P]:  # noqa: PLR0913 -- the part says what it is and reads, by keyword
+    """Open `source`, a run of the part `name` (or of its `module`), to run it again with the run's params or `params`,
+    which `parse` validates. `reads` names the inputs the part reads now, each of which the run must have saved. The
+    replay's id is bound to every record logged from here on."""
+    original = source.record()
+    if original.job not in {name, module}:
+        msg = f"run {original.run_id} is a run of {original.job}, not {name}"
+        raise ValueError(msg)
+    params_text = params.read_text(encoding="utf-8") if params is not None else source.params_json()
+    parsed = parse(params_text)
+    run_id = snapshots.new_run_id()
+    logs.bind(run_id=run_id, job=name, replay_of=original.run_id)
+    saved = source.inputs()
+    if missing := sorted(set(reads) - set(saved)):
+        msg = f"run {original.run_id} did not read {missing}, which the job reads now: a replay runs on what the run read"
+        raise ValueError(msg)
+    params_path = str(params) if params is not None else f"{original.run_id}/params.json"
+    return Replay(original, run_id, parsed, params_text, params_path, saved)
+
+
+def resume(  # noqa: PLR0913 -- the part says what it is and writes, by keyword
+    source: Snapshot, record: RunRecord, *, name: str, targets: Mapping[str, Target], databases: Callable[[str], Database], version: str, clock: Callable[[], datetime]
+) -> RunRecord:
+    """Finish publishing `record`, a run of `name` that committed to some of its databases and failed on another, from
+    its snapshot, and save its record. `targets` are where the part writes each output now, which must be where the
+    run wrote it."""
+    if record.reasons or not record.publishes:
+        msg = f"run {record.run_id} is {record.status} and never published: only a run that failed while publishing resumes; run it again instead"
+        raise ValueError(msg)
+    for output_name, output in record.outputs.items():
+        now = (targets[output_name].database, targets[output_name].table) if output_name in targets else None
+        if now != (output.database, output.table):
+            msg = f"{output_name} is written to {now} now, and the run wrote ({output.database}, {output.table}): resume with the code the run ran"
+            raise ValueError(msg)
+    publication = publish.Publication(record.run_id, name, record.parsed_interval(), version, False, clock)  # noqa: FBT003 -- a dataclass field, by position
+    publishes = record.publishes | publish.publish(publication, targets, source.changes(), databases)
+    final = RunRecord.model_validate(record.model_dump() | {"publishes": publishes, "status": status_of(publishes, len({output.database for output in record.outputs.values()}))})
+    source.save_record(final)
+    return final
+
+
+@dataclass(frozen=True)
+class Regression[D]:
+    """One replayed run: how its outputs differ, and every reason the replay would not write them."""
+
+    run_id: str
+    diffs: list[D]
+    reasons: list[str]
+
+
+def regress[D](root: Root, name: str, *, last: int, labels: Mapping[str, str], replay: Callable[[Snapshot], tuple[RunRecord, list[D]]]) -> list[Regression[D]]:
+    """Replay `name`'s last `last` published runs whose labels include `labels`, with `replay`, the part's own, and how
+    each one's outputs differ. Writes nothing."""
+    chosen = [snapshot for snapshot in snapshots.runs_of(root, name) if (record := snapshot.record()).status == "published" and labels.items() <= record.labels.items()][:last]
+    start = time.perf_counter()
+    found: list[Regression[D]] = []
+    for snapshot in chosen:
+        record, diffs = replay(snapshot)
+        found.append(Regression(snapshot.root.name, diffs, record.reasons))
+    log.info("regressed", extra={"runs": len(found), "changed": sum(bool(entry.diffs or entry.reasons) for entry in found), "ms": logs.ms_since(start)})
+    return found

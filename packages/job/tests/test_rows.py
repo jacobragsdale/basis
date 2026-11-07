@@ -6,8 +6,8 @@ import polars as pl
 import pytest
 from builders import Price
 
-import etl_framework as etl
-from etl_framework.rows import RowError, SchemaError, conform
+import basis.job as etl
+from basis.job.rows import RowError, SchemaError, conform
 
 
 def problems(frame: pl.DataFrame, *, naive: str = "in_zone") -> list[str]:

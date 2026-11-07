@@ -1,7 +1,8 @@
 # Integration tests
 
-These run against real databases, and only on request: `uv run pytest -m integration`. They need a scratch SQL Server
-database and a scratch Oracle schema, which they create and drop tables in; never point them at a shared one.
+These run against real databases, and only on request: `uv run pytest -m integration`, from the workspace's root.
+They need a scratch SQL Server database and a scratch Oracle schema, which they create and drop tables in; never point
+them at a shared one.
 
 ```sh
 docker run -d --name etlf-test-mssql -p 127.0.0.1:14433:1433 -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD=Etl-test-1234 mcr.microsoft.com/mssql/server:2022-latest

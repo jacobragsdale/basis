@@ -1,8 +1,0 @@
-# Sort imports as a job repo does, where etl_framework is a third-party package and the job's own modules, here
-# etl_framework.example, are first-party. `etl new` leaves this file out of the jobs it copies.
-extend = "../../../pyproject.toml"
-
-[lint.isort]
-known-first-party = ["etl_framework.example"]
-known-third-party = ["etl_framework"]
-split-on-trailing-comma = false
