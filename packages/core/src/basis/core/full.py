@@ -178,7 +178,9 @@ def _contracts(repo: Path, parts: Mapping[str, Part], report: Report) -> tuple[d
             report(error)
             broken += 1
             continue
-        _said(f"the {name} part's contract {'is unchanged' if found[name] is None else 'changed, as `uv run basis review` shows'}")
+        diff = found[name]
+        summary = diff.partition("\n")[0].rstrip(".") if diff is not None else None
+        _said(f"the {name} part's contract is unchanged" if summary is None else f"the {name} part's contract: {summary}, as `uv run basis review` shows")
     return found, broken, None
 
 

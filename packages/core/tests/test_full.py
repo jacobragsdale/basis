@@ -256,9 +256,9 @@ def test_a_qa_tier_that_refuses_or_a_qa_run_that_fails_fails_the_check(declared:
 def test_review_prints_what_regress_and_the_qa_tier_found_on_the_commit_checked(declared: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", str(declared))
     _, runs = regressing(CHANGED, SAME)
-    part = Part(runs=runs, qa=qa_part().qa, contract=lambda _: "- `GET /prices`: `price` is now a decimal")
+    part = Part(runs=runs, qa=qa_part().qa, contract=lambda _: "Changed since v0.1.0, compatibly.\n\n- `GET /prices`: `price` is now a decimal")
     assert checked(declared, part) == 0
-    capsys.readouterr()
+    assert "basis check --full: the alpha part's contract: Changed since v0.1.0, compatibly, as `uv run basis review` shows" in capsys.readouterr().err
     assert review.review(declared, "HEAD") == 0
     head = clone.of(declared)
     assert head is not None
@@ -267,7 +267,7 @@ def test_review_prints_what_regress_and_the_qa_tier_found_on_the_commit_checked(
     assert f"`basis check --full` passed on commit `{commit}`, on 2026-11-07 14:02 UTC, with basis-core {version('basis-core')}" in printed
     assert "| prices | `R1` | prices: upsert: 1 changed (price 1) |" in printed
     assert "| alpha | prices | `Q1` | published: prices (3 inserted) |" in printed
-    assert "### The alpha contract\n\n- `GET /prices`: `price` is now a decimal" in printed
+    assert "### The alpha contract\n\nChanged since v0.1.0, compatibly.\n\n- `GET /prices`: `price` is now a decimal" in printed
     assert f"\n- basis-core {version('basis-core')}\n" in printed
 
 

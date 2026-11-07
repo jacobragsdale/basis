@@ -259,8 +259,9 @@ class Part:
     machine has its settings file, such as each job's, published to QA's tables."""
     contract: Callable[[Path], str | None] | None = None
     """How the contract the part's code offers others, such as an API's `openapi.json`, differs from the last
-    release's, as Markdown, or None when it does not; called on the repo `basis check --full` checks, and printed by
-    `basis review`. A job offers none."""
+    release's, as Markdown whose first line says so in a sentence, which `basis check --full` prints, or None when it
+    does not; called on the repo `basis check --full` checks, and printed by `basis review`. A change the contract's
+    users cannot take raises a `BasisError` that names it, which fails the check. A job offers none."""
 
 
 _held: ContextVar[list[str] | None] = ContextVar("basis.core.verbs.held", default=None)
