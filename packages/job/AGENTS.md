@@ -39,8 +39,8 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
 | `testing.py` | `ContractTests`, the import check's `FORBIDDEN`, and the builders `frame` and `inputs`. |
 | core `testing.py` | What every part's contract tests share: the import chains, with basis's portions named. |
 | core `errors.py` | `BasisError`, the failures basis raises on purpose, which print as one line, and `deliberate`, for a call that raises a builtin error on purpose. |
-| `new.py`, `sync.py`, `templates/`, `skills/` | `basis-job new repo`, `basis new job` and `basis sync`: a job repo from the example and the templates, declaring the job part, and its agent files, whose skills are named `job-*`. |
-| core `new.py`, `sync.py`, `templates/` | What `new` and `sync` share across parts: the shared templates, the sources for a repo's basis packages, and the files basis owns in a repo, which `sync` writes and removes. |
+| `new.py`, `sync.py`, `templates/`, `skills/` | `basis-job new repo`, `basis new job` and `basis sync`: a job repo from the example and the templates, declaring the job part, and what the part writes in it: its block of `AGENTS.md`, its skills, named `job-*`, and its line of the Dockerfile. |
+| core `new.py`, `sync.py`, `hooks.py`, `hygiene.py`, `templates/` | What `new` and `sync` share across parts: the shared templates, the sources for a repo's basis packages, the files basis owns in a repo, which `sync` writes and removes, with the framework files in `templates/sync/`, the git setting that runs a repo's hooks, and the checks of staged files the commit hook runs. |
 | core `verbs.py`, `command.py`, `check.py` | The interface a part gives the `basis` command; the command, which finds the repo's declared parts and runs core's verbs and theirs, printing every failure as one `ERROR` line; and `basis check`'s steps. |
 | `example/` | The example job, laid out as a job's folder, with its fixture and tests; `basis new job` copies it, leaving out its `ruff.toml`. |
 | `docs/` | The docs for job authors, which `basis docs` prints. |
@@ -97,4 +97,7 @@ To check what `basis-job new repo` generates, from the root, whose checkout `--f
 uv run basis-job new repo pricing-etl --dir SCRATCH --framework-path .   # its first job is positions
 cd SCRATCH/pricing-etl && uv run basis new job rates
 uv run basis check
+git add --all && git commit -m "First commit"   # the commit hook runs basis check
 ```
+
+A repo whose image builds takes basis-job from git, as the root's AGENTS.md says.

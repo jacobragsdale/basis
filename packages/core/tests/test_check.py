@@ -1,11 +1,14 @@
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
 
-from basis.core import sync
+from basis.core import hooks, sync
 from basis.core.check import Runner, check
 from basis.core.sync import AgentFiles
+
+type Git = Callable[..., str]
+"""conftest's `git` fixture."""
 
 FILES = AgentFiles("basis-alpha", "the alpha block\n", {})
 
@@ -28,8 +31,11 @@ def errors(capsys: pytest.CaptureFixture[str]) -> list[str]:
 
 
 @pytest.fixture
-def repo(tmp_path: Path) -> Path:
+def repo(tmp_path: Path, git: Git) -> Path:
+    """A clone whose files are what basis writes, and which runs its hooks."""
     sync.write(tmp_path, [FILES])
+    git(tmp_path, "init", "--quiet")
+    hooks.ensure(tmp_path)
     return tmp_path
 
 
@@ -62,4 +68,59 @@ def test_agent_files_that_differ_from_what_the_parts_write_fail_and_say_to_sync(
     (repo / ".agents/skills/job-gone").mkdir(parents=True)
     _, run = runner()
     assert check(repo, [FILES], run=run) == 1
-    assert errors(capsys) == ["ERROR: AGENTS.md, .agents/skills/job-gone do not match what the installed parts write: run `uv run basis sync`, which rewrites or removes each"]
+    assert errors(capsys) == ["ERROR: AGENTS.md, .agents/skills/job-gone do not match what the installed basis writes: run `uv run basis sync`, which rewrites or removes each"]
+
+
+def test_claude_settings_basis_cannot_read_fail_and_every_other_step_still_runs(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    (repo / ".claude/settings.json").write_text("{", encoding="utf-8")
+    ran, run = runner()
+    assert check(repo, [FILES], run=run) == 1
+    assert len(ran) == 5
+    [line] = errors(capsys)
+    assert line.startswith(f"ERROR: {repo / '.claude/settings.json'} is not JSON, so basis cannot add its rules to it (")
+    assert line.endswith("): fix it, or remove it, and run `uv run basis sync`")
+
+
+def test_claude_settings_basis_cannot_read_hide_no_other_drift(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    (repo / ".claude/settings.json").write_text("{", encoding="utf-8")
+    (repo / ".githooks/pre-push").write_text("#!/bin/sh\n", encoding="utf-8")
+    _, run = runner()
+    assert check(repo, [FILES], run=run) == 1
+    assert [line.split(" ")[1] for line in errors(capsys)] == [f"{repo / '.claude/settings.json'}", ".githooks/pre-push"]
+
+
+def test_files_of_the_repos_own_at_paths_basis_writes_fail_and_say_to_adopt_them(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    (repo / "Dockerfile").write_text("FROM python:3.14-slim\n", encoding="utf-8")
+    (repo / "CLAUDE.md").write_text("Read AGENTS.md.\n", encoding="utf-8")
+    _, run = runner()
+    assert check(repo, [FILES], run=run) == 1
+    adopt = "run `uv run basis sync --adopt`, which saves each beside itself as NAME.before-basis, for you to compare and delete, and writes basis's"
+    assert errors(capsys) == [f"ERROR: Dockerfile, CLAUDE.md are the repo's own, at paths basis writes, so basis leaves them alone: {adopt}"]
+
+
+def test_staged_checks_the_files_staged_for_a_commit_first(repo: Path, git: Git, capsys: pytest.CaptureFixture[str]) -> None:
+    (repo / "deploy.toml").write_text("[broken\n", encoding="utf-8")
+    git(repo, "add", "deploy.toml")
+    ran, run = runner()
+    assert check(repo, [FILES], run=run) == 0
+    assert check(repo, [FILES], run=run, staged=True) == 1
+    assert len(ran) == 10
+    [line] = errors(capsys)
+    assert line.startswith("ERROR: deploy.toml is not TOML (")
+
+
+def test_check_points_a_clone_that_names_no_hooks_folder_at_the_repos_hooks(tmp_path: Path, git: Git, capsys: pytest.CaptureFixture[str]) -> None:
+    sync.write(tmp_path, [FILES])
+    git(tmp_path, "init", "--quiet")
+    _, run = runner()
+    assert check(tmp_path, [FILES], run=run) == 0
+    assert git(tmp_path, "config", "core.hooksPath") == ".githooks\n"
+    assert not [line for line in capsys.readouterr().err.splitlines() if line.startswith("ERROR")]  # its log record may be there
+
+
+def test_a_clone_that_runs_other_hooks_fails_and_says_how_to_run_the_repos(repo: Path, git: Git, capsys: pytest.CaptureFixture[str]) -> None:
+    git(repo, "config", "core.hooksPath", "elsewhere")
+    ran, run = runner()
+    assert check(repo, [FILES], run=run) == 1
+    assert len(ran) == 5
+    assert errors(capsys) == ["ERROR: git runs this clone's hooks from elsewhere, not .githooks/, so the repo's commit and push hooks never run: run `git config core.hooksPath .githooks`"]

@@ -1,0 +1,4 @@
+# This file is managed by basis: `basis sync` rewrites it from the installed version, and `basis check` fails when it differs.
+# Every text file is checked out with LF line endings, on Windows as in WSL, so a clone behaves the same in both: the
+# hooks run in Git's sh, and `basis check` compares the files basis writes byte for byte.
+* text=auto eol=lf

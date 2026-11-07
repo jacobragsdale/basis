@@ -1,30 +1,87 @@
-"""The files `basis sync` writes into a repo from its parts' installed versions, and removes once no part writes them:
-each part's block of `AGENTS.md`, between markers, and its skills in `.agents/skills/`, the conventions every agent
-reads. They are copies, not symlinks, since Git on Windows checks a symlink out as a text file by default.
+"""The files `basis sync` writes into a repo from the installed versions of basis and its parts, and removes once
+none of them writes them. They are copies, not symlinks, since Git on Windows checks a symlink out as a text file by
+default, and they are written with LF line endings and compared byte for byte, as `.gitattributes` checks them out.
 
 basis owns, in a repo:
 
-- each block of `AGENTS.md` whose begin marker says `sync` writes it; what is outside the blocks is the repo's own;
-- each folder of `.agents/skills/` whose name starts with a part's name and a dash, such as `job-new`;
+- the framework files, `REPO_FILES`: the Dockerfile, whose last lines are each part's `image` and whose apt packages
+  include those `[tool.basis] apt-packages` names, the deploy pipeline, the commit and push hooks, and
+  `.gitattributes`;
+- each block of `AGENTS.md` whose begin marker says `sync` writes it: basis's own, `CORE`, and each part's; what is
+  outside the blocks is the repo's own;
+- `CLAUDE.md`, which holds only `@AGENTS.md`: Claude Code reads `AGENTS.md` only through it;
+- each folder of `.agents/skills/` whose name starts with a part's name and a dash, such as `job-new`, and its copy in
+  `.claude/skills/`, the one skills folder Claude Code reads;
+- the rules `DENY` in `.claude/settings.json`, which keeps every other key and rule it holds;
 - each file whose first lines carry `MARKER`;
 - each path a part lists as `retired`: what an earlier version of it wrote before the marker existed.
 
-`stale` lists what differs from what the parts write, whether to rewrite or to remove, which `basis check` reports,
-and `write` makes the repo match, which `basis sync` does. Both take every part the repo has at once, since what one
-part no longer writes may be another's."""
+`CLAUDE.md` and `.claude/settings.json` carry no marker: the one holds a single line, and the other is JSON, which has
+no comments. A file the repo already holds at one of these paths, which basis did not write, is the repo's own until
+it is adopted: one without the marker, a `CLAUDE.md` that holds anything else, or settings that hold none of basis's
+rules. `write` replaces it only when told to adopt it, after saving it beside itself as `NAME.before-basis`.
 
+`plan` works out, once, what basis writes in a repo and what stops it: files the repo's own, and files basis cannot
+read, each of which leaves every other file to be checked and written. `stale` lists what differs, whether to rewrite
+or to remove, which `basis check` reports, and `write` makes the repo match, which `basis sync` does. Both take every
+part the repo has at once, since what one part no longer writes may be another's."""
+
+import json
 import os
 import re
 import shutil
-from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+import stat
+import tomllib
+from collections.abc import Callable, Iterator, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from basis.core.errors import BasisError
+from basis.core.hooks import FOLDER, HOOKS
 
 PARTS = ("job", "api", "optim")
 """basis's parts, by name: each owns the skill folders its name and a dash begin."""
 MARKER = "managed by basis: `basis sync` rewrites it"
 """What a file basis writes carries in its first lines, in a comment of the file's own syntax."""
+CORE = "basis"
+"""The name of basis's own block of `AGENTS.md`."""
+TEMPLATES = Path(__file__).parent / "templates" / "sync"
+REPO_FILES = {"Dockerfile": "Dockerfile", "azure-pipelines.yml": "azure-pipelines.yml", ".gitattributes": "gitattributes", **{f"{FOLDER}/{hook}": hook for hook in HOOKS}}
+"""Each framework file, by its path in a repo, and its template in `TEMPLATES`, whose `{image}` the parts' lines
+replace, and `{apt-packages}` the repo's. A template's name has no leading dot, so no tool takes it for this repo's
+own file."""
+EXECUTABLE = frozenset(f"{FOLDER}/{hook}" for hook in HOOKS)
+"""The files git runs, which it skips unless they are executable: on Windows, Git runs a hook whatever its mode."""
 SKILLS = Path(".agents") / "skills"
+CLAUDE_SKILLS = Path(".claude") / "skills"
+CLAUDE_SETTINGS = Path(".claude") / "settings.json"
+CLAUDE_MD = "@AGENTS.md\n"
+APT = "apt-packages"
+"""The `[tool.basis]` key naming the Debian packages a repo's image installs beside basis's own, such as `libpq5`."""
+BEFORE = ".before-basis"
+"""What `write` adds to the name of a file of the repo's own that it adopts, to keep it for its owner to compare."""
+DENY = (
+    "Bash(git commit *--no-verify*)",
+    "Bash(git push *--no-verify*)",
+    "Bash(git * commit *--no-verify*)",
+    "Bash(git * push *--no-verify*)",
+    "Bash(git commit -n*)",
+    "Bash(git commit -an*)",
+    "Bash(git commit * -n)",
+    "Bash(git commit * -n -*)",
+    "Bash(git commit * -nm *)",
+    "Bash(git commit * -an *)",
+    "Bash(git commit * -anm *)",
+)  # fmt: skip
+"""Claude Code's rules against skipping the hooks. They refuse `--no-verify` anywhere in a commit or a push, after
+`git` alone or after options such as `-C DIR`; and `-n`, a commit's short form of it: as the first option, alone or
+bundled (`-n`, `-nm`, `-an`, `-anm`), as the last, before another option, and in the bundles `-nm`, `-an` and `-anm`
+after other options. `-n` alone before a message is left alone, since a rule for it would refuse a commit whose
+message holds ` -n `. A rule matches the command as an agent writes it, not every way of running git: the rules are
+best effort, and the push hook, which checks every pushed commit, is the backstop."""
+SCHEMA = "https://json.schemastore.org/claude-code-settings.json"
+_APT_PACKAGE = re.compile(r"^[a-z0-9][a-z0-9+.-]+(=[A-Za-z0-9.+~:-]+)?$")
+"""A Debian package's name, with an optional `=VERSION`: what may go in the image's `apt-get install`."""
 _HEAD = 3
 """Lines a file's marker may be in: the first line can be one a format needs, such as a Dockerfile's `# syntax=`."""
 _LINE = 512
@@ -33,10 +90,14 @@ _UNREAD = {".git", ".venv", "venv", "node_modules", "__pycache__", ".ruff_cache"
 """Folders whose files basis never writes, so no marker is looked for in them."""
 _BLOCK = re.compile(r"<!-- (?P<name>[\w.-]+):begin \(written by `[\w -]*sync`[^)]*\) -->.*?<!-- (?P=name):end -->(?P<tail>\n*)", re.DOTALL)
 
+type Problem = tuple[str, str]
+"""A reason and its fix, which `basis` prints as one `ERROR` line."""
+
 
 @dataclass(frozen=True)
 class AgentFiles:
-    """One part's agent files, as its installed version writes them."""
+    """What one part writes in a repo, as its installed version writes it: its agent files, and its lines of the
+    repo's Dockerfile."""
 
     part: str
     """The part's distribution, which names its block, such as `basis-job`."""
@@ -44,6 +105,9 @@ class AgentFiles:
     """The part's block of `AGENTS.md`, without its markers."""
     skills: dict[str, str]
     """Each skill's `SKILL.md`, by its folder's name, which starts with the part's name and a dash."""
+    image: str = ""
+    """The part's lines of the Dockerfile, before its entry point: a comment giving the command a container of the
+    part runs, such as a job's `run JOB --publish`, and any instruction the part needs."""
     formerly: tuple[str, ...] = ()
     """Names the part's block had before, such as `etl-framework`, whose blocks `sync` replaces in place."""
     retired: tuple[str, ...] = ()
@@ -63,53 +127,248 @@ class AgentFiles:
         return f"{self.begin}\n{self.block}{self.end}\n"
 
 
+class SyncError(BasisError, ValueError):
+    """A file basis writes, or writes part of, which it cannot work out what to write in."""
+
+    def __init__(self, reason: str, fix: str) -> None:
+        super().__init__(f"{reason}: {fix}")
+        self.problem: Problem = (reason, fix)
+
+
+@dataclass(frozen=True)
+class Plan:
+    """What basis writes in a repo, worked out once, and what stops it writing some of it."""
+
+    repo: Path
+    files: dict[Path, str]
+    """Each file basis writes, and what it should hold: all but those in `unclaimed` and `unreadable`."""
+    unclaimed: dict[Path, str]
+    """Files the repo already holds at paths basis writes, which basis did not write, and what basis would write
+    there."""
+    unreadable: dict[Path, Problem]
+    """Files basis cannot work out what to write in, each with why and the fix."""
+    unwritten: list[Path]
+    """What basis owns that nothing writes now."""
+
+    def stale(self) -> list[Path]:
+        """Each file that does not hold what basis writes, or a hook git would skip, and each that nothing writes."""
+        return [path for path, text in self.files.items() if not _holds(self.repo, path, text)] + self.unwritten
+
+    def problems(self) -> list[Problem]:
+        """What stops basis writing some of its files: one line for the files of the repo's own, and one for each it
+        cannot read."""
+        return [*self.unreadable.values(), *_unclaimed(self.repo, list(self.unclaimed))]
+
+
+@dataclass(frozen=True)
+class Synced:
+    """What `write` did, and what it could not do."""
+
+    repo: Path
+    changed: list[Path] = field(default_factory=list[Path])
+    """Each file written or removed."""
+    adopted: list[Path] = field(default_factory=list[Path])
+    """Each file of the repo's own that was replaced, after being saved beside itself as `NAME.before-basis`."""
+    refused: list[Path] = field(default_factory=list[Path])
+    """Each file of the repo's own left alone, since `write` was not told to adopt it."""
+    unwritable: dict[Path, Problem] = field(default_factory=dict[Path, Problem])
+    """Each file left alone because basis cannot read it, or cannot keep what it holds now."""
+
+    def problems(self) -> list[Problem]:
+        return [*self.unwritable.values(), *_unclaimed(self.repo, self.refused)]
+
+
+def core() -> AgentFiles:
+    """basis's own block of `AGENTS.md`, which every repo has, whatever its parts."""
+    return AgentFiles(CORE, (TEMPLATES / "agents.md").read_text(encoding="utf-8"), {})
+
+
 def skills(folder: Path) -> dict[str, str]:
     """Each skill's `SKILL.md` in `folder`, by its folder's name."""
     return {child.name: (child / "SKILL.md").read_text(encoding="utf-8") for child in sorted(folder.iterdir()) if (child / "SKILL.md").exists()}
 
 
-def expected(repo: Path, parts: Sequence[AgentFiles]) -> dict[Path, str]:
-    """Each file the parts write in `repo`, and what it should hold."""
+def plan(repo: Path, parts: Sequence[AgentFiles]) -> Plan:
+    """What basis and `parts` write in `repo`, and what stops them."""
     agents = repo / "AGENTS.md"
-    current = agents.read_text(encoding="utf-8") if agents.exists() else "# Agent guide\n\n"
-    found = {agents: _agents(current, parts)}
+    current = _read(agents).replace("\r\n", "\n") if agents.exists() else "# Agent guide\n\n"
+    image = "".join(files.image for files in parts)
+    made: dict[Path, Callable[[], tuple[str, bool]]] = {
+        **{repo / path: _template(repo, repo / path, template, image) for path, template in REPO_FILES.items()},
+        agents: lambda: (_agents(current, [*parts, core()]), True),
+        repo / "CLAUDE.md": lambda: (CLAUDE_MD, not (repo / "CLAUDE.md").exists() or _read(repo / "CLAUDE.md").replace("\r\n", "\n") == CLAUDE_MD),
+        repo / CLAUDE_SETTINGS: lambda: _claude_settings(repo / CLAUDE_SETTINGS),
+    }
     for files in parts:
-        found.update({repo / SKILLS / name / "SKILL.md": text for name, text in files.skills.items()})
-    return found
+        for name, text in files.skills.items():
+            made.update({repo / folder / name / "SKILL.md": (lambda text=text: (text, True)) for folder in (SKILLS, CLAUDE_SKILLS)})
+    written: dict[Path, str] = {}
+    unclaimed: dict[Path, str] = {}
+    unreadable: dict[Path, Problem] = {}
+    for path, make in made.items():
+        try:
+            text, claimed = make()
+        except SyncError as error:
+            unreadable[path] = error.problem
+            continue
+        (written if claimed or not path.exists() else unclaimed)[path] = text
+    return Plan(repo, written, unclaimed, unreadable, _unwritten(repo, parts, set(made)))
 
 
-def unwritten(repo: Path, parts: Sequence[AgentFiles]) -> list[Path]:
-    """What basis owns in `repo` that none of `parts` writes now."""
-    wanted = expected(repo, parts)
-    folders = [folder for folder in _children(repo / SKILLS) if folder.is_dir() and folder.name.startswith(tuple(f"{part}-" for part in PARTS))]
+def stale(repo: Path, parts: Sequence[AgentFiles]) -> list[Path]:
+    """What `write` would change: each file that does not hold what basis and the parts write, or a hook git would
+    skip, and each file that none of them writes. Files of the repo's own and files basis cannot read are not among
+    them: `Plan.problems` says what they are."""
+    return plan(repo, parts).stale()
+
+
+def write(repo: Path, parts: Sequence[AgentFiles], *, adopt: bool = False) -> Synced:
+    """Rewrite each file that does not hold what basis and the parts write, remove each that none of them writes, and
+    with `adopt`, replace each file of the repo's own after saving it as `NAME.before-basis`."""
+    found = plan(repo, parts)
+    done = Synced(repo, unwritable=dict(found.unreadable))
+    for path, text in found.files.items():
+        if not _holds(repo, path, text):
+            _put(repo, path, text)
+            done.changed.append(path)
+    for path, text in found.unclaimed.items():
+        before = path.with_name(path.name + BEFORE)
+        if not adopt:
+            done.refused.append(path)
+        elif before.exists():
+            name = before.relative_to(repo).as_posix()
+            done.unwritable[path] = (f"{name} is there from an earlier adoption", "compare it with what basis wrote, delete it, and run `uv run basis sync --adopt` again")
+        else:
+            path.rename(before)
+            _put(repo, path, text)
+            done.adopted.append(path)
+            done.changed.append(path)
+    for path in found.unwritten:
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+        done.changed.append(path)
+    return done
+
+
+def apt_packages(repo: Path) -> tuple[str, ...]:
+    """The Debian packages the repo's `pyproject.toml` names as `[tool.basis] apt-packages`, beside basis's own."""
+    pyproject = repo / "pyproject.toml"
+    if not pyproject.is_file():
+        return ()
+    fix = f'give [tool.basis] {APT} = ["libpq5"], a list of Debian package names, each with an optional =VERSION, and run `uv run basis sync`'
+    try:
+        tool: object = tomllib.loads(pyproject.read_text(encoding="utf-8")).get("tool")
+    except tomllib.TOMLDecodeError as error:
+        msg = f"{pyproject} is not TOML, so the Dockerfile's packages are unknown ({error})"
+        raise SyncError(msg, "fix it") from error
+    table = tool.get("basis") if isinstance(tool, dict) else None
+    names = table.get(APT, []) if isinstance(table, dict) else []
+    if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+        msg = f"{pyproject}'s [tool.basis] {APT} is not a list of package names"
+        raise SyncError(msg, fix)
+    if bad := [str(name) for name in names if not _APT_PACKAGE.match(str(name))]:
+        one = len(bad) == 1
+        msg = f"{pyproject}'s [tool.basis] {APT} has {', '.join(map(repr, bad))}, which {'is no Debian package name' if one else 'are not Debian package names'}"
+        raise SyncError(msg, fix)
+    return tuple(str(name) for name in names)
+
+
+def _template(repo: Path, path: Path, template: str, image: str) -> Callable[[], tuple[str, bool]]:
+    """The text of the framework file at `path`, and whether the file the repo holds there, if any, is basis's: one
+    that carries the marker."""
+
+    def make() -> tuple[str, bool]:
+        text = (TEMPLATES / template).read_text(encoding="utf-8").replace("{image}", image)
+        if "{apt-packages}" in text:
+            text = text.replace("{apt-packages}", "".join(f" {name}" for name in apt_packages(repo)))
+        return text, _carries_marker(path)
+
+    return make
+
+
+def _unwritten(repo: Path, parts: Sequence[AgentFiles], wanted: set[Path]) -> list[Path]:
+    """What basis owns in `repo` that neither it nor any of `parts` writes now: none of `wanted`."""
+    prefixes = tuple(f"{part}-" for part in PARTS)
+    folders = [folder for skills in (SKILLS, CLAUDE_SKILLS) for folder in _children(repo / skills) if folder.is_dir() and folder.name.startswith(prefixes)]
     found = {folder for folder in folders if folder / "SKILL.md" not in wanted}
     found |= {path for path in _marked(repo) if path not in wanted}
     found |= {repo / path for files in parts for path in files.retired if (repo / path).exists()}
     return sorted(found)
 
 
-def stale(repo: Path, parts: Sequence[AgentFiles]) -> list[Path]:
-    """What `write` would change: each file that does not hold what the parts write, and each that none of them writes."""
-    differ = [path for path, text in expected(repo, parts).items() if not path.exists() or path.read_text(encoding="utf-8") != text]
-    return differ + unwritten(repo, parts)
+def _unclaimed(repo: Path, paths: list[Path]) -> list[Problem]:
+    if not paths:
+        return []
+    names = ", ".join(path.relative_to(repo).as_posix() for path in paths)
+    one = len(paths) == 1
+    return [
+        (
+            f"{names} {'is' if one else 'are'} the repo's own, at {'a path' if one else 'paths'} basis writes, so basis leaves {'it' if one else 'them'} alone",
+            "run `uv run basis sync --adopt`, which saves each beside itself as NAME.before-basis, for you to compare and delete, and writes basis's",
+        )
+    ]
 
 
-def write(repo: Path, parts: Sequence[AgentFiles]) -> list[Path]:
-    """Rewrite each file that does not hold what the parts write, remove each that none of them writes, and return
-    them."""
-    changed: list[Path] = []
-    for path, text in expected(repo, parts).items():
-        if not path.exists() or path.read_text(encoding="utf-8") != text:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
-            changed.append(path)
-    for path in unwritten(repo, parts):
-        if path.is_dir():
-            shutil.rmtree(path)
-        else:
-            path.unlink()
-        changed.append(path)
-    return changed
+def _put(repo: Path, path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8", newline="")
+    if _runs(repo, path):
+        path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def _holds(repo: Path, path: Path, text: str) -> bool:
+    """Whether `path` holds `text`, byte for byte, and git would run it if it is a hook."""
+    if not path.is_file() or _read(path) != text:
+        return False
+    return not _runs(repo, path) or os.name == "nt" or bool(path.stat().st_mode & stat.S_IXUSR)
+
+
+def _runs(repo: Path, path: Path) -> bool:
+    return path.relative_to(repo).as_posix() in EXECUTABLE
+
+
+def _read(path: Path) -> str:
+    """`path`'s text as it is, so a line ending other than LF is a difference."""
+    return path.read_text(encoding="utf-8", newline="")
+
+
+def _carries_marker(path: Path) -> bool:
+    """Whether `path` is a file whose first lines carry `MARKER`, or no file at all."""
+    if not path.exists():
+        return True
+    try:
+        with path.open(encoding="utf-8") as opened:
+            return any(MARKER in opened.readline(_LINE) for _ in range(_HEAD))
+    except UnicodeDecodeError, OSError:  # a binary or unreadable file carries no marker
+        return False
+
+
+def _claude_settings(path: Path) -> tuple[str, bool]:
+    """`.claude/settings.json` with every rule of `DENY` (as it is when it has them all, and otherwise with the missing
+    ones added and every other key and rule kept), and whether the file there is one basis wrote: one that holds at
+    least one of its rules."""
+    if not path.exists():
+        return _json({"$schema": SCHEMA, "permissions": {"deny": list(DENY)}}), True
+    current = _read(path)
+    fix = "fix it, or remove it, and run `uv run basis sync`"
+    try:
+        data: object = json.loads(current)
+    except json.JSONDecodeError as error:
+        msg = f"{path} is not JSON, so basis cannot add its rules to it ({error})"
+        raise SyncError(msg, fix) from error
+    if not isinstance(data, dict) or not isinstance(permissions := data.get("permissions", {}), dict) or not isinstance(deny := permissions.get("deny", []), list):
+        msg = f"{path} is not Claude Code's settings, an object whose permissions.deny is a list of rules"
+        raise SyncError(msg, fix)
+    claimed = any(rule in deny for rule in DENY)
+    if not (missing := [rule for rule in DENY if rule not in deny]):
+        return current, claimed
+    return _json({**data, "permissions": {**permissions, "deny": [*deny, *missing]}}), claimed
+
+
+def _json(value: object) -> str:
+    return json.dumps(value, indent=2, ensure_ascii=False) + "\n"
 
 
 def _agents(current: str, parts: Sequence[AgentFiles]) -> str:
@@ -147,10 +406,5 @@ def _marked(repo: Path) -> Iterator[Path]:
         names[:] = sorted(name for name in names if name not in _UNREAD and not (Path(folder) / name / "pyvenv.cfg").exists())
         for name in sorted(files):
             path = Path(folder) / name
-            try:
-                with path.open(encoding="utf-8") as opened:
-                    head = [opened.readline(_LINE) for _ in range(_HEAD)]
-            except UnicodeDecodeError, OSError:  # a binary or unreadable file carries no marker
-                continue
-            if any(MARKER in line for line in head):
+            if path.exists() and _carries_marker(path):
                 yield path

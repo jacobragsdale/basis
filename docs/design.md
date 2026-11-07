@@ -285,9 +285,10 @@ is one grep away; Anthropic's C-compiler experiment found the same.
 
 The repos have no CI, so the gates run on the desktop, where the agent works. The commit hook formats and lint-fixes the
 staged files with ruff and then runs `basis check`. The push hook runs `basis check --full`, which adds `regress` where
-the run store is reachable and the QA tier where QA settings exist. Both hooks are committed under `.githooks/`, and any
-`basis` command sets the clone's `core.hooksPath` when it is unset, so a fresh clone has them after its first `basis`
-command, and `basis check` fails, with that fix, when they are missing.
+the run store is reachable and the QA tier where QA settings exist. Both hooks are committed under `.githooks/`, and the verbs
+a developer runs on a clone (`basis check`, `sync` and `new`, and `dev` and `doctor` once they exist) set its
+`core.hooksPath` when it is unset, so a fresh clone has them after its first check, and `basis check` fails, with that
+fix, when they are missing. The verbs a container or a scheduler runs, such as `basis run`, leave git alone.
 
 The QA tier runs a repo's parts against the QA databases from the desktop, with the safeguards of optim's and
 etl-framework's end-to-end suites: it refuses to run unless every configured source carries the QA marker, and writes

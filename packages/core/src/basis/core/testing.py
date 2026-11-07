@@ -7,7 +7,7 @@ from collections.abc import Iterable
 import grimp
 
 FORBIDDEN = (
-    "basis.core.check", "basis.core.command", "basis.core.databases", "basis.core.new", "basis.core.publish",
+    "basis.core.check", "basis.core.command", "basis.core.databases", "basis.core.hooks", "basis.core.hygiene", "basis.core.new", "basis.core.publish",
     "basis.core.runs", "basis.core.settings", "basis.core.snapshots", "basis.core.storage", "basis.core.sync",
     "basis.core.testing", "basis.core.verbs", "mssql_python", "oracledb",
     "pyodbc", "pymssql", "cx_Oracle", "sqlalchemy", "psycopg", "psycopg2", "snowflake", "httpx", "requests", "urllib3",

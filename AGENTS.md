@@ -39,10 +39,14 @@ To check what `basis-job new repo` generates, from the root:
 ```sh
 uv run basis-job new repo pricing-etl --dir SCRATCH --framework-path .   # its first job is positions
 cd SCRATCH/pricing-etl && uv run basis new job rates
-uv run basis check                  # the agent files, the lockfile, ruff, ty and pytest, as a commit needs them
+uv run basis check                  # the framework files, the hooks, the lockfile, ruff, ty and pytest
+git add --all && git commit -m "First commit"   # the commit hook fixes, formats and runs basis check
 ```
 
-CI runs the same on every pull request that changes more than docs.
+A repo whose image builds needs basis from git rather than a checkout: push the branch, and make one with
+`uvx --from 'git+https://github.com/jacobragsdale/basis@BRANCH#subdirectory=packages/job' basis-job new repo loads`,
+which takes basis from the commit uvx installed. CI runs all of this on every pull request that changes more than
+docs, and builds that repo's image and publishes its job to SQL Server.
 
 ## The basis command
 
@@ -64,7 +68,21 @@ holds the interface, and its docstring is the reference.
   prints as one line too. Any other exception is a defect, whose traceback is logged first. A call that raises a
   builtin error on purpose, such as a lookup that finds no run, goes in `with deliberate(LookupError):`. Results a
   caller reads are JSON on stdout.
-- `basis sync` owns each part's block of `AGENTS.md`, each `.agents/skills/PART-*` folder, and each file whose first
-  lines carry `basis.core.sync.MARKER`; it removes those no installed part writes now, and `basis check` reports them.
+- `basis sync` owns the framework files (`basis.core.sync.REPO_FILES`: the Dockerfile, `azure-pipelines.yml`, the
+  hooks in `.githooks/` and `.gitattributes`, from `packages/core/src/basis/core/templates/sync/`), basis's own block
+  of `AGENTS.md` and each part's, `CLAUDE.md`, each `.agents/skills/PART-*` folder and its copy in `.claude/skills/`,
+  the deny rules in `.claude/settings.json`, and each file whose first lines carry `basis.core.sync.MARKER`. It writes
+  them with LF line endings, removes those nothing writes now, and `basis check` reports any that differ, byte for
+  byte. A part adds its lines of the Dockerfile as its `AgentFiles.image`, and a repo its Debian packages as
+  `[tool.basis] apt-packages`. `sync.plan` works this out once per call.
+- A file of the repo's own at a path basis writes (one without the marker, a `CLAUDE.md` holding anything else, or
+  settings with none of basis's rules) is left alone, and a file basis cannot read, such as settings that are not
+  JSON, is one `ERROR` line; every other file is still checked and written. `basis sync --adopt` saves each file of
+  the repo's own as `NAME.before-basis` and writes basis's.
+- `basis check`, `sync` and `new` point a clone that names no hooks folder at the repo's `.githooks/`
+  (`basis.core.hooks.ensure`); the verbs a container runs, such as `run`, leave git alone. `basis check` fails, with
+  the fix, when the clone runs other hooks or is no clone. The hooks are POSIX sh, which Git for Windows runs too. The
+  commit hook ends with `basis check --staged`, whose checks of the staged files are `basis.core.hygiene`'s; the push
+  hook checks each pushed commit, in a temporary worktree inside the git folder when it is not a clean HEAD.
 - A command that runs before a repo exists, such as `basis-job new repo NAME`, is a `standalone` command in
   `basis.core.command`, with the same failures.

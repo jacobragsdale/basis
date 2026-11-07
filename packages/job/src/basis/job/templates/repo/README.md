@@ -12,7 +12,10 @@ uv run python jobs/{job}/main.py   # run a job, from your IDE or here; it never 
 ```
 
 `uv run basis --help` lists every command this repo has, `uv run basis check` runs every check a commit must pass,
-`uv run basis docs` lists the framework's docs, and `uv run basis docs job/tutorial` prints the tutorial.
+`uv run basis docs` lists the framework's docs, and `uv run basis docs job/tutorial` prints the tutorial. The hooks in
+`.githooks/`, which `basis check` turns on, run `basis check` on every commit and on each commit pushed. A Debian
+package the image needs goes in `pyproject.toml`'s `[tool.basis] apt-packages`, and `uv run basis sync` writes it
+into the Dockerfile.
 
 ## Where each change goes
 
@@ -27,5 +30,7 @@ uv run python jobs/{job}/main.py   # run a job, from your IDE or here; it never 
 
 ## Production
 
-The image runs `basis run JOB --params jobs/JOB/params/default.json --interval START..END --publish`. Build it with the
-commit, which every run records: `docker build --build-arg GIT_SHA=$(git rev-parse HEAD) .`
+The image runs `basis run JOB --params jobs/JOB/params/default.json --interval START..END --publish`, and its settings
+are the variables `.env.example` lists. Build it with the commit, which every run records:
+`docker build --build-arg GIT_SHA=$(git rev-parse HEAD) .`. `azure-pipelines.yml` builds and pushes it from `main`,
+once basis's release fills in the firm's pipeline templates.

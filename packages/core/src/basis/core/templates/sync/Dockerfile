@@ -1,6 +1,10 @@
 # syntax=docker/dockerfile:1
-# The image a scheduler runs: `basis run JOB --params jobs/JOB/params/default.json --interval START..END --publish`.
-# Build it with the commit, which every run's snapshot records: docker build --build-arg GIT_SHA=$(git rev-parse HEAD) .
+# This file is managed by basis: `basis sync` rewrites it from the installed version, and `basis check` fails when it differs.
+# The repo's one image, whose first process is tini, running `basis` with the container's command: the end of this file
+# lists the command for each part the repo has. Build it with the commit, which every run records:
+#   docker build --build-arg GIT_SHA=$(git rev-parse HEAD) .
+# A Debian package the repo's code needs goes in pyproject.toml's [tool.basis] apt-packages, which `basis sync` writes
+# into the image's packages below; never edit this file.
 
 # The build stage installs the dependencies. git is here, and not in the image, for basis's packages taken from git.
 FROM python:3.14-slim AS build
@@ -22,13 +26,18 @@ RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
 # so basis run as the first process would carry on past a stop. A stopped run commits nothing: its transactions roll back.
 FROM python:3.14-slim
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends libltdl7 libkrb5-3 libgssapi-krb5-2 tini \
+    && apt-get install --yes --no-install-recommends libltdl7 libkrb5-3 libgssapi-krb5-2 tini{apt-packages} \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --no-create-home basis
 WORKDIR /app
 COPY --from=build /app /app
+# The commit comes last, so a build of another commit with the same dependencies reuses every layer above.
 ARG GIT_SHA
-ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 BASIS_GIT_SHA=$GIT_SHA
+RUN test -n "$GIT_SHA" || { echo 'ERROR: the image would record no commit: build it with --build-arg GIT_SHA=$(git rev-parse HEAD)' >&2; exit 1; }
+LABEL org.opencontainers.image.revision=$GIT_SHA
+ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 BASIS_GIT_SHA=$GIT_SHA
 USER 10001
-ENTRYPOINT ["tini", "--", "basis"]
+# The container's command is what follows `basis`. Whatever schedules or serves the container gives it, and with none
+# the container prints `basis --help`. For each part:
+{image}ENTRYPOINT ["tini", "--", "basis"]
 CMD ["--help"]
