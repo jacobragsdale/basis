@@ -1,0 +1,57 @@
+# This file is managed by basis: `basis sync` rewrites it from the installed version, and `basis check` fails when it differs.
+# The deploy pipeline: check the commit, then build the repo's one image and push it, tagged with the commit.
+#
+# STUB. The steps that install uv, reach the internal feed, and build, push and deploy the image are the maintainer's
+# team's pipeline templates, which basis does not know yet; spike 0.1 supplies them, and a basis release replaces each
+# value marked STUB below. Until then, register no pipeline from this file. Pull requests are checked on the desktop,
+# by the hooks in .githooks/; the day the firm builds CI, a branch policy on main that requires this pipeline makes
+# its check stage the gate.
+
+trigger:
+  branches:
+    include: [main]
+
+resources:
+  repositories:
+    - repository: templates
+      type: git
+      name: STUB-project/STUB-pipeline-templates  # STUB: the team's templates repository
+      ref: refs/heads/main
+
+variables:
+  image: $(Build.Repository.Name)
+
+stages:
+  - stage: check
+    displayName: basis check
+    jobs:
+      - job: check
+        pool:
+          vmImage: ubuntu-latest  # STUB: the team's agent pool
+        steps:
+          - checkout: self
+          - script: curl -LsSf https://astral.sh/uv/0.13.7/install.sh | sh  # STUB: uv as the team's agents get it
+            displayName: Install uv
+          - script: |
+              export PATH="$HOME/.local/bin:$PATH"
+              uv sync --locked
+              uv run --locked basis check  # `basis check --full` once basis has it
+            displayName: basis check
+            # STUB: an internal index needs its credentials here, as the team's templates provide them
+
+  - stage: image
+    displayName: Build and push the image
+    dependsOn: check
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: image
+        pool:
+          vmImage: ubuntu-latest  # STUB: the team's agent pool
+        steps:
+          - checkout: self
+          - template: STUB-build-and-push.yml@templates  # STUB: the team's template that builds and pushes an image
+            parameters:
+              dockerfile: Dockerfile
+              repository: $(image)
+              tags: $(Build.SourceVersion)
+              arguments: --build-arg GIT_SHA=$(Build.SourceVersion)

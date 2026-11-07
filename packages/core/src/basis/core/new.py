@@ -1,23 +1,30 @@
 """What `new` shares across parts: a repo made from basis's shared templates and the part's own, with the sources its
 basis packages come from, so a new repo matches the basis version that made it. The part adds its own files after."""
 
+import json
 import re
 import subprocess
 from collections.abc import Mapping
+from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 
+from basis.core import hooks
 from basis.core.errors import BasisError
 
 GIT = "https://github.com/jacobragsdale/basis"
-"""Where a repo's basis packages come from when neither an index nor a checkout is given, at the version's tag."""
+"""Where a repo's basis packages come from, at the version's tag, when neither an index nor a checkout is given and
+the part was not installed from git."""
 FOLDER = "packages/core"
 """basis-core's folder in a checkout of basis."""
 UNRELEASED = "0.0.0"
 """The version basis carries until its first release, which no tag names."""
 TEMPLATES = Path(__file__).parent / "templates" / "repo"
 """The files every part's repo holds."""
-_DOTTED = {"gitignore", "dockerignore", "env.example", "python-version", "pre-commit-config.yaml"}
+_DOTTED = {"gitignore", "dockerignore", "env.example", "python-version"}
 _REPO = re.compile(r"^[a-z0-9][a-z0-9._-]{0,99}$")
+_COMMIT = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
+"""A git commit's full id: SHA-1, or SHA-256 in a repository that uses it."""
 
 
 class NewError(BasisError, ValueError):
@@ -28,29 +35,60 @@ class NoReleaseError(BasisError, LookupError):
     """A repo made with neither an index nor a checkout, by a basis that has no release to take its packages from."""
 
 
+@dataclass(frozen=True)
+class Commit:
+    """The commit of a git repository holding basis that a part's package was installed from, as `uvx --from
+    'git+URL@REF#subdirectory=packages/job'` installs it."""
+
+    url: str
+    commit: str
+    """The commit's full id, whatever ref named it: a branch moves on, and a new repo matches what made it."""
+
+
+def installed_from(name: str) -> Commit | None:
+    """The commit the installed distribution `name` came from, or None when it came from an index or a folder."""
+    try:
+        recorded = distribution(name).read_text("direct_url.json")
+    except PackageNotFoundError:
+        return None
+    return commit_of(recorded) if recorded is not None else None
+
+
+def commit_of(direct_url: str) -> Commit | None:
+    """The commit a distribution's `direct_url.json` (PEP 610) names, or None when it names none: the distribution was
+    installed from a folder or an archive, or from another version control system."""
+    data: object = json.loads(direct_url)
+    if not isinstance(data, dict) or not isinstance(url := data.get("url"), str) or not isinstance(vcs := data.get("vcs_info"), dict):
+        return None
+    if vcs.get("vcs") != "git" or not isinstance(commit := vcs.get("commit_id"), str) or not _COMMIT.match(commit):
+        return None
+    return Commit(url, commit)
+
+
 def repo(  # noqa: PLR0913 -- the part says what it adds and where its packages come from, by keyword
     path: Path, *, templates: Path, values: Mapping[str, str], distributions: Mapping[str, str], version: str, index: str | None, checkout: Path | None
 ) -> None:
     """A new folder at `path`, holding the shared templates and the part's `templates`, each with `{NAME}` replaced by
-    `values[NAME]` and `{source}` by where the repo's basis packages come from (see `sources`)."""
+    `values[NAME]` and `{source}` by where the repo's basis packages come from (see `sources`): with neither an index
+    nor a checkout, the commit the part's package was installed from, if it came from git."""
     if path.exists():
         msg = f"{path} already exists: give a new folder"
         raise NewError(msg)
     if not _REPO.match(path.name):
         msg = f"{path.name!r} is no repo's name: give one of lower-case letters, digits, '.', '_' and '-'"
         raise NewError(msg)
-    source = sources(distributions, version=version, index=index, checkout=checkout)
+    source = sources(distributions, version=version, index=index, checkout=checkout, commit=installed_from(next(iter(distributions))))
     path.mkdir(parents=True)
     for folder in (TEMPLATES, templates):
         write_templates(path, folder, {**values, "source": source})
 
 
-def sources(distributions: Mapping[str, str], *, version: str, index: str | None, checkout: Path | None) -> str:
+def sources(distributions: Mapping[str, str], *, version: str, index: str | None, checkout: Path | None, commit: Commit | None = None) -> str:
     """The `pyproject.toml` lines that say where a repo's basis packages come from: `index`; a checkout of basis at
-    `checkout`, installed editable; or, with neither, basis's GitHub repository at `version`'s tag, which needs a
-    release. `distributions` are the part's packages, by name, each with its folder in a checkout. basis-core is not
-    among them: no repo depends on it by name, and each part's own workspace source brings it from the same checkout or
-    commit, so a source for it would go unused.
+    `checkout`, installed editable; or, with neither, `commit`, the commit the part was installed from, or else basis's
+    GitHub repository at `version`'s tag, which needs a release. `distributions` are the part's packages, by name, each
+    with its folder in a checkout. basis-core is not among them: no repo depends on it by name, and each part's own
+    workspace source brings it from the same checkout or commit, so a source for it would go unused.
 
     The index replaces PyPI for the whole repo (`default = true`), so a name the index lacks fails rather than being
     taken from PyPI, where anyone may publish it; the firm's feed proxies PyPI for every other package."""
@@ -66,8 +104,12 @@ def sources(distributions: Mapping[str, str], *, version: str, index: str | None
             msg = f"{checkout} is not a checkout of basis: it has no {', '.join(missing)}; give the folder that holds packages/"
             raise NewError(msg)
         lines = [f'{name} = {{ path = "{(root / folder).as_posix()}", editable = true }}' for name, folder in distributions.items()]
+    elif commit is not None:
+        lines = [f'{name} = {{ git = "{commit.url}", subdirectory = "{folder}", rev = "{commit.commit}" }}' for name, folder in distributions.items()]
     elif version == UNRELEASED:
-        msg = f"basis has no release yet, so no tag holds its packages: clone {GIT} and pass --framework-path with the clone's folder"
+        name, folder = next(iter(distributions.items()))
+        command = f"uvx --from 'git+{GIT}#subdirectory={folder}' {name} new repo NAME"
+        msg = f"basis has no release yet, so no tag holds its packages: run {name} from git, as `{command}` does, or clone {GIT} and pass --framework-path with the clone's folder"
         raise NoReleaseError(msg)
     else:
         lines = [f'{name} = {{ git = "{GIT}", subdirectory = "{folder}", tag = "v{version}" }}' for name, folder in distributions.items()]
@@ -95,8 +137,10 @@ def render(text: str, values: Mapping[str, str]) -> str:
 
 
 def install(repo: Path) -> None:
-    """Initialise git and install a new repo's dependencies; its first commit is the author's."""
+    """Initialise git, point it at the repo's hooks, and install a new repo's dependencies; its first commit is the
+    author's."""
     run(["git", "init", "--quiet", "--initial-branch=main"], repo)
+    hooks.ensure(repo)
     run(["uv", "sync", "--quiet"], repo)
 
 

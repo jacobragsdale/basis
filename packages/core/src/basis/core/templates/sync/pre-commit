@@ -1,0 +1,29 @@
+#!/bin/sh
+# This file is managed by basis: `basis sync` rewrites it from the installed version, and `basis check` fails when it differs.
+# The commit hook. ruff fixes what it can in the Python files staged for the commit and formats them, git stages them
+# again, and `basis check` runs every check a commit must pass. Never skip it with `git commit --no-verify`: fix what
+# each ERROR line says, and commit again.
+set -eu
+cd "$(dirname "$0")/.."
+
+fail() {
+    printf 'ERROR: %s\n' "$1" >&2
+    exit 1
+}
+
+staged() {
+    git diff --cached --name-only --relative --diff-filter=ACMR "$@" -- '*.py' '*.pyi'
+}
+
+command -v uv >/dev/null 2>&1 || fail "uv is not on the PATH git runs hooks with, and the hooks run every check through it: install uv, as https://docs.astral.sh/uv/ says, or put its folder on the PATH"
+git diff --cached --check >&2 || fail "the staged changes add the whitespace errors or conflict markers listed above: remove each, stage the files again, and commit"
+
+if [ -n "$(staged)" ]; then
+    partly=$(staged -z | xargs -0 git diff --name-only --relative --)
+    [ -z "$partly" ] || fail "$(printf '%s' "$partly" | tr '\n' ' ') also changed since it was staged, and the hook would stage that with ruff's fixes: stage all of it, or stash the rest with \`git stash push --keep-index\`, and commit again"
+    # What ruff cannot fix or format, `basis check` reports below.
+    staged -z | xargs -0 uv run --frozen --quiet ruff check --fix --exit-zero --silent -- || :
+    staged -z | xargs -0 uv run --frozen --quiet ruff format --silent -- || :
+    staged -z | xargs -0 git add --
+fi
+exec uv run --frozen --quiet basis check

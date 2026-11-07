@@ -1,0 +1,13 @@
+#!/bin/sh
+# This file is managed by basis: `basis sync` rewrites it from the installed version, and `basis check` fails when it differs.
+# The push hook: `basis check`, on what is about to be pushed. `basis check --full`, which adds `regress` where the run
+# store is reachable and the QA tier where QA settings exist, takes its place once basis has it. Never skip it with
+# `git push --no-verify`: fix what each ERROR line says, and push again.
+set -eu
+cd "$(dirname "$0")/.."
+
+if ! command -v uv >/dev/null 2>&1; then
+    printf 'ERROR: %s\n' "uv is not on the PATH git runs hooks with, and the hooks run every check through it: install uv, as https://docs.astral.sh/uv/ says, or put its folder on the PATH" >&2
+    exit 1
+fi
+exec uv run --frozen --quiet basis check

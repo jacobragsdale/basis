@@ -1,9 +1,10 @@
 """The `basis` command, which basis-core provides and each part adds its verbs to, as `basis.core.verbs` describes.
 
 It finds its repo, the nearest folder at or above the working directory with a `pyproject.toml`, reads the parts that
-file declares as `[tool.basis] parts = ["job"]`, loads each one's entry point in the `basis.verbs` group, and runs
-one verb: a part's own, or one of core's, which reach the parts through their `Part`. A verb of a part the repo does
-not declare is refused, never offered.
+file declares as `[tool.basis] parts = ["job"]`, loads each one's entry point in the `basis.verbs` group, points a
+clone that names no hooks folder at the repo's hooks (`basis.core.hooks.ensure`), and runs one verb: a part's own, or
+one of core's, which reach the parts through their `Part`. A verb of a part the repo does not declare is refused,
+never offered.
 
 Every failure is one line on stderr, `ERROR: REASON: FIX`, and the exit code is 1, or 2 for a command line that does
 not parse. A `BasisError`, which basis raises on purpose with the fix in its message, prints as that line alone, as
@@ -25,7 +26,7 @@ from typing import NoReturn, override
 
 from pydantic import ValidationError
 
-from basis.core import check, logs, settings, sync
+from basis.core import check, hooks, logs, settings, sync
 from basis.core.errors import BasisError
 from basis.core.verbs import Part, Regress, Replay, Runs, Verb, fail
 
@@ -33,8 +34,8 @@ GROUP = "basis.verbs"
 PACKAGES = {"job": "basis-job", "api": "basis-api", "optim": "optim"}
 """The package each part comes in, for the fix when a repo declares a part that is not installed."""
 CORE = ("check", "replay", "regress", "new", "sync", "docs")
-"""Core's verbs, which no part may add: in the order `basis --help` lists them, each when a declared part gives it
-something to do."""
+"""Core's verbs, which no part may add: in the order `basis --help` lists them. `check` and `sync` are always listed,
+since every repo has basis's own files, and each of the others when a declared part gives it something to do."""
 
 log = logging.getLogger(__name__)
 
@@ -80,6 +81,7 @@ def run(argv: Sequence[str], *, cwd: Path, installed: Installed) -> int:
             return 0
         settings.refuse_renamed(os.environ)
         repo = find(cwd, installed)
+        hooks.ensure(repo.root)
         groups = _groups(repo)
         verbs = {verb.name: verb for _, group in groups for verb in group}
         _refuse_undeclared(argv, repo, verbs, installed)
@@ -203,6 +205,9 @@ def _core(repo: Repo) -> list[Verb]:
     def agent_files() -> list[sync.AgentFiles]:
         return [read() for read in files]
 
+    def run_check(_: argparse.Namespace) -> int:
+        return check.check(repo.root, agent_files(), run=check.run_command)
+
     def replay(n: argparse.Namespace) -> int:
         return _owner(saving, n.name).replay(Replay(n.name, str(n.run_id), n.params))
 
@@ -210,20 +215,20 @@ def _core(repo: Repo) -> list[Verb]:
         return _regress(saving, Regress(n.name, n.last, dict(n.label), n.snapshots))
 
     offered = {
-        "check": Verb("check", "lint, format check, type check and test the repo, and check its agent files", _no_arguments, lambda _: check.check(repo.root, agent_files(), run=check.run_command)),
+        "check": Verb("check", "lint, format check, type check and test the repo, and check its framework files and hooks", _no_arguments, run_check),
         "replay": Verb("replay", "rerun a saved run's transform with today's code, and print how its outputs differ", _replay_arguments, replay),
         "regress": Verb("regress", "replay recent published runs with today's code, and list what changed", _regress_arguments, regress),
         "new": Verb("new", f"add a {' or a '.join(kinds)} to the repo", partial(_new_arguments, kinds), lambda n: _new(repo, kinds[str(n.kind)], str(n.name))),
-        "sync": Verb("sync", "rewrite the repo's agent files from the installed parts", _no_arguments, lambda _: _sync(repo.root, agent_files())),
+        "sync": Verb("sync", "rewrite the repo's framework and agent files from the installed version", _no_arguments, lambda _: _sync(repo.root, agent_files())),
         "docs": Verb("docs", "list the docs of the installed parts, or print one", _docs_arguments, lambda n: _docs(_pages(repo), n.page)),
     }
-    given = {"check"}.union(*map(_gives, parts))
+    given = {"check", "sync"}.union(*map(_gives, parts))
     return [offered[name] for name in CORE if name in given]
 
 
 def _gives(part: Part) -> set[str]:
     """The core verbs `part` gives something to do."""
-    fields = {"sync": part.files is not None, "docs": part.docs is not None, "new": bool(part.new), "replay": part.runs is not None, "regress": part.runs is not None}
+    fields = {"docs": part.docs is not None, "new": bool(part.new), "replay": part.runs is not None, "regress": part.runs is not None}
     return {name for name, given in fields.items() if given}
 
 
@@ -292,6 +297,7 @@ def _new(repo: Repo, make: Callable[[Path, str], Path], name: str) -> int:
 def _sync(root: Path, files: Sequence[sync.AgentFiles]) -> int:
     for path in sync.write(root, files):
         log.info("synced %s", path)
+    hooks.ensure(root)  # which did nothing before the command if the hooks were not written yet
     return 0
 
 

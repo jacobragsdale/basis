@@ -17,8 +17,8 @@ that one of them gives something to do:
 
 | Core verb | Listed when a declared part has | What it does with them |
 |---|---|---|
-| `check` | always | lints, type checks and tests the repo, and compares the files `sync` owns with what `files` give |
-| `sync` | `files` | writes what every part's `files` give, and removes what basis wrote that none of them gives now |
+| `check` | always | lints, type checks and tests the repo, checks its clone runs its hooks, and compares the files `sync` owns with what basis and `files` give |
+| `sync` | always | writes basis's own files and what every part's `files` give, and removes what basis wrote that none of them gives now |
 | `docs [PAGE]` | `docs` | lists every part's pages as `PART/PAGE`, or prints one |
 | `new KIND NAME` | `new` | calls `new[KIND](repo, NAME)` |
 | `replay [NAME] RUN_ID`, `regress [NAME]` | `runs` | calls `runs.replay` or `runs.regress`, of the part whose `runs.names` holds NAME, or of the only part that saves runs |
@@ -98,8 +98,8 @@ class Part:
     verbs: tuple[Verb, ...] = ()
     """The part's own verbs, such as basis-job's `run`."""
     files: Callable[[], AgentFiles] | None = None
-    """The part's block of `AGENTS.md` and its skills, as the installed version writes them; read only by the verbs
-    that use them."""
+    """The part's block of `AGENTS.md`, its skills and its lines of the Dockerfile, as the installed version writes
+    them; read only by the verbs that use them."""
     docs: Path | None = None
     """A folder of Markdown pages, each `PAGE.md`, for the installed version."""
     new: Mapping[str, Callable[[Path, str], Path]] = field(default_factory=dict[str, Callable[[Path, str], Path]])

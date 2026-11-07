@@ -9,11 +9,14 @@ CHECKOUT = Path(__file__).parents[3]
 """The checkout of basis these tests run in, which holds packages/core and packages/job."""
 
 
-def test_a_new_repo_holds_its_job_listed_and_its_agent_files_current(tmp_path: Path) -> None:
+def test_a_new_repo_holds_its_job_listed_and_its_framework_and_agent_files_current(tmp_path: Path) -> None:
     repo = new.repo(tmp_path / "pricing-etl", "prices", index=None, framework_path=CHECKOUT, install=False)
     assert (repo / "jobs/prices/job.py").read_text(encoding="utf-8").count("from jobs.prices.rows import") == 1
     assert 'prices = "jobs.prices.job"' in (repo / "pyproject.toml").read_text(encoding="utf-8")
-    assert (repo / ".gitignore").exists()
+    assert all((repo / name).is_file() for name in (".gitignore", ".gitattributes", ".githooks/pre-commit", ".githooks/pre-push", "azure-pipelines.yml", "CLAUDE.md", ".claude/settings.json"))
+    assert "#   a job: run JOB --params jobs/JOB/params/default.json --interval START..END --publish" in (repo / "Dockerfile").read_text(encoding="utf-8")
+    assert sorted(path.name for path in (repo / ".claude/skills").iterdir()) == sorted(path.name for path in (repo / ".agents/skills").iterdir()) == ["job-new", "job-port", "job-why-failed"]
+    assert not (repo / ".pre-commit-config.yaml").exists()
     assert sync.stale(repo) == []
 
 

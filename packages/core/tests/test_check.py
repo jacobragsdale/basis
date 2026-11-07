@@ -1,11 +1,14 @@
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
 
-from basis.core import sync
+from basis.core import hooks, sync
 from basis.core.check import Runner, check
 from basis.core.sync import AgentFiles
+
+type Git = Callable[..., str]
+"""conftest's `git` fixture."""
 
 FILES = AgentFiles("basis-alpha", "the alpha block\n", {})
 
@@ -28,8 +31,11 @@ def errors(capsys: pytest.CaptureFixture[str]) -> list[str]:
 
 
 @pytest.fixture
-def repo(tmp_path: Path) -> Path:
+def repo(tmp_path: Path, git: Git) -> Path:
+    """A clone whose files are what basis writes, and which runs its hooks."""
     sync.write(tmp_path, [FILES])
+    git(tmp_path, "init", "--quiet")
+    hooks.ensure(tmp_path)
     return tmp_path
 
 
@@ -62,4 +68,12 @@ def test_agent_files_that_differ_from_what_the_parts_write_fail_and_say_to_sync(
     (repo / ".agents/skills/job-gone").mkdir(parents=True)
     _, run = runner()
     assert check(repo, [FILES], run=run) == 1
-    assert errors(capsys) == ["ERROR: AGENTS.md, .agents/skills/job-gone do not match what the installed parts write: run `uv run basis sync`, which rewrites or removes each"]
+    assert errors(capsys) == ["ERROR: AGENTS.md, .agents/skills/job-gone do not match what the installed basis writes: run `uv run basis sync`, which rewrites or removes each"]
+
+
+def test_a_clone_that_runs_other_hooks_fails_and_says_how_to_run_the_repos(repo: Path, git: Git, capsys: pytest.CaptureFixture[str]) -> None:
+    git(repo, "config", "core.hooksPath", "elsewhere")
+    ran, run = runner()
+    assert check(repo, [FILES], run=run) == 1
+    assert len(ran) == 5
+    assert errors(capsys) == ["ERROR: git runs this clone's hooks from elsewhere, not .githooks/, so the repo's commit and push hooks never run: run `git config core.hooksPath .githooks`"]

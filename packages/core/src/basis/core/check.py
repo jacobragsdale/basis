@@ -1,7 +1,8 @@
 """`basis check`: what a repo's code must pass before a commit, with no network, database or Docker. The files `basis
-sync` owns are compared with what the declared parts write, then the lockfile, ruff's lint and format, ty and pytest
-run through uv, in the repo's own locked environment. Every step runs, so one check finds every problem;
-each tool lists its own findings, and each step that fails ends with one `ERROR` line that says how to fix it."""
+sync` owns are compared with what basis and the declared parts write, the clone is checked to run the repo's hooks,
+then the lockfile, ruff's lint and format, ty and pytest run through uv, in the repo's own locked environment. Every
+step runs, so one check finds every problem; each tool lists its own findings, and each step that fails ends with one
+`ERROR` line that says how to fix it."""
 
 import subprocess
 import sys
@@ -9,7 +10,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from basis.core import sync
+from basis.core import hooks, sync
 from basis.core.errors import BasisError
 from basis.core.sync import AgentFiles
 from basis.core.verbs import fail
@@ -44,9 +45,11 @@ STEPS = (
 def check(repo: Path, files: Sequence[AgentFiles], *, run: Runner) -> int:
     """Run every check on the repo at `repo`, whose parts' agent files are `files`; 0 when every one passes."""
     failures = 0
-    if files and (stale := sync.stale(repo, files)):
+    if stale := sync.stale(repo, files):
         names = ", ".join(path.relative_to(repo).as_posix() for path in stale)
-        failures += fail(f"{names} {'does' if len(stale) == 1 else 'do'} not match what the installed parts write", "run `uv run basis sync`, which rewrites or removes each")
+        failures += fail(f"{names} {'does' if len(stale) == 1 else 'do'} not match what the installed basis writes", "run `uv run basis sync`, which rewrites or removes each")
+    if (found := hooks.problem(repo)) is not None:
+        failures += fail(*found)
     if run(LOCK.argv, repo) != 0:
         return fail(LOCK.reason, LOCK.fix)
     for step in STEPS:

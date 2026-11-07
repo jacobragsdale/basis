@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from basis.core import command
+from basis.core import command, sync
 from basis.core.errors import BasisError, deliberate
 from basis.core.settings import Settings
 from basis.core.sync import AgentFiles
@@ -78,7 +78,7 @@ def error_line(capsys: pytest.CaptureFixture[str]) -> str:
 def test_help_lists_the_declared_parts_verbs_and_the_core_verbs_they_give_something_to_do(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert basis(repo(tmp_path), "--help") == 0
     listed = [line.split()[0] for line in capsys.readouterr().out.splitlines() if line.startswith("  ") and not line.lstrip().startswith("-")]
-    assert listed == ["check", "serve"]
+    assert listed == ["check", "sync", "serve"]
 
 
 def test_a_verb_runs_from_a_folder_inside_the_repo(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -268,6 +268,21 @@ def test_sync_writes_each_declared_parts_agent_files(tmp_path: Path) -> None:
     assert basis(folder, "sync", installed={"alpha": lambda: Part(files=lambda: files)}) == 0
     assert "the alpha block" in (folder / "AGENTS.md").read_text(encoding="utf-8")
     assert (folder / ".agents/skills/alpha-new/SKILL.md").read_text(encoding="utf-8") == "# Make one\n"
+
+
+def test_any_command_points_a_clone_that_names_no_hooks_folder_at_the_repos_hooks(tmp_path: Path, git: Callable[..., str]) -> None:
+    folder = repo(tmp_path)
+    sync.write(folder, [])
+    git(folder, "init", "--quiet")
+    assert basis(folder, "--help") == 0
+    assert git(folder, "config", "core.hooksPath") == ".githooks\n"
+
+
+def test_sync_points_the_clone_at_the_hooks_it_writes(tmp_path: Path, git: Callable[..., str]) -> None:
+    folder = repo(tmp_path)
+    git(folder, "init", "--quiet")
+    assert basis(folder, "sync") == 0
+    assert git(folder, "config", "core.hooksPath") == ".githooks\n"
 
 
 def test_a_standalone_command_fails_as_basis_does(capsys: pytest.CaptureFixture[str]) -> None:
