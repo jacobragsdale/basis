@@ -236,8 +236,9 @@ follow:
   their longest values were not ASCII.
 - **A raise.** A value with more UTF-16 units than that longest value raises `RuntimeError: Input string exceeds allowed
   column size at parameter index 1`. Six emoji (12 units) beside `hello world` (11) are enough.
-- **A count of one.** When a value is longer than 4,000 UTF-16 units (the driver's `MAX_INLINE_CHAR`), the driver
-  streams it as `nvarchar(max)`. It then falls back to `execute` for each row and keeps only the last row's `rowcount`.
+- **A count of one.** When that value is longer than 4,000 UTF-16 units (the driver's `MAX_INLINE_CHAR`), the driver
+  streams the column as `nvarchar(max)`. It then falls back to `execute` for each row and keeps only the last row's
+  `rowcount`.
   So it writes every row and reports 1, and basis's count check refused the publish: "wrote 1 rows, and the run
   computed 5: nothing is committed". The cut-off is exactly 4,000 units, measured on the client whatever the column:
   `"a" * 4000` and 2,000 emoji published; `"a" * 4001`, `"é" * 4001`, 2,001 emoji and `"a" * 3999 + "😀"` (4,000
@@ -485,8 +486,8 @@ print(repr(cursor.fetchone()[0][4090:]))  # 'aaaab'
 Found by basis-core's write fix, with the same versions against SQL Server 2022, in a database collated
 `SQL_Latin1_General_CP1_CI_AS`. `executemany` types each column from its longest value by characters. When that value
 is ASCII, it binds the column as `varchar`, and the server converts every value through the code page, without an
-error. A value with more UTF-16 units than that value raises. A value past 4,000 UTF-16 units makes the driver run each
-row by itself, and `rowcount` is the last row's. A decimal whose text passes 38 characters is refused:
+error. A value with more UTF-16 units than that value raises. When that value is past 4,000 UTF-16 units, the driver
+runs each row by itself, and `rowcount` is the last row's. A decimal whose text passes 38 characters is refused:
 
 ```python
 from decimal import Decimal
