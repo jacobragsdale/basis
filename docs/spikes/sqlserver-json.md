@@ -42,6 +42,7 @@ Microsoft's documentation or mssql-python's wiki, issues and releases, read on 2
 | 3 | Can a bound `str` write a `json` column? | Yes, through `execute`, `executemany`, `?` and `%(name)s`, up to 4 MB, and through basis's own staging path. | verified here |
 | 3 | Can a `dict` or `list` be bound? | No: `TypeError`. Only bulk copy, which basis does not use, takes them. | verified here |
 | 3 | Does the server validate the JSON? | Yes: error 13609 for text that is not a JSON object or array. | verified here |
+| 3 | Does `executemany` bind every value exactly, and count it? | No, under the driver's own typing: a column whose longest value is ASCII loses what the database's code page cannot hold, without an error, and a batch holding a string past 4,000 UTF-16 units counts one row. basis-core gives each column's type, and sends such a row by itself. | verified after the spike, on SQL Server 2022 |
 | 4 | Do `JSON_VALUE`, `JSON_QUERY`, `OPENJSON` and `JSON_OBJECTAGG` work on the type? | Yes, and so do `JSON_ARRAYAGG`, `JSON_OBJECT`, `JSON_MODIFY`, `.modify`, `ISJSON`, `JSON_PATH_EXISTS` and `JSON_CONTAINS`. | verified here |
 | 4 | Is a `json` column indexable? | Not as the key of an index or a primary key. It can be an included column or a filtered index's condition, and it takes `CREATE JSON INDEX` and an indexed computed column. | verified here; the indexes were created and queried, but their plans not inspected |
 | 4 | Can a `json` value be compared? | No: `=`, `GROUP BY`, `ORDER BY`, `DISTINCT` and `UNION` are refused. `UNION ALL` and `IS NULL` work. | verified here |
@@ -214,11 +215,114 @@ primary key is refused: "is of a type that is invalid for use as a key column in
 - basis encodes each struct and list value to JSON text itself, by the rules in section 5, and binds the text. A null
   value binds as SQL NULL, never as the text `null`, which the type refuses. polars' `struct.json_encode()` writes the
   text `null` for a null struct, so the null has to be kept explicitly.
-- The write path stays as it is: no bulk copy, no table-valued parameters, no change to staging.
+- The write path stays as it is: no bulk copy, no table-valued parameters, and the stage. basis-core now gives each
+  column's type to `executemany`, every string as `nvarchar`, as the next paragraph says.
 - The check of a plan refuses a `json` column as an upsert key, or in a delete by values, before anything connects.
 - basis turns errors 13609, 1007, 13645 and 13646 into one ERROR line naming the table and the column. One bad row fails
   its whole `executemany` call, so the server's error cannot name the row; basis's encoder checks the limits that can
   fail (section 5) first, and names the row itself.
+
+**Found by basis-core's write fix, after the spike.** This was run on 2026-11-07 against SQL Server 2022 (16.0.4305.5)
+on Linux, with mssql-python 1.17.0 and `msodbcsql18` 18.6.2.2, in a database collated `SQL_Latin1_General_CP1_CI_AS`.
+It went through basis's own publish, by `Append`, `ReplaceWhere` and `Upsert`, into `nvarchar(max)`, into `varchar(max)`
+with a UTF-8 collation, and into `varchar` in code page 1252. The probe above bound a `json` column's values alone or in
+small batches. In a batch, `executemany` types each column from one value, the longest by characters, and four defects
+follow:
+
+- **Silent loss.** When that value is ASCII, the whole column binds as `varchar`. The server converts every value
+  through the database's code page, whatever the column's own type. A publish of `hello world`, `日本`, `Ω` and `😀`
+  committed `hello world`, `??`, `?` and `:-D`, with status `published`, into `nvarchar(max)` and UTF-8 `varchar(max)`
+  alike. Text the code page holds, such as `Zoë` and `€`, arrives intact. That is why `test_text.py`'s batches passed:
+  their longest values were not ASCII.
+- **A raise.** A value with more UTF-16 units than that longest value raises `RuntimeError: Input string exceeds allowed
+  column size at parameter index 1`. Six emoji (12 units) beside `hello world` (11) are enough.
+- **A count of one.** When that value is longer than 4,000 UTF-16 units (the driver's `MAX_INLINE_CHAR`), the driver
+  streams the column as `nvarchar(max)`. It then falls back to `execute` for each row and keeps only the last row's
+  `rowcount`.
+  So it writes every row and reports 1, and basis's count check refused the publish: "wrote 1 rows, and the run
+  computed 5: nothing is committed". The cut-off is exactly 4,000 units, measured on the client whatever the column:
+  `"a" * 4000` and 2,000 emoji published; `"a" * 4001`, `"é" * 4001`, 2,001 emoji and `"a" * 3999 + "😀"` (4,000
+  characters, 4,001 units) did not. `nvarchar(max)` and UTF-8 `varchar(max)` behaved the same.
+- **A decimal.** A decimal whose text (`format(value, "f")`) is longer than 38 characters raises `Invalid precision or
+  scale value`. 38 digits and a decimal point are enough.
+
+basis-core now gives each column's type through `setinputsizes`, for every statement:
+
+- a string as `nvarchar`, sized to the longest the statement binds in UTF-16 units, or `nvarchar(max)` past 4,000;
+- a decimal as its text (`varchar(41)`), which the server converts exactly;
+- an integer as a `bigint`;
+- a float, bit, date or datetime as the driver types it.
+
+Rows go in the frame's order. Each run of rows whose strings all bind as `nvarchar(n)` is one `executemany`. Each row
+holding a string longer than 4,000 units goes as a statement of its own, in its place, with the same types: so a plain
+insert's identity column numbers the rows as the frame orders them. The driver's own typing of a batch took a string
+starting `POINT`, `LINESTRING` or `POLYGON` for geometry, and sized it by its characters; the types given leave no
+such guess. Every count is a statement's own. The server counts each stage, with `SELECT COUNT_BIG(*)`, which is exact
+because the `#temp` table is the session's alone. Each run of rows is a span: a batch's records its
+`db.operation.batch.size`, and a run of rows sent one by one its `basis.statements`, so a trace shows what each such
+row costs. These are medians of five runs in a local container, each rolled back:
+
+| Case | Before | After |
+|---|---|---|
+| 50,000 short rows, insert | 0.91 s | 0.84 s |
+| 50,000 short rows, upsert, with the stage's count | 1.20 s | 1.07 s |
+| 50,000 rows, one of 5,400 characters, insert | 8.84 s, refused | 1.09 s |
+| 2,000 rows of 5,400 characters each, insert | 0.68 s, refused | 0.65 s |
+| 2,000 rows of 5,400 characters each, upsert | 0.69 s, refused | 0.80 s |
+
+A row past 4,000 units costs one round trip, 0.33 ms here, as it did inside the driver. A `json` table whose documents
+are mostly that long publishes one round trip per row, so 50,000 such rows take about 50,000 times the firm's latency.
+
+A `varchar` whose collation's code page is not UTF-8 replaces a character it cannot hold, as `日` with `?`, without an
+error, and it does so from an `nvarchar` parameter too. So `describe` reads the code page of each `char`, `varchar`
+and `text` column (`COLLATIONPROPERTY(collation_name, 'CodePage')`), and `check_values` refuses any value that the
+code page's Python codec cannot encode, before anything is written. A column of an alias type, as
+`CREATE TYPE code FROM varchar(50)`, is described as the system type it is an alias of (`TYPE_NAME(system_type_id)`),
+so it takes text and is checked as a `varchar`; `check_table` refused it before, as a type it did not know. Every code
+page SQL Server 2022 has is one of Python's codecs, except 65001, which is UTF-8, and 0, which only Unicode-only
+collations use and no `varchar` can take. In a code page 1252 `varchar`, the server kept 255 of the Basic Multilingual
+Plane's 63,487 characters exactly: the 250 that Python's `cp1252` encodes, and U+0081, U+008D, U+008F, U+0090 and
+U+009D, which Python refuses. So among the characters the column can hold, the check refuses only those five
+controls.
+
+A string is measured in its column's own units too: `nvarchar(n)` holds n UTF-16 units, so `nvarchar(6)` holds three
+emoji and not six, and `varchar(n)` n bytes of its code page, so a UTF-8 `varchar(10)` holds five `é` and a code page
+932 one `日本語abcd`. The check counted characters before, and the server raised such a value, once the rows before it
+were written. The check encodes each distinct value once, and runs once for each table a publish writes: the publish
+describes the table again in its transaction, and checks the values only where the table is not the one the run
+checked them against. 50,000 distinct values beyond ASCII take 38 ms to check against code page 1252.
+
+What the count check cannot see: each count is SQL Server's own, for its statement, and a trigger can change it. An
+`INSTEAD OF INSERT` trigger that drops a row and counts its own insert makes the counts differ, and the publish is
+refused. A trigger that sets `NOCOUNT ON`, as most do, leaves the outer statement's count, so the check passes a row
+the table never got. An index with `IGNORE_DUP_KEY = ON` drops a duplicate with only a warning, and the server counts
+that row as unwritten. `test_text_writes.py` shows the publish refused in each place such a row can go: in a batch,
+by itself, and through the upsert's stage.
+
+The same batches went through Oracle too, by python-oracledb 26.1.0 in thin mode, into Oracle Free 23ai's AL32UTF8
+database (`MAX_STRING_SIZE` `STANDARD`), and lost nothing. The batches whose longest value is ASCII, and six emoji
+beside `hello world`, published exactly into `VARCHAR2(4000 CHAR)` and `CLOB`, as did values either side of 4,000
+units into `CLOB`. Two were refused, with an error:
+
+- `VARCHAR2(4000 CHAR)` holds 4,000 bytes under `STANDARD`, so `"a" * 3998 + "😀"` (3,999 characters, 4,002 bytes)
+  raised ORA-12899, since basis's check counted characters. `describe` now reads `data_length` and `char_used`: a
+  column in characters holds its bytes too, and one in bytes is measured in them, so the check refuses that value
+  before anything is written.
+- basis binds Oracle's writes as frames through Arrow, which binds strings as `VARCHAR2`. So a `CLOB` value over 16,000
+  UTF-8 bytes raises ORA-01461, through every write mode. Bound as Python tuples, 100,000 characters insert. But a
+  `MERGE` from `dual` refuses them even then, with `setinputsizes(DB_TYPE_CLOB)`, with `TO_CLOB(:2)`, or with
+  `CAST(:2 AS CLOB)`. The fix left to try is temporary LOBs from `connection.createlob`, and it needs its own change,
+  since a LOB must replace every value of the column in the batch.
+
+Oracle replaces a character its character set cannot hold without an error, as SQL Server's code pages do. So
+`describe` reads the database's sets from `nls_database_parameters`: `NLS_CHARACTERSET` for `CHAR`, `VARCHAR2` and
+`CLOB`, and `NLS_NCHAR_CHARACTERSET` for `NCHAR`, `NVARCHAR2` and `NCLOB`. `CHARSETS` in
+`packages/core/src/basis/core/databases/oracle.py` gives Python's codec for the sets basis knows: AL32UTF8 and UTF8 hold
+any text, as does AL16UTF16, WE8MSWIN1252 is `cp1252`, WE8ISO8859P1 `latin-1` and US7ASCII `ascii`. `check_values`
+refuses a value its column's set cannot hold, and, in a set basis does not know, any value beyond ASCII, naming the
+set. Oracle's UTF8 is CESU-8, which takes 6 bytes for a character outside the Basic Multilingual Plane where UTF-8
+takes 4, so a byte limit there is checked short of the server's. CI's Oracle is AL32UTF8, so no live test of a
+non-Unicode set is possible there, and unit tests hold the mapping and the refusals.
 
 ## 4. Functions, indexes and limits
 
@@ -368,6 +472,11 @@ For depth, 60 nested polars lists inside an object round-tripped, within the typ
 | Floats in exponent form, or out of range, lose digits or are refused | Plain notation, exact up to 38 digits (verified here). A value outside that range is refused, or else written as a JSON string. |
 | Decimals as JSON numbers read back lossy through polars | Write them as JSON strings (verified here). Reading others' numbers exactly needs `json.loads(..., parse_float=Decimal)`. |
 | `mssql-odbc` cannot bind an all-`None` `json` parameter | Stay on `msodbcsql18` (verified here). |
+| `executemany` binds a column whose longest value is ASCII as `varchar`, losing what the code page cannot hold, and raises on a value with more UTF-16 units than that one | Give every column's type with `setinputsizes`, each string as `nvarchar` sized in UTF-16 units, as basis-core does (verified after the spike). |
+| `executemany` counts one row for a batch holding a string past 4,000 UTF-16 units | Send each such row as a statement of its own, and count each stage on the server, as basis-core does (verified after the spike). |
+| `executemany` refuses a decimal whose text is longer than 38 characters | Bind decimals as text, as basis-core does (verified after the spike). |
+| A non-UTF-8 `varchar`, or an Oracle column in a non-Unicode character set, replaces a character it cannot hold, without an error | Refuse the value before writing, by the column's code page or character set, as basis-core's `check_values` does (verified after the spike on SQL Server; unit-tested for Oracle's sets). |
+| Oracle refuses a `CLOB` value over 16,000 UTF-8 bytes bound through Arrow | None yet: temporary LOBs, untried. The publish fails with ORA-01461 and nothing commits (verified after the spike). |
 
 ## Upstream
 
@@ -397,6 +506,28 @@ connection.cursor().execute("INSERT INTO t2 VALUES (1, ?)", ("a" * 4094 + "\U000
 cursor = connection.cursor()
 cursor.execute("SELECT v FROM t2")
 print(repr(cursor.fetchone()[0][4090:]))  # 'aaaab'
+```
+
+Found by basis-core's write fix, with the same versions against SQL Server 2022, in a database collated
+`SQL_Latin1_General_CP1_CI_AS`. `executemany` types each column from its longest value by characters. When that value
+is ASCII, it binds the column as `varchar`, and the server converts every value through the code page, without an
+error. A value with more UTF-16 units than that value raises. When that value is past 4,000 UTF-16 units, the driver
+runs each row by itself, and `rowcount` is the last row's. A decimal whose text passes 38 characters is refused:
+
+```python
+from decimal import Decimal
+
+cursor = connection.cursor()
+cursor.execute("CREATE TABLE t3 (id int PRIMARY KEY, v nvarchar(max), d decimal(38,10))")
+cursor.executemany("INSERT INTO t3 (id, v) VALUES (?, ?)", [(1, "hello world"), (2, "日本"), (3, "Ω"), (4, "\U0001f600")])
+cursor.execute("SELECT v FROM t3 ORDER BY id")
+print([row[0] for row in cursor.fetchall()])  # ['hello world', '??', '?', ':-D']
+cursor.executemany("INSERT INTO t3 (id, v) VALUES (?, ?)", [(5, "hello world"), (6, "\U0001f600" * 6)])
+# RuntimeError: Input string exceeds allowed column size at parameter index 1
+cursor.executemany("INSERT INTO t3 (id, v) VALUES (?, ?)", [(7, "x"), (8, "a" * 4001), (9, "x")])
+print(cursor.rowcount)  # 1, and all 3 rows are written
+cursor.executemany("INSERT INTO t3 (id, d) VALUES (?, ?)", [(10, Decimal("1234567890123456789012345678.0123456789"))])
+# ProgrammingError: Driver Error: Invalid precision or scale value; DDBC Error: [Microsoft]Invalid precision value
 ```
 
 ## The probe

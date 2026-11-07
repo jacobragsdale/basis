@@ -5,7 +5,7 @@ from decimal import Decimal
 import polars as pl
 import pytest
 
-from basis.core.destination import DestColumn, TableSpec, check_table, check_values
+from basis.core.destination import DestColumn, TableSpec, Unit, check_table, check_values
 from basis.core.tables import Changes, Column
 
 
@@ -101,3 +101,77 @@ def test_an_integer_beyond_its_column_is_refused() -> None:
     target = Table((Column(name="n", kind="int", nullable=False, dtype=pl.Int64()),), table="counts", key=None)
     spec = TableSpec("mssql", "counts", {"n": column("n", "SMALLINT")})
     assert check_values(target, spec, Changes(insert=pl.DataFrame({"n": [40_000]}))) == ["insert: n: values from 40000 to 40000, beyond SMALLINT's -32768 to 32767"]
+
+
+def text(type_: str, length: int | None, *, unit: Unit, encoding: str | None, charset: str | None, max_bytes: int | None = None) -> DestColumn:  # noqa: PLR0913 -- a column's storage, each by keyword
+    """A string column `note` of `type_`, holding `length` of its `unit`, stored in `encoding`, which `charset` names."""
+    return DestColumn("note", type_, length, None, None, nullable=True, generated=False, defaulted=False, unit=unit, max_bytes=max_bytes, encoding=encoding, charset=charset)
+
+
+def notes(*values: str | None) -> Changes:
+    return Changes(insert=prices(*(dict[str, object](note=value) for value in values)))
+
+
+def cp1252(length: int | None) -> DestColumn:
+    return text("VARCHAR", length, unit="bytes", encoding="cp1252", charset="code page 1252")
+
+
+CANNOT_HOLD = (
+    "insert: note: 4 values hold characters code page 1252 cannot store, such as '日', which the database would replace without an error:"
+    " store them in a Unicode column, NVARCHAR or a VARCHAR with a UTF-8 collation"
+)
+
+
+@pytest.mark.parametrize(
+    ("column", "values", "problems"),
+    [
+        (cp1252(None), ["hello world", "Zoë, café, €5", None], []),
+        (cp1252(None), ["hello world", "日本", "Ω", "\U0001f600", "日本"], [CANNOT_HOLD]),
+        (text("NVARCHAR", None, unit="UTF-16 units", encoding="utf-16-le", charset="UTF-16"), ["hello world", "日本", "Ω", "\U0001f600"], []),
+    ],
+    ids=["text-its-code-page-holds", "text-it-does-not", "a-unicode-column"],
+)
+def test_text_a_columns_code_page_cannot_store_is_refused(column: DestColumn, values: list[str | None], problems: list[str]) -> None:
+    """SQL Server replaces a character a `varchar`'s code page cannot hold, as `日` with `?`, and raises no error. Each
+    distinct value is encoded once, and the count is of every value."""
+    assert check_values(TARGET, mssql(note=column), notes(*values)) == problems
+
+
+@pytest.mark.parametrize(
+    ("column", "fits", "too_long", "problem"),
+    [
+        (text("NVARCHAR", 6, unit="UTF-16 units", encoding="utf-16-le", charset="UTF-16"), "\U0001f600" * 3, "\U0001f600" * 6, "values up to 12 UTF-16 units, and the column holds 6"),
+        (text("VARCHAR", 10, unit="bytes", encoding="utf-8", charset="UTF-8"), "é" * 5, "é" * 10, "values up to 20 bytes in UTF-8, and the column holds 10"),
+        (text("VARCHAR", 10, unit="bytes", encoding="cp932", charset="code page 932"), "日本語abcd", "日本語" * 2, "values up to 12 bytes in code page 932, and the column holds 10"),
+        (cp1252(10), "é" * 10, "é" * 11, "values up to 11 bytes in code page 1252, and the column holds 10"),
+    ],
+    ids=["nvarchar-in-utf16-units", "utf8-varchar-in-bytes", "cp932-varchar-in-bytes", "cp1252-varchar-in-bytes"],
+)
+def test_a_string_is_measured_in_its_columns_own_units(column: DestColumn, fits: str, too_long: str, problem: str) -> None:
+    """SQL Server's `nvarchar(n)` holds n UTF-16 units, so 6 emoji take 12, and its `varchar(n)` n bytes of its code
+    page, so `é` takes 2 in UTF-8 and 1 in code page 1252, and `日` 2 in code page 932."""
+    spec = mssql(note=column)
+    assert check_values(TARGET, spec, notes(fits, "x")) == []
+    assert check_values(TARGET, spec, notes(fits, too_long)) == [f"insert: note: {problem}"]
+
+
+def oracle(**changed: DestColumn) -> TableSpec:
+    return TableSpec("oracle", "prices", mssql().columns | changed)
+
+
+def test_an_oracle_varchar2_in_characters_holds_its_bytes_too() -> None:
+    """`VARCHAR2(4000 CHAR)` holds 4,000 characters, and 4,000 bytes at most, which an emoji takes 4 of in AL32UTF8."""
+    column = text("VARCHAR2", 4000, unit="characters", max_bytes=4000, encoding="utf-8", charset="AL32UTF8")
+    assert check_values(TARGET, oracle(note=column), notes("a" * 4000)) == []
+    assert check_values(TARGET, oracle(note=column), notes("a" * 3998 + "\U0001f600")) == ["insert: note: values up to 4002 bytes in AL32UTF8, and the column holds 4000"]
+
+
+def test_a_character_set_basis_does_not_know_refuses_text_beyond_ascii_and_names_the_set() -> None:
+    column = text("VARCHAR2", 100, unit="characters", max_bytes=100, encoding=None, charset="EE8ISO8859P2")
+    assert check_values(TARGET, oracle(note=column), notes("hello", "plain")) == []
+    refusal = (
+        "insert: note: 1 values hold characters beyond ASCII, such as 'ë', and basis does not know which of them EE8ISO8859P2 stores, which"
+        " the database would replace without an error: store them in an NVARCHAR2 or NCLOB column, whose national character set is"
+        " Unicode, or add EE8ISO8859P2 to basis.core.databases.oracle.CHARSETS"
+    )
+    assert check_values(TARGET, oracle(note=column), notes("hello", "Zoë")) == [refusal]

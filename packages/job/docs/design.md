@@ -44,6 +44,10 @@ read and write SQL Server or Oracle, and they do not feed each other.
   and begin the transaction explicitly. portfolio-optim's `sources/mssql.py` reads the same way it first did here, and
   likely has the same defect.
 - mssql-python's bulk copy opens a connection of its own, outside the run's transaction, so writes use `executemany`.
+  Its own typing, in 1.17.0, types each column from the column's longest value: one whose longest is ASCII binds as
+  `varchar`, losing what the database's code page cannot hold without an error, and a batch with a string past 4,000
+  UTF-16 units counts one row. So writes give each column's type, every string as `nvarchar`, and send such a row by
+  itself (docs/spikes/sqlserver-json.md, section 3).
 - Oracle's read-only transactions raise ORA-01466 for a table whose definition changed in the last few seconds, which
   is why Oracle's isolation is a setting.
 - polars rounds a decimal cast to a smaller scale and truncates a decimal cast to an integer, even with `strict=True`,
