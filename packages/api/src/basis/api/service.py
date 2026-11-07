@@ -26,6 +26,10 @@ Every route declares three things, none of which has a default, so a route that 
   another service's 502 on one that asks for an `api.http`. It adds `api.SignInRequiredError`, the 401 a handler
   raises for an anonymous request, to each route whose parameters ask for the user. `Route.answers` holds them all.
 
+A route that answers a dataset says so, `dataset=True`, and answers it as Arrow when the request asks for it (see
+`dataset.py`). A route's name is its handler's, and its operation's id in the OpenAPI document, so a service gives each
+handler a name of its own.
+
 A route reads its request strictly (see `strict.py`): no unknown key, and no value coerced, in its body, its query or
 its path.
 
@@ -66,6 +70,7 @@ from starlette.routing import Route as StarletteRoute
 
 from basis.api import strict
 from basis.api.compute import Compute, ComputeFunction
+from basis.api.dataset import Rows, rows
 from basis.api.errors import Error, NotReadyError, ServiceError
 from basis.api.identity import GivenUser, SignInRequiredError, User, annotation_refusal
 from basis.api.resources import (
@@ -131,6 +136,9 @@ class Route:
     """Each `api.Error` the handler may raise, but basis's own, which `answers` adds."""
     status: int = HTTPStatus.OK
     """The status of a response that succeeds."""
+    dataset: bool = False
+    """Whether it answers a dataset, rows of one model, which it gives as Arrow when the request asks for it: see
+    `dataset.py`."""
     name: str = field(init=False)
     """The handler's name, which is the route's."""
     asks: tuple[Ask, ...] = field(init=False)
@@ -142,6 +150,8 @@ class Route:
     """Every `api.Error` the route may answer with: its declared `errors`, and each of basis's own that it can meet."""
     reads: strict.Shape = field(init=False)
     """What it reads from a request, strictly."""
+    rows: Rows | None = field(init=False)
+    """The columns of the dataset it answers; None for a route that answers no dataset."""
 
     def __post_init__(self) -> None:
         if not self.path.startswith("/"):
@@ -169,6 +179,7 @@ class Route:
             msg = f"{self.name}'s deadline is {deadline!r}: give it deadline_s, the seconds the route has to answer, above 0"
             raise ServiceError(msg)
         _check_response(self)
+        object.__setattr__(self, "rows", rows(self.response, self.name) if self.dataset else None)
         object.__setattr__(self, "errors", _declared_errors(self.name, self.errors))
         for path, asked in _asked_within(handler, (), set()):
             msg = (
@@ -194,17 +205,20 @@ class Route:
 
 class _Declare(Protocol):
     def __call__(  # noqa: PLR0913 -- what a route declares, each by keyword
-        self, path: str, handler: FunctionType, *, deadline_s: float, response: object, errors: Sequence[type[Error]], status: int = HTTPStatus.OK
+        self, path: str, handler: FunctionType, *, deadline_s: float, response: object, errors: Sequence[type[Error]], status: int = HTTPStatus.OK, dataset: bool = False
     ) -> Route: ...
 
 
 def _route(method: Method) -> _Declare:
-    def declare(path: str, handler: FunctionType, *, deadline_s: float, response: object, errors: Sequence[type[Error]], status: int = HTTPStatus.OK) -> Route:  # noqa: PLR0913 -- by keyword
-        return Route(method, path, handler, deadline_s, response, errors, status)
+    def declare(  # noqa: PLR0913 -- by keyword
+        path: str, handler: FunctionType, *, deadline_s: float, response: object, errors: Sequence[type[Error]], status: int = HTTPStatus.OK, dataset: bool = False
+    ) -> Route:
+        return Route(method, path, handler, deadline_s, response, errors, status, dataset)
 
     declare.__name__ = declare.__qualname__ = method.lower()
     declare.__doc__ = (
-        f"A route that answers {method} requests to `path` with `handler`: within `deadline_s` seconds, with `response` and `status` when it succeeds, and with one of `errors` when it fails."
+        f"A route that answers {method} requests to `path` with `handler`: within `deadline_s` seconds, with `response` and `status` when it succeeds, and with one of `errors` when it fails;"
+        " with `dataset=True`, `response` is rows, which it answers as Arrow when the request asks for it."
     )
     return declare
 
@@ -324,6 +338,7 @@ class Service:
                 msg = f"service {self.name} declares {route.method} {same} twice: give each method and path one handler"
                 raise ServiceError(msg)
             seen[route.shape] = route
+        _check_names(self.name, routes)
 
 
 @dataclass(frozen=True)
@@ -569,6 +584,16 @@ def _check_user(service: str, user: object, routes: Sequence[Route]) -> None:
                 given = f"its user is {user.__qualname__}" if user is not None else "it declares no user=..."
                 msg = f"{route.name} asks for {ask.given.__qualname__}, which service {service} does not give: {given}"
                 raise ServiceError(msg)
+
+
+def _check_names(service: str, routes: Sequence[Route]) -> None:
+    """That each route's name, its handler's, which is its operation's id in the OpenAPI document, is its own."""
+    names: set[str] = set()
+    for route in routes:
+        if route.name in names:
+            msg = f"service {service} has two routes named {route.name}: a route's name is its handler's, and its operation's id in the OpenAPI document, so give each handler a name of its own"
+            raise ServiceError(msg)
+        names.add(route.name)
 
 
 def _check_resources(service: str, resources: Sequence[object]) -> None:

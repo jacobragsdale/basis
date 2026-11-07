@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # every commit and tag, so the example's openapi.json is checked against basis's last release
       - uses: astral-sh/setup-uv@v7
         with:
           version: "0.13.7"

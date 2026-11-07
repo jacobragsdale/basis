@@ -9,6 +9,8 @@
   (`relay.py`), which the repo's scheduler runs on a schedule;
 - `basis ddl [SERVICE] --dialect DIALECT`, basis-core's verb, prints the CREATE TABLE of each outbox the service's
   databases declare (`outboxes.py`).
+- `basis sync` writes, and `basis check` checks, the repo's `openapi.json` with the API's other files (`sync.py`), and
+  `basis check --full` compares it with the last release's (`contract.py`).
 
 A failure prints as one line, as every `basis` failure does: a service that declares too little, settings that name no
 value the API needs, or a call whose response is an error. uvicorn loads when a verb runs, not for every
@@ -62,8 +64,9 @@ class DdlArgs:
 
 
 def part() -> Part:
-    """basis-api's verbs, which the `basis.verbs` entry point named `api` gives the `basis` command, and its files:
-    its block of `AGENTS.md` and its line of the Dockerfile."""
+    """basis-api's verbs, which the `basis.verbs` entry point named `api` gives the `basis` command; its files, its
+    block of `AGENTS.md`, its line of the Dockerfile and the repo's `openapi.json`; and its contract, the
+    breaking-change check of `openapi.json`."""
     return Part(
         verbs=(
             Verb("serve", "serve the API with uvicorn until SIGTERM, which drains it first", _service_argument, lambda n: _serve(ServeArgs(n.service))),
@@ -77,7 +80,14 @@ def part() -> Part:
             names=_services,
             ddl=Shared("print the CREATE TABLE of each outbox the service's databases declare", lambda n: _ddl(DdlArgs(n.name, "mssql" if n.dialect == "mssql" else "oracle")), _ddl_arguments),
         ),
+        contract=_contract,
     )
+
+
+def _contract(repo: Path) -> str | None:
+    from basis.api import contract  # noqa: PLC0415 -- FastAPI and pyarrow load when the check runs, not for every `basis --help`
+
+    return contract.contract(repo)
 
 
 def _services() -> dict[str, str]:

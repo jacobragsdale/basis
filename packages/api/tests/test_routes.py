@@ -4,7 +4,7 @@ the errors it declares, each listed in the OpenAPI document."""
 import asyncio
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from enum import StrEnum
 from http import HTTPStatus
@@ -261,19 +261,19 @@ def test_query_and_path_text_reads_by_its_types_grammar(kind: object, text: str,
 @pytest.mark.parametrize(
     ("path", "params", "errors"),
     [
-        ("/quotes/X", {"size": "10", "side": "buy", "sise": "10"}, [("query", "/sise", "Unknown query parameter: this route takes size, side, venue, at")]),
-        ("/quotes/X", {"size": "010", "side": "buy"}, [("query", "/size", "Input should be an integer, as 10 or -3: digits, with a minus sign only before them and no leading zero")]),
-        ("/quotes/X", [("size", "10"), ("size", "11"), ("side", "buy")], [("query", "/size", "Given 2 times: give it once")]),
-        ("/quotes/X", {"size": "10", "side": "BUY"}, [("query", "/side", "Input should be one of buy, sell")]),
-        ("/quotes/X", {"size": "10", "side": "buy", "at": "2026-11-06T14:30:00"}, [("query", "/at", "Input should be a time with its offset, as 2026-11-06T14:30:00Z or 2026-11-06T09:30:00-05:00")]),
-        ("/lots/007", {}, [("path", "/number", "Input should be an integer, as 10 or -3: digits, with a minus sign only before them and no leading zero")]),
+        ("/quotes/X", {"size": "10", "side": "buy", "sise": "10"}, [("sise", "Unknown query parameter: this route takes size, side, venue, at")]),
+        ("/quotes/X", {"size": "010", "side": "buy"}, [("size", "Input should be an integer, as 10 or -3: digits, with a minus sign only before them and no leading zero")]),
+        ("/quotes/X", [("size", "10"), ("size", "11"), ("side", "buy")], [("size", "Given 2 times: give it once")]),
+        ("/quotes/X", {"size": "10", "side": "BUY"}, [("side", "Input should be one of buy, sell")]),
+        ("/quotes/X", {"size": "10", "side": "buy", "at": "2026-11-06T14:30:00"}, [("at", "Input should be a time with its offset, as 2026-11-06T14:30:00Z or 2026-11-06T09:30:00-05:00")]),
+        ("/lots/007", {}, [("number", "Input should be an integer, as 10 or -3: digits, with a minus sign only before them and no leading zero")]),
     ],
     ids=["unknown-key", "leading-zero", "given-twice", "enum-case", "naive-time", "path"],
 )
-def test_query_and_path_parameters_are_read_strictly(client: TestClient, path: str, params: object, errors: list[tuple[str, str, str]]) -> None:
+def test_query_and_path_parameters_are_read_strictly(client: TestClient, path: str, params: object, errors: list[tuple[str, str]]) -> None:
     response = client.get(path, params=params)  # ty: ignore[invalid-argument-type] -- a mapping or pairs, as httpx takes them
     assert (response.status_code, response.json()["type"]) == (HTTPStatus.UNPROCESSABLE_CONTENT, "invalid-request")
-    assert [(error["location"], error["pointer"], error["detail"]) for error in response.json()["errors"]] == errors
+    assert [(error["parameter"], error["detail"]) for error in response.json()["errors"]] == errors
 
 
 def test_a_list_takes_its_key_once_for_each_value(client: TestClient) -> None:
@@ -292,29 +292,35 @@ def test_a_body_reaches_the_handler_exactly(client: TestClient) -> None:
 @pytest.mark.parametrize(
     ("changed", "pointer", "kind"),
     [
-        ({"quantity": "10"}, "/quantity", "Input should be a valid integer"),
-        ({"quantity": 10.0}, "/quantity", "Input should be a valid integer"),
-        ({"security": 912810}, "/security", "Input should be a valid string"),
-        ({"hedged": "true"}, "/hedged", "Input should be a valid boolean"),
-        ({"price": 101.25}, "/price", 'Input should be a string of the decimal, as "0.045"'),
-        ({"legs": [{"rate": 0.045, "at": "2026-11-06T14:30:00Z"}]}, "/legs/0/rate", 'Input should be a string of the decimal, as "0.045"'),
-        ({"legs": [{"rate": "0.045", "at": "2026-11-06T14:30:00"}]}, "/legs/0/at", "Input should be a time with its offset"),
-        ({"side": "buy"}, "/side", "Extra inputs are not permitted"),
-        ({"legs": [{"rate": "0.045", "at": "2026-11-06T14:30:00Z", "notional": "1"}]}, "/legs/0/notional", "Extra inputs are not permitted"),
+        ({"quantity": "10"}, "#/quantity", "Input should be a valid integer"),
+        ({"quantity": 10.0}, "#/quantity", "Input should be a valid integer"),
+        ({"security": 912810}, "#/security", "Input should be a valid string"),
+        ({"hedged": "true"}, "#/hedged", "Input should be a valid boolean"),
+        ({"price": 101.25}, "#/price", 'Input should be a string of the decimal, as "0.045"'),
+        ({"legs": [{"rate": 0.045, "at": "2026-11-06T14:30:00Z"}]}, "#/legs/0/rate", 'Input should be a string of the decimal, as "0.045"'),
+        ({"legs": [{"rate": "0.045", "at": "2026-11-06T14:30:00"}]}, "#/legs/0/at", "Input should be a time with its offset"),
+        ({"side": "buy"}, "#/side", "Extra inputs are not permitted"),
+        ({"price": "1e3"}, "#/price", 'Input should be a decimal\'s digits, as "0.045"'),
+        ({"price": "+1.5"}, "#/price", 'Input should be a decimal\'s digits, as "0.045"'),
+        ({"legs": [{"rate": " 0.045", "at": "2026-11-06T14:30:00Z"}]}, "#/legs/0/rate", 'Input should be a decimal\'s digits, as "0.045"'),
+        ({"legs": [{"rate": "0.045", "at": "2026-11-06T14:30:00Z", "notional": "1"}]}, "#/legs/0/notional", "Extra inputs are not permitted"),
     ],
-    ids=["int-as-text", "int-as-a-float", "str-as-a-number", "bool-as-text", "decimal-as-a-number", "nested-decimal-as-a-number", "naive-time", "unknown-key", "nested-unknown-key"],
-)
+    ids=[
+        "int-as-text", "int-as-a-float", "str-as-a-number", "bool-as-text", "decimal-as-a-number", "nested-decimal-as-a-number", "naive-time", "unknown-key",
+        "decimal-with-an-exponent", "decimal-with-a-plus", "nested-decimal-with-a-space", "nested-unknown-key",
+    ],
+)  # fmt: skip
 def test_a_body_is_read_strictly(client: TestClient, changed: dict[str, object], pointer: str, kind: str) -> None:
     response = client.post("/orders", json=ORDER | changed)
     [error] = response.json()["errors"]
-    assert (response.status_code, error["location"], error["pointer"]) == (HTTPStatus.UNPROCESSABLE_CONTENT, "body", pointer)
+    assert (response.status_code, error["pointer"]) == (HTTPStatus.UNPROCESSABLE_CONTENT, pointer)
     assert error["detail"].startswith(kind)
 
 
 def test_a_body_is_json_only_when_the_request_says_so(client: TestClient) -> None:
     response = client.post("/orders", content=b'{"security": "X", "quantity": 1, "price": "1"}', headers={"content-type": "text/plain"})
     [error] = response.json()["errors"]
-    assert (error["location"], error["detail"]) == ("body", "The body is text/plain, not JSON: send it as application/json")
+    assert (error["pointer"], error["detail"]) == ("#", "The body is text/plain, not JSON: send it as application/json")
 
 
 def test_a_declared_error_answers_its_problem(client: TestClient) -> None:
@@ -354,15 +360,16 @@ def test_each_error_a_route_answers_with_is_in_the_openapi_document_as_a_problem
     given: fakes.Fakes = {WAREHOUSE: fakes.Database(), PRICING: fakes.Http(_pricing())}
     document = _DOCUMENT.validate_python(api.build(SERVICE, settings=api.Settings.given(), fakes=given).asgi.openapi())
     problem = {"application/problem+json": {"schema": {"$ref": "#/components/schemas/Problem"}}}
+    invalid = {"application/problem+json": {"schema": {"$ref": "#/components/schemas/ValidationProblem"}}}
     assert _at(document, "paths", "/warehouse", "get", "responses") == {
         "200": _at(document, "paths", "/warehouse", "get", "responses", "200"),
-        "422": {"description": "invalid-request: The request is not valid", "content": problem},
+        "422": {"description": "invalid-request: The request is not valid", "content": invalid},
         "504": {"description": "deadline-exceeded: A call took longer than its deadline", "content": problem},
     }
     assert _at(document, "paths", "/stale/{security}", "get", "responses", "409") == {"description": "stale: The quote is stale", "content": problem}
     schemas = _at(document, "components", "schemas")
     assert isinstance(schemas, dict)
-    assert {"Problem", "FieldError"} <= set(schemas)
+    assert {"Problem", "ValidationProblem", "PointerError", "ParameterError"} <= set(schemas)
     assert "HTTPValidationError" not in schemas
 
 
@@ -401,7 +408,7 @@ def test_a_body_is_validated_once() -> None:
 
 def test_a_body_sent_to_a_route_that_takes_none_is_refused(client: TestClient) -> None:
     response = client.request("GET", "/stale/X", content=b'{"price": "1"}', headers={"content-type": "application/json"})
-    assert [(error["location"], error["detail"]) for error in response.json()["errors"]] == [("body", "This route takes no body: send the request without one")]
+    assert [(error["pointer"], error["detail"]) for error in response.json()["errors"]] == [("#", "This route takes no body: send the request without one")]
 
 
 @dataclass(frozen=True)
@@ -493,3 +500,76 @@ def later(tasks: BackgroundTasks) -> dict[str, str]:
 def test_a_route_runs_no_background_tasks() -> None:
     with pytest.raises(api.ServiceError, match="takes BackgroundTasks, whose work runs after the response, outside the route's deadline"):
         api.get("/later", later, deadline_s=1, response=dict[str, str], errors=[])
+
+
+class Stamp(BaseModel):
+    """Lax, so what a handler returns is validated into it, a time's text included."""
+
+    at: datetime
+
+
+NOON = datetime(2026, 11, 6, 12, 0)  # without its offset, as a defect would give it
+STAMPED = "INSERT INTO stamps (at) VALUES (%(at)s)"
+
+
+def at_noon() -> Stamp:
+    return Stamp(at=NOON)
+
+
+def at_noon_utc() -> Stamp:
+    return Stamp(at=NOON.replace(tzinfo=UTC))
+
+
+def stamps() -> list[Stamp]:
+    return [at_noon_utc(), at_noon()]
+
+
+def parsed() -> Stamp:
+    return Stamp.model_validate({"at": "2026-11-06T12:00:00"})
+
+
+def by_desk() -> dict[str, datetime]:
+    return {"rates": NOON}
+
+
+async def stamp(warehouse: Annotated[api.Writer, api.given(WAREHOUSE)]) -> Stamp:
+    await warehouse.execute(STAMPED, at=NOON)
+    return at_noon()
+
+
+STAMPS = _service(
+    api.get("/noon", at_noon, deadline_s=1, response=Stamp, errors=[]),
+    api.get("/noon-utc", at_noon_utc, deadline_s=1, response=Stamp, errors=[]),
+    api.get("/stamps", stamps, deadline_s=1, response=list[Stamp], errors=[]),
+    api.get("/parsed", parsed, deadline_s=1, response=Stamp, errors=[]),
+    api.get("/by-desk", by_desk, deadline_s=1, response=dict[str, datetime], errors=[]),
+    api.post("/stamp", stamp, deadline_s=1, response=Stamp, errors=[]),
+)
+
+
+@pytest.fixture
+def stamping() -> Iterator[tuple[TestClient, fakes.Database]]:
+    warehouse = fakes.Database(answers={STAMPED: 1})
+    given: fakes.Fakes = {WAREHOUSE: warehouse, PRICING: fakes.Http(_pricing()), PRICES: fakes.Cache()}
+    with TestClient(api.build(STAMPS, settings=api.Settings.given(), fakes=given).asgi, raise_server_exceptions=False) as started:
+        yield started, warehouse
+
+
+@pytest.mark.parametrize("path", ["/noon", "/stamps", "/parsed", "/by-desk"], ids=["a-models", "in-a-list", "from-text", "in-a-map"])
+def test_a_response_whose_time_has_no_offset_is_a_defect(stamping: tuple[TestClient, fakes.Database], path: str, logged: Callable[[], list[dict[str, object]]]) -> None:
+    client, _ = stamping
+    response = client.get(path)
+    assert (response.status_code, response.json()["title"]) == (HTTPStatus.INTERNAL_SERVER_ERROR, "Internal Server Error")
+    [failed] = [record for record in logged() if record["message"] == f"GET {path} failed"]
+    assert "timezone_aware" in str(failed["error"])
+
+
+def test_a_response_whose_times_carry_their_offsets_is_answered(stamping: tuple[TestClient, fakes.Database]) -> None:
+    client, _ = stamping
+    assert client.get("/noon-utc").json() == {"at": "2026-11-06T12:00:00Z"}
+
+
+def test_a_response_whose_time_has_no_offset_rolls_its_writes_back(stamping: tuple[TestClient, fakes.Database]) -> None:
+    client, warehouse = stamping
+    assert client.post("/stamp").status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+    assert (warehouse.committed, warehouse.rolled_back) == ([], [fakes.Statement(STAMPED, {"at": NOON})])

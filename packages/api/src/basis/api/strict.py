@@ -9,6 +9,8 @@ as `"019a5c3e-..."`. Two rules go further than pydantic's strict mode:
 
 - A `Decimal` is a JSON string of its digits, as `"1000000.00"`, never a number: pydantic reads a JSON number through a
   float, so `12345678901234567890.123456789` would arrive as `12345678901234567000`, and `1000000.00` without its scale.
+  Its digits read as a query's decimal does, below, so `"1e3"`, `"+1"` and `" 1"` are refused; `DECIMAL` is the
+  grammar, which the OpenAPI document gives as the string's pattern.
 - A `datetime` carries its offset, as `"2026-11-06T14:30:00Z"`: a time without one could be any zone's.
 
 A key no model declares is refused at every depth, whatever a model's own config says. The body is JSON only when the
@@ -70,6 +72,10 @@ type ErrorEntry = dict[str, object]
 `FieldError`."""
 
 _DIGITS = r"-?(?:0|[1-9][0-9]*)"
+DECIMAL = _DIGITS + r"(?:\.[0-9]+)?"
+"""A decimal's text, in a body's string or a query's: digits, a point and digits after it, with a minus sign only
+before them and no exponent."""
+_IS_DECIMAL = re.compile(DECIMAL)
 
 
 @dataclass(frozen=True)
@@ -92,7 +98,7 @@ _SCALARS: tuple[tuple[type, Text], ...] = (
     (bool, Text("true or false", _matching("true|false"))),
     (int, Text("an integer, as 10 or -3: digits, with a minus sign only before them and no leading zero", _matching(_DIGITS))),
     (float, Text("a finite number, as 1.5 or 2e-3, written as JSON writes one", _matching(_DIGITS + r"(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?", finite=True))),
-    (Decimal, Text("a decimal, as 0.045 or 100: digits, a point and digits, with a minus sign only before them and no exponent", _matching(_DIGITS + r"(?:\.[0-9]+)?"))),
+    (Decimal, Text("a decimal, as 0.045 or 100: digits, a point and digits, with a minus sign only before them and no exponent", _matching(DECIMAL))),
     (
         datetime,
         Text(
@@ -380,6 +386,8 @@ def _inexact(value: object, tree: JsonValue, at: tuple[str | int, ...]) -> Itera
     match value:
         case Decimal() if not isinstance(tree, str):
             yield _as_number(at, tree)
+        case Decimal() if isinstance(tree, str) and _IS_DECIMAL.fullmatch(tree) is None:
+            yield _not_digits(at, tree)
         case datetime() if value.tzinfo is None:
             yield _without_offset(at, tree)
         case RootModel():
@@ -406,6 +414,7 @@ def _inexact(value: object, tree: JsonValue, at: tuple[str | int, ...]) -> Itera
 def _inexact_set(value: AbstractSet[object], tree: list[JsonValue], at: tuple[str | int, ...]) -> Iterator[ErrorEntry]:
     if any(isinstance(item, Decimal) for item in value):  # a set of decimals: every item of its JSON is one
         yield from (_as_number((*at, index), node) for index, node in enumerate(tree) if not isinstance(node, str))
+        yield from (_not_digits((*at, index), node) for index, node in enumerate(tree) if isinstance(node, str) and _IS_DECIMAL.fullmatch(node) is None)
     if any(isinstance(item, datetime) and item.tzinfo is None for item in value):
         yield _without_offset(at, tree)
 
@@ -420,6 +429,11 @@ def _inexact_fields(value: object, keys: Mapping[str, str], tree: dict[str, Json
 def _as_number(at: tuple[str | int, ...], given: JsonValue) -> ErrorEntry:
     message = 'Input should be a string of the decimal, as "0.045": a JSON number reaches a decimal through a float, which can change it'
     return {"type": "decimal_string", "loc": at, "msg": message, "input": given}
+
+
+def _not_digits(at: tuple[str | int, ...], given: JsonValue) -> ErrorEntry:
+    message = 'Input should be a decimal\'s digits, as "0.045" or "-2.50": a point and digits, with a minus sign only before them and no exponent'
+    return {"type": "decimal_digits", "loc": at, "msg": message, "input": given}
 
 
 def _without_offset(at: tuple[str | int, ...], given: JsonValue) -> ErrorEntry:

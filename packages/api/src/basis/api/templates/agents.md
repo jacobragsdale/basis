@@ -48,7 +48,26 @@ Rules to keep:
   route that asks for the user, so it is never declared. basis verifies every request's bearer token from the
   `BASIS_IDENTITY__*` settings; a handler never reads the `Authorization` header or decodes a token itself.
 - A handler fails by raising a subclass of `api.Error` that declares its `status` and `title`, and the caller gets a
-  problem details response. Any other exception is a bare 500, logged once with its traceback.
+  problem details response. Any other exception is a bare 500, logged once with its traceback. A 422 names the fields
+  it refuses, so a UI puts each error on its field: `raise PeriodReversed(msg, errors=[api.ParameterError(detail=...,
+  parameter="end")])` for a query or path parameter, or `api.PointerError(detail=..., pointer=api.pointer("legs", 0,
+  "rate"))` for a field of the body.
+- The repo commits `openapi.json`, its API's OpenAPI document, which UIs generate their clients from: `basis sync`
+  writes it from the service, and `basis check`, which the commit hook runs, fails until it matches, so run
+  `uv run basis sync` after changing a route or a model, and commit what it writes. Each operation's id is its
+  handler's name, so renaming a handler renames the function a UI calls.
+- `[tool.basis.api] releases` in `pyproject.toml` is the glob of the repo's release tags, as `"v*"`. `basis check
+  --full`, which the push hook runs, fails on a change to `openapi.json` that breaks a UI built against the last
+  release: a field a response gives removed, renamed or retyped, a field a request takes removed or newly required,
+  or an operation removed or renamed. Add beside what a UI relies on; never change it in place. The check reads the
+  repo's release tags, so a CI checkout of the repo fetches its whole history and its tags.
+- Every time a response gives carries its offset, as the clock's do: one without is a 500.
+- A route that answers rows, as a grid shows them, declares `dataset=True` and answers `list[Row]`, each field of `Row`
+  a scalar, a decimal with its `Field(max_digits=..., decimal_places=...)`; it answers Arrow to a request that asks for
+  `application/vnd.apache.arrow.stream`, and JSON otherwise.
+- A UI calls the API from its own host, under `/api`, which the ingress removes, so no route's path starts with it.
+  Where a UI's pages are on another origin, the settings name it, as `BASIS_ALLOWED_ORIGINS='["https://ui.example"]'`;
+  without it, no other origin's page may call the API.
 - Settings are `BASIS_*` variables, read once at startup; one that is missing stops the API with one `ERROR` line.
 - A test builds the app with `api.build(service, settings=Settings.given(...), fakes={...})`, a fake from
   `basis.api.fakes` for each resource, and `fakes.Compute()` for a compute function to run in the test's process, and

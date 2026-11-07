@@ -1,0 +1,964 @@
+{
+  "x-basis": "managed by basis: `basis sync` rewrites it",
+  "openapi": "3.1.0",
+  "info": {
+    "title": "accruals",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/accrued-interest": {
+      "get": {
+        "summary": "Accrued Interest",
+        "operationId": "accrued_interest",
+        "parameters": [
+          {
+            "name": "face",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "title": "Face",
+              "type": "string",
+              "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"
+            }
+          },
+          {
+            "name": "rate",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "title": "Rate",
+              "type": "string",
+              "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "title": "Start"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "title": "End"
+            }
+          },
+          {
+            "name": "convention",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Convention"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accrual"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid-request: The request is not valid; period-reversed: The period ends before it starts; period-too-long: The period is longer than this service accrues over",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/conventions": {
+      "get": {
+        "summary": "Conventions",
+        "operationId": "conventions",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DayCount"
+                  },
+                  "type": "array",
+                  "title": "Response Conventions"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid-request: The request is not valid",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bonds/{security}": {
+      "get": {
+        "summary": "Bond",
+        "operationId": "bond",
+        "parameters": [
+          {
+            "name": "security",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z0-9]{12}$",
+              "description": "The bond's ISIN.",
+              "title": "Security"
+            },
+            "description": "The bond's ISIN."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Bond"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown-bond: No bond has that ISIN",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid-request: The request is not valid",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "deadline-exceeded: A call took longer than its deadline",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bonds/{security}/dirty-price": {
+      "get": {
+        "summary": "Dirty Price",
+        "operationId": "dirty_price",
+        "parameters": [
+          {
+            "name": "security",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z0-9]{12}$",
+              "description": "The bond's ISIN.",
+              "title": "Security"
+            },
+            "description": "The bond's ISIN."
+          },
+          {
+            "name": "face",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "title": "Face",
+              "type": "string",
+              "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"
+            }
+          },
+          {
+            "name": "settle",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "title": "Settle"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirtyPrice"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown-bond: No bond has that ISIN; unpriced: The pricing service has no price for the bond",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid-request: The request is not valid; matured: The bond matures on or before the settlement date; not-issued: The bond is issued after the settlement date",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "call-failed: A call to another service failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "deadline-exceeded: A call took longer than its deadline",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bonds/{security}/yield": {
+      "get": {
+        "summary": "Bond Yield",
+        "description": "The bond's yield to maturity at the pricing service's clean price, settling on `settle`.",
+        "operationId": "bond_yield",
+        "parameters": [
+          {
+            "name": "security",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z0-9]{12}$",
+              "description": "The bond's ISIN.",
+              "title": "Security"
+            },
+            "description": "The bond's ISIN."
+          },
+          {
+            "name": "settle",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "title": "Settle"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Yield"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown-bond: No bond has that ISIN; unpriced: The pricing service has no price for the bond",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid-request: The request is not valid; no-yield: No yield gives the bond's price; matured: The bond matures on or before the settlement date; not-issued: The bond is issued after the settlement date",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "call-failed: A call to another service failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "deadline-exceeded: A call took longer than its deadline",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bonds/{security}/coupons": {
+      "get": {
+        "summary": "Coupons",
+        "description": "The bond's coupons, from its first to its last, which is paid at maturity.",
+        "operationId": "coupons",
+        "parameters": [
+          {
+            "name": "security",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z0-9]{12}$",
+              "description": "The bond's ISIN.",
+              "title": "Security"
+            },
+            "description": "The bond's ISIN."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rows, as JSON, or as an Arrow IPC stream when the request's Accept asks for it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Coupon"
+                  },
+                  "title": "Response Coupons"
+                }
+              },
+              "application/vnd.apache.arrow.stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown-bond: No bond has that ISIN",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid-request: The request is not valid",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "deadline-exceeded: A call took longer than its deadline",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/settlements": {
+      "post": {
+        "summary": "Record Settlement",
+        "description": "Record a settlement, with the interest accrued to its date, and book it with the ledger: the row and the booking\ncommit once the response validates, and the ledger is called after, by its id, as many times as it takes.",
+        "operationId": "record_settlement",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettlementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settlement"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown-bond: No bond has that ISIN",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid-request: The request is not valid; matured: The bond matures on or before the settlement date; not-issued: The bond is issued after the settlement date",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "call-failed: A call to another service failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "deadline-exceeded: A call took longer than its deadline",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Accrual": {
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date",
+            "title": "Start"
+          },
+          "end": {
+            "type": "string",
+            "format": "date",
+            "title": "End"
+          },
+          "convention": {
+            "$ref": "#/components/schemas/Convention"
+          },
+          "days": {
+            "type": "integer",
+            "title": "Days"
+          },
+          "year_days": {
+            "type": "integer",
+            "title": "Year Days"
+          },
+          "interest": {
+            "type": "string",
+            "title": "Interest"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "start",
+          "end",
+          "convention",
+          "days",
+          "year_days",
+          "interest"
+        ],
+        "title": "Accrual"
+      },
+      "Bond": {
+        "properties": {
+          "security_id": {
+            "type": "string",
+            "title": "Security Id"
+          },
+          "coupon_rate": {
+            "type": "string",
+            "title": "Coupon Rate"
+          },
+          "convention": {
+            "$ref": "#/components/schemas/Convention"
+          },
+          "frequency": {
+            "type": "integer",
+            "enum": [
+              1,
+              2,
+              4,
+              12
+            ],
+            "title": "Frequency"
+          },
+          "issued": {
+            "type": "string",
+            "format": "date",
+            "title": "Issued"
+          },
+          "maturity": {
+            "type": "string",
+            "format": "date",
+            "title": "Maturity"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "security_id",
+          "coupon_rate",
+          "convention",
+          "frequency",
+          "issued",
+          "maturity"
+        ],
+        "title": "Bond",
+        "description": "A bond's terms, as the warehouse's `bonds` table holds them."
+      },
+      "Convention": {
+        "type": "string",
+        "enum": [
+          "30/360",
+          "ACT/360",
+          "ACT/365F"
+        ]
+      },
+      "Coupon": {
+        "properties": {
+          "starts": {
+            "type": "string",
+            "format": "date",
+            "title": "Starts"
+          },
+          "pays": {
+            "type": "string",
+            "format": "date",
+            "title": "Pays"
+          },
+          "interest": {
+            "type": "string",
+            "title": "Interest"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "starts",
+          "pays",
+          "interest"
+        ],
+        "title": "Coupon",
+        "description": "One of a bond's coupons, a row of its schedule."
+      },
+      "DayCount": {
+        "properties": {
+          "convention": {
+            "$ref": "#/components/schemas/Convention"
+          },
+          "year_days": {
+            "type": "integer",
+            "title": "Year Days"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "convention",
+          "year_days"
+        ],
+        "title": "DayCount"
+      },
+      "DirtyPrice": {
+        "properties": {
+          "security_id": {
+            "type": "string",
+            "title": "Security Id"
+          },
+          "settle": {
+            "type": "string",
+            "format": "date",
+            "title": "Settle"
+          },
+          "face": {
+            "type": "string",
+            "title": "Face"
+          },
+          "clean": {
+            "type": "string",
+            "title": "Clean"
+          },
+          "accrued": {
+            "type": "string",
+            "title": "Accrued"
+          },
+          "dirty": {
+            "type": "string",
+            "title": "Dirty"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "security_id",
+          "settle",
+          "face",
+          "clean",
+          "accrued",
+          "dirty"
+        ],
+        "title": "DirtyPrice"
+      },
+      "JsonValue": {},
+      "ParameterError": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "parameter": {
+            "type": "string",
+            "title": "Parameter",
+            "description": "The parameter's name, as the request gives it."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "detail",
+          "parameter"
+        ],
+        "title": "ParameterError",
+        "description": "A query, path or header parameter at fault."
+      },
+      "PointerError": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "pointer": {
+            "type": "string",
+            "title": "Pointer",
+            "description": "An RFC 6901 JSON Pointer to the field in the body, in URI fragment form, as `#/legs/0/rate`; `#` is the whole\nbody. `pointer` makes one."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "detail",
+          "pointer"
+        ],
+        "title": "PointerError",
+        "description": "A field of the request's body at fault."
+      },
+      "Problem": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "status": {
+            "type": "integer",
+            "title": "Status"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "instance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instance",
+            "description": "`urn:uuid:` and the request's id, which every log line of the request carries."
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The detail of an `HTTPException` that is not a sentence, such as a dict, as it was given."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "title": "Problem",
+        "description": "RFC 9457 problem details."
+      },
+      "Settlement": {
+        "properties": {
+          "settlement_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Settlement Id"
+          },
+          "security_id": {
+            "type": "string",
+            "title": "Security Id"
+          },
+          "face": {
+            "type": "string",
+            "title": "Face"
+          },
+          "settle": {
+            "type": "string",
+            "format": "date",
+            "title": "Settle"
+          },
+          "accrued": {
+            "type": "string",
+            "title": "Accrued"
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Recorded At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "settlement_id",
+          "security_id",
+          "face",
+          "settle",
+          "accrued",
+          "recorded_at"
+        ],
+        "title": "Settlement"
+      },
+      "SettlementRequest": {
+        "properties": {
+          "security_id": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{12}$",
+            "title": "Security Id"
+          },
+          "face": {
+            "title": "Face",
+            "type": "string",
+            "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"
+          },
+          "settle": {
+            "type": "string",
+            "format": "date",
+            "title": "Settle"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "security_id",
+          "face",
+          "settle"
+        ],
+        "title": "SettlementRequest"
+      },
+      "ValidationProblem": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "status": {
+            "type": "integer",
+            "title": "Status"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "instance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instance",
+            "description": "`urn:uuid:` and the request's id, which every log line of the request carries."
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The detail of an `HTTPException` that is not a sentence, such as a dict, as it was given."
+          },
+          "errors": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PointerError"
+                },
+                {
+                  "$ref": "#/components/schemas/ParameterError"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Errors",
+            "description": "Each field at fault, which may be none: a 422 that names no field says why in its `detail`."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "title",
+          "status",
+          "errors"
+        ],
+        "title": "ValidationProblem",
+        "description": "RFC 9457 problem details for a 422, a request basis or the handler refuses, which names each field at fault."
+      },
+      "Yield": {
+        "properties": {
+          "security_id": {
+            "type": "string",
+            "title": "Security Id"
+          },
+          "settle": {
+            "type": "string",
+            "format": "date",
+            "title": "Settle"
+          },
+          "clean": {
+            "type": "string",
+            "title": "Clean"
+          },
+          "dirty": {
+            "type": "string",
+            "title": "Dirty"
+          },
+          "annual_yield": {
+            "type": "string",
+            "title": "Annual Yield"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "security_id",
+          "settle",
+          "clean",
+          "dirty",
+          "annual_yield"
+        ],
+        "title": "Yield"
+      }
+    }
+  }
+}

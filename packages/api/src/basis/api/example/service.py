@@ -1,7 +1,8 @@
 """Accrued interest on a fixed-rate bond: the coupon interest earned between two dates under the bond's day count
 convention, which a buyer pays the seller at settlement. Given a bond's terms, the service accrues over any period;
 for a bond in its warehouse, it accrues since the last coupon, prices the bond with the pricing service's clean price,
-solves for its yield to maturity in the service's process pool, and records settlements.
+solves for its yield to maturity in the service's process pool, lists its coupons, a dataset that a UI's grid can take
+as Arrow, and records settlements, booking each with the ledger service through the warehouse's outbox.
 
 This file is the service: its settings, its resources, the errors it declares, its handlers, and the declaration basis
 builds its app from, in which each route declares its deadline, its response and its errors. The handlers compute and
@@ -170,6 +171,18 @@ class Yield(BaseModel):
     """The yield to maturity, compounded as often as the bond pays coupons, as a fraction: 0.0461 for 4.61%."""
 
 
+class Coupon(BaseModel):
+    """One of a bond's coupons, a row of its schedule."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    starts: date
+    """The day its period starts accruing: the coupon date before, or the issue date for the first."""
+    pays: date
+    interest: Annotated[Decimal, Field(max_digits=12, decimal_places=2)]
+    """Per 100 of face, as the bond's convention accrues it over the period, to the cent."""
+
+
 class SettlementRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -189,10 +202,13 @@ class Settlement(BaseModel):
     recorded_at: datetime
 
 
-WAREHOUSE = api.database("warehouse", deadline_s=5, max_concurrent=8)
-"""Where each bond's terms are, and where settlements are recorded."""
+WAREHOUSE = api.database("warehouse", deadline_s=5, max_concurrent=8, outbox=api.outbox("accruals_outbox", max_age_s=86_400, backoff_s=60, max_backoff_s=3_600))
+"""Where each bond's terms are, where settlements are recorded, and where their bookings wait for the ledger: a day, at
+most, retried from a minute to an hour apart."""
 PRICING = api.http("pricing", deadline_s=2)
 """The pricing service, which quotes each bond's clean price."""
+LEDGER = api.http("ledger", deadline_s=2)
+"""The ledger service, which books each settlement, and drops a booking whose `Idempotency-Key` it has seen."""
 TERMS = api.cache("bond_terms", Bond, ttl_s=300, max_entries=10_000, deadline_s=5)
 """Bonds' terms, which change far less often than every five minutes."""
 CLOCK = api.clock("clock")
@@ -261,7 +277,7 @@ def accrued_interest(period: Annotated[Period, Query()], settings: Annotated[Set
     start, end = period.start, period.end
     if end < start:
         msg = f"{end} is before {start}"
-        raise PeriodReversed(msg)
+        raise PeriodReversed(msg, errors=[api.ParameterError(detail=f"is before the start, {start}", parameter="end")])
     if (end - start).days > settings.max_days:
         msg = f"{start} to {end} is {(end - start).days} days, and this service accrues over {settings.max_days} at most"
         raise PeriodTooLong(msg)
@@ -314,10 +330,27 @@ async def bond_yield(  # noqa: PLR0913, PLR0917 -- what the route reads and reac
     return Yield(security_id=security, settle=settle, clean=price.clean, dirty=dirty.quantize(MICRO, rounding=ROUND_HALF_EVEN), annual_yield=annual)
 
 
+async def coupons(security: Security, warehouse: Annotated[api.Reader, api.given(WAREHOUSE)]) -> list[Coupon]:
+    """The bond's coupons, from its first to its last, which is paid at maturity."""
+    found = await _bond(warehouse, security)
+    step = 12 // found.frequency
+    dates = [found.maturity]
+    while (earlier := _months_before(found.maturity, step * len(dates))) > found.issued:
+        dates.append(earlier)
+    ends = sorted(dates)
+    starts = [found.issued, *ends[:-1]]
+    return [Coupon(starts=start, pays=end, interest=accrue(HUNDRED, found.coupon_rate, start, end, found.convention).interest) for start, end in zip(starts, ends, strict=True)]
+
+
 async def record_settlement(
-    request: SettlementRequest, warehouse: Annotated[api.Writer, api.given(WAREHOUSE)], clock: Annotated[api.Clock, api.given(CLOCK)], ids: Annotated[api.Ids, api.given(IDS)]
+    request: SettlementRequest,
+    warehouse: Annotated[api.Writer, api.given(WAREHOUSE)],
+    ledger: Annotated[api.Client, api.given(LEDGER)],
+    clock: Annotated[api.Clock, api.given(CLOCK)],
+    ids: Annotated[api.Ids, api.given(IDS)],
 ) -> Settlement:
-    """Record a settlement, with the interest accrued to its date: the row commits once the response validates."""
+    """Record a settlement, with the interest accrued to its date, and book it with the ledger: the row and the booking
+    commit once the response validates, and the ledger is called after, by its id, as many times as it takes."""
     found = await _bond(warehouse, request.security_id)
     accrued = accrue(request.face, found.coupon_rate, last_coupon(found, request.settle), request.settle, found.convention).interest
     settlement = Settlement(settlement_id=ids.new(), security_id=found.security_id, face=request.face, settle=request.settle, accrued=accrued, recorded_at=clock.now())
@@ -326,6 +359,7 @@ async def record_settlement(
         settlement_id=settlement.settlement_id, security=settlement.security_id, face=settlement.face,
         settle=settlement.settle, accrued=settlement.accrued, recorded_at=settlement.recorded_at,
     )  # fmt: skip
+    await ledger.send("POST", "/bookings", settlement, key=str(settlement.settlement_id))
     log.info("recorded settlement %s", settlement.settlement_id, extra={"settlement_id": str(settlement.settlement_id), "security_id": settlement.security_id})
     return settlement
 
@@ -353,13 +387,14 @@ OUTSIDE_ITS_LIFE = [Matured, NotIssued]
 service = api.Service(
     name="accruals",
     settings=Settings,
-    resources=[WAREHOUSE, PRICING, TERMS, CLOCK, IDS],
+    resources=[WAREHOUSE, PRICING, LEDGER, TERMS, CLOCK, IDS],
     routes=[
         api.get("/accrued-interest", accrued_interest, deadline_s=1, response=Accrual, errors=[PeriodReversed, PeriodTooLong]),
         api.get("/conventions", conventions, deadline_s=1, response=list[DayCount], errors=[]),
         api.get("/bonds/{security}", bond, deadline_s=5, response=Bond, errors=[UnknownBond]),
         api.get("/bonds/{security}/dirty-price", dirty_price, deadline_s=5, response=DirtyPrice, errors=[UnknownBond, Unpriced, *OUTSIDE_ITS_LIFE]),
         api.get("/bonds/{security}/yield", bond_yield, deadline_s=5, response=Yield, errors=[UnknownBond, Unpriced, NoYield, *OUTSIDE_ITS_LIFE]),
+        api.get("/bonds/{security}/coupons", coupons, deadline_s=5, response=list[Coupon], errors=[UnknownBond], dataset=True),
         api.post("/settlements", record_settlement, status=HTTPStatus.CREATED, deadline_s=5, response=Settlement, errors=[UnknownBond, *OUTSIDE_ITS_LIFE]),
     ],
     fakes="basis.api.example.dev:fakes",

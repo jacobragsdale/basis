@@ -1,5 +1,6 @@
 """An API's settings: basis-core's, which name each database, with how the API serves, where its spans go, where
-each other service it calls is, and how it verifies its users' tokens (`identity`, which `basis.api.identity` holds). A service subclasses `Settings` with fields of its own, which read from `BASIS_*`
+each other service it calls is, how it verifies its users' tokens (`identity`, which `basis.api.identity` holds), and
+which other origins' pages may call it (`allowed_origins`, which `basis.api.origins` describes). A service subclasses `Settings` with fields of its own, which read from `BASIS_*`
 variables too: `BASIS_SERVE__PORT` sets `serve.port`, `BASIS_HTTP__PRICING__URL` the pricing service's URL, and a
 service's `max_days` is `BASIS_MAX_DAYS`. The settings are read once, when the app is built,
 and a missing or invalid one stops it there, with one line that names the variable to set."""
@@ -13,6 +14,7 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from pydantic_settings import SettingsError as SourceError
 
 from basis.api.identity import Identity
+from basis.api.origins import Origin
 from basis.core import settings as core
 from basis.core.model import Model
 from basis.core.settings import SettingsError, variable
@@ -76,6 +78,10 @@ class Settings(core.Settings):
     """The process pool, `BASIS_COMPUTE__WORKERS`, which a service whose routes ask for a compute function must give."""
     identity: Identity | None = None
     """How the API verifies its users' tokens, which a service that declares a user needs: see `basis.api.identity`."""
+    allowed_origins: tuple[Origin, ...] = ()
+    """The origins whose pages may call the API from a browser, besides its own, each as the browser sends it, such as
+    `https://positions.example`: none unless they are named, and a UI behind the API's own host needs none. See
+    `basis.api.origins`."""
     _given: bool = PrivateAttr(default=False)
     """Whether these settings were validated inside `given`; no variable, file or argument sets a private attribute."""
 

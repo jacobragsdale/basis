@@ -47,7 +47,7 @@ for their declarations, import no server, no exporter, no database driver and no
 from typing import TYPE_CHECKING
 
 from basis.api.compute import Compute, ComputeFunction, compute
-from basis.api.errors import Error, FieldError, Problem, ServiceError
+from basis.api.errors import Error, FieldError, ParameterError, PointerError, Problem, ServiceError, ValidationProblem, pointer
 from basis.api.identity import SignInRequiredError, User
 from basis.api.resources import Bind, Cache, CallFailedError, Client, Clock, DeadlineExceededError, Ids, Outbox, Reader, Resource, Writer, cache, clock, database, http, ids, outbox
 from basis.api.service import Route, Service, delete, get, given, load, patch, post, put
@@ -71,6 +71,8 @@ __all__ = [
     "FieldError",
     "Ids",
     "Outbox",
+    "ParameterError",
+    "PointerError",
     "Problem",
     "Reader",
     "Resource",
@@ -83,6 +85,7 @@ __all__ = [
     "SignInRequiredError",
     "Traces",
     "User",
+    "ValidationProblem",
     "Writer",
     "build",
     "cache",
@@ -97,6 +100,7 @@ __all__ = [
     "load",
     "outbox",
     "patch",
+    "pointer",
     "post",
     "put",
     "serve",

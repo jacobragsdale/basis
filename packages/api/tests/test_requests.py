@@ -172,7 +172,7 @@ def test_a_body_that_is_not_json_is_a_problem_with_the_whole_body() -> None:
         response = client.post("/orders", content=b'{"security": "T1",', headers={"content-type": "application/json"})
     assert (response.status_code, response.json()["type"]) == (HTTPStatus.UNPROCESSABLE_CONTENT, "invalid-request")
     [error] = response.json()["errors"]
-    assert (error["location"], error["pointer"]) == ("body", "")
+    assert error["pointer"] == "#"
     assert error["detail"].startswith("The body is not JSON: EOF while parsing a value at line 1 column 18")
 
 

@@ -22,16 +22,30 @@ abstract, and only the classes it raises declare a status and a title:
         status = HTTPStatus.NOT_FOUND
         title = "No price for the security"
 
-A request that does not validate gets `invalid-request` with an `errors` list, one entry per field. An error FastAPI or
-Starlette raise, such as no route (404) or the wrong method (405), gets `about:blank` with the status's own phrase as
-its title, and an `HTTPException` whose detail is not a sentence, such as a dict, carries it as `data`. Any other
-exception gets a bare 500, which says nothing of what failed, while the log says everything."""
+Every 422 is a `ValidationProblem`, whose `errors` name each field at fault, as RFC 9457's own example does, so a UI
+puts each error on its field: a field of the body by an RFC 6901 JSON Pointer in URI fragment form, `#/legs/0/rate`,
+where `#` is the whole body, and a query, path or header parameter by its name.
+
+    {"type": "invalid-request", "title": "The request is not valid", "status": 422,
+     "errors": [{"detail": "Field required", "parameter": "end"},
+                {"detail": "Input should be greater than 0", "pointer": "#/legs/0/face"}]}
+
+A request that does not validate gets `invalid-request`, one entry per field. A handler's own 422 has the same shape,
+and names the fields it refuses, if any, when it is raised:
+
+    raise PeriodReversed(f"{end} is before {start}", errors=[api.ParameterError(detail="ends before start", parameter="end")])
+    raise BookClosed(f"{book} is closed", errors=[api.PointerError(detail="closed", pointer=api.pointer("book"))])
+
+An error FastAPI or Starlette raise, such as no route (404) or the wrong method (405), gets `about:blank` with the
+status's own phrase as its title, and an `HTTPException` whose detail is not a sentence, such as a dict, carries it as
+`data`. Any other exception gets a bare 500, which says nothing of what failed, while the log says everything."""
 
 import re
 from collections.abc import Mapping, Sequence
 from http import HTTPStatus
 from types import MappingProxyType
 from typing import ClassVar
+from urllib.parse import quote
 from uuid import UUID
 
 from fastapi.exceptions import RequestValidationError
@@ -89,25 +103,40 @@ class Error(Exception):
         if "type" not in vars(cls):
             cls.type = re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "-", cls.__name__.removesuffix("Error") or cls.__name__).lower()
 
-    def __init__(self, detail: str) -> None:
+    def __init__(self, detail: str, *, errors: Sequence[FieldError] = ()) -> None:
         if self._abstract:
             msg = f"{type(self).__qualname__} is a base for errors, and is never raised itself: raise one of its subclasses, which declare a status and a title"
             raise TypeError(msg)
+        if errors and self.status != HTTPStatus.UNPROCESSABLE_CONTENT:
+            msg = f"{type(self).__qualname__} is a {self.status}, and only a 422 names the fields it refuses: give its errors in the detail instead"
+            raise TypeError(msg)
         super().__init__(detail)
         self.detail = detail
+        self.errors: tuple[FieldError, ...] = tuple(errors)
 
 
-class FieldError(Model):
-    location: str
-    """Where in the request the field is: `body`, `query`, `path`, `header` or `cookie`."""
-    pointer: str
-    """A JSON Pointer to the field within its location, such as `/end` in the query or `/legs/0/rate` in the body;
-    empty for the location as a whole."""
+class PointerError(Model):
+    """A field of the request's body at fault."""
+
     detail: str
+    pointer: str
+    """An RFC 6901 JSON Pointer to the field in the body, in URI fragment form, as `#/legs/0/rate`; `#` is the whole
+    body. `pointer` makes one."""
+
+
+class ParameterError(Model):
+    """A query, path or header parameter at fault."""
+
+    detail: str
+    parameter: str
+    """The parameter's name, as the request gives it."""
+
+
+type FieldError = PointerError | ParameterError
 
 
 class Problem(Model):
-    """RFC 9457 problem details, with `errors` for a request that does not validate."""
+    """RFC 9457 problem details."""
 
     type: str
     title: str
@@ -115,9 +144,26 @@ class Problem(Model):
     detail: str | None = None
     instance: str | None = None
     """`urn:uuid:` and the request's id, which every log line of the request carries."""
-    errors: tuple[FieldError, ...] | None = None
     data: JsonValue | None = None
     """The detail of an `HTTPException` that is not a sentence, such as a dict, as it was given."""
+
+
+class ValidationProblem(Problem):
+    """RFC 9457 problem details for a 422, a request basis or the handler refuses, which names each field at fault."""
+
+    errors: tuple[PointerError | ParameterError, ...]
+    """Each field at fault, which may be none: a 422 that names no field says why in its `detail`."""
+
+
+def pointer(*path: str | int) -> str:
+    """The JSON Pointer to the body's field at `path`, in URI fragment form: `pointer("legs", 0, "rate")` is
+    `#/legs/0/rate`, and `pointer()` the whole body. A key's `~` and `/` are escaped as RFC 6901 says, and what a URI's
+    fragment does not allow is percent-encoded."""
+    return "#" + "".join("/" + quote(str(part).replace("~", "~0").replace("/", "~1"), safe=_FRAGMENT) for part in path)
+
+
+_FRAGMENT = "~!$&'()*+,;=:@"
+"""What RFC 3986 allows in a fragment as it is, besides letters, digits and `-._`."""
 
 
 class NotReadyError(Error):
@@ -129,10 +175,13 @@ def problem(error: Exception, request_id: UUID | None) -> tuple[Problem, Mapping
     """The one exception map: the problem details for `error`, with the headers its response needs, such as `Allow`."""
     instance = request_id.urn if request_id is not None else None
     match error:
+        case Error() if error.status == HTTPStatus.UNPROCESSABLE_CONTENT:
+            return ValidationProblem(type=error.type, title=error.title, status=error.status, detail=error.detail, instance=instance, errors=error.errors), error.headers
         case Error():
             return Problem(type=error.type, title=error.title, status=error.status, detail=error.detail, instance=instance), error.headers
         case RequestValidationError():
-            return Problem(type="invalid-request", title="The request is not valid", status=HTTPStatus.UNPROCESSABLE_CONTENT, instance=instance, errors=_field_errors(error.errors())), _NO_HEADERS
+            invalid = HTTPStatus.UNPROCESSABLE_CONTENT
+            return ValidationProblem(type="invalid-request", title="The request is not valid", status=invalid, instance=instance, errors=_field_errors(error.errors())), _NO_HEADERS
         case HTTPException():
             phrase = _phrase(error.status_code)
             detail, data = _http_detail(error.detail, phrase)
@@ -148,23 +197,27 @@ def response(error: Exception, request_id: UUID | None) -> Response:
     return Response(found.model_dump_json(exclude_none=True), status_code=found.status, headers=headers, media_type=MEDIA_TYPE)
 
 
+_PARAMETERS = frozenset({"query", "path", "header", "cookie"})
+
+
 def _field_errors(errors: Sequence[object]) -> tuple[FieldError, ...]:
-    """FastAPI's validation errors, each as its location, a pointer and pydantic's message, without the input, which
-    can hold what the caller should not see echoed, such as a password."""
+    """FastAPI's validation errors, each as the field it names and pydantic's message, without the input, which can
+    hold what the caller should not see echoed, such as a password."""
     return tuple(_field_error(entry) for entry in errors)
 
 
 def _field_error(entry: object) -> FieldError:
     if not isinstance(entry, Mapping):
-        return FieldError(location="request", pointer="", detail=str(entry))
+        return PointerError(detail=str(entry), pointer=pointer())
     location, message, kind, context = entry.get("loc"), entry.get("msg"), entry.get("type"), entry.get("ctx")
-    parts = [str(part) for part in location] if isinstance(location, tuple) else []
+    parts: list[str | int] = [part if isinstance(part, int) else str(part) for part in location] if isinstance(location, tuple) else []
     if kind == "json_invalid":  # the body is not JSON, and FastAPI puts where decoding stopped, a character, in `loc`
         where = f" at character {parts[1]}" if len(parts) > 1 else ""
         reason = context.get("error") if isinstance(context, Mapping) else None
-        return FieldError(location="body", pointer="", detail=f"{message}{where}" + (f": {reason}" if reason is not None else ""))
-    pointer = "".join(f"/{part.replace('~', '~0').replace('/', '~1')}" for part in parts[1:])
-    return FieldError(location=parts[0] if parts else "request", pointer=pointer, detail=str(message))
+        return PointerError(detail=f"{message}{where}" + (f": {reason}" if reason is not None else ""), pointer=pointer())
+    if parts and parts[0] in _PARAMETERS and len(parts) > 1:
+        return ParameterError(detail=str(message), parameter=str(parts[1]))  # a list's index, after the name, is not the UI's to place
+    return PointerError(detail=str(message), pointer=pointer(*parts[1:]))
 
 
 def _http_detail(given: object, phrase: str) -> tuple[str | None, JsonValue | None]:

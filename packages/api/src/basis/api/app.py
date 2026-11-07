@@ -3,13 +3,14 @@
 - its settings, read once here, so that a missing one stops the app before it serves, its resources' included;
 - the request boundary (`requests.py`): request ids, log fields, `traceparent` out, and the error no handler expected;
 - inside it, for a service that declares a user, each request's bearer token verified (`tokens.py`);
+- outside it, the answers to the pages of the other origins the settings allow, if any (`origins.py`);
 - one exception map (`errors.problem`) for every error a handler or FastAPI raises;
 - FastAPI's own telemetry, on the app's tracer provider (`traces.py`), which reads `traceparent` in and makes each
   request's server span;
 - a lifespan that adds the settings' span exporter, opens the service's resources (`opened.py`) and starts its
   compute pool (`pool.py`), marks the app ready, and on shutdown closes them and flushes the spans;
 - each route as `routes.py` serves it: within its deadline, reading its request strictly, and answering only the errors
-  it declares, which its OpenAPI operation lists;
+  it declares, which its OpenAPI operation lists, in the document `openapi.py` finishes;
 - `/health/live`, which answers while the process does, and `/health/ready`, which answers 200 only between the
   resources being open and shutdown beginning, and a 503 problem before and after.
 
@@ -37,7 +38,7 @@ from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from basis.api import errors, opened, routes, tokens, traces
+from basis.api import errors, openapi, opened, origins, routes, tokens, traces
 from basis.api.fakes import Fakes
 from basis.api.requests import HEALTH, REQUEST_ID, Requests
 from basis.api.service import STATE, Runtime, Service, ServiceError
@@ -146,10 +147,14 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | 
             lifecycle.advance(Stage.STOPPED)
             log.info("%s stopped", service.name, extra={"service": service.name})
 
-    app = routes.Application(
+    app = openapi.Application(
         title=service.name,
         lifespan=lifespan,
-        middleware=[Middleware(Requests), *([Middleware(tokens.Bearer, verifier=identity)] if identity is not None else [])],  # Bearer inside Requests
+        middleware=[
+            *origins.middleware(configured.allowed_origins),
+            Middleware(Requests),
+            *([Middleware(tokens.Bearer, verifier=identity)] if identity is not None else []),  # Bearer inside Requests
+        ],
         exception_handlers={errors.Error: _problem, HTTPException: _problem, RequestValidationError: _problem},
         telemetry={
             "tracer_provider": provider,
@@ -172,11 +177,7 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | 
 
     app.add_api_route(f"{HEALTH}live", live, methods=["GET"], include_in_schema=False)
     app.add_api_route(f"{HEALTH}ready", ready, methods=["GET"], include_in_schema=False)
-    for route in service.routes:
-        app.router.add_api_route(
-            route.path, route.handler, methods=[route.method], status_code=route.status, name=route.name,
-            response_model=route.response, responses=routes.responses(route), route_class_override=routes.route_class(route),
-        )  # fmt: skip
+    routes.add(app, service)
     return App(service, configured, app, lifecycle, provider)
 
 
