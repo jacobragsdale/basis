@@ -6,9 +6,11 @@ read-only credentials runs a job, and writes nothing. A job's `main.py` names th
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Annotated, Literal, override
+from types import NoneType, UnionType
+from typing import Annotated, Literal, TypeAliasType, Union, get_args, get_origin, override
 
-from pydantic import Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr
+from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from basis.core.errors import BasisError
@@ -190,14 +192,64 @@ def read(path: Path) -> FileSettings:
     return FileSettings(_env_file=path)
 
 
-_KINDS = {"mssql", "oracle"}
-"""Each database's `kind`, which pydantic adds to a validation error's location, after the database's name."""
+type _At = tuple[object, str | None]
+"""A type within the settings, and the field its union is discriminated by, where it is a discriminated union."""
 
 
-def variable(location: Sequence[int | str]) -> str:
-    """The environment variable that sets the value at `location` in `Settings`, from a validation error, such as
-    `BASIS_DATABASES__WAREHOUSE__WRITE__LEDGER`."""
-    parts = [str(part) for part in location]
-    if parts[:1] == ["databases"] and len(parts) > 2 and parts[2] in _KINDS:  # noqa: PLR2004 -- databases, its name, its kind
-        del parts[2]
+def variable(location: Sequence[int | str], settings: type[BaseModel] = Settings) -> str:
+    """The environment variable that sets the value at `location` in `settings`, from a validation error, such as
+    `BASIS_DATABASES__WAREHOUSE__WRITE__LEDGER`. pydantic puts the tag of a discriminated union in the location, after
+    the union, such as a database's `mssql`, which no variable names, so each is left out wherever it is."""
+    parts: list[str] = []
+    at: _At = (settings, None)
+    for part in location:
+        members = _tagged(at)
+        if members is not None and part in members:
+            at = (members[part], None)
+            continue
+        parts.append(str(part))
+        at = _within(at[0], part)
     return PREFIX + "__".join(parts).upper()
+
+
+def _within(kind: object, part: int | str) -> _At:
+    """The type at `part` within `kind`: a model's field, a mapping's value, or a sequence's item."""
+    kind, _ = _unwrapped(kind)
+    if isinstance(kind, type) and issubclass(kind, BaseModel):
+        if (found := kind.model_fields.get(str(part))) is None:
+            return None, None
+        return found.annotation, found.discriminator if isinstance(found.discriminator, str) else None
+    arguments = get_args(kind)
+    if get_origin(kind) is dict and len(arguments) == 2:  # noqa: PLR2004 -- the key's type and the value's
+        return arguments[1], None
+    if get_origin(kind) in {list, tuple} and arguments:
+        return arguments[0], None
+    return None, None
+
+
+def _tagged(at: _At) -> dict[int | str, object] | None:
+    """Each member of the discriminated union at `at`, by its tag; None where `at` is no discriminated union."""
+    kind, discriminator = _unwrapped(at[0])
+    if (discriminator := at[1] if at[1] is not None else discriminator) is None:
+        return None
+    members: dict[int | str, object] = {}
+    for member in get_args(kind):
+        if isinstance(member, type) and issubclass(member, BaseModel) and (tag := member.model_fields.get(discriminator)) is not None:
+            members |= dict.fromkeys(get_args(tag.annotation), member)
+    return members
+
+
+def _unwrapped(kind: object) -> tuple[object, str | None]:
+    """`kind` without its alias, its `Annotated` metadata and its `| None`, and the field a `Field(discriminator=...)`
+    in that metadata names."""
+    discriminator: str | None = None
+    while True:
+        if isinstance(kind, TypeAliasType):
+            kind = kind.__value__
+        elif get_origin(kind) is Annotated:
+            kind, *metadata = get_args(kind)
+            discriminator = next((found.discriminator for found in metadata if isinstance(found, FieldInfo) and isinstance(found.discriminator, str)), discriminator)
+        elif get_origin(kind) in {Union, UnionType} and NoneType in (arguments := get_args(kind)) and len(arguments) == 2:  # noqa: PLR2004 -- one type and None
+            kind = next(argument for argument in arguments if argument is not NoneType)
+        else:
+            return kind, discriminator

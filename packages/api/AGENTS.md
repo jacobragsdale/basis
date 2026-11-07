@@ -56,8 +56,10 @@ Paths are under `src/basis/api/`.
 - A token that does not verify is a 401, never anonymity; only a request with no `Authorization` header is anonymous.
   Verification accepts only the settings' algorithms, all of them asymmetric, and a key only for an algorithm it fits;
   it never reads a key the token carries. Every check it makes is in `tokens.py`'s docstring, and each has a test.
-- The development key is published, so settings read from the environment refuse it on any machine that is not a
-  declared desktop (`identity.Machine`); `Settings.given`, which only a test can call, takes it anywhere.
+- The development key is published, so every app refuses it on any machine that is not a declared desktop
+  (`identity.Machine`), in `tokens.plan`, which every app passes through; only settings from `Settings.given`, which a
+  test makes in code and no variable can mark, take it anywhere.
+- A token whose key the JWK set holds never waits for a fetch; only one naming a key it does not hold does.
 - A test builds its app with `Settings.given(...)`, so the developer's environment never changes what it checks.
 
 ## Checks

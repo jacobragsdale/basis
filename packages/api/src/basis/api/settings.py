@@ -5,15 +5,14 @@ service's `max_days` is `BASIS_MAX_DAYS`. The settings are read once, when the a
 and a missing or invalid one stops it there, with one line that names the variable to set."""
 
 import re
-from collections.abc import Sequence
 from contextvars import ContextVar
 from typing import Annotated, Literal, Self, override
 
-from pydantic import Field, FilePath, HttpUrl, ValidationError, model_validator
+from pydantic import Field, FilePath, HttpUrl, PrivateAttr, ValidationError, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from pydantic_settings import SettingsError as SourceError
 
-from basis.api.identity import Identity, Machine, refuse_development
+from basis.api.identity import Identity
 from basis.core import settings as core
 from basis.core.model import Model
 from basis.core.settings import SettingsError, variable
@@ -67,6 +66,14 @@ class Settings(core.Settings):
     """Each other service the API calls, by the name its `api.http` declaration gives."""
     identity: Identity | None = None
     """How the API verifies its users' tokens, which a service that declares a user needs: see `basis.api.identity`."""
+    _given: bool = PrivateAttr(default=False)
+    """Whether these settings were validated inside `given`; no variable, file or argument sets a private attribute."""
+
+    @property
+    def from_arguments(self) -> bool:
+        """Whether these settings are `given`'s, made in code from its arguments, as only a test's are, and never read
+        from the environment: the development key is refused in any other settings off a declared desktop."""
+        return self._given
 
     @classmethod
     def given(cls, **values: object) -> Self:
@@ -77,6 +84,11 @@ class Settings(core.Settings):
             return cls.model_validate(values)
         finally:
             _ARGUMENTS_ONLY.reset(token)
+
+    @override
+    def model_post_init(self, context: object, /) -> None:
+        super().model_post_init(context)
+        self._given = _ARGUMENTS_ONLY.get()
 
     @classmethod
     @override
@@ -97,13 +109,12 @@ _ARGUMENTS_ONLY = ContextVar("basis.api.settings.arguments_only", default=False)
 """Set by `Settings.given` while it validates, so that no source but its arguments is read."""
 
 
-def read[S: Settings](settings: type[S], *, machine: Machine | None = None) -> S:
-    """`settings` from the environment, or an error that names each variable to set. Settings that verify tokens with
-    the development key are refused unless `machine`, by default this one, is declared a developer's desktop."""
+def read[S: Settings](settings: type[S]) -> S:
+    """`settings` from the environment, or an error that names each variable to set."""
     try:
-        found = settings()
+        return settings()
     except ValidationError as error:
-        problems = "; ".join(f"{_variable(entry['loc'])}: {entry['msg']}" for entry in error.errors(include_url=False, include_input=False))
+        problems = "; ".join(f"{variable(entry['loc'], settings)}: {entry['msg']}" for entry in error.errors(include_url=False, include_input=False))
         msg = f"the settings are not valid, so the API cannot start: set {problems}"
         raise SettingsError(msg) from None  # the validation error would print every value beside the field it names
     except SourceError as error:  # a value that does not parse before it is validated, such as a block's JSON
@@ -112,17 +123,3 @@ def read[S: Settings](settings: type[S], *, machine: Machine | None = None) -> S
         reason = f": {error.__cause__}" if error.__cause__ is not None else ""
         msg = f"the settings are not valid, so the API cannot start: set {name}, whose value does not parse{reason}"
         raise SettingsError(msg) from None
-    refuse_development(found.identity, machine if machine is not None else Machine.here())
-    return found
-
-
-_KEYS = {"jwks", "public_key", "development"}
-"""Each kind of identity keys, which pydantic adds to a validation error's location, after `keys`."""
-
-
-def _variable(location: Sequence[int | str]) -> str:
-    """The variable that sets the value at `location`, as basis-core's `variable` names it, less the kind of keys."""
-    parts = list(location)
-    if parts[:2] == ["identity", "keys"] and len(parts) > 2 and parts[2] in _KEYS:  # noqa: PLR2004 -- identity, keys, their kind
-        del parts[2]
-    return variable(parts)

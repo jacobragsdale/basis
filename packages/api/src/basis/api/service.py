@@ -101,9 +101,9 @@ class Route:
         if self.status not in range(200, 300):
             msg = f"route {self.path!r} succeeds with status {self.status}: give a 2xx, and raise an api.Error for each way it fails"
             raise ServiceError(msg)
-        for path, resource in _asked_within(handler, (), set()):
+        for path, asked in _asked_within(handler, (), set()):
             msg = (
-                f"{self.name}'s dependency {' -> '.join(path)} asks for {resource.name}: ask for it in {self.name}'s own parameters,"
+                f"{self.name}'s dependency {' -> '.join(path)} asks for {asked}: ask for it in {self.name}'s own parameters,"
                 " and pass what it gives to the dependency, so the route shows everything it reaches"
             )
             raise ServiceError(msg)
@@ -283,9 +283,10 @@ def _asks_for(handler: FunctionType) -> Iterator[Ask]:
                 yield Ask(parameter.name, base, marker.dependency.resource)
 
 
-def _asked_within(call: object, path: tuple[str, ...], seen: set[int]) -> Iterator[tuple[tuple[str, ...], Resource]]:
-    """Each resource that a dependency of `call`'s, at any depth, asks for, with the dependencies that lead to it:
-    `call`'s own parameters ask for theirs where `path` is empty."""
+def _asked_within(call: object, path: tuple[str, ...], seen: set[int]) -> Iterator[tuple[tuple[str, ...], str]]:
+    """Each resource, by name, or the user, that a dependency of `call`'s, at any depth, asks for, with the dependencies
+    that lead to it: `call`'s own parameters ask for theirs where `path` is empty. The user is refused there as a
+    resource is, so that a route's own parameters show it reads the user, and the 401 it may answer."""
     if id(call) in seen:
         return
     seen.add(id(call))
@@ -302,8 +303,11 @@ def _asked_within(call: object, path: tuple[str, ...], seen: set[int]) -> Iterat
             dependency = marker.dependency if marker.dependency is not None else base  # `Depends()` depends on the type
             if isinstance(dependency, _GivenDatabase | _GivenResource):
                 if path:
-                    yield (*path, parameter.name), dependency.resource
-            elif not isinstance(dependency, _Given | GivenUser) and callable(dependency):
+                    yield (*path, parameter.name), dependency.resource.name
+            elif isinstance(dependency, GivenUser):
+                if path:
+                    yield (*path, parameter.name), "the user"
+            elif not isinstance(dependency, _Given) and callable(dependency):
                 yield from _asked_within(dependency, (*path, getattr(dependency, "__name__", type(dependency).__name__)), seen)
 
 

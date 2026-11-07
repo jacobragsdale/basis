@@ -3,15 +3,18 @@ import socket
 import time
 from collections.abc import Generator
 from pathlib import Path
+from typing import Annotated, Literal
 
 import mssql_python
 import oracledb
 import pytest
+from pydantic import Field, ValidationError
 
 from basis.core.databases import open_database
 from basis.core.databases.base import end_reading
 from basis.core.databases.oracle import connect
-from basis.core.settings import GivenSettings, OracleSettings, publish_refusal
+from basis.core.model import Model
+from basis.core.settings import GivenSettings, OracleSettings, publish_refusal, variable
 
 MSSQL = {"kind": "mssql", "connection_string": "Server=nowhere", "isolation": "snapshot", "timeout_s": 5, "max_rows": 10}
 ORACLE = {"kind": "oracle", "dsn": "nowhere:1521/X", "user": "reader", "password": "x", "mode": "thin", "isolation": "read_only", "timeout_s": 5, "max_rows": 10}
@@ -99,3 +102,33 @@ def test_a_login_the_database_never_answers_ends_at_its_timeout(hung_database: s
         pass
 
     assert time.monotonic() - start < 10
+
+
+class Email(Model):
+    kind: Literal["email"]
+    to: str
+
+
+class Page(Model):
+    kind: Literal["page"]
+    rota: str
+
+
+class Alerting(GivenSettings):
+    alerts: tuple[Annotated[Email | Page, Field(discriminator="kind")], ...] = ()
+
+
+@pytest.mark.parametrize(
+    ("settings", "values", "variables"),
+    [
+        (GivenSettings, {"databases": {"oracle": {key: value for key, value in ORACLE.items() if key != "dsn"}}}, ["BASIS_DATABASES__ORACLE__DSN"]),
+        (GivenSettings, {"databases": {"warehouse": MSSQL | {"write": {}}}}, ["BASIS_DATABASES__WAREHOUSE__WRITE__CONNECTION_STRING"]),
+        (GivenSettings, {"databases": {"warehouse": MSSQL | {"timeout_s": 0}}}, ["BASIS_DATABASES__WAREHOUSE__TIMEOUT_S"]),
+        (Alerting, {"alerts": [{"kind": "email", "to": "desk@example.com"}, {"kind": "page"}]}, ["BASIS_ALERTS__1__ROTA"]),
+    ],
+    ids=["a-database-named-as-its-kind", "a-write-block", "a-limit", "a-union-in-a-list"],
+)
+def test_a_variable_is_named_without_the_tag_of_any_discriminated_union(settings: type[GivenSettings], values: dict[str, object], variables: list[str]) -> None:
+    with pytest.raises(ValidationError) as raised:
+        settings.model_validate(values)
+    assert [variable(error["loc"], settings) for error in raised.value.errors()] == variables

@@ -7,10 +7,12 @@ from types import MappingProxyType
 from typing import Annotated
 
 import pytest
+from fastapi import Depends
 from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from pydantic import Field
+from pydantic import AliasChoices, AliasPath, ConfigDict, Field
+from pydantic.alias_generators import to_camel
 
 from basis import api
 from basis.api import tokens
@@ -204,6 +206,112 @@ def test_a_declaration_that_asks_for_a_user_wrongly_is_refused(declare: Callable
         declare()
 
 
+def signed_in(user: Annotated[Trader | None, api.given(Trader)]) -> Trader:
+    if user is None:
+        msg = "positions are shown to a signed-in user"
+        raise api.SignInRequiredError(msg)
+    return user
+
+
+def required(user: Annotated[Trader, api.given(Trader)]) -> Trader:
+    return user
+
+
+def through(trader: Annotated[Trader, Depends(required)]) -> Trader:
+    return trader
+
+
+def desk_of_the_signed_in(user: Annotated[Trader, Depends(signed_in)]) -> dict[str, str]:
+    return {"desk": user.desk}
+
+
+def desk_through_two(user: Annotated[Trader, Depends(through)]) -> dict[str, str]:
+    return {"desk": user.desk}
+
+
+@pytest.mark.parametrize(
+    ("handler", "message"),
+    [
+        (desk_of_the_signed_in, "desk_of_the_signed_in's dependency signed_in -> user asks for the user: ask for it in desk_of_the_signed_in's own parameters"),
+        (desk_through_two, "desk_through_two's dependency through -> required -> user asks for the user: ask for it in desk_through_two's own parameters"),
+    ],
+    ids=["a-dependency-that-handles-the-anonymous-case", "a-dependency-of-a-dependency-that-cannot-be-none"],
+)
+def test_a_dependency_that_asks_for_the_user_is_refused_as_one_that_asks_for_a_resource(handler: Callable[..., dict[str, str]], message: str) -> None:
+    """Else the route would read the user without its parameters showing it, past the checks of its service and its
+    annotation."""
+    with pytest.raises(api.ServiceError, match=message):
+        api.get("/desk", handler)  # ty: ignore[invalid-argument-type] -- a named function
+
+
+def _choosing() -> object:
+    class Choosing(api.User):
+        expires: Annotated[int, Field(validation_alias=AliasChoices("expires", "exp"))]
+
+    return Choosing
+
+
+def _pathed() -> object:
+    class Pathed(api.User):
+        expires: Annotated[int, Field(validation_alias=AliasPath("exp"))]
+
+    return Pathed
+
+
+def _validated() -> object:
+    class Validated(api.User):
+        expires: Annotated[int, Field(validation_alias="exp")]
+
+    return Validated
+
+
+def _generated() -> object:
+    class Generated(api.User):
+        model_config = ConfigDict(alias_generator=to_camel)
+        desk_id: str
+
+    return Generated
+
+
+def _by_name() -> object:
+    class ByName(api.User):
+        model_config = ConfigDict(validate_by_name=True)
+
+    return ByName
+
+
+def _populated() -> object:
+    class Populated(api.User):
+        model_config = ConfigDict(populate_by_name=True)
+
+    return Populated
+
+
+def _allowing() -> object:
+    class Allowing(api.User):
+        model_config = ConfigDict(extra="allow")
+
+    return Allowing
+
+
+@pytest.mark.parametrize(
+    ("declare", "message"),
+    [
+        (_choosing, r"Choosing.expires reads its claim through validation_alias=AliasChoices\(choices=\['expires', 'exp'\]\): name the one claim it reads with Field\(alias=...\) alone"),
+        (_pathed, r"Pathed.expires reads its claim through validation_alias=AliasPath\(path=\['exp'\]\)"),
+        (_validated, r"Validated.expires reads its claim through validation_alias='exp'"),
+        (_generated, "Generated sets alias_generator in its model_config: a User reads each claim by its field's name, or a plain Field"),
+        (_by_name, "ByName sets validate_by_name in its model_config"),
+        (_populated, "Populated sets populate_by_name in its model_config"),
+        (_allowing, "Allowing sets extra in its model_config"),
+    ],
+    ids=["alias-choices", "alias-path", "validation-alias", "alias-generator", "validate-by-name", "populate-by-name", "extra-allow"],
+)
+def test_a_user_names_each_claim_by_its_field_or_a_plain_alias_alone(declare: Callable[[], object], message: str) -> None:
+    with pytest.raises(api.ServiceError, match=message):
+        declare()
+
+
 def test_a_route_may_ask_for_a_base_of_the_services_user() -> None:
     service = api.Service(name="positions", settings=api.Settings, user=Trader, routes=[api.get("/anyone", anyone)])
     with TestClient(api.build(service, settings=api.Settings.given(identity=DEVELOPMENT)).asgi) as client:
@@ -236,7 +344,7 @@ def test_identity_settings_name_the_variable_to_fix(monkeypatch: pytest.MonkeyPa
         monkeypatch.setenv("BASIS_IDENTITY__KEYS__KIND", "public_key")
         monkeypatch.setenv("BASIS_IDENTITY__KEYS__PATH", __file__)
     with pytest.raises(api.SettingsError, match=message.replace("[", r"\[")):
-        read(api.Settings, machine=Machine({}, None, ()))
+        read(api.Settings)
 
 
 # The development key, which anyone can sign with: refused by settings read from the environment, but on a desktop.
@@ -287,14 +395,35 @@ def test_the_sign_in_systems_keys_are_never_refused(tmp_path: Path) -> None:
     refuse_development(identity, _machine(tmp_path, declared=None, environ={"KUBERNETES_SERVICE_HOST": "10.0.0.1"}, container=True))
 
 
-def test_settings_read_from_the_environment_refuse_the_development_key_off_a_desktop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _development_in_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     for name, value in {"ISSUER": ISSUER, "AUDIENCE": AUDIENCE, "ALGORITHMS": '["ES256"]', "LEEWAY_S": "30", "KEYS__KIND": "development"}.items():
         monkeypatch.setenv(f"BASIS_IDENTITY__{name}", value)
+
+
+@pytest.mark.parametrize(
+    "build",
+    [lambda: api.build(SERVICE), lambda: api.build(SERVICE, settings=api.Settings()), lambda: api.build(SERVICE, settings=api.Settings.model_validate({}))],
+    ids=["settings-read-by-build", "settings-made-from-the-environment", "settings-validated-with-the-environment"],
+)
+def test_every_app_refuses_the_development_key_in_a_pod_whatever_made_its_settings(monkeypatch: pytest.MonkeyPatch, build: Callable[[], api.App]) -> None:
+    """The bypass review found: settings made with `Settings()`, which read the environment as `read` does, but skip it."""
+    _development_in_the_environment(monkeypatch)
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
     with pytest.raises(api.SettingsError, match=r"BASIS_IDENTITY__KEYS__KIND is development, .* and this machine is not one: it runs in a Kubernetes pod"):
-        read(api.Settings, machine=_machine(tmp_path, environ={"KUBERNETES_SERVICE_HOST": "10.0.0.1"}))
-    found = read(api.Settings, machine=_machine(tmp_path))
-    assert found.identity is not None
-    assert found.identity.keys.kind == "development"
+        build()
+
+
+def test_settings_from_the_environment_take_the_development_key_on_a_declared_desktop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _development_in_the_environment(monkeypatch)
+    with pytest.raises(api.SettingsError, match=r"this machine is not one: .*desktop.toml does not exist"):
+        tokens.plan(SERVICE, api.Settings(), machine=_machine(tmp_path / "undeclared", declared=None))
+    assert tokens.plan(SERVICE, api.Settings(), machine=_machine(tmp_path)) is not None
+
+
+def test_only_given_settings_are_a_tests_and_no_variable_makes_them_so(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("BASIS_FROM_ARGUMENTS", "BASIS__GIVEN", "BASIS_GIVEN"):
+        monkeypatch.setenv(name, "true")
+    assert [api.Settings.given().from_arguments, api.Settings().from_arguments, api.Settings.given().model_copy().from_arguments] == [True, False, True]
 
 
 def test_settings_given_in_a_test_take_the_development_key_anywhere() -> None:

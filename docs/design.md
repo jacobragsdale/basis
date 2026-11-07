@@ -219,9 +219,9 @@ from its URL, fetched again when a token names a key it does not hold, or one pu
 explicitly, since the sign-in system's details are not yet known, and none is guessed. Only asymmetric algorithms are
 accepted, never `none` or HMAC, whose key would let every API that verifies a token make one too, and a key verifies
 only an algorithm it fits. The development key is published, so that tests, `basis dev` and a UI's development mode
-sign with it; settings read from the environment refuse it unless the machine is declared a desktop, by `desktop = true`
-in `basis/desktop.toml` in the user's own configuration folder, which no repo, image or deployment's variables hold, and
-refuse it in a container even then. Tokens are verified with PyJWT, which every basis environment already holds.
+sign with it; every app refuses it unless the machine is declared a desktop, by `desktop = true` in
+`basis/desktop.toml` in the user's own configuration folder, which no repo, image or deployment's variables hold, and
+refuses it in a container even then, but for an app built from a test's own settings. Tokens are verified with PyJWT, which every basis environment already holds.
 
 `basis call ROUTE` runs a handler in-process with its real or fake resources and prints the response, so an agent
 exercises an endpoint without starting a server. Every request in production is recorded in the run store: the request,

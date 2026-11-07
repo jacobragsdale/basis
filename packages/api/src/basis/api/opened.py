@@ -14,8 +14,8 @@ once the statement has ended if it still runs, and a request that would have com
 and whether it committed in the end is logged when it ends.
 
 `plan` checks, when the app is built, that the settings configure every resource that has no fake, so that a missing
-setting stops the app before it serves; `Resources.open`, in the app's lifespan, opens them, checking that each
-database answers, through each login the routes use, within its deadline."""
+setting stops the app before it serves; `Resources.open`, in the app's lifespan, opens them, after the keys its users'
+tokens verify with, checking that each database answers, through each login the routes use, within its deadline."""
 
 import asyncio
 import contextvars
@@ -50,6 +50,14 @@ log = logging.getLogger(__name__)
 _PROPAGATOR = TraceContextTextMapPropagator()
 _SYSTEMS = {"mssql": "microsoft.sql_server", "oracle": "oracle.db"}
 """OpenTelemetry's `db.system.name` for each kind of database."""
+
+
+class Opens(Protocol):
+    """What the app opens before its resources and closes after them: the keys its users' tokens verify with."""
+
+    async def open(self, tracer: Tracer) -> None: ...
+
+    async def close(self) -> None: ...
 
 
 class DatabasePort(Protocol):
@@ -174,16 +182,21 @@ class Resources:
         self._handles: dict[str, object] = {}
         self._clients: list[httpx2.AsyncClient] = []
         self._closing: set[asyncio.Task[None]] = set()
+        self._first: Opens | None = None
         self._linger_s = linger_s
         """How long shutdown waits for work that outlived its request: a login and a statement, at the longest the
         settings allow, or, where every database is a fake, until it ends, which the fakes' answers decide."""
 
     @classmethod
-    async def open(cls, planned: Plan, tracer: Tracer) -> Resources:
+    async def open(cls, planned: Plan, tracer: Tracer, first: Opens | None = None) -> Resources:
+        """The resources `planned` opened, after `first`, which they close last."""
         real = [planned.settings.databases[resource.name] for resource in planned.service.resources if isinstance(resource, DatabaseResource) and resource.name not in planned.fakes]
         opened = cls(tracer, linger_s=2 * max(database.timeout_s for database in real) if real else None)
         written = {route.writes.name for route in planned.service.routes if route.writes is not None}
         try:
+            if first is not None:
+                opened._first = first  # closed whether or not it opened, which a failed fetch leaves half done
+                await first.open(tracer)
             for resource in planned.service.resources:
                 await opened._open(resource, planned, writes=resource.name in written)
         except BaseException:
@@ -235,6 +248,8 @@ class Resources:
                 log.warning("%s database connections still run statements that missed their deadlines", len(waiting), extra={"connections": len(waiting)})
         for database in self._databases.values():
             database.pool.shutdown(wait=False, cancel_futures=True)
+        if self._first is not None:
+            await self._first.close()
 
 
 async def _answers(database: OpenDatabase, *, writes: bool) -> None:

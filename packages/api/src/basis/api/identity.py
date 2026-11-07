@@ -20,7 +20,9 @@ makes it handle that case:
 
 `api.User` holds the token's subject, `sub`: the sign-in system's id for the user. A service declares each other claim
 it needs as a field of its own subclass, named as the claim, or with `Field(alias=...)` where the claim's name is no
-identifier; a token without a required one, or with one that does not validate, is refused. The claims that basis
+identifier; a token without a required one, or with one that does not validate, is refused. No other way of naming a
+claim is allowed (`validation_alias`, `AliasChoices`, `AliasPath`, an alias generator, population by name), so that the
+claims a user reads are plain to see, and checked. The claims that basis
 verifies itself (`iss`, `aud`, `exp`, `nbf`, `iat`) are not a service's to declare, and the user holds nothing else
 of the token, the token itself included.
 
@@ -38,8 +40,8 @@ algorithms accepted, the leeway for clock skew, and the keys, each set explicitl
     BASIS_IDENTITY__KEYS__URL=https://signin.internal.example/.well-known/jwks.json
 
 The keys are the sign-in system's JWK set, from its URL (`Jwks`); one public key, from a PEM file (`PublicKey`); or
-the development key (`Development`), which anyone can sign with, so that settings read from the environment refuse
-it on any machine that is not declared a developer's desktop (`Machine`)."""
+the development key (`Development`), which anyone can sign with, so that every app refuses it on any machine that is
+not declared a developer's desktop (`Machine`), unless its settings are a test's own, from `Settings.given`."""
 
 import os
 import platform
@@ -83,11 +85,24 @@ class User(BaseModel):
     @override
     def __pydantic_init_subclass__(cls, **kwargs: object) -> None:
         super().__pydantic_init_subclass__(**kwargs)
+        config = cls.model_config
+        changed = [key for key, value in _CONFIG.items() if config.get(key, value) != value]
+        if changed:
+            msg = f"{cls.__qualname__} sets {', '.join(changed)} in its model_config: a User reads each claim by its field's name, or a plain Field(alias=...), and ignores the rest, so remove it"
+            raise ServiceError(msg)
         for name, found in cls.model_fields.items():
+            if found.validation_alias is not None and found.validation_alias != found.alias:
+                msg = f"{cls.__qualname__}.{name} reads its claim through validation_alias={found.validation_alias!r}: name the one claim it reads with Field(alias=...) alone"
+                raise ServiceError(msg)
             claim = found.alias if found.alias is not None else name
             if claim in VERIFIED and name != "subject":
                 msg = f"{cls.__qualname__}.{name} declares the {claim} claim, which basis verifies itself: declare only the other claims the service needs, and read the subject as user.subject"
                 raise ServiceError(msg)
+
+
+_CONFIG: Mapping[str, object] = MappingProxyType({"extra": "ignore", "alias_generator": None, "validate_by_name": False, "populate_by_name": False, "validate_by_alias": True})
+"""The configuration a `User` keeps, which a subclass may not change: each claim it reads is then the name or the plain
+alias of one of its fields, which basis checks against the claims it verifies itself."""
 
 
 class InvalidTokenError(Error):
@@ -129,8 +144,8 @@ class Jwks(Model):
     deadline_s: Annotated[float, Field(gt=0)] = 5
     """Seconds each fetch may take."""
     max_age_s: Annotated[float, Field(gt=0)] = 600
-    """Seconds a fetched set is used before the next request fetches it again. A set that cannot be fetched then is
-    kept, with a warning, until a fetch succeeds."""
+    """Seconds a fetched set is used before a request starts fetching it again, in the background, without waiting for
+    it. A set that cannot be fetched then is kept, with a warning, until a fetch succeeds."""
     refresh_s: Annotated[float, Field(ge=0)] = 30
     """The fewest seconds between two fetches made for a key the set does not hold, so that tokens naming made-up keys
     cannot make the API hammer the sign-in system."""
@@ -155,8 +170,9 @@ class PublicKey(Model):
 
 class Development(Model):
     """The development key, an ES256 key that basis publishes (`basis.api.tokens.DEVELOPMENT_KEY`), so that tests,
-    `basis dev` and a UI on the same desktop can sign tokens with it (`basis.api.tokens.sign`). Anyone can, so settings
-    read from the environment refuse it on any machine that is not declared a developer's desktop (`Machine`)."""
+    `basis dev` and a UI on the same desktop can sign tokens with it (`basis.api.tokens.sign`). Anyone can, so every app
+    refuses it on any machine that is not declared a developer's desktop (`Machine`), unless its settings are a test's
+    own, from `Settings.given`."""
 
     kind: Literal["development"]
 

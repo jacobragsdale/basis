@@ -3,8 +3,9 @@
 `plan` checks, when the app is built, that the service's declaration and its settings agree: a service that declares a
 user has its identity configured, and configured identity has a service that declares a user, since otherwise no token
 would be verified. It reads a public key, which must fit every algorithm the settings accept, as must the development
-key. The app's lifespan opens the `Verifier`, fetching the JWK set before the app reports ready, so a wrong URL stops
-the app before it serves.
+key, which it refuses off a declared desktop unless the settings are a test's own. Every app is planned here, whatever
+made its settings. The app's lifespan opens the `Verifier` before its resources, once it has started and its spans have
+somewhere to go, fetching the JWK set before the app reports ready, so a wrong URL stops the app before it serves.
 
 `Bearer`, the middleware inside the request boundary (`requests.Requests`), verifies the token of every request but a
 health check, so that a refusal is a problem with the request's id, and every record logged while the request is
@@ -24,20 +25,20 @@ served carries its user. Verifying checks, refusing the token at the first check
 - its `sub`, and every claim the service's `User` declares.
 
 The JWK set is fetched with the settings' CA bundle and proxy, and nothing from the environment, within its deadline
-and with a span of its own. A set that is stale and cannot be fetched again is kept, with a warning; a token whose key
-the set does not hold, when the set cannot be fetched, is a 503, `keys-unavailable`, as the token may well be good.
+and with a span of its own. A token whose key the set holds never waits for a fetch: a stale set is fetched again in
+the background, and kept, with a warning, when that fails. Only a token naming a key the set does not hold waits, for
+one fetch, within its deadline; and when the set cannot be fetched, it is a 503, `keys-unavailable`, as the token may
+well be good.
 
 `sign` makes tokens with the development key, for tests and `basis dev`."""
 
 import asyncio
 import base64
 import logging
-import math
 import ssl
 import time
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from datetime import UTC, datetime
+from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType
 from typing import Protocol, assert_never
@@ -56,7 +57,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from basis.api import errors
-from basis.api.identity import USER, Algorithm, Development, Identity, InvalidTokenError, Jwks, KeysUnavailableError, PublicKey, User
+from basis.api.identity import USER, Algorithm, Development, Identity, InvalidTokenError, Jwks, KeysUnavailableError, Machine, PublicKey, User, refuse_development
 from basis.api.requests import HEALTH, REQUEST_ID
 from basis.api.service import Service, ServiceError
 from basis.api.settings import Settings
@@ -189,21 +190,25 @@ def _check_times(claims: Mapping[str, object], now: float, leeway_s: float) -> N
         raise InvalidTokenError(msg)
 
 
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+_LATEST = int((datetime(9999, 12, 31, 23, 59, 59, tzinfo=UTC) - _EPOCH).total_seconds())
+"""The last second a `datetime` holds, past which a time in a token is no time."""
+
+
 def _numeric_date(claims: Mapping[str, object], claim: str) -> float | None:
-    """A claim that is a time, as RFC 7519's NumericDate, in seconds since 1970; None where the token has none."""
+    """A claim that is a time, as RFC 7519's NumericDate, in seconds since 1970 and before the year 10000; None where
+    the token has none. The bounds are compared before anything converts it, since JSON's integers have no limit and a
+    float has one; NaN is in no bounds."""
     if (value := claims.get(claim)) is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+    if isinstance(value, bool) or not isinstance(value, int | float) or not 0 <= value <= _LATEST:
         msg = f"the token's {claim} claim is not a time, in seconds since 1970"
         raise InvalidTokenError(msg)
     return float(value)
 
 
 def _iso(seconds: float) -> str:
-    try:
-        return datetime.fromtimestamp(seconds, UTC).isoformat()
-    except OverflowError, OSError, ValueError:  # past the years datetime holds
-        return f"{seconds:g} seconds after 1970"
+    return (_EPOCH + timedelta(seconds=seconds)).isoformat()
 
 
 def _unclaimed(error: ValidationError) -> str:
@@ -238,8 +243,8 @@ class _JwkSet(BaseModel):
 
 
 class KeySet:
-    """The sign-in system's JWK set, fetched when the app opens, and fetched again, by one request while the others
-    wait for it, when a token names a key the set does not hold, or when it is stale."""
+    """The sign-in system's JWK set, fetched when the app opens, and fetched again when a token names a key the set
+    does not hold, by one request while the others wait for it, or in the background when the set is stale."""
 
     def __init__(self, settings: Jwks, *, monotonic: Callable[[], float]) -> None:
         self._settings = settings
@@ -264,6 +269,11 @@ class KeySet:
         self._tracer = tracer
         await self._refresh()
 
+    @property
+    def closed(self) -> bool:
+        """Whether its client is closed, or was never made."""
+        return self._client is None or self._client.is_closed
+
     async def close(self) -> None:
         if self._fetching is not None:
             self._fetching.cancel()
@@ -271,13 +281,12 @@ class KeySet:
             await self._client.aclose()
 
     async def key(self, kid: str | None, algorithm: Algorithm) -> VerifyingKey:
-        settings = self._settings
-        if self._fetched_at is None or self._monotonic() - self._fetched_at >= settings.max_age_s:
-            try:
-                if self._may_fetch():
-                    await self._refresh()
-            except KeysUnavailableError as error:
-                log.warning("the sign-in system's JWK set is stale, and is kept: %s", error.detail, extra={"url": str(settings.url)})
+        """The key `kid` names that verifies `algorithm`. A token whose key the set holds never waits for a fetch: a
+        stale set is fetched again in the background. Only a key the set does not hold waits for one, within the
+        fetch's deadline, and at most once every `refresh_s`."""
+        stale = self._fetched_at is None or self._monotonic() - self._fetched_at >= self._settings.max_age_s
+        if stale and self._may_fetch():
+            self._fetch_soon()
         if (found := self._find(kid, algorithm)) is not None:
             return found
         if self._may_fetch():
@@ -297,11 +306,15 @@ class KeySet:
     async def _refresh(self) -> None:
         """Fetch the set, or wait for the fetch already under way; a request cancelled while it waits leaves the fetch
         to the others."""
+        await asyncio.shield(self._fetch_soon())
+
+    def _fetch_soon(self) -> asyncio.Task[None]:
+        """The fetch under way, or a new one, which goes on without anyone waiting for it."""
         if self._fetching is None:
             self._tried_at = self._monotonic()
             self._fetching = asyncio.create_task(self._fetch())
             self._fetching.add_done_callback(self._fetched)
-        await asyncio.shield(self._fetching)
+        return self._fetching
 
     def _fetched(self, task: asyncio.Task[None]) -> None:
         self._fetching = None
@@ -313,6 +326,8 @@ class KeySet:
             await self._get()
         except KeysUnavailableError as error:
             self._failure = error
+            if self._fetched_at is not None:
+                log.warning("the sign-in system's JWK set could not be fetched again, and the one fetched before is kept: %s", error.detail, extra={"url": str(self._settings.url)})
             raise
         self._failure = None
 
@@ -349,31 +364,40 @@ class KeySet:
         log.info("fetched the sign-in system's JWK set: %s signing keys", len(self._keys), extra={"url": url, "kids": [jwk.get("kid") for jwk in self._keys]})
 
     def _find(self, kid: str | None, algorithm: Algorithm) -> VerifyingKey | None:
-        """The key `kid` names that verifies `algorithm`, or the set's only key where the token names none; None where
-        the set holds no such key."""
+        """The key that verifies `algorithm` among the set's keys that `kid` names, each considered for its algorithm
+        and its type, or among all of them where the token names none, which must then be one; None where the set
+        holds no key `kid` names."""
         if (made := self._made.get((kid, algorithm))) is not None:
             return made
-        held = [jwk for jwk in self._keys if jwk.get("kid") == kid] if kid is not None else list(self._keys)
+        held = [jwk for jwk in self._keys if kid is None or jwk.get("kid") == kid]
         if not held:
             return None
-        if kid is None and len(held) > 1:
-            msg = f"the token names no key id, kid, and the sign-in system's JWK set holds {len(held)} keys"
+        considered = [_fit(jwk, algorithm) for jwk in held]
+        fitting = [found for found in considered if not isinstance(found, str)]
+        if kid is None and len(fitting) > 1:
+            msg = f"the token names no key id, kid, and {len(fitting)} of the sign-in system's keys verify {algorithm}"
             raise InvalidTokenError(msg)
-        jwk = held[0]
-        if (meant := jwk.get("alg")) is not None and meant != algorithm:
-            msg = f"the token is signed with {algorithm}, and the sign-in system's key {kid} is for {meant}"
+        if not fitting:
+            unfit = [found for found in considered if isinstance(found, str)]
+            named = f"keys {kid}" if kid is not None else "keys"
+            msg = unfit[0] if len(unfit) == 1 else f"none of the sign-in system's {len(unfit)} {named} verifies {algorithm}"
             raise InvalidTokenError(msg)
-        try:
-            parsed: object = jwt.PyJWK(jwk, algorithm=algorithm).key
-        except jwt.PyJWTError as error:
-            msg = f"the sign-in system's key {kid} does not fit {algorithm}"
-            raise InvalidTokenError(msg) from error
-        key = _verifying(parsed)
-        if key is None or not fits(algorithm, key):
-            msg = f"the sign-in system's key {kid} is not a public key that fits {algorithm}"
-            raise InvalidTokenError(msg)
-        self._made[kid, algorithm] = key
-        return key
+        self._made[kid, algorithm] = fitting[0]
+        return fitting[0]
+
+
+def _fit(jwk: Mapping[str, JsonValue], algorithm: Algorithm) -> VerifyingKey | str:
+    """The public key `jwk` holds, where it verifies `algorithm`, by the algorithm it names and its type; or why not."""
+    kid = jwk.get("kid")
+    if (meant := jwk.get("alg")) is not None and meant != algorithm:
+        return f"the token is signed with {algorithm}, and the sign-in system's key {kid} is for {meant}"
+    try:
+        parsed: object = jwt.PyJWK(dict(jwk), algorithm=algorithm).key
+    except jwt.PyJWTError:
+        return f"the sign-in system's key {kid} does not fit {algorithm}"
+    if (key := _verifying(parsed)) is None or not fits(algorithm, key):
+        return f"the sign-in system's key {kid} is not a public key that fits {algorithm}"
+    return key
 
 
 def _verifying(key: object) -> VerifyingKey | None:
@@ -395,10 +419,12 @@ def fits(algorithm: Algorithm, key: VerifyingKey) -> bool:
             assert_never(unreachable)
 
 
-def plan(service: Service, settings: Settings, *, now: Callable[[], datetime] = _utc_now, monotonic: Callable[[], float] = time.monotonic) -> Verifier | None:
+def plan(service: Service, settings: Settings, *, now: Callable[[], datetime] = _utc_now, monotonic: Callable[[], float] = time.monotonic, machine: Machine | None = None) -> Verifier | None:
     """The verifier of `service`'s tokens, or None for a service that declares no user, after checking that its
     settings configure identity where, and only where, the service declares a user, and that a public key, or the
-    development key, fits every algorithm they accept."""
+    development key, fits every algorithm they accept. Every app is planned here, so the development key is refused
+    here unless `machine`, by default this one, is declared a developer's desktop, or the settings are a test's own,
+    from `Settings.given`, which nothing outside code can make."""
     identity = settings.identity
     if service.user is None:
         if identity is not None:
@@ -421,6 +447,8 @@ def plan(service: Service, settings: Settings, *, now: Callable[[], datetime] = 
         case PublicKey():
             keys = FixedKey(_fitting(_read(identity.keys.path), identity.algorithms, f"the public key in {identity.keys.path}"))
         case Development():
+            if not settings.from_arguments:
+                refuse_development(identity, machine if machine is not None else Machine.here())
             keys = FixedKey(_fitting(_DEVELOPMENT, identity.algorithms, "the development key, an ES256 key,"))
         case unreachable:
             assert_never(unreachable)
@@ -501,24 +529,6 @@ class Bearer:
             msg = "the Authorization header holds no bearer token: send `Authorization: Bearer TOKEN`, or no Authorization header for an anonymous request"
             raise InvalidTokenError(msg)
         return await self.verifier.verify(token.strip())
-
-
-def lifespan[A](verifier: Verifier | None, tracer: Tracer, inner: Callable[[A], AbstractAsyncContextManager[Mapping[str, object]]]) -> Callable[[A], AbstractAsyncContextManager[Mapping[str, object]]]:
-    """`inner`, the app's lifespan, with the verifier opened before it starts, so that the JWK set is fetched before
-    the app reports ready and a wrong URL stops it before it serves, and closed after it stops."""
-    if verifier is None:
-        return inner
-
-    @asynccontextmanager
-    async def opened(app: A) -> AsyncGenerator[Mapping[str, object]]:
-        await verifier.open(tracer)
-        try:
-            async with inner(app) as state:
-                yield state
-        finally:
-            await verifier.close()
-
-    return opened
 
 
 def sign(identity: Identity, subject: str, *, issued: datetime, expires: datetime, claims: Mapping[str, JsonValue] | None = None) -> str:

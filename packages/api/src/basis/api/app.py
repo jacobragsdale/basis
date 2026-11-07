@@ -102,7 +102,7 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Mapping[
         raise ServiceError(msg)
     configured = settings
     planned = opened.plan(service, configured, fakes or {})
-    verifier = tokens.plan(service, configured)
+    identity = tokens.plan(service, configured)
     writes = {route.handler: route.writes for route in service.routes if route.writes is not None}
     lifecycle = Lifecycle()
     provider = traces.provider(service.name)
@@ -119,7 +119,7 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Mapping[
         if (exporter := traces.exporter(configured.traces)) is not None:
             provider.add_span_processor(exporter)
         try:
-            resources = await opened.Resources.open(planned, tracer)
+            resources = await opened.Resources.open(planned, tracer, identity)  # the identity's keys first, then the resources
         except BaseException:
             await asyncio.to_thread(provider.shutdown)  # the failed open's spans too
             raise
@@ -147,8 +147,8 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Mapping[
 
     app = FastAPI(
         title=service.name,
-        lifespan=tokens.lifespan(verifier, tracer, lifespan),
-        middleware=[Middleware(Requests), *([Middleware(tokens.Bearer, verifier=verifier)] if verifier is not None else [])],  # Bearer inside Requests
+        lifespan=lifespan,
+        middleware=[Middleware(Requests), *([Middleware(tokens.Bearer, verifier=identity)] if identity is not None else [])],  # Bearer inside Requests
         exception_handlers={errors.Error: _problem, HTTPException: _problem, RequestValidationError: _problem},
         telemetry={
             "tracer_provider": provider,
