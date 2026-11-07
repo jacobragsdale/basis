@@ -100,10 +100,10 @@ holds the interface, and its docstring is the reference.
   nothing writes now, and `basis check` reports any that differ, byte for byte. A part adds its lines of the
   Dockerfile as its `AgentFiles.image`, and a repo its Debian packages as `[tool.basis] apt-packages`. `sync.plan`
   works this out once per call.
-- A file of the repo's own at a path basis writes (one without the marker, a `CLAUDE.md` holding anything else, or
-  settings with none of basis's rules) is left alone, and a file basis cannot read, such as settings that are not
-  JSON, is one `ERROR` line; every other file is still checked and written. `basis sync --adopt` saves each file of
-  the repo's own as `NAME.before-basis` and writes basis's.
+- A file of the repo's own at a path basis writes (one without the marker, a skill's `SKILL.md` among them, a
+  `CLAUDE.md` holding anything else, or settings with none of basis's rules) is left alone, and a file basis cannot
+  read, such as settings that are not JSON, is one `ERROR` line; every other file is still checked and written.
+  `basis sync --adopt` saves each file of the repo's own as `NAME.before-basis` and writes basis's.
 - `basis check`, `sync` and `new` point a clone that names no hooks folder at the repo's `.githooks/`
   (`basis.core.hooks.ensure`); the verbs a container runs, such as `run`, leave git alone. `basis check` fails, with
   the fix, when the clone runs other hooks or is no clone. The hooks are POSIX sh, which Git for Windows runs too. The

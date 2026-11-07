@@ -46,6 +46,23 @@ def test_a_block_that_etl_framework_wrote_is_replaced_not_joined_by_a_second(tmp
     assert agents.read_text(encoding="utf-8") == synced
 
 
+def test_a_repos_first_sync_removes_what_etl_framework_wrote_without_a_marker_and_nothing_of_the_repos_own(tmp_path: Path) -> None:
+    """etl-framework 0.1.0 wrote its skills to `.agents/skills/etl-*` with no marker, and a test of the agent files;
+    basis-job lists them as `retired`, so the first `basis sync` removes them, and leaves a skill of the repo's own."""
+    repo = new.repo(tmp_path / "pricing-etl", "prices", index=None, framework_path=CHECKOUT, install=False)
+    written = [repo / ".agents/skills" / name / "SKILL.md" for name in ("etl-new-job", "etl-port-job", "etl-why-failed")]
+    own = repo / ".agents/skills/etl-team-notes/SKILL.md"
+    for path in [*written, own]:
+        path.parent.mkdir(parents=True)
+        path.write_text(f"---\nname: {path.parent.name}\ndescription: As etl-framework 0.1.0 wrote it.\n---\n", encoding="utf-8")
+    (repo / "tests/test_agent_files.py").write_text("def test_agent_files() -> None: ...\n", encoding="utf-8")
+    assert sorted(path.relative_to(repo).as_posix() for path in sync.write(repo)) == [
+        ".agents/skills/etl-new-job", ".agents/skills/etl-port-job", ".agents/skills/etl-why-failed", "tests/test_agent_files.py",
+    ]  # fmt: skip
+    assert own.is_file()
+    assert sync.stale(repo) == []
+
+
 def test_without_a_release_a_repo_needs_a_checkout_or_an_index(tmp_path: Path) -> None:
     with pytest.raises(NoReleaseError, match="pass --framework-path"):
         new.repo(tmp_path / "pricing-etl", "prices", index=None, framework_path=None, install=False)

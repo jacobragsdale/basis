@@ -86,17 +86,12 @@ docstring-code-format = true
 skip-magic-trailing-comma = true
 
 # optim's import contracts, apart from the workspace root's so that those hold with optim gone. From the root, the commit
-# hook runs them as `uv run lint-imports --no-cache --config packages/optim/pyproject.toml`.
+# hook runs them as `uv run lint-imports --no-cache --config packages/optim/pyproject.toml`. That no other part imports
+# optim is the root's contract, which the hook runs on any change to them.
 [tool.importlinter]
 root_packages = ["optim", "basis.core", "basis.job", "basis.api"]  # basis's are portions of one namespace, each named
 include_external_packages = true  # so a contract can forbid a database driver
 exclude_type_checking_imports = true
-
-[[tool.importlinter.contracts]]
-name = "Nothing outside packages/optim imports optim: basis-core, basis-job and basis-api build, check and test without it"
-type = "forbidden"
-source_modules = ["basis.core", "basis.job", "basis.api"]
-forbidden_modules = ["optim"]
 
 [[tool.importlinter.contracts]]
 name = "optim imports basis-core and no other part, so a change to one cannot break another"

@@ -105,7 +105,7 @@ error-on-warning = true
 # repos a member's tests make; a conftest below the root cannot load it. A part's pytest plugin, which its package
 # registers for the repos it makes, stays out of this session (`-p no:NAME`), so one part's code never runs in
 # another's tests; pytester's own sessions still load it.
-addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration' --ignore-glob=packages/*/src/*/templates --ignore-glob=packages/*/src/basis/*/templates -p pytester -p no:optim"
+addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration' --ignore-glob=packages/*/src/*/templates -p pytester -p no:optim"
 testpaths = ["packages/*/tests", "packages/*/src/*/example", "packages/*/src/basis/*/example"]  # every member's tests, and its example's
 pythonpath = ["packages/job/tests", "packages/optim/tests"]  # each member's shared test modules, such as basis-job's `builders`; a missing path adds nothing
 xfail_strict = true  # An xfail that starts passing is a failure, not a silent pass.
@@ -121,7 +121,7 @@ markers = [
 [tool.coverage.run]
 branch = true  # Statement coverage hides the untaken half of every condition.
 source = ["packages/core/src/basis", "packages/job/src/basis", "packages/api/src/basis", "packages/optim/src/optim"]  # each package's code, not its tests
-omit = ["*/src/*/templates/*"]  # a generated repo's files, which run in that repo
+omit = ["**/templates/**"]  # a generated repo's files, which run in that repo; coverage's `*` stops at a `/`
 
 [tool.coverage.report]
 show_missing = true
@@ -146,6 +146,12 @@ forbidden_modules = ["basis.job", "basis.api"]
 name = "Parts import basis-core and never each other, so a change to one cannot break another"
 type = "independence"
 modules = ["basis.job", "basis.api"]
+
+[[tool.importlinter.contracts]]
+name = "basis-core, basis-job and basis-api import no optim, which may change or go"
+type = "forbidden"
+source_modules = ["basis.core", "basis.job", "basis.api"]
+forbidden_modules = ["optim"]  # no root package, so an external one when installed, and a contract that holds when it is not
 
 [[tool.importlinter.contracts]]
 name = "Job code and the checks it runs through do no I/O: the run loop loads, saves and publishes"
