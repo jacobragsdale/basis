@@ -19,11 +19,12 @@ A repo lists its service as an entry point in the `basis.apis` group, `NAME = "m
 import importlib
 import inspect
 import re
-from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass
+from collections.abc import Iterable, Iterator, Sequence
+from dataclasses import dataclass, field
 from http import HTTPStatus
-from importlib.metadata import entry_points
-from typing import Annotated, Literal, get_args, get_origin
+from importlib.metadata import EntryPoint, entry_points
+from types import FunctionType
+from typing import Annotated, Literal, Protocol, get_args, get_origin
 
 from fastapi import params
 from starlette.applications import Starlette
@@ -37,9 +38,9 @@ STATE = "basis"
 RESERVED = ("/health", "/docs", "/redoc", "/openapi.json")
 """Paths the app itself answers: its health endpoints and its OpenAPI document and pages."""
 NAME = re.compile(r"[a-z][a-z0-9-]{0,62}")
+_PARAMETER = re.compile(r"\{[^}]*\}")
 
 type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
-type Handler = Callable[..., object]
 
 
 class ServiceError(TypeError):
@@ -50,11 +51,13 @@ class ServiceError(TypeError):
 class Route:
     method: Method
     path: str
-    handler: Handler
+    handler: FunctionType
     """A named function, sync where it calls blocking code, which FastAPI runs in its threadpool, and async only where
     it awaits. Its name is the route's name."""
     status: int = HTTPStatus.OK
     """The status of a response that succeeds."""
+    name: str = field(init=False)
+    """The handler's name, which is the route's."""
 
     def __post_init__(self) -> None:
         if not self.path.startswith("/"):
@@ -63,36 +66,35 @@ class Route:
         if any(self.path == reserved or self.path.startswith(f"{reserved}/") for reserved in RESERVED):
             msg = f"route {self.path!r} is one the app answers itself ({', '.join(RESERVED)}): give the route another path"
             raise ServiceError(msg)
-        if not inspect.isfunction(self.handler) or self.handler.__name__ == "<lambda>":
-            msg = f"route {self.path!r}'s handler is a {type(self.handler).__name__}, not a named function: declare it with def, whose name is the route's"
+        handler = self.handler
+        if not inspect.isfunction(handler) or handler.__name__ == "<lambda>":
+            msg = f"route {self.path!r}'s handler is a {type(handler).__name__}, not a named function: declare it with def, whose name is the route's"
             raise ServiceError(msg)
+        object.__setattr__(self, "name", handler.__name__)  # frozen: set once, from the handler
         if self.status not in range(200, 300):
             msg = f"route {self.path!r} succeeds with status {self.status}: give a 2xx, and raise an api.Error for each way it fails"
             raise ServiceError(msg)
 
     @property
-    def name(self) -> str:
-        return str(getattr(self.handler, "__name__", ""))
+    def shape(self) -> tuple[Method, str]:
+        """The method and the path with its parameters unnamed: two routes of one shape match the same requests."""
+        return self.method, _PARAMETER.sub("{}", self.path)
 
 
-def get(path: str, handler: Handler, *, status: int = HTTPStatus.OK) -> Route:
-    return Route("GET", path, handler, status)
+class _Declare(Protocol):
+    def __call__(self, path: str, handler: FunctionType, *, status: int = HTTPStatus.OK) -> Route: ...
 
 
-def post(path: str, handler: Handler, *, status: int = HTTPStatus.OK) -> Route:
-    return Route("POST", path, handler, status)
+def _route(method: Method) -> _Declare:
+    def declare(path: str, handler: FunctionType, *, status: int = HTTPStatus.OK) -> Route:
+        return Route(method, path, handler, status)
+
+    declare.__name__ = declare.__qualname__ = method.lower()
+    declare.__doc__ = f"A route that answers {method} requests to `path` with `handler`, and `status` when it succeeds."
+    return declare
 
 
-def put(path: str, handler: Handler, *, status: int = HTTPStatus.OK) -> Route:
-    return Route("PUT", path, handler, status)
-
-
-def patch(path: str, handler: Handler, *, status: int = HTTPStatus.OK) -> Route:
-    return Route("PATCH", path, handler, status)
-
-
-def delete(path: str, handler: Handler, *, status: int = HTTPStatus.OK) -> Route:
-    return Route("DELETE", path, handler, status)
+get, post, put, patch, delete = _route("GET"), _route("POST"), _route("PUT"), _route("PATCH"), _route("DELETE")
 
 
 @dataclass(frozen=True)
@@ -123,12 +125,13 @@ class Service:
                 if not issubclass(self.settings, kind):
                     msg = f"{route.name} asks for {kind.__qualname__}, which service {self.name} does not give: its settings are {self.settings.__qualname__}"
                     raise ServiceError(msg)
-        seen: set[tuple[str, str]] = set()
+        seen: dict[tuple[Method, str], Route] = {}
         for route in routes:
-            if (route.method, route.path) in seen:
-                msg = f"service {self.name} declares {route.method} {route.path} twice: give each method and path one handler"
+            if (first := seen.get(route.shape)) is not None:
+                same = route.path if route.path == first.path else f"{first.path} and {route.path}, which match the same paths,"
+                msg = f"service {self.name} declares {route.method} {same} twice: give each method and path one handler"
                 raise ServiceError(msg)
-            seen.add((route.method, route.path))
+            seen[route.shape] = route
 
 
 @dataclass(frozen=True)
@@ -163,38 +166,42 @@ def given(kind: type[Settings]) -> params.Depends:
     return params.Depends(_Given(kind))
 
 
-def _asks_for(handler: Handler) -> Iterator[type[Settings]]:
-    """What each of `handler`'s parameters asks basis for, through `given`."""
-    for parameter in inspect.signature(handler).parameters.values():
+def _asks_for(handler: FunctionType) -> Iterator[type[Settings]]:
+    """What each of `handler`'s parameters asks basis for, through `given`, its annotations evaluated even where they
+    are strings, as FastAPI evaluates them."""
+    for parameter in inspect.signature(handler, eval_str=True).parameters.values():
         metadata = get_args(parameter.annotation)[1:] if get_origin(parameter.annotation) is Annotated else ()
         for marker in (*metadata, parameter.default):
             if isinstance(marker, params.Depends) and isinstance(marker.dependency, _Given):
                 yield marker.dependency.kind
 
 
-def load(reference: str | None = None) -> Service:
+def load(reference: str | None = None, *, listed: Iterable[EntryPoint] | None = None) -> Service:
     """The service `reference` names: an entry point in the `basis.apis` group, a module whose `service` it is, or
-    `module:attribute`. With none, the one service the installed packages list."""
-    listed = {entry.name: entry.value for entry in entry_points(group=GROUP)}
+    `module:attribute`. With none, the one service listed. `listed` is the entry points to choose from, by default the
+    installed packages' `basis.apis`."""
+    entries = {entry.name: entry for entry in (listed if listed is not None else entry_points(group=GROUP))}
     if reference is None:
-        if len(listed) != 1:
+        if len(entries) != 1:
             listing = f'[project.entry-points."{GROUP}"]'
-            msg = f"the installed packages list {sorted(listed) or 'no services'} in the {GROUP} entry points: name the service to serve, or list the repo's one under {listing} in its pyproject.toml"
+            msg = f"the installed packages list {sorted(entries) or 'no services'} in the {GROUP} entry points: name the service to serve, or list the repo's one under {listing} in its pyproject.toml"
             raise ServiceError(msg)
-        reference = next(iter(listed))
-    target = listed.get(reference, reference)
-    module_name, _, attribute = target.partition(":")
+        reference = next(iter(entries))
+    entry = entries.get(reference) or EntryPoint(name=reference, value=reference, group=GROUP)
     try:
-        module = importlib.import_module(module_name)
+        module = importlib.import_module(entry.module)
     except ModuleNotFoundError as error:
-        if error.name is not None and module_name.startswith(error.name):
-            msg = f"no service named {reference!r}: the installed packages list {sorted(listed) or 'none'}, and it is not a module path"
+        if error.name is not None and (entry.module == error.name or entry.module.startswith(f"{error.name}.")):
+            msg = f"no service named {reference!r}: the installed packages list {sorted(entries) or 'none'}, and it is not a module path"
             raise ServiceError(msg) from error
-        raise
-    found = getattr(module, attribute or "service", None)
+        raise  # the module exists, and something it imports does not
+    attribute = entry.attr or "service"
+    found: object = module
+    for part in attribute.split("."):
+        found = getattr(found, part, None)
     if isinstance(found, Service):
         return found
-    where = f"{module_name}.{attribute or 'service'}"
+    where = f"{entry.module}:{attribute}"
     if isinstance(found, Starlette):
         msg = f"{where} is an app the service made itself, which basis does not serve: declare `service = api.Service(name=..., settings=..., routes=[...])`, and basis builds its app"
         raise ServiceError(msg)

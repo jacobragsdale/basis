@@ -3,11 +3,13 @@ service subclasses `Settings` with fields of its own, which read from the same v
 `SERVE__PORT` after the prefix sets `serve.port`, and a service's `max_days` is `MAX_DAYS` after it. The settings
 are read once, when the app is built, and a missing or invalid one stops it there, naming the variable to set."""
 
+import re
 from contextvars import ContextVar
 from typing import Annotated, Literal, Self, override
 
 from pydantic import Field, HttpUrl, ValidationError, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
+from pydantic_settings import SettingsError as SourceError
 
 from basis.core import settings as core
 from basis.core.model import Model
@@ -86,6 +88,12 @@ def read[S: Settings](settings: type[S]) -> S:
         problems = "; ".join(f"{variable(settings, entry['loc'])}: {entry['msg']}" for entry in error.errors(include_url=False, include_input=False))
         msg = f"the settings are not valid, so the API cannot start: set {problems}"
         raise SettingsError(msg) from None  # the validation error would print every value beside the field it names
+    except SourceError as error:  # a value that does not parse before it is validated, such as a block's JSON
+        field = re.search(r'field "([^"]+)"', str(error))  # pydantic-settings names the field in its message alone
+        name = variable(settings, (field.group(1),)) if field is not None else f"the variable that starts {variable(settings, ())}"
+        reason = f": {error.__cause__}" if error.__cause__ is not None else ""
+        msg = f"the settings are not valid, so the API cannot start: set {name}, whose value does not parse{reason}"
+        raise SettingsError(msg) from None
 
 
 def variable(settings: type[BaseSettings], location: tuple[str | int, ...]) -> str:

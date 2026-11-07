@@ -8,7 +8,9 @@ from uuid import UUID
 
 import httpx2
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from pydantic import BaseModel
 
 from basis import api
 
@@ -33,13 +35,26 @@ def price(security: str, settings: Annotated[api.Settings, api.given(api.Setting
     return {"security": security, "price": "101.25"}
 
 
+class Order(BaseModel):
+    security: str
+    quantity: int
+
+
+def order(placed: Order) -> Order:
+    return placed
+
+
+def conflict() -> dict[str, str]:
+    raise HTTPException(HTTPStatus.CONFLICT, detail={"conflicts": ["T1", "T2"]})
+
+
 def broken() -> dict[str, str]:
     log.info("about to fail")
     msg = "the database password is hunter2"
     raise RuntimeError(msg)
 
 
-SERVICE = api.Service(name="prices", settings=api.Settings, routes=[api.get("/prices/{security}", price), api.get("/broken", broken)])
+SERVICE = api.Service(name="prices", settings=api.Settings, routes=[api.get("/prices/{security}", price), api.post("/orders", order), api.get("/conflict", conflict), api.get("/broken", broken)])
 
 
 def _app(**settings: object) -> api.App:
@@ -116,7 +131,7 @@ def test_spans_go_only_where_the_settings_say(capsys: pytest.CaptureFixture[str]
     assert [(span["name"], span["parent_id"]) for span in server] == [("GET /prices/{security}", f"0x{CALLER_SPAN}")]
     context = server[0]["context"]
     assert isinstance(context, dict)
-    assert context["span_id"] == f"0x{response.headers['traceparent'].split('-')[2]}"
+    assert {str(key): value for key, value in context.items()}["span_id"] == f"0x{response.headers['traceparent'].split('-')[2]}"
 
 
 def test_a_declared_error_is_a_problem_and_an_ordinary_log_line(logged: Records) -> None:
@@ -142,6 +157,22 @@ def test_an_unexpected_error_is_a_bare_500_logged_once_with_its_traceback(logged
     assert sum("traceback" in record for record in logged()) == 1
 
 
+def test_a_body_that_is_not_json_is_a_problem_with_the_whole_body() -> None:
+    with TestClient(_app().asgi) as client:
+        response = client.post("/orders", content=b'{"security": "T1",', headers={"content-type": "application/json"})
+    assert (response.status_code, response.json()["type"]) == (HTTPStatus.UNPROCESSABLE_CONTENT, "invalid-request")
+    [error] = response.json()["errors"]
+    assert (error["location"], error["pointer"]) == ("body", "")
+    assert error["detail"].startswith("JSON decode error at character 18: ")
+
+
+def test_an_http_exception_keeps_its_status_and_its_structured_detail() -> None:
+    with TestClient(_app().asgi) as client:
+        response = client.get("/conflict")
+    assert response.status_code == HTTPStatus.CONFLICT
+    assert response.json() == {"type": "about:blank", "title": "Conflict", "status": 409, "instance": f"urn:uuid:{response.headers['x-request-id']}", "data": {"conflicts": ["T1", "T2"]}}
+
+
 @pytest.mark.parametrize(
     ("method", "path", "status", "headers"), [("GET", "/nowhere", HTTPStatus.NOT_FOUND, {}), ("POST", "/broken", HTTPStatus.METHOD_NOT_ALLOWED, {"allow": "GET"})], ids=["no-route", "wrong-method"]
 )
@@ -154,7 +185,8 @@ def test_errors_from_routing_are_problems_too(method: str, path: str, status: in
 
 def _spans(out: str) -> list[dict[str, object]]:
     """ConsoleSpanExporter's output: one indented JSON object per span, one after another."""
-    decoder, spans, at = json.JSONDecoder(), [], 0
+    decoder, at = json.JSONDecoder(), 0
+    spans: list[dict[str, object]] = []
     while (at := _skip_space(out, at)) < len(out):
         span, at = decoder.raw_decode(out, at)
         assert isinstance(span, dict)

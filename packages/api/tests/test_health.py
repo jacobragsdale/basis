@@ -13,10 +13,11 @@ def quote(security: str) -> dict[str, str]:
 SERVICE = api.Service(name="quotes", settings=api.Settings, routes=[api.get("/quotes/{security}", quote)])
 
 
-def _readiness(client: TestClient) -> tuple[int, str | None]:
+def _readiness(client: TestClient) -> tuple[int, object]:
     response = client.get("/health/ready")
-    body = response.json()
-    return response.status_code, body.get("detail") if response.status_code != HTTPStatus.OK else body["status"]
+    body: object = response.json()
+    assert isinstance(body, dict)
+    return response.status_code, body.get("detail") if response.status_code != HTTPStatus.OK else body.get("status")
 
 
 def test_ready_only_between_startup_and_shutdown() -> None:

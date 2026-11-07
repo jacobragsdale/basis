@@ -16,7 +16,7 @@ Paths are under `src/basis/api/`.
 | `__init__.py` | The declarations' names; `api.build` and `api.serve` load on first use, so a service's modules import no server. |
 | `service.py` | `Service`, `Route` and `get`/`post`/`put`/`patch`/`delete`; `given`, what a handler asks basis for; `load`, a service by entry point (`basis.apis`) or module. |
 | `settings.py` | `Settings`, basis-core's with `serve` and `traces`; `Settings.given`, settings from arguments alone, for tests; `read`, which names each variable to set. |
-| `errors.py` | `Error`, which a service subclasses with a status and a title; `Problem`; `problem`, the one exception map. |
+| `errors.py` | `Error`, which a service subclasses with a status and a title, or with `abstract=True` as a base for others; `Problem`; `problem`, the one exception map. |
 | `app.py` | `build`: the app, its lifespan, its exception handlers, its health endpoints and the `Lifecycle` readiness reports. |
 | `requests.py` | The request boundary: the request id, log fields, `X-Request-Id` and `traceparent` out, one log line per request, and the 500 for an exception nothing expected. |
 | `traces.py` | The app's own tracer provider, which FastAPI's telemetry makes server spans with, and the exporter the settings name. |
