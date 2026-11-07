@@ -1,6 +1,6 @@
 """Writing a run's changes: each database in one transaction, in name order, which commits only once every table the
 run writes there, and a ledger row for each, is written. The first failure stops the rest, and its database rolls
-back; a database that committed stays committed, and `etl resume` writes the others from the run's snapshot, the
+back; a database that committed stays committed, and `basis resume` writes the others from the run's snapshot, the
 same rows, not a fresh extract. The ledger, written in the same transaction as the data, says which databases a run
 committed to, so a resume never writes one twice.
 
@@ -63,7 +63,7 @@ def _publish_database(publication: Publication, database: Database, targets: Map
         for name, target in targets.items():
             spec = writer.describe(target.table)
             if spec is None:
-                msg = f"{target.table} does not exist in {database.name}: `etl ddl` prints a CREATE TABLE for it"
+                msg = f"{target.table} does not exist in {database.name}: `basis ddl` prints a CREATE TABLE for it"
                 raise PublishRefusedError(msg)
             if reasons := check_table(target, spec) + check_values(target, spec, changes[name]):
                 raise PublishRefusedError(f"{name}: {target.table} changed since the run checked it:\n" + "\n".join(reasons))

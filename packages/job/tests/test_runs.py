@@ -65,7 +65,7 @@ def test_a_run_that_publishes_to_an_unconfigured_database_fails_before_loading(t
     result = run_on_files(tmp_path, make_job(write=etl.Append()), prices({}), publish=True)
     assert result.record.status == "failed"
     assert result.record.inputs == {}
-    assert result.record.reasons == ["database 'warehouse' is not configured, and the run publishes to it: set ETL_DATABASES__WAREHOUSE__*"]
+    assert result.record.reasons == ["database 'warehouse' is not configured, and the run publishes to it: set BASIS_DATABASES__WAREHOUSE__*"]
 
 
 def test_a_replay_with_other_params_reports_what_they_change(tmp_path: Path) -> None:

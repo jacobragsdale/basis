@@ -2,8 +2,8 @@
 
 This package is basis-job, which ETL job repos depend on; it was etl-framework until basis's step 1.3. A job is a
 folder in a repo's `jobs/`, whose `job.py` exports `Params`, `Inputs`, `Outputs`, `transform` and optionally `check`;
-the framework loads its inputs, runs its transform, checks its changes, saves a snapshot, and with `etl run --publish`
-writes each database in one transaction with a ledger row per table. The job contract is this package's, and the
+the framework loads its inputs, runs its transform, checks its changes, saves a snapshot, and with `basis run
+--publish` writes each database in one transaction with a ledger row per table. The job contract is this package's, and the
 plumbing it runs on is basis-core's, in `packages/core`, which imports nothing from here.
 [docs/design.md](docs/design.md) is the design and its decisions; the docs for job authors are in
 `src/basis/job/docs/` and ship with the package.
@@ -17,8 +17,8 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
 |---|---|
 | `__init__.py` | The job contract's names; `etl.run` and `etl.replay` load `api.py` on first use. |
 | `api.py` | `run` and `replay`, as a job's `main.py` calls them: paths from the job's folder, a settings file set for the call alone, snapshots in the repo's `snapshots/`, never a publish. |
-| `cli.py` | Every `etl` command, one handler each, its arguments as a frozen dataclass. |
-| core `settings.py` | `ETL_*` variables: the snapshot root and each named database, with an optional `WRITE` block. |
+| `cli.py` | basis-job's part of the `basis` command: `part()`, which its `basis.verbs` entry point names, with its verbs (`run`, `resume`, `describe`, `ddl`) and what core's verbs do with its jobs; and `scaffold()`, the `basis-job` command that makes a repo. One handler per verb, its arguments as a frozen dataclass. |
+| core `settings.py` | `BASIS_*` variables: the snapshot root and each named database, with an optional `WRITE` block. |
 | `job.py` | Finding a job by entry point or module path, and reading its contract. |
 | `rows.py` | `Row`, its column types and annotations, and `conform`, the boundary every frame passes through. |
 | core `tables.py` | What a run writes, in the terms every part shares: `Column`, `IDENTIFIER`, `Changes`, `Delete`, `Range`, and the `Target` protocol that `outputs.Target` meets. |
@@ -38,10 +38,11 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
 | core `logs.py` | JSON lines, run fields on every record, and the exception record. |
 | `testing.py` | `ContractTests`, the import check's `FORBIDDEN`, `check_agent_files`, and the builders `frame` and `inputs`. |
 | core `testing.py` | What every part's contract tests share: the import chains, with basis's portions named, and the agent-files check. |
-| `new.py`, `sync.py`, `templates/`, `skills/` | `etl new repo`, `etl new job` and `etl sync`: a job repo from the example and the templates, and its agent files. |
+| `new.py`, `sync.py`, `templates/`, `skills/` | `basis-job new repo`, `basis new job` and `basis sync`: a job repo from the example and the templates, declaring the job part, and its agent files, whose skills are named `job-*`. |
 | core `new.py`, `sync.py`, `templates/` | What `new` and `sync` share across parts: the shared templates, the sources for a repo's basis packages, and a part's agent files. |
-| `example/` | The example job, laid out as a job's folder, with its fixture and tests; `etl new` copies it, leaving out its `ruff.toml`. |
-| `docs/` | The docs for job authors, which `etl docs` prints. |
+| core `verbs.py`, `command.py`, `check.py` | The interface a part gives the `basis` command; the command, which finds the repo's declared parts and runs core's verbs and theirs, printing every failure as one `ERROR` line; and `basis check`'s steps. |
+| `example/` | The example job, laid out as a job's folder, with its fixture and tests; `basis new job` copies it, leaving out its `ruff.toml`. |
+| `docs/` | The docs for job authors, which `basis docs` prints. |
 
 ## Rules to keep
 
@@ -53,8 +54,8 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
   A new option gets no default that depends on how jobs usually look.
 - A query binds only the interval, as `interval_start` and `interval_end` (Oracle reserves `START`). Params never
   change what is read.
-- Nothing is written to a database unless every check passed for every output, and only from `etl run --publish` or
-  `etl resume`. Each database's tables and ledger rows commit in one transaction.
+- Nothing is written to a database unless every check passed for every output, and only from `basis run --publish` or
+  `basis resume`. Each database's tables and ledger rows commit in one transaction.
 - Identifiers in SQL are a row's column names and a table's name, restricted by `basis.core.tables.IDENTIFIER` and
   `outputs.TABLE_NAME`; every value is bound.
 - A conversion at a boundary loses nothing; polars' own casts round and truncate, so `rows.conform` casts back and
@@ -69,7 +70,11 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
   `ddl._LEDGER`; add its driver to the import contract and to core's `testing.FORBIDDEN`, and its container to the
   integration tier and CI.
 - A write mode is a frozen dataclass in `outputs.py`, a case in `changes.build`, and a row in the reference's table.
-- A command is a handler in `cli.py`; its Python twin, if any, is in `api.py`.
+- A verb is a `Verb` in `cli.part()` with its handler in `cli.py`; its Python twin, if any, is in `api.py`. A verb that
+  every kind of part has, such as `replay`, is core's, in core's `command.py`, and reaches the job part through a
+  field of its `Part`.
+- Every failure a verb reports is one line, `ERROR: REASON: FIX`: return `fail(reason, fix)`, or raise with a message
+  that ends with the fix.
 
 ## Checks
 
@@ -81,10 +86,10 @@ uv run pytest                        # every package's unit tests, and the examp
 uv run pytest -m integration         # real SQL Server and Oracle: tests/integration/README.md
 ```
 
-To check what `etl new` generates, from the root, whose checkout `--framework-path` names:
+To check what `basis-job new repo` generates, from the root, whose checkout `--framework-path` names:
 
 ```sh
-uv run etl new repo pricing-etl prices --dir SCRATCH --framework-path .
-cd SCRATCH/pricing-etl && uv run etl new job rates
-uv run pytest && uv run ruff check . && uv run ruff format --check . && uv run ty check
+uv run basis-job new repo pricing-etl --dir SCRATCH --framework-path .   # its first job is positions
+cd SCRATCH/pricing-etl && uv run basis new job rates
+uv run basis check
 ```

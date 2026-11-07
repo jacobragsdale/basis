@@ -28,7 +28,7 @@ read and write SQL Server or Oracle, and they do not feed each other.
 | No custom SQL write hook | A SQL side effect is the one write that a replay and `regress` could not see. A job that needs the table's current rows reads the table as an input. |
 | A ledger table per destination database, written in the same transaction | It is never wrong about whether a publish happened. It guards plain appends against a second publish of an overlapping interval, and tells `resume` which databases have a run. It is the only DDL the framework asks for. |
 | Databases commit one at a time, in name order; `resume` finishes a partial run from its snapshot | Distributed transactions are not dependable from these drivers; resuming the same rows gives the same end state. |
-| No DDL at run time | Whether job logins have DDL rights is unknown, so runs never need them: SQL Server stages in `#temp` tables, Oracle binds frames to batched statements, and `etl ddl` prints the tables. |
+| No DDL at run time | Whether job logins have DDL rights is unknown, so runs never need them: SQL Server stages in `#temp` tables, Oracle binds frames to batched statements, and `basis ddl` prints the tables. |
 | polars, not pandas | ETL moves values that must arrive exactly: integers with nulls, decimals at their scale, zone-aware datetimes. polars keeps those types; pandas would turn nullable integers into floats and decimals into objects. |
 | No worker processes or partitions | Data fits in memory, and polars already uses every core. optim's process pool exists for CPU-bound solves. |
 | Destination checks against what the database says the table is | A drifted table fails a run in seconds, before it loads; a value too long or too precise fails it before the database would truncate it or fail halfway. |
@@ -47,7 +47,7 @@ read and write SQL Server or Oracle, and they do not feed each other.
   is why Oracle's isolation is a setting.
 - polars rounds a decimal cast to a smaller scale and truncates a decimal cast to an integer, even with `strict=True`,
   so `conform` casts back and compares.
-- A settings file read by pydantic-settings rejects any line the settings do not declare, such as `ETL_LOG_LEVEL`. The
+- A settings file read by pydantic-settings rejects any line the settings do not declare, such as `BASIS_LOG_LEVEL`. The
   Python API sets the file's variables for the call alone instead, as the command line's `uv run --env-file` does.
 - The generated image's dependencies install in a build stage with git, since `uv sync` fetches an etl-framework taken
   from GitHub with git, which `python:3.14-slim` lacks.

@@ -1,4 +1,4 @@
-"""Logging. Each record is one JSON object per line on stderr, for agents and log platforms; `ETL_LOG_FORMAT=text`
+"""Logging. Each record is one JSON object per line on stderr, for agents and log platforms; `BASIS_LOG_FORMAT=text`
 prints lines for a person instead. INFO tells a run's story: what loaded, what the transform made, every check that
 failed, what was written to each database, and one summary record at the end, with timings in `*_ms` fields.
 
@@ -16,16 +16,16 @@ A run binds its id and its job first, with `bind(run_id=..., job=...)`, so every
 `run_id` finds a whole run. A job logs with `logging.getLogger(__name__)`; `include` gives its package's loggers the
 configured level, as basis's have.
 
-Exceptions need nothing: the CLI logs them once, with the notes added on the way up, the root cause, and the line in
-basis where it surfaced. Where a frame knows what the message does not, such as which dataset was loading, it
-adds that with `error.add_note(...)`.
+Exceptions need nothing: the command prints each as one line, with the notes added on the way up, and logs a defect's
+record once, with its root cause and the line in basis where it surfaced. Where a frame knows what the message does
+not, such as which dataset was loading, it adds that with `error.add_note(...)`.
 """
 
 import importlib.util
 import logging
 import time
 import traceback
-from collections.abc import Generator, Mapping
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from functools import cache
@@ -38,6 +38,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _FRAMEWORK = "basis"  # the namespace every basis package is a portion of, whose logger is each one's parent
 _PARTS = ("basis.job",)  # the parts whose frames an error's `where` names, as basis-core's; each joins as it arrives
+_PREFIX = "BASIS_LOG_"
 _STANDARD = {*vars(logging.makeLogRecord({})), "message", "asctime"}  # LogRecord's own attributes, not `extra` fields
 _bound: dict[str, object] = {}  # fields on every record this process logs; see `bind`
 _included: list[str] = []  # packages besides basis whose loggers log at the configured level; see `include`
@@ -46,16 +47,21 @@ _included: list[str] = []  # packages besides basis whose loggers log at the con
 class LogSettings(BaseSettings):
     """Read on its own, before `Settings`, so that a bad environment is logged like any other error."""
 
-    model_config = SettingsConfigDict(env_prefix="ETL_LOG_", extra="forbid", frozen=True)
+    model_config = SettingsConfigDict(env_prefix=_PREFIX, extra="forbid", frozen=True)
 
     level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     format: Literal["json", "text"] | None = None
     """None: the caller's default, JSON for the command line and text for a run from Python."""
 
 
+def variable(location: Sequence[int | str]) -> str:
+    """The environment variable that sets the value at `location` in `LogSettings`, from a validation error."""
+    return _PREFIX + "__".join(str(part) for part in location).upper()
+
+
 def setup(*, default_format: Literal["json", "text"] = "json") -> None:
     """Configure this process. basis's loggers log at the configured level; libraries log only warnings and
-    up. Bad `ETL_LOG_*` settings raise after configuring the defaults, so that the error is logged like any other."""
+    up. Bad `BASIS_LOG_*` settings raise after configuring the defaults, so that the error is logged like any other."""
     try:
         settings = LogSettings()
     except ValidationError:

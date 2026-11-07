@@ -4,7 +4,7 @@ Each section is one goal. The [reference](reference.md) has every option they us
 
 ## Publish a job to a database for the first time
 
-A job publishes only from `etl run --publish`, on a machine whose settings give each database the job writes a
+A job publishes only from `basis run --publish`, on a machine whose settings give each database the job writes a
 `WRITE` block, and only once its tables and the database's ledger exist.
 
 Prerequisites:
@@ -18,19 +18,19 @@ To publish a job:
 1. Print the job's tables in the destination's dialect, and the ledger's:
 
    ```sh
-   uv run etl ddl prices --dialect mssql
-   uv run etl ddl --ledger etl.publishes --dialect mssql
+   uv run basis ddl prices --dialect mssql
+   uv run basis ddl --ledger etl.publishes --dialect mssql
    ```
 
    Have someone with DDL rights run both. One ledger serves every job that writes to that database.
 
 2. In the settings file the scheduler's container reads, configure each database the job names, with a `WRITE` block
-   for each one it writes, as `.env.example` shows. `ETL_DATABASES__WAREHOUSE__WRITE__LEDGER` names the ledger from
+   for each one it writes, as `.env.example` shows. `BASIS_DATABASES__WAREHOUSE__WRITE__LEDGER` names the ledger from
    step 1.
 3. Run the job once without publishing, against the real databases:
 
    ```sh
-   uv run --env-file .env.prod etl run prices --params jobs/prices/params/default.json --interval 2026-11-05..2026-11-06
+   uv run --env-file .env.prod basis run prices --params jobs/prices/params/default.json --interval 2026-11-05..2026-11-06
    ```
 
    The run checks each destination table against its row before it loads anything. If the summary's `status` is
@@ -46,7 +46,7 @@ A run that writes to two databases commits each in its own transaction, so a fai
 `status` as `partial` in its manifest. Resume it, after fixing what failed:
 
 ```sh
-uv run --env-file .env.prod etl resume prices RUN_ID
+uv run --env-file .env.prod basis resume prices RUN_ID
 ```
 
 `resume` writes the run's saved changes, the same rows, to each database whose ledger does not have the run, and
@@ -58,14 +58,14 @@ A table written with `Append()` refuses a second publish of an interval that ove
 since its rows would be inserted twice. If you mean to insert them twice, add `--again`:
 
 ```sh
-uv run --env-file .env.prod etl run prices --params jobs/prices/params/default.json --interval 2026-11-05..2026-11-06 --publish --again
+uv run --env-file .env.prod basis run prices --params jobs/prices/params/default.json --interval 2026-11-05..2026-11-06 --publish --again
 ```
 
 To rerun an interval without duplicating it, write the table with `ReplaceWhere(interval=COLUMN)` instead.
 
 ## Find out why a run failed
 
-Every log record carries the run's `run_id`. The run's manifest is `ETL_SNAPSHOT_ROOT/runs/job/JOB/RUN_ID.json`:
+Every log record carries the run's `run_id`. The run's manifest is `BASIS_SNAPSHOT_ROOT/runs/job/JOB/RUN_ID.json`:
 
 - `status` says how the run ended, `error` holds an error that stopped it, and `reasons` lists every reason it did
   not write: a row that does not match, a table that has drifted, a value that does not fit, or the job's own check.
@@ -75,18 +75,18 @@ Every log record carries the run's `run_id`. The run's manifest is `ETL_SNAPSHOT
 To reproduce the run on a laptop with the code you have now, replay it from the production snapshot root:
 
 ```sh
-uv run --env-file .env.prod etl replay prices RUN_ID
+uv run --env-file .env.prod basis replay prices RUN_ID
 ```
 
 A replay reads only the snapshot and writes nothing to a database.
 
 ## Check a change against recent production runs
 
-`etl regress` replays a job's latest published runs with the code you have now, and lists every table whose changes
+`basis regress` replays a job's latest published runs with the code you have now, and lists every table whose changes
 differ. It exits 1 if anything changed, so a pipeline can gate a merge on it:
 
 ```sh
-uv run --env-file .env.prod etl regress prices --last 20 --label purpose=production
+uv run --env-file .env.prod basis regress prices --last 20 --label purpose=production
 ```
 
 Each entry names the run, and each difference the output, the operation, and the rows added, removed and changed, by

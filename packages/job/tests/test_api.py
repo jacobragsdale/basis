@@ -9,16 +9,16 @@ from basis.job.example import job
 
 @pytest.fixture(autouse=True)
 def clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in [name for name in os.environ if name.startswith("ETL_")]:
+    for name in [name for name in os.environ if name.startswith("BASIS_")]:
         monkeypatch.delenv(name)
 
 
 def test_a_settings_file_applies_to_one_call_and_may_hold_what_the_framework_does_not_read(tmp_path: Path) -> None:
     settings = tmp_path / "test.env"
-    settings.write_text("ETL_LOG_LEVEL=WARNING\nETL_GIT_SHA=abc123\nOTHER_TOOL=1\n", encoding="utf-8")
+    settings.write_text("BASIS_LOG_LEVEL=WARNING\nBASIS_GIT_SHA=abc123\nOTHER_TOOL=1\n", encoding="utf-8")
     result = etl.run(job, params="params/default.json", data="tests/fixture", env=settings, snapshot_root=tmp_path / "snapshots")
     assert result.record.status == "checked"
-    assert "ETL_LOG_LEVEL" not in os.environ
+    assert "BASIS_LOG_LEVEL" not in os.environ
     assert "OTHER_TOOL" not in os.environ
 
 

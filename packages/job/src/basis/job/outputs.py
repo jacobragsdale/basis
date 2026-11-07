@@ -147,7 +147,7 @@ def _validate(target: Target) -> None:
         msg = f"{where}: a table is TABLE or SCHEMA.TABLE, letters, digits, underscores and $, never quoted"
         raise ValueError(msg)
     if not IDENTIFIER.match(target.database):
-        msg = f"{where}: database {target.database!r} is lower-case letters, digits and underscores, as in ETL_DATABASES__{target.database.upper()}__KIND"
+        msg = f"{where}: database {target.database!r} is lower-case letters, digits and underscores, as in BASIS_DATABASES__{target.database.upper()}__KIND"
         raise ValueError(msg)
     names = target.row.names()
     if target.key is not None and not target.key:

@@ -27,7 +27,7 @@ from basis.core.tables import Changes, Delete, Range
 
 type Status = Literal["failed", "checked", "published", "partial"]
 """`failed`: an error, or a reason not to write; `checked`: every check passed, and the run was not asked to publish;
-`published`: every database committed; `partial`: some committed and one failed, which `etl resume` finishes."""
+`published`: every database committed; `partial`: some committed and one failed, which `basis resume` finishes."""
 
 
 class InputRecord(Model):
@@ -69,7 +69,7 @@ class RunRecord(Model):
     version: str
     """The version of the basis part that made the run, such as basis-job's."""
     git_sha: str | None = None
-    """The job repo's commit, as the image's `ETL_GIT_SHA` gives it."""
+    """The job repo's commit, as the image's `BASIS_GIT_SHA` gives it."""
     started_at: datetime
     finished_at: datetime | None = None
     interval: str | None = None

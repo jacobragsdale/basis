@@ -55,7 +55,7 @@ Rows a SQL file selects from a database.
 | Parameter | Type | Description |
 |---|---|---|
 | `row` | `type[etl.Row]` | The rows' columns. |
-| `database` | `str` | The database's name, as `ETL_DATABASES__NAME__*` configures it. |
+| `database` | `str` | The database's name, as `BASIS_DATABASES__NAME__*` configures it. |
 | `sql` | `str` | The SQL file, relative to the file that declares the query. |
 | `empty` | `"fail"` or `"allow"` | Whether a run may continue when the query returns no rows. |
 
@@ -135,7 +135,7 @@ The destination checks run only where the database is configured.
 ## Params
 
 A subclass of `etl.Params` is a strict pydantic model: an unknown key is refused, and no value is coerced. A run reads
-one JSON file of params. A field's docstring is its description in `etl describe`.
+one JSON file of params. A field's docstring is its description in `basis describe`.
 
 ## Interval
 
@@ -145,28 +145,33 @@ without one.
 
 ## Commands
 
+A job repo has one command, `basis`. It offers the verbs of the parts the repo declares in its `pyproject.toml`, as
+`[tool.basis] parts = ["job"]`, and `basis --help` lists them; a verb of a part the repo does not declare is refused,
+with how to declare it. `basis-job`, which `uvx` runs before a repo exists, makes one.
+
 | Command | Does |
 |---|---|
-| `etl run JOB --params FILE [--interval START..END] [--data DIR] [--label KEY=VALUE]... [--publish] [--again]` | Runs a job, saves its snapshot, and with `--publish` writes its changes. `--again` publishes an `Append()` table for an interval the ledger already has. |
-| `etl replay JOB RUN_ID [--params FILE]` | Runs a saved run's transform again on its inputs; prints the replay's status, reasons and differences as JSON. |
-| `etl resume JOB RUN_ID` | Writes a partly published run's changes to each database whose ledger lacks the run. |
-| `etl regress JOB [--last N] [--label KEY=VALUE]... [--snapshots ROOT]` | Replays the job's last `N` (default 10) published runs whose labels include every `--label`; prints each run's differences as JSON. |
-| `etl describe JOB` | Prints the job's params schema, inputs and outputs as JSON. |
-| `etl list` | Prints the jobs the installed packages list, by name. |
-| `etl ddl JOB --dialect mssql\|oracle` | Prints `CREATE TABLE` for each of the job's tables. |
-| `etl ddl --ledger TABLE --dialect mssql\|oracle` | Prints `CREATE TABLE` and `CREATE INDEX` for the ledger. |
-| `etl new repo REPO JOB [--dir DIR] [--index URL \| --framework-path PATH]` | Makes a job repo with one job, runs `git init` and `uv sync`. `PATH` is a checkout of basis, the folder that holds `packages/`, installed editable. `URL` replaces PyPI for the whole repo, so it must proxy PyPI. Without either option, basis-job comes from basis's GitHub tag for this version, which needs a release: until basis has one, `etl new repo` fails and says to pass `--framework-path`. |
-| `etl new job NAME` | Adds a job to the repo in the working directory. |
-| `etl sync` | Rewrites `AGENTS.md`'s basis-job block and `.agents/skills/etl-*` from the installed version. |
-| `etl docs [PAGE]` | Lists the docs, or prints one. |
+| `basis check` | Checks that the agent files match the installed basis-job and that `uv.lock` matches `pyproject.toml`, then runs `ruff check`, `ruff format --check`, `ty check` and `pytest`, each through `uv run --locked`. Every step runs, and each that fails prints its findings and then its `ERROR` line. Needs no network or database. |
+| `basis run JOB --params FILE [--interval START..END] [--data DIR] [--label KEY=VALUE]... [--publish] [--again]` | Runs a job, saves its snapshot, and with `--publish` writes its changes. `--again` publishes an `Append()` table for an interval the ledger already has. |
+| `basis replay JOB RUN_ID [--params FILE]` | Runs a saved run's transform again on its inputs; prints the replay's status, reasons and differences as JSON. |
+| `basis resume JOB RUN_ID` | Writes a partly published run's changes to each database whose ledger lacks the run. |
+| `basis regress [JOB] [--last N] [--label KEY=VALUE]... [--snapshots ROOT]` | Replays the last `N` (default 10) published runs of `JOB`, or of every job the repo lists, whose labels include every `--label`; prints each run's job, reasons and differences as JSON. |
+| `basis describe [JOB]` | Prints the job's params schema, inputs and outputs as JSON; without `JOB`, every job the repo lists, with its module. |
+| `basis ddl JOB --dialect mssql\|oracle` | Prints `CREATE TABLE` for each of the job's tables. |
+| `basis ddl --ledger TABLE --dialect mssql\|oracle` | Prints `CREATE TABLE` and `CREATE INDEX` for the ledger. |
+| `basis new job NAME` | Adds a job to the repo, copied from the example, and lists it in `pyproject.toml`. |
+| `basis sync` | Rewrites `AGENTS.md`'s basis-job block and `.agents/skills/job-*` from the installed version. |
+| `basis docs [PAGE]` | Lists the docs, as `job/PAGE`, or prints one; `PAGE` alone does where no other part has a page of that name. |
+| `basis-job new repo NAME [JOB] [--dir DIR] [--index URL \| --framework-path PATH]` | Makes a job repo, `NAME`, whose first job, `JOB` (`positions` if not given), is a copy of the example, and runs `git init` and `uv sync`. `PATH` is a checkout of basis, the folder that holds `packages/`, installed editable. `URL` replaces PyPI for the whole repo, so it must proxy PyPI. Without either option, basis-job comes from basis's GitHub tag for this version, which needs a release: until basis has one, `basis-job new repo` fails and says to pass `--framework-path`. |
 
-`JOB` is an entry point name or a module path. `replay`, `resume` and `regress` find runs under
-`ETL_SNAPSHOT_ROOT`.
+`JOB` is a name the repo lists as an entry point, or a module path. `replay`, `resume` and `regress` find runs under
+`BASIS_SNAPSHOT_ROOT`. Every failure prints one line on stderr, after any log records: `ERROR:`, the reason, and the
+fix. A result a caller reads, such as `describe`'s, is JSON on stdout.
 
 | Exit code | Meaning |
 |---|---|
 | `0` | The command did what it says: a run without `--publish` was `checked`, a run with it `published`. |
-| `1` | A run failed, was refused, or published partly; a regression found differences; or the command raised. |
+| `1` | A run failed, was refused, or published partly; a regression found differences; or the command failed. |
 | `2` | The command line did not parse. |
 
 ## Python API
@@ -178,7 +183,7 @@ returns the replay's result and its differences.
 
 Paths are relative to the job's folder. `env` names a settings file, looked for in the job's folder and each folder
 above it up to the repo's root; its variables are set for the call alone, and the process's environment overrides them. Snapshots are saved in the repo's
-`snapshots/`. `replay` looks for the run there, then under the settings file's `ETL_SNAPSHOT_ROOT`. Given `data` and
+`snapshots/`. `replay` looks for the run there, then under the settings file's `BASIS_SNAPSHOT_ROOT`. Given `data` and
 no `interval`, `run` uses the fixture's interval from `fixture.json`.
 
 ## Settings
@@ -187,21 +192,21 @@ Settings come only from environment variables, which a settings file can hold.
 
 | Variable | Description |
 |---|---|
-| `ETL_SNAPSHOT_ROOT` | Where `etl run` saves snapshots and the other commands find runs: a path, or a URL `pyarrow.fs` reads and writes. Required by the commands. |
-| `ETL_DATABASES__NAME__KIND` | `mssql` or `oracle`. |
-| `ETL_DATABASES__NAME__TIMEOUT_S` | Seconds a statement may take; a login waits at most 30. |
-| `ETL_DATABASES__NAME__MAX_ROWS` | The most rows a query may return before the run fails. |
-| `ETL_DATABASES__NAME__CONNECTION_STRING` | SQL Server: the reading login's connection string. |
-| `ETL_DATABASES__NAME__ISOLATION` | SQL Server: `snapshot` or `read_committed`. Oracle: `read_only` or `read_committed`. |
-| `ETL_DATABASES__NAME__WRITE__CONNECTION_STRING` | SQL Server: the writing login's connection string. |
-| `ETL_DATABASES__NAME__DSN`, `__USER`, `__PASSWORD` | Oracle: the reading login. |
-| `ETL_DATABASES__NAME__MODE` | Oracle: `thin` or `thick`. |
-| `ETL_DATABASES__NAME__CLIENT_LIB_DIR` | Oracle, thick mode: where Oracle Instant Client is, if not on the library path. |
-| `ETL_DATABASES__NAME__WRITE__USER`, `__WRITE__PASSWORD` | Oracle: the writing login. |
-| `ETL_DATABASES__NAME__WRITE__LEDGER` | The ledger table in that database. |
-| `ETL_LOG_LEVEL` | `DEBUG`, `INFO` (default), `WARNING` or `ERROR`. |
-| `ETL_LOG_FORMAT` | `json` (the commands' default) or `text` (the Python API's default). |
-| `ETL_GIT_SHA` | The job repo's commit, which the run's manifest records; the generated `Dockerfile` sets it. |
+| `BASIS_SNAPSHOT_ROOT` | Where `basis run` saves snapshots and the other commands find runs: a path, or a URL `pyarrow.fs` reads and writes. Required by the commands. |
+| `BASIS_DATABASES__NAME__KIND` | `mssql` or `oracle`. |
+| `BASIS_DATABASES__NAME__TIMEOUT_S` | Seconds a statement may take; a login waits at most 30. |
+| `BASIS_DATABASES__NAME__MAX_ROWS` | The most rows a query may return before the run fails. |
+| `BASIS_DATABASES__NAME__CONNECTION_STRING` | SQL Server: the reading login's connection string. |
+| `BASIS_DATABASES__NAME__ISOLATION` | SQL Server: `snapshot` or `read_committed`. Oracle: `read_only` or `read_committed`. |
+| `BASIS_DATABASES__NAME__WRITE__CONNECTION_STRING` | SQL Server: the writing login's connection string. |
+| `BASIS_DATABASES__NAME__DSN`, `__USER`, `__PASSWORD` | Oracle: the reading login. |
+| `BASIS_DATABASES__NAME__MODE` | Oracle: `thin` or `thick`. |
+| `BASIS_DATABASES__NAME__CLIENT_LIB_DIR` | Oracle, thick mode: where Oracle Instant Client is, if not on the library path. |
+| `BASIS_DATABASES__NAME__WRITE__USER`, `__WRITE__PASSWORD` | Oracle: the writing login. |
+| `BASIS_DATABASES__NAME__WRITE__LEDGER` | The ledger table in that database. |
+| `BASIS_LOG_LEVEL` | `DEBUG`, `INFO` (default), `WARNING` or `ERROR`. |
+| `BASIS_LOG_FORMAT` | `json` (the commands' default) or `text` (the Python API's default). |
+| `BASIS_GIT_SHA` | The job repo's commit, which the run's manifest records; the generated `Dockerfile` sets it. |
 
 `NAME` is the database's name in upper case. A database without a `WRITE` block can be read and never written. A
 field a database's block does not have is an error; a variable the framework does not read is ignored.
@@ -212,7 +217,7 @@ the seconds before the run began, which a `TRUNCATE` does.
 
 ## Snapshot files
 
-Snapshots are kept in a run store, at `ETL_SNAPSHOT_ROOT`, or in the repo's `snapshots/` for a run from Python:
+Snapshots are kept in a run store, at `BASIS_SNAPSHOT_ROOT`, or in the repo's `snapshots/` for a run from Python:
 
 ```text
 objects/HASH.parquet         each dataset, once, named by the SHA-256 of the file
@@ -237,11 +242,11 @@ each input, as `inputs/NAME`, and of each table's frames, as `outputs/NAME/upser
 | `failed` | An error, or at least one reason not to write. |
 | `checked` | Every check passed; the run did not publish. |
 | `published` | Every database the job writes committed. |
-| `partial` | Some databases committed and one failed; `etl resume` finishes it. |
+| `partial` | Some databases committed and one failed; `basis resume` finishes it. |
 
 ## Ledger
 
-One table per database a job writes, created from `etl ddl --ledger`. Each publish adds one row per table, in the
+One table per database a job writes, created from `basis ddl --ledger`. Each publish adds one row per table, in the
 transaction that wrote the table: `run_id`, `job`, `output`, `table_name`, `interval_start`, `interval_end` (naive
 UTC), `rerun_safe`, `deleted`, `upserted`, `inserted_new`, `inserted` (as the database counted), `published_at`
 (naive UTC), and `etl_version`. Its key is `(run_id, output)`.

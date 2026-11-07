@@ -1,5 +1,5 @@
-"""The agent files a job repo carries from the installed basis-job: its block in `AGENTS.md` and the `etl-*` skills in
-`.agents/skills/`, which `etl sync` rewrites and each repo's `tests/test_agent_files.py` checks."""
+"""The agent files a job repo carries from the installed basis-job: its block in `AGENTS.md` and the `job-*` skills in
+`.agents/skills/`, which `basis sync` rewrites, and `basis check` and each repo's `tests/test_agent_files.py` check."""
 
 from pathlib import Path
 
@@ -12,7 +12,7 @@ _PACKAGE = Path(__file__).parent
 
 def agent_files() -> AgentFiles:
     block = (_PACKAGE / "templates" / "agents.md").read_text(encoding="utf-8").replace("{version}", VERSION)
-    return AgentFiles("basis-job", "etl", block, core_sync.skills(_PACKAGE / "skills"), formerly=("etl-framework",))
+    return AgentFiles("basis-job", block, core_sync.skills(_PACKAGE / "skills"), formerly=("etl-framework",))
 
 
 def stale(repo: Path) -> list[Path]:

@@ -11,7 +11,7 @@ Paths are the job folder's, wherever the IDE runs the file from. `env` names a s
 folder or a folder above it up to the repo's root. Its variables are set for this call alone and removed after it, so
 a call that reads `.env.qa` and one that reads `.env.prod` never mix, and the process's own environment wins over
 the file, as `uv run --env-file` does. A run from Python saves its snapshot in the repo's `snapshots/`, and never
-publishes: only `etl run --publish` writes to a database."""
+publishes: only `basis run --publish` writes to a database."""
 
 import logging
 import os
@@ -62,7 +62,7 @@ def run(  # noqa: PLR0913 -- main.py writes every value out, by keyword
 
 def replay(job: ModuleType, run_id: str, *, params: str | Path | None = None, env: str | Path | None = None, snapshot_root: str | Path | None = None) -> tuple[runs.Result, list[OperationDiff]]:
     """Run a saved run's transform again on its inputs, with the code you have now, and with `params` if given. The run
-    is found in the repo's `snapshots/`, or `snapshot_root` if given, then under the `ETL_SNAPSHOT_ROOT` the settings
+    is found in the repo's `snapshots/`, or `snapshot_root` if given, then under the `BASIS_SNAPSHOT_ROOT` the settings
     file names, such as production's in `.env.prod`; the replay is saved in the first of those."""
     found = jobs.read(job)
     _setup_logs(found)

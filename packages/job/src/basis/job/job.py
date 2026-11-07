@@ -72,7 +72,7 @@ def load(reference: str) -> Job:
         imported = importlib.import_module(module)
     except ModuleNotFoundError as error:
         if error.name is not None and module.startswith(error.name):
-            msg = f"no job named {reference!r}: the installed packages list {sorted(jobs) or 'none'}, and it is not a module path"
+            msg = f"no job named {reference!r}, and it is no module path: give one the repo lists ({', '.join(sorted(jobs)) or 'none yet'}), or a job's module path, as jobs.NAME.job"
             raise JobError(msg) from error
         raise
     return read(imported)

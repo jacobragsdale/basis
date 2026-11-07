@@ -1,9 +1,10 @@
-"""Process configuration, read once from `ETL_*` environment variables and nothing else: no job repo holds a connection
-string. Each database a job names is configured by that name, as `ETL_DATABASES__WAREHOUSE__KIND=mssql`, with nested
+"""Process configuration, read once from `BASIS_*` environment variables and nothing else: no job repo holds a connection
+string. Each database a job names is configured by that name, as `BASIS_DATABASES__WAREHOUSE__KIND=mssql`, with nested
 fields under a double underscore. A database without a `WRITE` block can be read, and never written: a laptop with
 read-only credentials runs a job, and writes nothing. A job's `main.py` names the settings file it reads, such as
 `.env.prod`; the command line reads the process's environment, as `uv run --env-file .env` sets it."""
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated, Literal, override
 
@@ -14,6 +15,7 @@ from basis.core.model import Model
 from basis.core.storage import Root
 from basis.core.tables import IDENTIFIER
 
+PREFIX = "BASIS_"
 LEDGER = r"^[A-Za-z_][A-Za-z0-9_$]{0,127}(\.[A-Za-z_][A-Za-z0-9_$]{0,127})?$"
 
 
@@ -28,7 +30,7 @@ class MssqlWrite(Model):
     connection_string: SecretStr
     """A login that may insert, update and delete in the job's tables and in the ledger, and nothing else needs."""
     ledger: Annotated[str, Field(pattern=LEDGER)]
-    """The ledger table, as `etl ddl --ledger --dialect mssql` creates it, such as `etl.publishes`."""
+    """The ledger table, as `basis ddl --ledger TABLE --dialect mssql` creates it, such as `etl.publishes`."""
 
 
 class MssqlSettings(Limits):
@@ -46,7 +48,7 @@ class OracleWrite(Model):
     user: str
     password: SecretStr
     ledger: Annotated[str, Field(pattern=LEDGER)]
-    """The ledger table, as `etl ddl --ledger --dialect oracle` creates it, such as `ETL.PUBLISHES`."""
+    """The ledger table, as `basis ddl --ledger TABLE --dialect oracle` creates it, such as `ETL.PUBLISHES`."""
 
 
 class OracleSettings(Limits):
@@ -72,7 +74,7 @@ type DatabaseSettings = Annotated[MssqlSettings | OracleSettings, Field(discrimi
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="ETL_",
+        env_prefix=PREFIX,
         env_nested_delimiter="__",
         extra="forbid",
         frozen=True,
@@ -83,14 +85,14 @@ class Settings(BaseSettings):
     )
 
     snapshot_root: str | None = None
-    """Where `etl run` saves its snapshots, and where a replay finds a run by its id: a path, or a URL such as
+    """Where `basis run` saves its snapshots, and where a replay finds a run by its id: a path, or a URL such as
     `abfs://runs@account.dfs.core.windows.net/etl`. A run from Python saves in its repo's `snapshots/` instead."""
     databases: dict[str, DatabaseSettings] = Field(default_factory=dict)
     """Each database a job reads or writes, by the name its datasets and tables give."""
 
     def snapshots(self) -> Root:
         if self.snapshot_root is None:
-            msg = "set ETL_SNAPSHOT_ROOT: where etl run saves its snapshots, and where a replay finds a run by its id"
+            msg = "no snapshot root is set, which is where `basis run` saves its snapshots and where a replay finds a run by its id: set BASIS_SNAPSHOT_ROOT, as .env.example shows"
             raise ValueError(msg)
         return Root.at(self.snapshot_root)
 
@@ -99,7 +101,7 @@ class Settings(BaseSettings):
             msg = f"database {name!r}: a database's name is lower-case letters, digits and underscores"
             raise ValueError(msg)
         if (found := self.databases.get(name)) is None:
-            msg = f"database {name!r} is not configured: set ETL_DATABASES__{name.upper()}__KIND and the rest of its block (see .env.example)"
+            msg = f"database {name!r} is not configured: set BASIS_DATABASES__{name.upper()}__KIND and the rest of its block, as .env.example shows"
             raise LookupError(msg)
         return found
 
@@ -118,3 +120,16 @@ class GivenSettings(Settings):
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         return (init_settings,)
+
+
+_KINDS = {"mssql", "oracle"}
+"""Each database's `kind`, which pydantic adds to a validation error's location, after the database's name."""
+
+
+def variable(location: Sequence[int | str]) -> str:
+    """The environment variable that sets the value at `location` in `Settings`, from a validation error, such as
+    `BASIS_DATABASES__WAREHOUSE__WRITE__LEDGER`."""
+    parts = [str(part) for part in location]
+    if parts[:1] == ["databases"] and len(parts) > 2 and parts[2] in _KINDS:  # noqa: PLR2004 -- databases, its name, its kind
+        del parts[2]
+    return PREFIX + "__".join(parts).upper()

@@ -1,6 +1,6 @@
 """The agent files a repo carries from each basis part it uses: the part's block in `AGENTS.md`, between markers, and
-its skills in `.agents/skills/`, the conventions every agent reads. The part's `sync` command rewrites them, and the
-repo's `tests/test_agent_files.py` fails when they no longer match the installed version. They are copies, not
+its skills in `.agents/skills/`, the conventions every agent reads. `basis sync` rewrites them, and `basis check` and
+the repo's `tests/test_agent_files.py` fail when they no longer match the installed version. They are copies, not
 symlinks, since Git on Windows checks a symlink out as a text file by default."""
 
 from dataclasses import dataclass
@@ -13,8 +13,6 @@ class AgentFiles:
 
     part: str
     """The part's distribution, which names its block, such as `basis-job`."""
-    command: str
-    """The command whose `sync` rewrites them, such as `etl`."""
     block: str
     """The part's block of `AGENTS.md`, without its markers."""
     skills: dict[str, str]
@@ -24,7 +22,7 @@ class AgentFiles:
 
     @property
     def begin(self) -> str:
-        return f"<!-- {self.part}:begin (written by `{self.command} sync`; edit outside the markers) -->"
+        return f"<!-- {self.part}:begin (written by `basis sync`; edit outside the markers) -->"
 
     @property
     def end(self) -> str:

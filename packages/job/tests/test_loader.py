@@ -31,5 +31,5 @@ def test_a_dataset_with_no_file_reads_its_source_and_says_what_to_configure(tmp_
     class Inputs(etl.Inputs):
         prices = etl.Query(Price, database="markets", sql="prices.sql", empty="allow")
 
-    with pytest.raises(LookupError, match="ETL_DATABASES__MARKETS__KIND"):
+    with pytest.raises(LookupError, match="BASIS_DATABASES__MARKETS__KIND"):
         load(Inputs.declared(), DAY, open_database=no_databases, data=tmp_path)

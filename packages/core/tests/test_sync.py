@@ -2,9 +2,9 @@ from pathlib import Path
 
 from basis.core.sync import AgentFiles, expected
 
-FILES = AgentFiles("new-part", "cmd", "the new block\n", {}, formerly=("old-part",))
-NEW = "<!-- new-part:begin (written by `cmd sync`; edit outside the markers) -->\nthe new block\n<!-- new-part:end -->"
-OLD = "<!-- old-part:begin (written by `cmd sync`; edit outside the markers) -->\nthe old block\n<!-- old-part:end -->"
+FILES = AgentFiles("new-part", "the new block\n", {}, formerly=("old-part",))
+NEW = "<!-- new-part:begin (written by `basis sync`; edit outside the markers) -->\nthe new block\n<!-- new-part:end -->"
+OLD = "<!-- old-part:begin (written by `basis sync`; edit outside the markers) -->\nthe old block\n<!-- old-part:end -->"
 
 
 def agents_md(repo: Path, text: str) -> str:

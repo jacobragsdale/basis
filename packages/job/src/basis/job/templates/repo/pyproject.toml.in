@@ -7,6 +7,9 @@ dependencies = ["basis-job>={version},<0.{next_minor}", "polars>=2.1.0"]  # jobs
 [project.entry-points."basis.jobs"]
 {job} = "jobs.{job}.job"
 
+[tool.basis]
+parts = ["job"]  # the parts this repo has, whose verbs `basis` offers; basis never infers one from a folder
+
 [build-system]
 requires = ["uv_build>=0.13.6,<0.14"]
 build-backend = "uv_build"

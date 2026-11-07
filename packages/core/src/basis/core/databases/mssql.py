@@ -78,7 +78,7 @@ class MssqlDatabase:
     @contextmanager
     def writing(self) -> Generator[MssqlWriter]:
         if self.settings.write is None:
-            msg = f"database {self.name!r} has no write settings: set ETL_DATABASES__{self.name.upper()}__WRITE__CONNECTION_STRING and __LEDGER"
+            msg = f"database {self.name!r} has no write settings: set BASIS_DATABASES__{self.name.upper()}__WRITE__CONNECTION_STRING and __LEDGER"
             raise LookupError(msg)
         start = time.perf_counter()
         with closing(connect_to(self.settings.write.connection_string.get_secret_value(), self.settings.timeout_s, autocommit=False)) as connection:

@@ -71,7 +71,7 @@ class Query(Dataset):
     def __init__(self, row: type[Row], *, database: str, sql: str, empty: Empty) -> None:
         super().__init__(row, empty=empty, base=_caller_folder())
         if not IDENTIFIER.match(database):
-            msg = f"database {database!r}: a database's name is lower-case letters, digits and underscores, as in ETL_DATABASES__{database.upper()}__KIND"
+            msg = f"database {database!r}: a database's name is lower-case letters, digits and underscores, as in BASIS_DATABASES__{database.upper()}__KIND"
             raise ValueError(msg)
         self.database = database
         self.sql = sql

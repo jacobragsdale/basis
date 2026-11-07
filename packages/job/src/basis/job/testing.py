@@ -97,7 +97,7 @@ def check_imports(job: jobs.Job) -> None:
 
 
 def check_agent_files(repo: Path) -> None:
-    """`AGENTS.md`'s block and the `etl-*` skills in the repo at `repo` match the installed basis-job."""
+    """`AGENTS.md`'s block and the `job-*` skills in the repo at `repo` match the installed basis-job."""
     __tracebackhide__ = True
     core_testing.check_agent_files(repo, sync.agent_files())
 
