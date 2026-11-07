@@ -85,7 +85,7 @@ the fix for each problem it finds.
 
 | Package | What it is | Imports from basis |
 |---|---|---|
-| `basis-core` | Internal: database sources for Oracle and SQL Server, settings, JSON logs, storage, the run store, snapshots, publishing with a ledger, the machinery of `replay`, `regress`, `new` and `sync`, contract-test helpers, and the `basis` command | Nothing |
+| `basis-core` | Internal: database sources for Oracle and SQL Server, the resources jobs and APIs share, settings and environments, JSON logs, storage, the run store, snapshots, publishing with a ledger, the machinery of `replay`, `regress`, `new` and `sync`, contract-test helpers, and the `basis` command | Nothing |
 | `basis-job` | Batch jobs: etl-framework's job contract | `basis-core` |
 | `basis-api` | HTTP APIs on FastAPI | `basis-core` |
 | `optim` | Portfolio optimizers: portfolio-optim's model contract and engine. Provisional, and not yet released | `basis-core` |
@@ -224,6 +224,7 @@ their spans record each value, so that a recorded request replays them. Handler 
 its resources, and an import contract, as basis-job's keeps job code pure, keeps handlers away from database drivers,
 HTTP clients and environment variables. "Pure" cannot mean "no I/O" for a handler that reads, decides, and reads again; it
 means "I/O only through the core", which lets the core bound, observe and record every call.
+Phase 5 moves resources into `basis.core`, for jobs too: see [What jobs and APIs share](#what-jobs-and-apis-share).
 
 Request bodies and settings are strict models: an unknown key is refused and no value is coerced, so a misspelled field
 fails at the boundary instead of being silently ignored. A decimal in a request body is a JSON string, as it is in a
@@ -292,6 +293,69 @@ transaction, `resume` from the snapshot, and `regress`. [etl-framework's
 design](https://github.com/jacobragsdale/etl-framework/blob/main/docs/design.md) holds its decisions and the reasons for
 them, and they stand. What changes is that its plumbing moves into `basis.core`, its command becomes `basis` (`etl run`
 becomes `basis run`), and its jobs can live in a repo beside an API.
+
+## What jobs and APIs share
+
+Jobs and APIs share one set of tools. Today basis-api alone has the HTTP client, the clock, ids and OpenTelemetry
+tracing, and jobs get only databases and logs, so [phase 5 of the roadmap](roadmap.md#phase-5-resources) moves them
+into `basis.core` and adds the rest of this section. The maintainer decided all of it on 2026-11-07, and asked that it
+stay simple.
+
+**Resources.** basis-api's resource model moves into `basis.core`: a resource is declared by name, every call that can
+wait has a deadline, every call has a trace span, and every resource has a fake. The HTTP client (httpx2, with a proxy
+and a CA bundle), the clock, ids and tracing move with it, so jobs get them too, and basis-api builds on core's.
+
+**Traces and logs.** Traces go to Datadog. The OpenTelemetry SDK, which basis-api already traces with, sends them over
+OTLP to the Datadog Agent on each AKS node, so basis needs no Datadog library. Every run and every request is a trace,
+and every SQL statement and HTTP call is a span. Logs stay JSON on stderr, as they are now, never files on NFS, and
+each record carries its trace's and span's ids, so Datadog links a log to its trace. There are no custom metrics:
+Datadog's APM derives request counts, errors and latency from the traces.
+
+**Calendars.** The firm has no official business-day calendar, only several implementations, mostly of SIFMA's. basis
+ships two, `sifma-us`, with its full and early closes, and `target2`, as data in `basis.core` built from SIFMA's and the
+ECB's published schedules, with no pandas. A calendar says whether a date is a business day, adds business days, and
+gives the previous business day and a day's early-close time. Each states the last date it covers, and asking about a
+later one is an error, never a silent business day. A job names its calendar explicitly.
+
+**Messages.** Slack messages go through channel webhooks, as the firm already posts to its channels, and email through
+the firm's SMTP relay. Both have fakes, and nothing is sent in tests, `replay`, `regress` or the QA tier.
+
+**Folders and Excel.** Portfolio managers live in Excel, and the files sit on NFS. A folder is a named path, which each
+machine's settings give: `\\server\share` on Windows, and a mount path in WSL and in a pod. basis reads and writes Excel
+with polars' own `read_excel` (calamine) and `write_excel` (xlsxwriter), in an optional extra, `basis-core[excel]`.
+Every write goes to a temporary file that is then renamed into place, so a portfolio manager never opens a half-written
+file.
+
+**Mongo and SQL Server JSON.** The firm uses Mongo, and is moving that data to SQL Server's native `json` columns, so a
+job that reads Mongo and publishes to SQL Server is the migration. basis reads Mongo, and writes to it as upserts by a
+declared key, so a rerun is safe; it is an optional extra, `basis-core[mongo]`, with no Mongo transactions and no
+ledger in Mongo. SQL Server's `json` columns work in reads, publishing and `basis ddl`.
+
+**Azure Data Lake.** Many of the firm's jobs archive data from databases to Azure Data Lake (ADLS Gen2), so a job can
+publish an output as Parquet to a declared lake path, partitioned by its run's interval, such as
+`CONTAINER/TABLE/date=2026-11-07/`. It goes through `pyarrow.fs`, which the run store already uses, so it adds no heavy
+dependency. The environment's settings declare how it signs in: an account key or a SAS token, as a secret, or Entra ID,
+through workload identity in a pod and `az login` on a desktop. Each partition is written to a temporary path and
+renamed into place, which the hierarchical namespace does atomically, and the archive counts as done only when its files
+read back with the row count written. The job's database ledger records the archive like any publish, with the
+interval, the path, the row count and the files' hashes, so a retry never archives twice, and `resume` and `--again`
+work as they do on a table. Deleting the archived rows from the source database is a later step, and an explicit one.
+
+**Environments.** Every command that touches the firm's systems needs `--env dev|qa|prod`, or `BASIS_ENV`, and has no
+default, so no command reaches an environment nobody named. Each user keeps one file per environment, `basis/ENV.env` in
+their own configuration folder, beside `desktop.toml`, holding its hosts, paths and secrets, and every repo they work in
+shares it. A pod gets its settings from its deployment. A repo's `.env.example` lists the names it needs. basis-job's
+`run(..., env="qa")` names an environment, as `--env` does, and the QA tier reads the user's `qa.env`, still alone.
+Database logins stay as the settings have them: a SQL Server connection string, which may carry a password or Kerberos,
+and Oracle's user and password. Most people use passwords, and some Kerberos.
+
+Prod is read-only unless the deployment sets one flag: without it, a run whose plan publishes or writes anything is
+refused at the start, with one `ERROR` line. That stops accidents, not malice, since anyone can set a flag; the real
+control is a read-only prod login for desktops, and the docs say so. Desktops write in dev and QA. `basis doctor --env
+ENV` checks that each login works and each folder is reachable.
+
+None of this brings Docker to the desktops: cross-platform still means the image in AKS, Windows on the Citrix desktops,
+and WSL.
 
 ## The run store and fixtures
 
@@ -368,7 +432,8 @@ one of which the file's run store must be; and the tables it may write, by datab
 before anything does, for every part at once, and the databases a part gets refuse any other table as they write. Each
 part reads its own runs from its own table, `[tool.basis.qa.job]` for jobs, each with what `basis run` takes. QA
 settings "exist" where the repo declares the tier and the machine has that file; elsewhere the push hook says it skipped
-it.
+it. From phase 5, that file is the user's `qa.env`, which every repo shares, and the repo no longer names it (see
+[What jobs and APIs share](#what-jobs-and-apis-share)).
 
 A reviewer judges what a change does. `basis review` writes the pull request's summary: the outputs `regress` saw
 change, the API contract's diff, the versions, and the commit that was checked, so the reviewer reads a summary of
@@ -441,13 +506,22 @@ Each fact was checked on 2026-11-06 against the source named, unless it says sec
 ## Not yet verified
 
 Each item but the last two is a spike in [Phase 0 of the roadmap](roadmap.md#phase-0-spikes), and the last two are
-**(work)** questions for the firm; each needs a written yes or no before the step that depends on it:
+**(work)** questions for the firm; each needs a written yes or no before the step that depends on it, but for the four
+about Datadog, SQL Server's `json` type, Kerberos and the lake (spikes 0.5 to 0.8), whose steps build to their desk
+research's best guesses, which the pilot then confirms at the firm:
 
 - that uv installs on a Citrix desktop without admin rights, on Windows and in WSL, and reaches the Azure Artifacts feed
   from both;
 - that Python namespace packages (`basis.core` across distributions) work with uv workspaces, ty and grimp;
 - that the AKS cluster's ingress can route `/api` on a UI's host to the API's service;
 - which agents the Harbor setup can drive;
+- that the Datadog Agent on the AKS cluster accepts OTLP, on which host and port, that it collects containers' logs,
+  and which format of trace id links a log record to its trace;
+- that mssql-python handles SQL Server's native `json` type;
+- that Kerberos logins work with mssql-python, in WSL and in a pod, and with oracledb, whose thin mode may not support
+  Kerberos;
+- that `pyarrow.fs.AzureFileSystem` signs in to the firm's storage account with workload identity in a pod and with the
+  Azure CLI on a desktop, and that the account has the hierarchical namespace, so a rename is atomic;
 - which algorithm the sign-in system signs its tokens with, how it distributes its keys, its issuer and audience, and
   the names of its claims. HMAC stays refused whatever the answer;
 - whether the firm's services read `Idempotency-Key` as the bare token basis sends, or as a structured-field string

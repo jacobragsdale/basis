@@ -1,6 +1,6 @@
 # Roadmap
 
-This roadmap is the build order for basis: five phases, the steps in each, what each step needs first, and when it is
+This roadmap is the build order for basis: six phases, the steps in each, what each step needs first, and when it is
 done. Steps in different lanes run at the same time. For the reasons behind each piece, see [the design](design.md).
 basis-ui has [a roadmap of its own](https://github.com/jacobragsdale/basis-ui/blob/main/docs/roadmap.md), and the two
 meet at the contract (step 2.5) and the pilot (step 2.8).
@@ -14,15 +14,17 @@ Actions.
 
 | Lane | Builds | Phases |
 |---|---|---|
-| A. Core and jobs | `basis-core`, `basis-job` | 1, 4 |
-| B. APIs | `basis-api` | 2 |
+| A. Core and jobs | `basis-core`, `basis-job` | 1, 4, 5 |
+| B. APIs | `basis-api` | 2, and 5.1's move |
 | C. Optim (provisional) | `optim` | 3 |
 | D. Eval | `evals/` | 0, then every phase |
 
 The critical path runs through lanes A and B: the namespace spike, the workspace, etl-framework's move, `basis-core`'s
-extraction, the `basis` command, the repo files, the desktop gates, then the API and the pilot. Optim is off the
-critical path, and runs alongside phase 2. Its design is provisional until the maintainer meets the firm's quant team,
-and nothing in lanes A and B may depend on it (see [the design](design.md#the-packages)).
+extraction, the `basis` command, the repo files, the desktop gates, then the API, its resources' move into `basis-core`
+(step 5.1), and the pilot, which confirms spikes 0.5 to 0.8 at the firm; no step waits for those spikes. Steps 5.2 to
+5.7 are off it, and run at once after 5.1. Optim is off the critical path, and runs alongside phase 2. Its design is
+provisional until the maintainer meets the firm's quant team, and nothing in lanes A and B may depend on it (see [the
+design](design.md#the-packages)).
 
 ```mermaid
 flowchart TD
@@ -30,12 +32,16 @@ flowchart TD
   s02[0.2 namespaces] --> r1[1.1 workspace]
   s03[0.3 eval] --> a8[2.8 pilot]
   s04[0.4 ingress, work] --> a5[2.5 UI contract]
+  s05[0.5 Datadog, work] -. confirm .-> a8
+  s06[0.6 SQL Server JSON, work] -. confirm .-> a8
+  s07[0.7 Kerberos, work] -. confirm .-> a8
+  s08[0.8 Data Lake, work] -. confirm .-> a8
   r1 --> r2[1.2 move etl-framework] --> r3[1.3 extract core]
   r3 --> r4[1.4 run store]
   r3 --> r5[1.5 basis command] --> r6[1.6 repo files and sync] --> r7[1.7 desktop gates]
   r4 --> r7
   r7 --> r8
-  r3 --> a1[2.1 API app] --> a2[2.2 resources] --> a3[2.3 routes] --> a5 --> a6[2.6 API contract tests] --> a7[2.7 new app] --> a8
+  r3 --> a1[2.1 API app] --> a2[2.2 resources] --> a3[2.3 routes] --> a5 --> c1[5.1 resources in core] --> a6[2.6 API contract tests] --> a7[2.7 new app] --> a8
   a2 --> a4[2.4 identity]
   a3 --> a9[2.9 after-commit calls]
   r7 --> a7
@@ -46,6 +52,11 @@ flowchart TD
   a2 --> o3
   o3 --> o5[3.5 verbs, sync and docs] --> o6
   a8 --> g[4 records and upkeep]
+  c1 --> c2[5.2 calendars]
+  c1 --> c3[5.3 messages]
+  c1 --> c4[5.4 folders and Excel]
+  c1 --> c5[5.5 Mongo and SQL Server JSON]
+  c1 --> c6[5.6 environments] --> c7[5.7 Data Lake]
 ```
 
 ## Rules for working in parallel
@@ -62,7 +73,9 @@ flowchart TD
 ## Phase 0: spikes
 
 Every spike runs at once. Each writes `docs/spikes/NAME.md` with the versions it used, a yes or no for each question,
-and the fallback for each no.
+and the fallback for each no. Spikes 0.5 to 0.8 are the exception: little in them is particular to the firm, so each
+starts as desk research, whose best guesses its phase 5 step builds to, and its questions become a short checklist that
+the pilot (2.8) confirms at the firm, fixing there whatever is wrong.
 
 1. **0.1 uv and the feed (work).** On a Citrix desktop, on Windows and in WSL: install uv without admin rights; set a
    user-level `uv.toml` that makes the Azure Artifacts feed the default index, with keyring or token authentication;
@@ -79,6 +92,19 @@ and the fallback for each no.
    the rest of the host to a UI's. Done when the result says whether UIs and APIs can share one origin, with the API
    seeing its paths without `/api`, as its `openapi.json` gives them, or whether APIs need their allowed origins
    declared.
+5. **0.5 Datadog (work).** On the AKS cluster: does the Datadog Agent accept OTLP, and on which host and port? Does it
+   collect containers' logs? Which format of trace id links a log record to its trace? Done when
+   `docs/spikes/datadog.md` gives a best guess for each, for step 5.1, and its checklist for the pilot.
+6. **0.6 SQL Server JSON (work).** Does mssql-python handle SQL Server's native `json` type, in reads, writes and
+   `CREATE TABLE`? Done when `docs/spikes/sqlserver-json.md` gives a best guess, for step 5.5, and its checklist for the
+   pilot.
+7. **0.7 Kerberos (work).** Do Kerberos logins work with mssql-python, in WSL and in a pod, and with oracledb, whose
+   thin mode may not support Kerberos? Done when `docs/spikes/kerberos.md` gives a best guess for each, for step 5.6,
+   and its checklist for the pilot.
+8. **0.8 Data Lake (work).** Does `pyarrow.fs.AzureFileSystem` sign in to the firm's storage account with workload
+   identity in a pod, and with the Azure CLI on a desktop? Does the account have the hierarchical namespace, so a rename
+   is atomic? Done when `docs/spikes/data-lake.md` gives a best guess for each, for step 5.7, and its checklist for the
+   pilot.
 
 ## Phase 1: the repo and basis-core
 
@@ -173,14 +199,16 @@ Lane B. Needs step 1.3. Steps 2.3 and 2.4 run at once, and so do 2.5 and 2.9.
    Needs 2.3 and spike 0.4.
 6. **2.6 Contract tests.** The app builds on fakes; every route declares what it must; `openapi.json` is current;
    Schemathesis runs on fakes; the import check passes; the agent files match. `basis review` adds the API contract's
-   diff. Needs 2.5.
+   diff. Needs 2.5 and 5.1.
 7. **2.7 New app.** `basis-api new app NAME` writes the API part, adds jobs through `basis.job`'s generator, and writes
-   `basis.core`'s repo files. Needs 1.7 and 2.6. Done when a generated repo with an API and a job passes `basis check
-   --full`, and its image serves the API and runs the job.
+   `basis.core`'s repo files. Needs 1.7, 2.6 and 5.1. Done when a generated repo with an API and a job passes `basis
+   check --full`, and its image serves the API and runs the job.
 8. **2.8 Pilot (work).** Create a pilot API repo with `uvx basis-api new app pilot`, beside basis-ui's pilot UI repo,
    from the internal feed. Deploy both to QA through their generated pipelines, behind one host if spike 0.4 allows it.
-   Lane D adds API tasks to the eval and runs them against the pilot. Needs 2.7, 1.8 and spike 0.3. Done when `new app`
-   reaches QA in one pipeline run and the loop time is recorded against the hook's one-minute budget.
+   Lane D adds API tasks to the eval and runs them against the pilot. Needs 2.7, 1.8, 5.1 and spike 0.3, so it reports
+   to Datadog from its first day, and it confirms the checklists of spikes 0.5 to 0.8, fixing whatever they find wrong.
+   Done when `new app` reaches QA in one pipeline run and the loop time is recorded against the hook's one-minute
+   budget.
 9. **2.9 After-commit calls.** Add the outbox, as the design has it: a state-changing call an `api.Client` sends with
    an idempotency key, written as a row of the outbox table in the route's transaction and made once after the commit,
    within the route's deadline, with `Idempotency-Key`; the relay, a scheduled basis job, which retries each row with
@@ -229,3 +257,76 @@ Lanes A, B and D. Needs step 2.8.
    shows the change helps.
 6. **4.6 CI (work).** When the firm builds CI, turn on the generated pipeline's `basis check --full` stage, and add a
    branch policy on `main` that requires it.
+
+## Phase 5: resources
+
+Lane A, with basis-api's side of 5.1 in lane B. Jobs and APIs share one set of tools: today basis-api alone has the
+HTTP client, the clock, ids and OpenTelemetry tracing, and jobs get only databases and logs. Steps 5.2 to 5.7 need 5.1,
+and 5.7 needs 5.6 too. They run in parallel, and their pull requests to `basis-core` merge one at a time (rule 2). The
+reasons are in [the design](design.md#what-jobs-and-apis-share).
+
+1. **5.1 Resources in core.** Move basis-api's resource model into `basis.core`: a declared resource, with a deadline,
+   a trace span and a fake. The HTTP client (httpx2, with its proxy and CA bundle), the clock, ids and OpenTelemetry
+   tracing move with it, so jobs get them too, and basis-api builds on core's. With it:
+   - every run and request is a trace, and every SQL statement and HTTP call a span, which the OpenTelemetry SDK sends
+     over OTLP to the Datadog Agent on each AKS node, with no Datadog library;
+   - logs stay JSON on stderr, never files on NFS, and each record carries its trace's and span's ids;
+   - there are no custom metrics, since Datadog's APM derives request counts, errors and latency from the traces.
+
+   Needs 2.5 merged, and no spike: it exports to the OTLP endpoint its settings name, and its tests run against an
+   OpenTelemetry collector container or an in-process exporter. Steps 2.6 and 2.7 build on it. Done when a job's run and
+   an API's request each make one trace, with a span for each SQL statement and HTTP call, and each of their log records
+   carries its trace's and span's ids, in the format `docs/spikes/datadog.md` gives, which the pilot confirms.
+2. **5.2 Calendars.** Ship `sifma-us`, with its full and early closes, and `target2` in `basis.core`, as data built from
+   SIFMA's and the ECB's published schedules, with no pandas. Each states the last date it covers. A job names its
+   calendar, which says whether a date is a business day, adds business days, and gives the previous business day and a
+   day's early-close time. Needs 5.1. Done when each function agrees with both published schedules, and a date after a
+   calendar's last is an error, never a business day.
+3. **5.3 Messages.** Add Slack, through a channel's webhook, and email, through the firm's SMTP relay, each with a fake.
+   Needs 5.1. Done when a job's tests send both through the fakes, and its replay, regress and QA runs send nothing.
+4. **5.4 Folders and Excel.** Add folders, each a named path, which each machine's settings give: `\\server\share` on
+   Windows, and a mount path in WSL and in pods. Read and write Excel with polars' own `read_excel` (calamine) and
+   `write_excel` (xlsxwriter), in an optional extra, `basis-core[excel]`. Each write goes to a temporary file, which is
+   then renamed into place. Needs 5.1. Done when a job reads a workbook from a folder and writes one to it, and a reader
+   of the folder never sees a half-written file.
+5. **5.5 Mongo and SQL Server JSON.** Add Mongo, in an optional extra, `basis-core[mongo]`: reads, and writes as upserts
+   by a declared key, with no transactions and no ledger. Make SQL Server's native `json` columns work in reads,
+   publishing and `basis ddl`. Needs 5.1, and builds to `docs/spikes/sqlserver-json.md`. Done when a job that reads
+   Mongo and publishes to a `json` column passes against a Mongo container and a SQL Server one whose version has the
+   type, and a second upsert of the same documents changes nothing in Mongo.
+6. **5.6 Environments.** Every command that touches the firm's systems takes `--env dev|qa|prod`, or `BASIS_ENV`, with
+   no default. A desktop reads the user's file for that environment, `basis/ENV.env` in their own configuration folder
+   (`~/.config/basis/ENV.env`, or `%APPDATA%\basis\ENV.env` on Windows), which holds its hosts, paths and secrets, and
+   which every repo the user works in shares. A pod reads what its deployment sets, `BASIS_ENV` among it. A repo's
+   `.env.example` lists the names it needs. What reads a settings file today fits as follows:
+   - basis-job's `run(..., env=".env")` takes an environment rather than a file, as `env="qa"`, with no default
+     environment, and reads the user's file for it, as `--env` does;
+   - the QA tier reads the user's `qa.env`, still alone and never the process's environment, in place of the file
+     `[tool.basis.qa] settings` names today, so that key goes. Its marker, stores and writes stay as they are.
+
+   In prod, a run whose plan publishes or writes anything is refused at the start, with one `ERROR` line, unless the
+   deployment sets one flag. That stops accidents, not malice, and the docs say the real control is a read-only prod
+   login for desktops. Desktops write in dev and QA. Database logins stay as the settings have them. `basis doctor --env
+   ENV` checks that each login works and each folder is reachable. Needs 5.1, and builds to `docs/spikes/kerberos.md`.
+   Done when a command that touches the firm's systems with no environment is refused with its fix, a prod run that
+   would write is refused without the flag, and `basis doctor --env qa` reports on each login and folder.
+7. **5.7 Azure Data Lake.** Add a lake destination: a job publishes an output as Parquet to a declared ADLS Gen2 path,
+   partitioned by its run's interval, such as `CONTAINER/TABLE/date=2026-11-07/`, through `pyarrow.fs`. The
+   environment's settings declare how it signs in: an account key or a SAS token, as a secret, or Entra ID, through
+   workload identity in a pod and `az login` on a desktop. Each partition goes to a temporary path and is renamed into
+   place, and the archive is done only when its files read back with the row count written. The job's database ledger
+   records it like any publish, with the interval, the path, the row count and the files' hashes. Needs 5.1 and 5.6,
+   builds to `docs/spikes/data-lake.md`, and runs alongside the other steps. Done when an interval's archive is in the
+   lake with its row count checked and its ledger row written, a retry archives nothing, and `resume` and `--again` work
+   on it as they do on a table.
+
+Later, and not yet stepped:
+
+- SharePoint, through Microsoft Graph, which needs an app registration with `Sites.Selected`, and a **(work)** spike
+  first;
+- Slack bot apps;
+- recorded HTTP responses, for replay;
+- run locks;
+- output checks;
+- Azure Key Vault;
+- deleting the rows a lake archive holds from its source database, as an explicit step of its own.
