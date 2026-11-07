@@ -17,7 +17,7 @@ from pydantic import Field, ValidationError
 from basis.core import traces
 from basis.core.databases import open_database
 from basis.core.databases.base import end_reading
-from basis.core.databases.mssql import MssqlReader, MssqlWriter
+from basis.core.databases.mssql import MssqlReader, MssqlWriter, fetches_char_as_utf8
 from basis.core.databases.oracle import OracleReader, connect
 from basis.core.model import Model
 from basis.core.settings import GivenSettings, OracleSettings, publish_refusal, variable
@@ -88,6 +88,17 @@ def test_oracle_in_thick_mode_loads_its_client_libraries_from_the_folder_given(t
 
     with pytest.raises(oracledb.DatabaseError, match=f"DPI-1047: Cannot locate .*{tmp_path}"):  # an empty folder: no client there
         connect(settings, user=settings.user, password=settings.password.get_secret_value())
+
+
+@pytest.mark.parametrize(
+    ("platform", "encoding", "utf8"),
+    [("linux", "UTF-8", True), ("linux", "ISO-8859-1", False), ("win32", "cp1252", False), ("win32", "utf-8", False)],
+    ids=["linux-utf8", "linux-latin1", "windows", "windows-utf8"],
+)
+def test_sql_server_char_data_is_fetched_as_utf8_only_where_the_driver_sends_it_so(platform: str, encoding: str, utf8: bool) -> None:  # noqa: FBT001 -- a parameter of the table
+    """The driver sends char data in the locale's charset off Windows, and in the ANSI code page on Windows, where the
+    UTF-8 fetch is unverified (docs/spikes/sqlserver-json.md): there each connection keeps the driver's default."""
+    assert fetches_char_as_utf8(platform, encoding) is utf8
 
 
 @pytest.fixture

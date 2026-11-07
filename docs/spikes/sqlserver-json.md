@@ -131,6 +131,17 @@ any `varchar(max)` column with a UTF-8 collation. Three workarounds were verifie
   binding defect in section 3.
 - The defect goes upstream with the repro under "Upstream" below.
 
+**Found by the fix, after the spike.** basis-core's fix, run on 2026-11-07 against SQL Server 2022 (16.0.4305.5) on
+Linux with the same driver, found the default loses more than the above. `fetchall` and `fetchone` drop a 4-byte
+character that straddles the driver's chunks of 4,095 UTF-16 units in a `varchar(max)` UTF-8 value, as in
+`"a" * 4094 + "😀b"`. Arrow dropped `["😀"]`'s emoji from a `varchar(200)` UTF-8 column too, wherever the result had a
+`varchar(max)` or `nvarchar(max)` column beside it. The UTF-8 char fetch read each exactly, and code page 1252 `varchar`
+and `nvarchar` text as well. Under an ISO-8859-1 locale on Linux it does not: Arrow raises `UnicodeDecodeError`, and
+`fetchall` returns `bytes`, with each character Latin-1 lacks replaced. So basis-core sets it on each connection off
+Windows, where the locale is UTF-8 (`fetches_char_as_utf8` in `packages/core/src/basis/core/databases/mssql.py`), and
+keeps the driver's default on Windows and under any other locale. `packages/job/tests/integration/test_text.py` reads
+and publishes such text.
+
 ## 3. Writing
 
 basis writes neither through bulk copy nor through table-valued parameters. `mssql.py` on `main` (6d29ec6) stages a
@@ -191,6 +202,10 @@ primary key is refused: "is of a type that is invalid for use as a key column in
   value binds as SQL NULL, never as the text `null`, which the type refuses. polars' `struct.json_encode()` writes the
   text `null` for a null struct, so the null has to be kept explicitly.
 - The write path stays as it is: no bulk copy, no table-valued parameters, no change to staging.
+- **Found by the fix, after the spike.** In a call with a string longer than 4,000 UTF-16 units, `executemany` inserts
+  every row and sets `rowcount` to 1, so basis's count check fails the publish: "the insert into T wrote 1 rows, and
+  the run computed 5: nothing is committed". A `json` document is often that long, so step 5.5 needs basis's writes to
+  count such rows another way.
 - The check of a plan refuses a `json` column as an upsert key, or in a delete by values, before anything connects.
 - basis turns errors 13609, 1007, 13645 and 13646 into one ERROR line naming the table and the column. One bad row fails
   its whole `executemany` call, so the server's error cannot name the row; basis's encoder checks the limits that can
@@ -362,6 +377,20 @@ print(pa.Table.from_batches(list(reader), schema=reader.schema).to_pylist())  # 
 cursor = connection.cursor()
 cursor.execute("SELECT j, v FROM t")
 print(tuple(cursor.fetchone()))  # ('["😀"]', '["😀"]')
+```
+
+Found by basis-core's fix, after the spike, with the same versions against SQL Server 2022: `fetchone` loses a 4-byte
+character too, where it straddles the driver's chunks of 4,095 UTF-16 units; and `executemany`'s `rowcount` is 1 for a
+call with a string longer than 4,000 UTF-16 units, though it inserts every row.
+
+```python
+connection.cursor().execute("CREATE TABLE t2 (id int PRIMARY KEY, v varchar(max) COLLATE Latin1_General_100_BIN2_UTF8)")
+connection.cursor().execute("INSERT INTO t2 VALUES (1, ?)", ("a" * 4094 + "\U0001f600b",))
+cursor = connection.cursor()
+cursor.execute("SELECT v FROM t2")
+print(repr(cursor.fetchone()[0][4090:]))  # 'aaaab'
+cursor.executemany("INSERT INTO t2 VALUES (?, ?)", [(2, "x"), (3, "x" * 4001), (4, "x")])
+print(cursor.rowcount)  # 1, and the table holds all three
 ```
 
 ## The probe
@@ -1087,11 +1116,13 @@ A short check at the port, which blocks nothing above.
    ```sh
    export SPIKE06_CONNECTION_STRING='Server=...;Database=...;Trusted_Connection=yes;Encrypt=yes'
    uv run --script probe.py > probe-wsl.txt 2>&1
+   uv run --no-project python -c "import locale; print(locale.getencoding())" >> probe-wsl.txt
    ```
 
    ```powershell
    $env:SPIKE06_CONNECTION_STRING = 'Server=...;Database=...;Trusted_Connection=yes;Encrypt=yes'
    uv run --script probe.py > probe-windows.txt 2>&1
+   uv run --no-project python -c "import locale; print(locale.getencoding())" >> probe-windows.txt
    ```
 
 Send back:
@@ -1099,5 +1130,7 @@ Send back:
 - the version row, and the `CREATE TABLE`'s error if it failed;
 - the list of `json` columns;
 - the redacted shape of two migrated documents;
-- both probe outputs. The lines that matter most are each `q2 ... arrow` line, whose "arrow with UTF-8 char fetch equal"
-  says whether that fix holds on Windows, and any `raised` line that is not in this result.
+- both probe outputs, each ending with its locale's encoding. The lines that matter most are each `q2 ... arrow` line,
+  whose "arrow with UTF-8 char fetch equal" says whether that fix holds on Windows, and any `raised` line that is not
+  in this result. basis-core sets the UTF-8 char fetch in WSL, where the encoding is UTF-8, and keeps the driver's
+  default on Windows, unverified, until these lines show it exact there (`fetches_char_as_utf8`).

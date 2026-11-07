@@ -1,5 +1,6 @@
 """SQL Server through mssql-python, Microsoft's driver, which bundles its ODBC driver. A query binds the interval as
-`%(interval_start)s` and `%(interval_end)s`. Reads arrive as Arrow, typed by the driver.
+`%(interval_start)s` and `%(interval_end)s`. Reads arrive as Arrow, typed by the driver, and each connection fetches
+char data as UTF-8 where that is exact, which the driver's default is not (`fetches_char_as_utf8`).
 
 A write stages each frame an upsert, an insert of new rows, or a delete by values needs in a `#temp` table, which any
 login may create, shaped by `SELECT TOP 0 ... INTO` from the destination itself, so the stage has the destination's
@@ -11,8 +12,10 @@ Each statement a reader or a writer runs has a span, and so does each commit and
 runs a caller's own SQL, binding `%(name)s` by name: each statement's deadline is the driver's query timeout, in whole
 seconds, which SQL Server enforces by cancelling the statement on the server too."""
 
+import locale
 import logging
 import math
+import sys
 import time
 from collections.abc import Generator, Mapping, Sequence
 from contextlib import closing, contextmanager
@@ -62,7 +65,22 @@ def connect_to(connection_string: str, timeout_s: int, *, autocommit: bool) -> m
         error.add_note(f"while connecting to SQL Server {target_of(connection_string)}")
         raise
     connection.timeout = timeout_s
+    if fetches_char_as_utf8(sys.platform, locale.getencoding()):
+        connection.setdecoding(mssql_python.SQL_CHAR, encoding="utf-8", ctype=mssql_python.SQL_CHAR)
     return connection
+
+
+def fetches_char_as_utf8(platform: str, encoding: str) -> bool:
+    """Whether a connection fetches char data (`char`, `varchar`, `text`, and `json`, which this driver gets as
+    `varchar(max)`) as UTF-8. Under the driver's default, UTF-16, mssql-python 1.17.0 drops some characters outside
+    Unicode's Basic Multilingual Plane, emoji among them, from `varchar(max)` values, with no error: through Arrow, and
+    through `fetch*` where one straddles the driver's chunks of 4,095 UTF-16 units (docs/spikes/sqlserver-json.md).
+
+    Fetched as char, the data comes in the charset of the process's locale, off Windows: exact where that is UTF-8, as
+    in basis's image (`LANG=C.UTF-8`), verified on Linux; under ISO-8859-1, Arrow raises and `fetch*` returns bytes. On
+    Windows it comes in the ANSI code page, so the fetch is unverified there, and likely wrong: Windows keeps the default
+    until the spike's checklist for the port shows it exact."""
+    return platform != "win32" and encoding.replace("-", "").lower() == "utf8"
 
 
 def target_of(connection_string: str) -> str:
