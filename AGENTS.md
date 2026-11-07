@@ -34,7 +34,8 @@ its docs.
 uv sync --all-packages              # every member; a plain `uv sync` installs only what basis releases, and removes optim
 uv run pre-commit install           # once per clone: the commit hook runs the checks below
 uv run pre-commit run --all-files   # ruff, ty with every rule an error, the lockfile, the import contracts, file hygiene
-uv run pytest                       # every package's unit tests, optim's among them, from the root
+uv run pytest                       # every package's unit tests, optim's among them, and scripts/tests, from the root
+uv run scripts/release.py check     # every member at the root's one version, pinning basis-core at it (docs/releasing.md)
 uv run pytest -m integration        # real SQL Server and Oracle, every package's: packages/job/tests/integration/README.md
 uv run scripts/without_optim.py     # the name check, then the hooks and unit tests with packages/optim removed
 ```
@@ -61,6 +62,11 @@ A repo whose image builds needs basis from git rather than a checkout: push the 
 `uvx --from 'git+https://github.com/jacobragsdale/basis@BRANCH#subdirectory=packages/job' basis-job new repo loads`,
 which takes basis from the commit uvx installed. CI runs all of this on every pull request that changes more than
 docs, and builds that repo's image and publishes its job to SQL Server.
+
+A release is a `v*` tag. The root `pyproject.toml`'s `[project] version` is every package's, which
+`uv run scripts/release.py version X.Y.Z` sets, and each package says in its own `pyproject.toml` whether a release
+publishes it (`[tool.basis-release] publish`). [docs/releasing.md](docs/releasing.md) says how to cut a release, and
+what the release workflow's dry run proves on each pull request that touches a release file.
 
 ## The basis command
 
