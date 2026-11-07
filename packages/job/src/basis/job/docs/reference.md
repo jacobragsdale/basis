@@ -168,8 +168,9 @@ basis's.
 | `basis-job new repo NAME [JOB] [--dir DIR] [--index URL \| --framework-path PATH]` | Makes a job repo, `NAME`, whose first job, `JOB` (`positions` if not given), is a copy of the example, runs `git init`, points git at its hooks, and runs `uv sync`. `PATH` is a checkout of basis, the folder that holds `packages/`, installed editable. `URL` replaces PyPI for the whole repo, so it must proxy PyPI. Without either option, basis-job comes from the commit `basis-job` was installed from, when `uvx --from 'git+https://github.com/jacobragsdale/basis@REF#subdirectory=packages/job'` installed it, and otherwise from basis's GitHub tag for this version, which needs a release. |
 
 `JOB` is a name the repo lists as an entry point, or a module path. `replay`, `resume` and `regress` find runs under
-`BASIS_SNAPSHOT_ROOT`. Every failure prints one line on stderr, after any log records: `ERROR:`, the reason, and the
-fix. A result a caller reads, such as `describe`'s, is JSON on stdout.
+`BASIS_SNAPSHOT_ROOT`. Every command ends its stderr with a log record, `finished VERB`, with its exit code and how
+long it took, and every failure then prints one line: `ERROR:`, the reason, and the fix, the last line. A result a
+caller reads, such as `describe`'s, is JSON on stdout.
 
 | Exit code | Meaning |
 |---|---|

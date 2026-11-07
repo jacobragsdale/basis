@@ -76,9 +76,12 @@ holds the interface, and its docstring is the reference.
   parses NAME, and RUN_ID for `resume` and `replay`, and the `Shared` of the part that runs NAME adds and reads the
   rest, so a job's `run` takes `--interval` and a model's `--portfolios`. Where several declared parts have the verb,
   NAME comes first, and a name two of them run is refused.
-- Every failure prints one line on stderr, `ERROR: REASON: FIX`: a handler returns `fail(reason, fix)`, or raises a
-  `basis.core.errors.BasisError` whose message ends with the fix; a pydantic `ValidationError` of settings or params
-  prints as one line too. Any other exception is a defect, whose traceback is logged first. A call that raises a
+- Every command's stderr ends with one log record, `finished VERB`, with its `verb`, `exit_code` and `ms`, whatever
+  the outcome, and then, for each failure, one line, `ERROR: REASON: FIX`: so a failure's ERROR line is the last line,
+  and the only one starting `ERROR`. The other stderr lines are JSON log records, for machines. A handler returns
+  `fail(reason, fix)`, or raises a `basis.core.errors.BasisError` whose message ends with the fix; a pydantic
+  `ValidationError` of settings or params prints as one line too; `basis` holds each ERROR line back until the record.
+  Any other exception is a defect, whose traceback is logged first. A call that raises a
   builtin error on purpose, such as a lookup that finds no run, goes in `with deliberate(LookupError):`. Results a
   caller reads are JSON on stdout.
 - `basis sync` owns the framework files (`basis.core.sync.REPO_FILES`: the Dockerfile, `azure-pipelines.yml`, the

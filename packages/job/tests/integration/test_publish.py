@@ -16,6 +16,7 @@ from integration.scratch import Scratch, run
 import basis.job as etl
 from basis.core import command, snapshots
 from basis.core.settings import GivenSettings
+from basis.core.storage import Root
 from basis.job import cli, ddl, runs
 from basis.job.job import Job
 from basis.job.outputs import FrameWrite, Target
@@ -227,3 +228,43 @@ def test_a_run_told_again_that_committed_to_one_database_resumes_again_on_the_ot
 
     assert command.run(["resume", partial.record.run_id], cwd=repo, installed={"job": cli.part}) == 0, capsys.readouterr().err
     assert (len(contents(alpha, table)), len(contents(beta, table))) == (4, 4)
+
+
+def test_a_resume_told_again_is_saved_so_its_next_attempt_is_too(both: tuple[Scratch, Scratch], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """The run is not told `--again`. Beta's ledger holds the interval, from the run before, and alpha's, a fresh one,
+    does not: the run commits to alpha and fails on beta, whose ledger it is pointed away from. A plain resume is
+    refused by beta's interval guard, and its fix says to resume with `--again`, which publishes, and is saved."""
+    alpha, beta = both
+    table, fresh = f"prices_{alpha.suffix}", f"fresh_ledger_{alpha.suffix}"
+    create(alpha, table, key=None)
+    create(beta, table, key=None)
+    alpha.with_ledger()
+    beta.with_ledger()
+    job = two_databases(table)
+    try:
+        assert run(job, {"alpha": alpha, "beta": beta}, TODAY, tmp_path).record.status == "published"
+        alpha.execute(ddl.ledger(fresh, alpha.dialect))
+        partial = run(job, {"alpha": ledgered(alpha, fresh), "beta": ledgered(beta, f"no_ledger_{beta.suffix}")}, TODAY, tmp_path)
+        assert (partial.record.status, partial.record.again) == ("partial", False)
+        settings = GivenSettings(databases={"alpha": ledgered(alpha, fresh).settings, "beta": beta.settings}, snapshot_root=str(tmp_path / "snapshots"))
+        monkeypatch.setattr(cli, "Settings", lambda: settings)
+        monkeypatch.setattr("basis.job.job.load", lambda _: job)  # the test's own job, which no module holds
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "pyproject.toml").write_text('[project]\nname = "repo"\n\n[tool.basis]\nparts = ["job"]\n', encoding="utf-8")
+        run_id = partial.record.run_id
+
+        assert command.run(["resume", run_id], cwd=repo, installed={"job": cli.part}) == 1
+        assert capsys.readouterr().err.splitlines()[-1].endswith(f"fix what its publishes record, then `basis resume two_databases {run_id} --again` again")
+        assert command.run(["resume", run_id, "--again"], cwd=repo, installed={"job": cli.part}) == 0, capsys.readouterr().err
+        assert snapshots.find(Root.at(tmp_path / "snapshots"), run_id).record().again
+        assert (len(contents(alpha, table)), len(contents(beta, table))) == (4, 4)
+    finally:
+        alpha.drop(fresh)
+
+
+def ledgered(scratch: Scratch, ledger: str) -> Scratch:
+    """`scratch` with its write login's ledger named `ledger`."""
+    write = scratch.settings["write"]
+    assert isinstance(write, dict)
+    return dataclasses.replace(scratch, settings=scratch.settings | {"write": write | {"ledger": ledger}})

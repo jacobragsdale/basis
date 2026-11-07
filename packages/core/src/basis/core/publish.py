@@ -27,6 +27,16 @@ class PublishRefusedError(RuntimeError):
     pass
 
 
+OVERLAP = "already published an interval that overlaps"
+"""What a database's refusal of a plain insert for an interval its ledger has says, which `--again` overrides."""
+
+
+def refused_overlap(publishes: Mapping[str, PublishRecord]) -> bool:
+    """Whether a database refused to publish because its ledger has the interval already: whether the next attempt
+    needs `--again`."""
+    return any(record.status == "failed" and record.error is not None and OVERLAP in record.error for record in publishes.values())
+
+
 @dataclass(frozen=True)
 class Publication:
     run_id: str
@@ -69,7 +79,7 @@ def _publish_database(publication: Publication, database: Database, targets: Map
                 raise PublishRefusedError(f"{name}: {target.table} changed since the run checked it:\n" + "\n".join(reasons))
             interval = publication.interval if not changes[name].rerun_safe and not publication.again else None
             if interval is not None and (runs := writer.overlapping(publication.job, name, interval)):
-                msg = f"{name} appends, and runs {', '.join(runs)} already published an interval that overlaps {publication.interval}: pass --again to insert its rows a second time"
+                msg = f"{name} appends, and runs {', '.join(runs)} {OVERLAP} {publication.interval}: pass --again to insert its rows a second time"
                 raise PublishRefusedError(msg)
             counts[name] = writer.apply(target, changes[name], spec)
             entry = LedgerEntry(publication.run_id, publication.job, name, target.table, publication.interval, changes[name].rerun_safe, counts[name], publication.clock(), publication.version)

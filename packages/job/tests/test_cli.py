@@ -44,6 +44,16 @@ def error_line(capsys: pytest.CaptureFixture[str]) -> str:
     return line
 
 
+def only_error(err: str) -> str:
+    """The one ERROR line in what a failure printed on stderr: the last line, after the record that says the command
+    finished, with no traceback."""
+    lines = err.splitlines()
+    assert [line for line in lines if line.startswith("ERROR")] == lines[-1:]
+    assert json.loads(lines[-2])["message"].startswith("finished ")
+    assert "traceback" not in err
+    return lines[-1]
+
+
 def ran(repo: Path, capsys: pytest.CaptureFixture[str]) -> str:
     """The id of a run of the example on its fixture."""
     assert basis(repo, *RUN) == 0
@@ -69,9 +79,9 @@ def test_a_run_that_cannot_publish_exits_nonzero_with_the_reason_and_the_fix(rep
 def test_a_run_whose_params_do_not_validate_names_the_field_and_the_file(repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "bad.json").write_text('{"include_closed_acounts": true}', encoding="utf-8")
     assert basis(repo, *RUN[:3], str(tmp_path / "bad.json"), *RUN[4:]) == 1
-    err = capsys.readouterr().err
-    assert err.startswith(f"ERROR: while reading basis.job.example.job's params from {tmp_path / 'bad.json'}: Params is not valid: include_closed_acounts: Extra inputs")
-    assert err.count("\n") == 1
+    assert only_error(capsys.readouterr().err).startswith(
+        f"ERROR: while reading basis.job.example.job's params from {tmp_path / 'bad.json'}: Params is not valid: include_closed_acounts: Extra inputs"
+    )
 
 
 def test_describe_prints_the_contract_as_json(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -108,9 +118,7 @@ def test_a_replay_of_a_run_on_the_same_code_changes_nothing(repo: Path, capsys: 
 def test_a_resume_of_a_run_that_never_published_is_refused_in_one_line(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     run_id = ran(repo, capsys)
     assert basis(repo, "resume", run_id) == 1
-    err = capsys.readouterr().err
-    assert err.startswith(f"ERROR: run {run_id} is checked and never published")
-    assert err.count("\n") == 1
+    assert only_error(capsys.readouterr().err).startswith(f"ERROR: run {run_id} is checked and never published")
 
 
 def test_a_run_told_again_records_it_and_resume_takes_again_too(repo: Path, snapshot_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -161,9 +169,7 @@ def test_each_failure_the_caller_can_fix_is_one_line_with_no_traceback(
         else:
             monkeypatch.setenv(name, value)
     assert basis(repo, *argv) == code
-    err = capsys.readouterr().err
-    assert err.startswith("ERROR: ")
-    assert err.count("\n") == 1
+    only_error(capsys.readouterr().err)
 
 
 def test_regress_replays_each_job_on_its_own(repo: Path, snapshot_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -212,13 +218,40 @@ def test_a_runs_failure_says_why_and_how_to_fix_it(fields: dict[str, object], *,
     assert cli.failure_of(RunRecord.model_validate(RECORD | fields), publish=publish) == failure
 
 
+OVERLAPPED = {
+    "status": "failed",
+    "at": datetime(2026, 11, 6, tzinfo=UTC),
+    "error": "PublishRefusedError: prices appends, and runs R0 already published an interval that overlaps 2026-11-05..2026-11-06: pass --again to insert its rows a second time",
+}
+"""A database's refusal of a plain insert for an interval its ledger has."""
+
+
+@pytest.mark.parametrize(
+    ("fields", "failure"),
+    [
+        ({"status": "partial", "again": True}, ("run R1 of prices published to some of its databases and failed on another", "fix what its publishes record, then `basis resume prices R1 --again`")),
+        (
+            {"status": "partial", "publishes": {"beta": OVERLAPPED}},
+            ("run R1 of prices published to some of its databases and failed on another", "fix what its publishes record, then `basis resume prices R1 --again`"),
+        ),
+        (
+            {"status": "failed", "publishes": {"alpha": OVERLAPPED}},
+            (f"run R1 of prices committed to no database: alpha: {OVERLAPPED['error']}", "run the job again with --again, if its rows are meant to be inserted a second time"),
+        ),
+    ],
+    ids=["a-partial-run-told-again", "a-partial-run-a-ledger-refused", "a-run-a-ledger-refused"],
+)
+def test_a_fix_carries_again_where_the_next_attempt_needs_it(fields: dict[str, object], failure: tuple[str, str]) -> None:
+    assert cli.failure_of(RunRecord.model_validate(RECORD | fields), publish=True) == failure
+
+
 def test_a_repo_made_before_basis_has_a_release_fails_with_one_error_line_that_names_the_fix(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert cli.scaffold(["new", "repo", "pricing-etl", "--dir", str(tmp_path)]) == 1
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err.startswith("ERROR: basis has no release yet")
-    assert captured.err.rstrip("\n").endswith("pass --framework-path with the clone's folder")
-    assert captured.err.count("\n") == 1
+    line = only_error(captured.err)
+    assert line.startswith("ERROR: basis has no release yet")
+    assert line.endswith("pass --framework-path with the clone's folder")
     assert not (tmp_path / "pricing-etl").exists()
 
 

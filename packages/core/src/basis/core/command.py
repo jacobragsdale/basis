@@ -4,26 +4,30 @@ It finds its repo, the nearest folder at or above the working directory with a `
 file declares as `[tool.basis] parts = ["job"]`, loads each one's entry point in the `basis.verbs` group, and runs
 one verb: a part's own, or one of core's, which reach the parts through their `Part`. A verb that jobs and models
 both have, such as `run`, is core's too (`SHARED`): it parses NAME, and RUN_ID where the verb takes one, and the part
-that runs NAME parses the rest. A verb of a part the repo does not declare is refused, never offered. The verbs a developer runs on a clone, `check`, `sync` and `new`, point a clone
-that names no hooks folder at the repo's hooks (`basis.core.hooks.ensure`); `run` and the rest, which a container or a
-scheduler runs, leave git alone.
+that runs NAME parses the rest. A verb of a part the repo does not declare is refused, never offered. The verbs a
+developer runs on a clone, `check`, `sync` and `new`, point a clone that names no hooks folder at the repo's hooks
+(`basis.core.hooks.ensure`); `run` and the rest, which a container or a scheduler runs, leave git alone.
 
-Every failure is one line on stderr, `ERROR: REASON: FIX`, and the exit code is 1, or 2 for a command line that does
-not parse. A `BasisError`, which basis raises on purpose with the fix in its message, prints as that line alone, as
-does a pydantic `ValidationError` of the caller's settings or params; any other exception is a defect, and its
+Every command ends with one log record, `finished VERB`, with its `exit_code` and `ms`, whatever its outcome, and then
+each failure's line on stderr, `ERROR: REASON: FIX`, held back until then (`basis.core.verbs.holding`): so a failure's
+ERROR line is the last line, and monitoring finds every exit code. The exit code is 1, or 2 for a command line that
+does not parse. A `BasisError`, which basis raises on purpose with the fix in its message, prints as that line alone,
+as does a pydantic `ValidationError` of the caller's settings or params; any other exception is a defect, and its
 traceback is logged before the line, as every exception's is with `BASIS_LOG_LEVEL=DEBUG`. `standalone` runs a
 command of the same kind outside a repo, such as `basis-job`, which makes one."""
 
 import argparse
+import contextlib
 import io
 import json
 import logging
 import os
 import sys
+import time
 import tomllib
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import partial
+from functools import cached_property, partial
 from importlib.metadata import EntryPoint, entry_points, version
 from pathlib import Path
 from typing import Literal, NoReturn, override
@@ -32,7 +36,7 @@ from pydantic import ValidationError
 
 from basis.core import check, hooks, logs, settings, sync
 from basis.core.errors import BasisError
-from basis.core.verbs import Part, Runs, Shared, Verb, fail
+from basis.core.verbs import Part, Runs, Shared, Verb, error_line, fail, holding
 
 GROUP = "basis.verbs"
 PACKAGES = {"job": "basis-job", "api": "basis-api", "optim": "optim"}
@@ -53,8 +57,9 @@ class Spec:
     run_id: bool = False
     """Whether RUN_ID follows NAME."""
     alone: Literal["refuse", "each", "first", "names"] = "refuse"
-    """What the verb does without NAME, where more than one declared part has it: refuse, hand the arguments to each
-    part in turn, hand them to the first, or print the name of everything every part runs."""
+    """What the verb does without NAME, where more than one declared part has it: refuse; hand the arguments, which
+    must be options every part takes, to each part in turn, and print what each part printed as JSON, by part; hand
+    them to the first; or print the name of everything every part runs."""
 
 
 SHARED = {
@@ -105,6 +110,10 @@ def installed() -> dict[str, Callable[[], Part]]:
 
 def run(argv: Sequence[str], *, cwd: Path, installed: Installed) -> int:
     """`basis` with `argv`, in the repo at or above `cwd`, with the parts `installed` lists."""
+    return _finishing("basis", argv, partial(_run, argv, cwd=cwd, installed=installed))
+
+
+def _run(argv: Sequence[str], *, cwd: Path, installed: Installed) -> int:
     try:
         logs.setup()
         if list(argv[:1]) == ["--version"]:  # which needs no repo
@@ -126,11 +135,28 @@ def run(argv: Sequence[str], *, cwd: Path, installed: Installed) -> int:
 def standalone(prog: str, description: str, verbs: Sequence[Verb], argv: Sequence[str] | None = None) -> int:
     """A command with `verbs` that runs outside a repo, such as `basis-job`, which makes one; it parses, runs and
     fails as `basis` does."""
-    try:
-        logs.setup()
-        return _execute(_parser(prog, description, verbs), {verb.name: verb for verb in verbs}, sys.argv[1:] if argv is None else argv)
-    except Exception as error:  # noqa: BLE001 -- the boundary where every failure becomes its one line
-        return report(error)
+    given = sys.argv[1:] if argv is None else argv
+
+    def execute() -> int:
+        try:
+            logs.setup()
+            return _execute(_parser(prog, description, verbs), {verb.name: verb for verb in verbs}, given)
+        except Exception as error:  # noqa: BLE001 -- the boundary where every failure becomes its one line
+            return report(error)
+
+    return _finishing(prog, given, execute)
+
+
+def _finishing(prog: str, argv: Sequence[str], execute: Callable[[], int]) -> int:
+    """`execute`'s exit code, `prog ARGV`'s, after the record that says it finished, with its verb, its exit code and
+    how long it took, and then the ERROR lines it printed, so that they are last."""
+    start = time.perf_counter()
+    with holding() as held:
+        code = execute()
+    verb = next((argument for argument in argv if not argument.startswith("-")), None)
+    log.info("finished %s", verb or prog, extra={"verb": verb, "exit_code": code, "ms": logs.ms_since(start)})
+    sys.stderr.write("".join(held))
+    return code
 
 
 def versions() -> str:
@@ -279,6 +305,7 @@ def _refuse_undeclared(argv: Sequence[str], repo: Repo, verbs: Collection[str], 
     verb = next((argument for argument in argv if not argument.startswith("-")), None)
     if verb is None or verb in verbs:
         return
+    offering: list[str] = []
     for name, load in installed.items():
         if name in repo.parts:
             continue
@@ -288,8 +315,14 @@ def _refuse_undeclared(argv: Sequence[str], repo: Repo, verbs: Collection[str], 
             log.debug("the %s part does not load", name, exc_info=True)
             continue
         if verb in _offers(part):
-            msg = f"`basis {verb}` comes with the {name} part, which {repo.pyproject} does not declare: add {name!r} to its [tool.basis] parts"
-            raise CommandError(msg)
+            offering.append(name)
+    if len(offering) == 1:
+        msg = f"`basis {verb}` comes with the {offering[0]} part, which {repo.pyproject} does not declare: add {offering[0]!r} to its [tool.basis] parts"
+        raise CommandError(msg)
+    if offering:
+        parts = " and ".join(offering)
+        msg = f"`basis {verb}` comes with the {parts} parts, which {repo.pyproject} does not declare: add the one the repo has, {' or '.join(map(repr, offering))}, to its [tool.basis] parts"
+        raise CommandError(msg)
 
 
 def _kinds(repo: Repo) -> dict[str, Callable[[Path, str], Path]]:
@@ -304,8 +337,8 @@ def _kinds(repo: Repo) -> dict[str, Callable[[Path, str], Path]]:
 
 @dataclass(frozen=True)
 class _Dispatched(Verb):
-    """A verb in `SHARED`, which reads its own command line: which part's parser reads it depends on its NAME, and
-    argparse cannot hand on a command line whose first argument is an option."""
+    """A verb in `SHARED`, which reads its own command line, since which part's parser reads it depends on its NAME:
+    `_execute` hands it the arguments after the verb."""
 
     dispatch: Callable[[Sequence[str]], int]
 
@@ -315,123 +348,165 @@ def _shared(repo: Repo) -> list[Verb]:
     found: list[Verb] = []
     for name, spec in SHARED.items():
         sides = {part: (runs, side) for part, runs in _running(repo).items() if (side := _sides(runs).get(name)) is not None}
-        if not sides:
-            continue
-        dispatch = partial(_dispatch, name, spec, sides)
-        found.append(_Dispatched(name, _shared_help(sides), _rest, partial(_from_rest, dispatch), dispatch))
+        if sides:
+            sharing = _Sharing(name, spec, sides)
+            found.append(_Dispatched(name, sharing.help(), _no_arguments, partial(_dispatched, sharing.dispatch), sharing.dispatch))
     return found
 
 
-def _shared_help(sides: Mapping[str, tuple[Runs, Shared]]) -> str:
-    """A shared verb's line in `basis --help`: the only part's help, or each part's, after what it runs."""
-    if len(sides) == 1:
-        return next(iter(sides.values()))[1].help
-    return " | ".join(f"{runs.noun}s: {side.help}" for runs, side in sides.values())
+def _no_arguments(_: argparse.ArgumentParser) -> None:
+    """A shared verb's arguments in the parser of every verb: none, since its parts' parsers read them."""
+
+
+def _dispatched(dispatch: Callable[[Sequence[str]], int], _: argparse.Namespace) -> int:
+    """A shared verb that argparse reached with nothing after it, as in `basis -- describe`."""
+    return dispatch(())
 
 
 def _running(repo: Repo) -> dict[str, Runs]:
     return {name: part.runs for name, part in repo.parts.items() if part.runs is not None}
 
 
-def _rest(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("rest", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+@dataclass(frozen=True)
+class _Sharing:
+    """A verb in `SHARED` as the declared parts that have it share it."""
 
+    verb: str
+    spec: Spec
+    sides: Mapping[str, tuple[Runs, Shared]]
+    """Each part that has the verb, by name, with what it runs and its side of the verb."""
 
-def _from_rest(dispatch: Callable[[Sequence[str]], int], namespace: argparse.Namespace) -> int:
-    """A shared verb that argparse parsed, as when an option comes before it: `_execute` hands on every other."""
-    return dispatch(namespace.rest)
+    @cached_property
+    def names(self) -> dict[str, Mapping[str, str]]:
+        """What each part runs, by name, with its module path: read once per command, when it is needed."""
+        return {part: runs.names() for part, (runs, _) in self.sides.items()}
 
+    def help(self) -> str:
+        """The verb's line in `basis --help`: the only part's help, or each part's, after what it runs."""
+        if len(self.sides) == 1:
+            return next(iter(self.sides.values()))[1].help
+        return " | ".join(f"{runs.noun}s: {side.help}" for runs, side in self.sides.values())
 
-type Sides = Mapping[str, tuple[Runs, Shared]]
-"""Each part that has a shared verb, by name, with what it runs and its side of the verb."""
+    def dispatch(self, argv: Sequence[str]) -> int:
+        """`basis VERB ARGV`: handed to the only part that has the verb, or to the one that runs NAME, whose parser
+        reads every argument; without NAME, where several parts have it, as `spec.alone` says."""
+        if len(self.sides) == 1:
+            return self._hand(next(iter(self.sides)), argv)
+        leading = next((index for index, argument in enumerate(argv) if argument.startswith("-")), len(argv))
+        helping = "-h" in argv or "--help" in argv
+        known = leading >= 1 and any(argv[0] in found for found in self.names.values())
+        if leading >= (2 if self.spec.run_id else 1) or (known and helping):  # NAME is given, and comes first
+            return self._hand(self._owner(argv[0]), argv)
+        if self.spec.run_id and known:
+            msg = f"basis {self.verb} {argv[0]} takes the id of one of its runs after the name: give it, as `basis {self.verb} {argv[0]} RUN_ID`"
+            raise CommandError(msg, code=2)
+        if helping:
+            return self._help()
+        match self.spec.alone:
+            case "names":
+                return _print(self._listed())
+            case "each":
+                return self._every_part(argv)
+            case "first":
+                return self._hand(next(iter(self.sides)), argv)
+            case "refuse":
+                where = "before the run's id" if self.spec.run_id else "first"
+                msg = f"more than one part of this repo has `basis {self.verb}` ({', '.join(self.sides)}): give the {self._nouns("'s")} name {where}"
+                raise CommandError(msg)
 
+    def _parser(self, part: str) -> argparse.ArgumentParser:
+        """`part`'s parser for the verb: core's NAME and RUN_ID, and the part's own arguments."""
+        runs, side = self.sides[part]
+        parser = _Parser(prog=f"basis {self.verb}", description=side.help)
+        metavar, path = (runs.noun.upper(), ", or its module path") if len(self.sides) == 1 else ("NAME", "")
+        parser.add_argument("name", metavar=metavar, nargs=None if self.spec.required else "?", help=self.spec.name.format(noun=runs.noun, path=path))
+        if self.spec.run_id:
+            parser.add_argument("run_id", metavar="RUN_ID")
+        side.arguments(parser)
+        return parser
 
-def _dispatch(verb: str, spec: Spec, sides: Sides, argv: Sequence[str]) -> int:
-    """`basis VERB ARGV`: handed to the only part that has the verb, or to the one that runs NAME, whose parser reads
-    every argument; without NAME, where several parts have it, as `spec.alone` says."""
-    if len(sides) == 1:
-        return _hand(verb, spec, sides, next(iter(sides)), argv)
-    leading = next((index for index, argument in enumerate(argv) if argument.startswith("-")), len(argv))
-    if leading >= (2 if spec.run_id else 1):  # NAME is given, and comes first
-        return _hand(verb, spec, sides, _owner(sides, argv[0]), argv)
-    if spec.run_id and leading == 1 and any(argv[0] in runs.names() for runs, _ in sides.values()):
-        msg = f"basis {verb} {argv[0]} takes the id of one of its runs after the name: give it, as `basis {verb} {argv[0]} RUN_ID`"
-        raise CommandError(msg, code=2)
-    if "-h" in argv or "--help" in argv:
-        return _help(verb, spec, sides)
-    nouns = " or ".join(f"{runs.noun}'s" for runs, _ in sides.values())
-    match spec.alone:
-        case "names":
-            return _print(_names(sides))
-        case "each":
-            return max(_each(verb, spec, sides, part, argv) for part in sides)
-        case "first":
-            return _hand(verb, spec, sides, next(iter(sides)), argv)
-        case "refuse":
-            where = "before the run's id" if spec.run_id else "first"
-            msg = f"more than one part of this repo has `basis {verb}` ({', '.join(sides)}): give the {nouns} name {where}"
+    def _hand(self, part: str, argv: Sequence[str]) -> int:
+        """`argv`, parsed by `part`'s parser, handed to `part`; for `describe` without NAME, what every part runs."""
+        try:
+            namespace = self._parser(part).parse_args(argv)
+        except SystemExit as exited:  # --help prints, then exits
+            return exited.code if isinstance(exited.code, int) else 0
+        if namespace.name is None and self.spec.alone == "names":
+            return _print(self._listed())
+        return self.sides[part][1].handle(namespace)
+
+    def _every_part(self, argv: Sequence[str]) -> int:
+        """`basis VERB ARGV` without NAME, handed to every part in turn: with only the options every part takes, since
+        one part's would fail the others, and with each part's result, which it prints as JSON, printed as one JSON
+        object, by part. A part's failure is its own line, and every other part still runs."""
+        for part in self.sides:
+            _, unknown = self._parser(part).parse_known_args(argv)
+            if options := [argument.partition("=")[0] for argument in unknown if argument.startswith("-")]:
+                listed = ", ".join(options)
+                msg = f"basis {self.verb}: {listed} is not an option of the {part} part's `basis {self.verb}`: name the {self._nouns()} it is for, as `basis {self.verb} NAME {options[0]} ...`"
+                raise CommandError(msg, code=2)
+        results: dict[str, object] = {}
+        code = 0
+        for part in self.sides:
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                code = max(code, self._each(part, argv))
+            results[part] = self._parsed(part, printed.getvalue())
+        _print(results)
+        return code
+
+    def _each(self, part: str, argv: Sequence[str]) -> int:
+        """`part`'s side of the verb, whose failure is its own line, so that every other part's runs too."""
+        try:
+            return self._hand(part, argv)
+        except Exception as error:  # noqa: BLE001 -- each part's failure is its own line, and the other parts still run
+            error.add_note(f"in the {part} part")
+            return report(error)
+
+    def _parsed(self, part: str, printed: str) -> object:
+        """What `part`'s side of the verb printed, as JSON, or None where it printed nothing."""
+        if not printed.strip():
+            return None
+        try:
+            return json.loads(printed)
+        except json.JSONDecodeError as error:
+            msg = f"the {part} part's `basis {self.verb}` printed what is not JSON, which it must print where several parts run it: {error}"
+            raise ValueError(msg) from error
+
+    def _help(self) -> int:
+        """What `basis VERB --help` prints where several parts have the verb, before NAME says whose arguments to give."""
+        spec = self.spec
+        usage = f"basis {self.verb} [-h] {'NAME' if spec.required or spec.run_id else '[NAME]'}{' RUN_ID' if spec.run_id else ''} ..."
+        lines = [f"With a {runs.noun}'s NAME, it does as the {part} part says: {side.help}." for part, (runs, side) in self.sides.items()]
+        lines.append(f"`basis {self.verb} NAME --help` gives the arguments of NAME's part.")
+        sys.stdout.write(f"usage: {usage}\n\n" + "\n".join(lines) + "\n")
+        return 0
+
+    def _owner(self, name: str) -> str:
+        """The part that runs `name`."""
+        owners = [part for part, found in self.names.items() if name in found]
+        if len(owners) == 1:
+            return owners[0]
+        if owners:
+            msg = f"the {' and '.join(owners)} parts both run something named {name!r}: rename one of them"
             raise CommandError(msg)
-
-
-def _hand(verb: str, spec: Spec, sides: Sides, part: str, argv: Sequence[str]) -> int:
-    """`argv`, parsed by `part`'s parser for `verb`: core's NAME and RUN_ID, and the part's own arguments."""
-    runs, side = sides[part]
-    parser = _Parser(prog=f"basis {verb}", description=side.help)
-    metavar, path = (runs.noun.upper(), ", or its module path") if len(sides) == 1 else ("NAME", "")
-    parser.add_argument("name", metavar=metavar, nargs=None if spec.required else "?", help=spec.name.format(noun=runs.noun, path=path))
-    if spec.run_id:
-        parser.add_argument("run_id", metavar="RUN_ID")
-    side.arguments(parser)
-    try:
-        namespace = parser.parse_args(argv)
-    except SystemExit as exited:  # --help prints, then exits
-        return exited.code if isinstance(exited.code, int) else 0
-    if namespace.name is None and spec.alone == "names":
-        return _print(_names(sides))
-    return side.handle(namespace)
-
-
-def _each(verb: str, spec: Spec, sides: Sides, part: str, argv: Sequence[str]) -> int:
-    """`part`'s side of `verb`, whose failure is its own line, so that every other part's runs too."""
-    try:
-        return _hand(verb, spec, sides, part, argv)
-    except Exception as error:  # noqa: BLE001 -- each part's failure is its own line, and the other parts still run
-        error.add_note(f"in the {part} part")
-        return report(error)
-
-
-def _help(verb: str, spec: Spec, sides: Sides) -> int:
-    """What `basis VERB --help` prints where several parts have the verb, before NAME says whose arguments to give."""
-    usage = f"basis {verb} [-h] {'NAME' if spec.required or spec.run_id else '[NAME]'}{' RUN_ID' if spec.run_id else ''} ..."
-    lines = [f"With a {runs.noun}'s NAME, it does as the {part} part says: {side.help}." for part, (runs, side) in sides.items()]
-    lines.append(f"`basis {verb} NAME --help` gives the arguments of NAME's part.")
-    sys.stdout.write(f"usage: {usage}\n\n" + "\n".join(lines) + "\n")
-    return 0
-
-
-def _owner(sides: Sides, name: str) -> str:
-    """The part that runs `name`, of those in `sides`."""
-    owners = [part for part, (runs, _) in sides.items() if name in runs.names()]
-    if len(owners) == 1:
-        return owners[0]
-    if owners:
-        msg = f"the {' and '.join(owners)} parts both run something named {name!r}: rename one of them"
+        listed = sorted({found for each in self.names.values() for found in each})
+        msg = f"nothing in this repo is named {name!r}: give one of {', '.join(listed) or f'its {self._nouns("s")}, once it has some'}"
         raise CommandError(msg)
-    names = sorted({found for runs, _ in sides.values() for found in runs.names()})
-    nouns = " or ".join(f"{runs.noun}s" for runs, _ in sides.values())
-    msg = f"nothing in this repo is named {name!r}: give one of {', '.join(names) or f'its {nouns}, once it has some'}"
-    raise CommandError(msg)
 
+    def _listed(self) -> dict[str, str]:
+        """Everything the parts run, by name, with its module path; a name two parts run is refused."""
+        found: dict[str, str] = {}
+        for each in self.names.values():
+            for name, path in each.items():
+                if name in found:
+                    self._owner(name)  # refuses it
+                found[name] = path
+        return found
 
-def _names(sides: Sides) -> dict[str, str]:
-    """Everything the parts in `sides` run, by name, with its module path."""
-    found: dict[str, str] = {}
-    for runs, _ in sides.values():
-        for name, path in runs.names().items():
-            if name in found:
-                _owner(sides, name)  # refuses the name two parts run
-            found[name] = path
-    return found
+    def _nouns(self, suffix: str = "") -> str:
+        """What the parts run, as `job or model`, each with `suffix`."""
+        return " or ".join(f"{runs.noun}{suffix}" for runs, _ in self.sides.values())
 
 
 def _print(value: object) -> int:
@@ -575,7 +650,7 @@ def _execute(parser: argparse.ArgumentParser, verbs: Mapping[str, Verb], argv: S
 def report(error: Exception) -> int:
     """Print `error` as its one line, after its traceback if it is a defect, and return its exit code."""
     if isinstance(error, CommandError):
-        sys.stderr.write(f"ERROR: {error}\n")
+        error_line(str(error))
         return error.code
     deliberate = isinstance(error, BasisError | ValidationError)
     if not deliberate or log.isEnabledFor(logging.DEBUG):
@@ -583,7 +658,7 @@ def report(error: Exception) -> int:
     message = one_line(error)
     if not deliberate:
         message = f"{type(error).__name__}: {message}: a defect; the log record above holds its traceback"
-    sys.stderr.write(f"ERROR: {message}\n")
+    error_line(message)
     return 1
 
 

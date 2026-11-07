@@ -13,7 +13,7 @@ from basis.core import command, sync
 from basis.core.errors import BasisError, deliberate
 from basis.core.settings import Settings
 from basis.core.sync import AgentFiles
-from basis.core.verbs import Part, Runs, Shared, Verb
+from basis.core.verbs import Part, Runs, Shared, Verb, fail
 
 ALPHA = '[project]\nname = "repo"\n\n[tool.basis]\nparts = ["alpha"]\n'
 
@@ -37,8 +37,14 @@ def verb(name: str, handle: Callable[[argparse.Namespace], int] | None = None) -
     return Verb(name, f"the {name} verb", lambda _: None, handle or says(name))
 
 
+LISTINGS: list[str] = []
+"""Each part whose names were read, in turn: a test clears it, and counts."""
+
+
 def runs(prefix: str, *names: str, noun: str = "job", option: str = "--interval") -> Runs:
-    """What a part runs, `names`, each of whose shared verbs prints what it was handed, and whose `run` takes `option`."""
+    """What a part runs, `names`, each of whose shared verbs prints what it was handed, and whose `run`, `resume`,
+    `replay` and `regress` take `option`, beside `--last`, which every part's `regress` takes. Its `regress` prints
+    JSON, as a part's must."""
 
     def says(verb: str) -> Callable[[argparse.Namespace], int]:
         def handle(n: argparse.Namespace) -> int:
@@ -48,16 +54,29 @@ def runs(prefix: str, *names: str, noun: str = "job", option: str = "--interval"
 
         return handle
 
+    def regresses(n: argparse.Namespace) -> int:
+        sys.stdout.write(json.dumps({key: value for key, value in vars(n).items() if value is not None}) + "\n")
+        return 0
+
     def options(parser: argparse.ArgumentParser) -> None:
         parser.add_argument(option)
 
+    def regress_options(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument(option)
+        parser.add_argument("--last")
+
+    def listed() -> dict[str, str]:
+        LISTINGS.append(prefix)
+        return {name: f"{prefix}.{name}" for name in names}
+
     return Runs(
         noun,
-        lambda: {name: f"{prefix}.{name}" for name in names},
+        listed,
         run=Shared(f"run a {noun}", says("runs"), options),
         describe=Shared(f"describe a {noun}", says("describes")),
-        replay=Shared(f"replay a {noun}'s run", says("replays")),
-        regress=Shared(f"regress {noun}s", says("regresses")),
+        resume=Shared(f"resume a {noun}'s run", says("resumes"), options),
+        replay=Shared(f"replay a {noun}'s run", says("replays"), options),
+        regress=Shared(f"regress {noun}s", regresses, regress_options),
         ddl=Shared(f"print a {noun}'s tables", says("prints")),
     )
 
@@ -88,11 +107,11 @@ def basis(folder: Path, *argv: str, installed: Mapping[str, Callable[[], Part]] 
 
 
 def error_line(capsys: pytest.CaptureFixture[str]) -> str:
-    """The one line a failure prints, after any log records."""
+    """The one ERROR line a failure prints: the last line, after the record that says the command finished."""
     lines = capsys.readouterr().err.splitlines()
-    assert lines
-    assert lines[-1].startswith("ERROR: ")
-    assert not any(line.startswith("ERROR") for line in lines[:-1])
+    assert [line for line in lines if line.startswith("ERROR")] == lines[-1:]
+    assert len(lines) >= 2, lines
+    assert json.loads(lines[-2])["message"].startswith("finished ")
     return lines[-1]
 
 
@@ -156,7 +175,7 @@ def test_a_basis_error_prints_as_its_line_alone_with_its_notes(tmp_path: Path, c
     error = BasisError("no run R1\nof prices: give another")
     error.add_note("while replaying")
     assert basis(repo(tmp_path), "serve", installed={"alpha": lambda: Part(verbs=(verb("serve", raises(error)),))}) == 1
-    assert capsys.readouterr().err == "ERROR: while replaying: no run R1 of prices: give another\n"
+    assert error_line(capsys) == "ERROR: while replaying: no run R1 of prices: give another"
 
 
 def test_a_builtin_error_raised_on_purpose_prints_as_one_line_where_the_call_says_so(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -166,7 +185,7 @@ def test_a_builtin_error_raised_on_purpose_prints_as_one_line_where_the_call_say
             raise LookupError(msg)
 
     assert basis(repo(tmp_path), "serve", installed={"alpha": lambda: Part(verbs=(verb("serve", handle),))}) == 1
-    assert capsys.readouterr().err == "ERROR: no run R1: is it the right snapshot root?\n"
+    assert error_line(capsys) == "ERROR: no run R1: is it the right snapshot root?"
 
 
 @pytest.mark.parametrize("error", [KeyError("prices"), IndexError("list index out of range"), TypeError("unsupported operand"), LookupError("no run R1"), ValueError("bad")])
@@ -183,9 +202,9 @@ def test_variables_under_the_names_basis_read_before_are_refused_with_their_new_
     monkeypatch.setenv("ETL_DATABASES__WAREHOUSE__KIND", "mssql")
     monkeypatch.setenv("ETL_HOME", "/opt/another-tool")  # another tool's, which basis never read
     assert basis(repo(tmp_path), "serve") == 1
-    assert capsys.readouterr().err == (
+    assert error_line(capsys) == (
         "ERROR: ETL_DATABASES__WAREHOUSE__KIND, ETL_SNAPSHOT_ROOT are set, and basis reads only BASIS_ variables now: rename ETL_DATABASES__WAREHOUSE__KIND"
-        " to BASIS_DATABASES__WAREHOUSE__KIND, ETL_SNAPSHOT_ROOT to BASIS_SNAPSHOT_ROOT, where they are set and in each .env file\n"
+        " to BASIS_DATABASES__WAREHOUSE__KIND, ETL_SNAPSHOT_ROOT to BASIS_SNAPSHOT_ROOT, where they are set and in each .env file"
     )
 
 
@@ -251,7 +270,7 @@ def test_a_shared_verb_goes_to_the_part_that_runs_the_name_and_its_parser_reads_
         "beta runs name=income portfolios=P1",
         "alpha runs name=prices interval=2026-11-05..2026-11-06",
         "beta replays name=income run_id=R1",
-        "alpha regresses name=prices",
+        '{"name": "prices"}',
     ]
     assert basis(folder, "run", "prices", "--portfolios", "P1", installed=JOBS_AND_MODELS) == 2
     assert error_line(capsys) == "ERROR: basis run: unrecognized arguments: --portfolios P1: `basis run --help` says what it takes"
@@ -280,9 +299,36 @@ def test_without_a_name_describe_lists_every_part_and_regress_replays_every_part
     folder = repo(tmp_path, BOTH)
     assert basis(folder, "describe", installed=installed) == 0
     assert json.loads(capsys.readouterr().out) == {"prices": "alpha.prices", "income": "beta.income"}
-    assert basis(folder, "regress", installed=installed) == 0
+    assert basis(folder, "regress", "--last", "5", installed=installed) == 0
+    assert json.loads(capsys.readouterr().out) == {"alpha": {"last": "5"}, "beta": {"last": "5"}}  # one JSON document, by part
     assert basis(folder, "ddl", installed=installed) == 0
-    assert capsys.readouterr().out.splitlines() == ["alpha regresses ", "beta regresses ", "alpha prints "]
+    assert capsys.readouterr().out == "alpha prints \n"
+
+
+def test_without_a_name_regress_takes_only_the_options_every_part_takes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert basis(repo(tmp_path, BOTH), "regress", "--portfolios", "P1", installed=JOBS_AND_MODELS) == 2
+    assert error_line(capsys) == ("ERROR: basis regress: --portfolios is not an option of the alpha part's `basis regress`: name the job or model it is for, as `basis regress NAME --portfolios ...`")
+    assert capsys.readouterr().out == ""  # no part ran
+
+
+def test_a_shared_verbs_help_after_a_name_gives_that_parts_options_before_its_run_id(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    folder = repo(tmp_path, BOTH)
+    for verb in ("replay", "resume"):
+        assert basis(folder, verb, "income", "--help", installed=JOBS_AND_MODELS) == 0
+        assert f"usage: basis {verb} [-h] [--portfolios PORTFOLIOS] [NAME] RUN_ID" in capsys.readouterr().out
+
+
+def test_a_shared_verb_reads_what_the_parts_run_once(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    LISTINGS.clear()
+    assert basis(repo(tmp_path, BOTH), "replay", "income", "R1", installed=JOBS_AND_MODELS) == 0
+    assert sorted(LISTINGS) == ["alpha", "beta"]
+    assert capsys.readouterr().out == "beta replays name=income run_id=R1\n"
+
+
+def test_a_shared_verb_that_argparse_reaches_runs_with_nothing_after_it(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """As after `--`, which ends basis's own options."""
+    assert basis(repo(tmp_path, '[tool.basis]\nparts = ["beta"]\n'), "--", "describe", installed={"beta": lambda: Part(runs=runs("beta", "income"))}) == 0
+    assert json.loads(capsys.readouterr().out) == {"income": "beta.income"}
 
 
 def test_describe_without_a_name_lists_what_the_only_part_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -314,8 +360,8 @@ def test_a_shared_verbs_help_gives_the_arguments_of_the_part_its_name_names(tmp_
 def test_where_one_part_has_a_shared_verb_its_help_names_what_the_part_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert basis(repo(tmp_path, '[tool.basis]\nparts = ["beta"]\n'), "replay", "--help") == 0
     out = capsys.readouterr().out
-    assert out.startswith("usage: basis replay [-h] [JOB] RUN_ID\n\nreplay a job's run\n")
-    assert "the job whose run it is; without it, the run is found by its id" in out
+    assert out.startswith("usage: basis replay [-h] [--interval INTERVAL] [JOB] RUN_ID\n\nreplay a job's run\n")
+    assert "the job whose run it is; without it, the run is found by its id" in " ".join(out.split())
 
 
 def test_a_part_cannot_add_a_verb_core_shares_among_the_parts(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -331,7 +377,7 @@ def test_a_part_refuses_the_variables_an_earlier_version_read_before_any_verb_ru
 
     monkeypatch.setenv("ALPHA_ROOT", "here")
     assert basis(repo(tmp_path), "check", installed={"alpha": lambda: Part(verbs=(verb("serve"),), renamed=renamed)}) == 1
-    assert capsys.readouterr().err == "ERROR: ALPHA_ROOT is set, and alpha reads BASIS_ALPHA__ROOT now: rename it\n"
+    assert error_line(capsys) == "ERROR: ALPHA_ROOT is set, and alpha reads BASIS_ALPHA__ROOT now: rename it"
 
 
 @pytest.mark.parametrize("count", ["0", "-3", "ten"])
@@ -417,4 +463,36 @@ def test_sync_points_the_clone_at_the_hooks_it_writes(tmp_path: Path, git: Calla
 
 def test_a_standalone_command_fails_as_basis_does(capsys: pytest.CaptureFixture[str]) -> None:
     assert command.standalone("basis-alpha", "Make an alpha repo.", [verb("new", raises(BasisError("pricing already exists: give a new folder")))], ["new"]) == 1
-    assert capsys.readouterr().err == "ERROR: pricing already exists: give a new folder\n"
+    assert error_line(capsys) == "ERROR: pricing already exists: give a new folder"
+
+
+@pytest.mark.parametrize(
+    ("argv", "code"),
+    [(["serve"], 0), (["serve", "--port", "x"], 2), (["fails"], 1), (["raises"], 1)],
+    ids=["success", "a-command-line-that-does-not-parse", "a-failure-it-returns", "an-error-it-raises"],
+)
+def test_every_command_ends_with_a_record_of_its_exit_code_before_any_error_line(tmp_path: Path, capsys: pytest.CaptureFixture[str], argv: list[str], code: int) -> None:
+    def port(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("--port", type=int)
+
+    def fails(_: argparse.Namespace) -> int:
+        fail("the port is taken", "give another")
+        sys.stderr.write('{"message": "a record logged after the failure"}\n')
+        return 1
+
+    verbs = (Verb("serve", "serve", port, says("served")), verb("fails", fails), verb("raises", raises(BasisError("no port: give one"))))
+    assert basis(repo(tmp_path), *argv, installed={"alpha": lambda: Part(verbs=verbs)}) == code
+    lines = capsys.readouterr().err.splitlines()
+    finished = next(json.loads(line) for line in lines if line.startswith("{") and json.loads(line)["message"].startswith("finished "))
+    assert (finished["message"], finished["verb"], finished["exit_code"]) == (f"finished {argv[0]}", argv[0], code)
+    assert finished["ms"] >= 0
+    errors = [index for index, line in enumerate(lines) if line.startswith("ERROR")]
+    assert errors == ([len(lines) - 1] if code else [])  # one ERROR line, the last, held back until the record
+
+
+def test_a_verb_of_more_than_one_installed_part_the_repo_does_not_declare_names_them_all(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    installed = {**JOBS_AND_MODELS, "gamma": lambda: Part(verbs=(verb("serve"),))}
+    assert basis(repo(tmp_path, '[tool.basis]\nparts = ["gamma"]\n'), "replay", "income", "R1", installed=installed) == 1
+    assert error_line(capsys).endswith(
+        f"`basis replay` comes with the alpha and beta parts, which {tmp_path / 'pyproject.toml'} does not declare: add the one the repo has, 'alpha' or 'beta', to its [tool.basis] parts"
+    )

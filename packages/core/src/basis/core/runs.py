@@ -102,9 +102,11 @@ def resume(  # noqa: PLR0913 -- the part says what it is and writes, by keyword
         if now != (output.database, output.table):
             msg = f"{output_name} is written to {now} now, and the run wrote ({output.database}, {output.table}): resume with the code the run ran"
             raise ValueError(msg)
-    publication = publish.Publication(record.run_id, name, record.parsed_interval(), version, record.again or again, clock)
+    told = record.again or again
+    publication = publish.Publication(record.run_id, name, record.parsed_interval(), version, told, clock)
     publishes = record.publishes | publish.publish(publication, targets, source.changes(), databases)
-    final = RunRecord.model_validate(record.model_dump() | {"publishes": publishes, "status": status_of(publishes, len({output.database for output in record.outputs.values()}))})
+    status = status_of(publishes, len({output.database for output in record.outputs.values()}))
+    final = RunRecord.model_validate(record.model_dump() | {"publishes": publishes, "status": status, "again": told})  # so that the next resume is told the same
     source.save_record(final)
     return final
 

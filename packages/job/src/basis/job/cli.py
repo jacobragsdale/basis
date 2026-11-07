@@ -19,6 +19,7 @@ from basis.core import command, logs, snapshots
 from basis.core.destination import Dialect
 from basis.core.errors import BasisError, deliberate
 from basis.core.interval import Interval
+from basis.core.publish import refused_overlap
 from basis.core.settings import Settings
 from basis.core.snapshots import RunRecord, Snapshot
 from basis.core.storage import Root
@@ -182,7 +183,7 @@ def failure_of(record: RunRecord, *, publish: bool) -> tuple[str, str] | None:
         return None
     run = f"run {record.run_id} of {record.job}"
     if record.status == "partial":
-        return f"{run} published to some of its databases and failed on another", f"fix what its publishes record, then `basis resume {record.job} {record.run_id}`"
+        return f"{run} published to some of its databases and failed on another", f"fix what its publishes record, then `{resume_command(record)}`"
     if record.error is not None:
         return f"{run} failed: {record.error}", "fix it, and run the job again"
     if record.reasons:
@@ -190,8 +191,19 @@ def failure_of(record: RunRecord, *, publish: bool) -> tuple[str, str] | None:
         replay = f"; `basis replay {record.job} {record.run_id}` reruns it on what it read" if record.inputs else ""
         return f"{run} wrote nothing, because {record.reasons[0]}{more}", f"fix {'each' if more else 'it'}, and run the job again{replay}"
     if errors := [f"{name}: {entry.error}" for name, entry in record.publishes.items() if entry.error is not None]:
-        return f"{run} committed to no database: {'; '.join(errors)}", "fix it, and run the job again"
+        again = refused_overlap(record.publishes)
+        return (
+            f"{run} committed to no database: {'; '.join(errors)}",
+            "run the job again with --again, if its rows are meant to be inserted a second time" if again else "fix it, and run the job again",
+        )
     return f"{run} ended {record.status} with no reason recorded, when it was asked to publish", "its log records say what happened; run it again, and report it if it does the same"
+
+
+def resume_command(record: RunRecord) -> str:
+    """The command that finishes publishing `record`'s run: told `--again` as the run was, or where a database refused
+    it for an interval its ledger has, since the next attempt needs it then."""
+    again = record.again or refused_overlap(record.publishes)
+    return f"basis resume {record.job} {record.run_id}{' --again' if again else ''}"
 
 
 def _saved(root: Root, run_id: str, name: str | None) -> tuple[Snapshot, jobs.Job]:
@@ -227,7 +239,7 @@ def _resume(args: ResumeArgs) -> int:
         record = runs.resume(job, source, settings, again=args.again)
     if record.status == "published":
         return 0
-    return fail(f"run {args.run_id} of {job.name} is still {record.status}", f"fix what its publishes record, then `basis resume {job.name} {args.run_id}` again")
+    return fail(f"run {args.run_id} of {job.name} is still {record.status}", f"fix what its publishes record, then `{resume_command(record)}` again")
 
 
 def _regress_from(n: argparse.Namespace) -> int:

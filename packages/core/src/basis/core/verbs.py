@@ -29,16 +29,19 @@ and a model both have.
 
 A shared verb reaches the only declared part that has it, whatever NAME is, so a module path names a job or a model
 there too. Where several do, NAME comes first, and is a name one of them lists in `Runs.names`; two of them listing the
-same name is refused, with the fix. Without NAME, there, `describe` prints what every part runs, `regress` replays
-every part's runs, `ddl` asks the first part, which prints only the ledger without NAME, and `run`, `resume` and
-`replay` are refused, with the fix. `basis VERB NAME --help` gives the arguments of NAME's part.
+same name is refused, with the fix. Without NAME, there, `describe` prints what every part runs; `regress` replays
+every part's runs, taking only the options every part's takes, and prints one JSON object of what each part printed,
+by part, so a part's `regress` without NAME prints JSON; `ddl` asks the first part, which prints only the ledger
+without NAME; and `run`, `resume` and `replay` are refused, with the fix. `basis VERB NAME --help` gives the arguments
+of NAME's part.
 
 `renamed` refuses, before any verb runs, the variables an earlier version of the part read under names it no longer
 reads, as `basis` refuses its own `ETL_*`.
 
 A handler reads its `argparse.Namespace` into a frozen dataclass before anything else reads it, and returns the exit
-code: 0 when the verb did what it says, and 1 when it did not. It reports a failure the caller can fix as one line,
-with `fail`, or by raising a `basis.core.errors.BasisError` whose message gives the reason and ends with the fix, which
+code: 0 when the verb did what it says, and 1 when it did not. `basis` logs `finished VERB`, with the exit code, after
+it. A handler reports a failure the caller can fix as one line, with `fail`, which `basis` holds back until that
+record so that it comes last, or by raising a `basis.core.errors.BasisError` whose message gives the reason and ends with the fix, which
 `basis` prints as the line; a pydantic `ValidationError` of the caller's input prints as one line too. Any other
 exception is a defect, and `basis` logs its traceback before its line; `basis.core.errors.deliberate` marks a builtin
 error that a call raises on purpose, such as a lookup that finds no run.
@@ -46,7 +49,9 @@ A result that a caller reads, such as `describe`'s, is JSON on stdout, and logs 
 
 import argparse
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -128,7 +133,32 @@ class Part:
     reads, by raising a `basis.core.errors.BasisError` that names its replacement."""
 
 
+_held: ContextVar[list[str] | None] = ContextVar("basis.core.verbs.held", default=None)
+"""The ERROR lines printed while a verb runs, which `basis` prints after the verb's last log record; None outside one."""
+
+
 def fail(reason: str, fix: str) -> int:
     """Print a failure as `basis` prints every one, `ERROR: REASON: FIX` on one line of stderr, and return 1."""
-    sys.stderr.write(f"ERROR: {reason}: {fix}\n")
+    error_line(f"{reason}: {fix}")
     return 1
+
+
+def error_line(message: str) -> None:
+    """Print `ERROR: MESSAGE` on one line of stderr: held back, while a verb runs, until `basis` has logged that it
+    finished, so that the ERROR lines come last."""
+    line = f"ERROR: {message}\n"
+    if (held := _held.get()) is not None:
+        held.append(line)
+    else:
+        sys.stderr.write(line)
+
+
+@contextmanager
+def holding() -> Generator[list[str]]:
+    """Hold back the ERROR lines printed in the block, in the list it gives, for the caller to print."""
+    held: list[str] = []
+    token = _held.set(held)
+    try:
+        yield held
+    finally:
+        _held.reset(token)
