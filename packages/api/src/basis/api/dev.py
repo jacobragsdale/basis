@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from basis.api import fakes as faked
 from basis.api.compute import ComputeFunction
 from basis.api.resources import CacheResource, ClockResource, DatabaseResource, HttpResource, IdsResource
-from basis.api.service import Service, ServiceError
+from basis.api.service import DeclarationError, Service
 
 _KEYS = (DatabaseResource, HttpResource, CacheResource, ClockResource, IdsResource, ComputeFunction)
 _FAKES = (faked.Database, faked.Http, faked.Cache, faked.Clock, faked.Ids, faked.Compute)
@@ -26,7 +26,7 @@ def fakes(service: Service) -> dict[faked.Faked, faked.Fake]:
             f"service {service.name} declares no fakes to run on: give its api.Service fakes='module:function', a function of the repo's own"
             " that returns a fake for each database and other service it declares, by resource, as api.build(..., fakes=...) takes them"
         )
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     module, _, attribute = reference.partition(":")
     try:
         made: object = getattr(importlib.import_module(module), attribute)
@@ -34,24 +34,24 @@ def fakes(service: Service) -> dict[faked.Faked, faked.Fake]:
         if error.name is None or not (module == error.name or module.startswith(f"{error.name}.")):
             raise  # the module exists, and something it imports does not
         msg = f"service {service.name}'s fakes are {reference}, and no module {module} exists: give fakes='module:function' the module that makes them"
-        raise ServiceError(msg) from error
+        raise DeclarationError(msg) from error
     except AttributeError as error:
         msg = f"service {service.name}'s fakes are {reference}, and {module} has no {attribute}: define it there, or name the function that makes them"
-        raise ServiceError(msg) from error
+        raise DeclarationError(msg) from error
     if not inspect.isfunction(made):
         msg = f"service {service.name}'s fakes are {reference}, a {type(made).__name__}: name a function that takes nothing and returns them"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     given: object = made()
     if not isinstance(given, Mapping):
         msg = f"{reference} returns a {type(given).__name__}: return a fake for each resource, by resource, as {{WAREHOUSE: fakes.Database(...)}}"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     found: dict[faked.Faked, faked.Fake] = {}
     for key, fake in given.items():
         if not isinstance(key, _KEYS) or not isinstance(fake, _FAKES):
             msg = f"{reference} returns {key!r}: {fake!r}: return a fake from basis.api.fakes for each resource or compute function, by the declaration"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         found[key] = fake
     if missing := [resource.name for resource in service.resources if isinstance(resource, DatabaseResource | HttpResource) and resource not in found]:
         msg = f"{reference} fakes none of {', '.join(missing)}, and service {service.name} runs on fakes alone here: return a fake for each database and other service it declares"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     return found

@@ -56,7 +56,7 @@ from typing import Annotated, Literal, Union, get_args, get_origin, override
 from pydantic import BaseModel, ConfigDict, Field, FilePath, HttpUrl, field_validator
 from starlette.requests import Request
 
-from basis.api.errors import Error, ServiceError
+from basis.api.errors import DeclarationError, Error
 from basis.core.model import Model
 from basis.core.settings import SettingsError, variable
 
@@ -89,15 +89,15 @@ class User(BaseModel):
         changed = [key for key, value in _CONFIG.items() if config.get(key, value) != value]
         if changed:
             msg = f"{cls.__qualname__} sets {', '.join(changed)} in its model_config: a User reads each claim by its field's name, or a plain Field(alias=...), and ignores the rest, so remove it"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         for name, found in cls.model_fields.items():
             if found.validation_alias is not None and found.validation_alias != found.alias:
                 msg = f"{cls.__qualname__}.{name} reads its claim through validation_alias={found.validation_alias!r}: name the one claim it reads with Field(alias=...) alone"
-                raise ServiceError(msg)
+                raise DeclarationError(msg)
             claim = found.alias if found.alias is not None else name
             if claim in VERIFIED and name != "subject":
                 msg = f"{cls.__qualname__}.{name} declares the {claim} claim, which basis verifies itself: declare only the other claims the service needs, and read the subject as user.subject"
-                raise ServiceError(msg)
+                raise DeclarationError(msg)
 
 
 _CONFIG: Mapping[str, object] = MappingProxyType({"extra": "ignore", "alias_generator": None, "validate_by_name": False, "populate_by_name": False, "validate_by_alias": True})

@@ -15,10 +15,12 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from pydantic import Field, ValidationError
 
 from basis.core import traces
-from basis.core.databases import open_database
+from basis.core.databases import mssql, open_database, oracle
 from basis.core.databases.base import end_reading
+from basis.core.databases.failures import Boundary, ending, failures
 from basis.core.databases.mssql import MssqlReader, MssqlWriter, fetches_char_as_utf8
 from basis.core.databases.oracle import OracleReader, connect
+from basis.core.errors import Conflict, Denied, Failed, Rejected, ServiceError, Timeout, Unavailable
 from basis.core.model import Model
 from basis.core.settings import GivenSettings, OracleSettings, publish_refusal, variable
 
@@ -87,7 +89,7 @@ def test_oracle_in_thick_mode_loads_its_client_libraries_from_the_folder_given(t
     settings = OracleSettings.model_validate(ORACLE | {"mode": "thick", "client_lib_dir": tmp_path})
 
     with pytest.raises(oracledb.DatabaseError, match=f"DPI-1047: Cannot locate .*{tmp_path}"):  # an empty folder: no client there
-        connect(settings, user=settings.user, password=settings.password.get_secret_value())
+        connect(settings, database="warehouse", user=settings.user, password=settings.password.get_secret_value())
 
 
 @pytest.mark.parametrize(
@@ -123,10 +125,174 @@ def test_a_login_the_database_never_answers_ends_at_its_timeout(hung_database: s
     found = open_database(GivenSettings(databases={"books": database}), "books")
     start = time.monotonic()
 
-    with pytest.raises(mssql_python.OperationalError), found.statements(writes=False):
+    with pytest.raises(Unavailable, match=r"^database books could not be reached, or lost the connection: Driver Error: ") as raised, found.statements(writes=False):
         pass
 
     assert time.monotonic() - start < 10
+    assert (raised.value.resource, raised.value.status, raised.value.__notes__) == ("books", None, ["while connecting to SQL Server tcp:" + hung_database + ", database X"])
+
+
+_SERVER = "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]"
+
+
+@pytest.mark.parametrize(
+    ("error", "kind"),
+    [
+        (mssql_python.OperationalError("Timeout expired", "[Microsoft][ODBC Driver 18 for SQL Server]Query timeout expired"), Timeout),
+        (mssql_python.OperationalError("Client unable to establish connection", "[Microsoft][ODBC Driver 18 for SQL Server]TCP Provider: Error code 0x2749"), Unavailable),
+        (mssql_python.OperationalError("Communication link failure", "[Microsoft][ODBC Driver 18 for SQL Server]TCP Provider: Error code 0x2746"), Unavailable),
+        (mssql_python.OperationalError("Connection timeout expired", "[Microsoft][ODBC Driver 18 for SQL Server]Login timeout expired"), Unavailable),
+        (mssql_python.OperationalError("Invalid authorization specification", f"{_SERVER}Login failed for user 'reader'."), Denied),
+        (mssql_python.ProgrammingError("Syntax error or access violation", f"{_SERVER}The SELECT permission was denied on the object 't', database 'd', schema 'dbo'."), Denied),
+        (mssql_python.ProgrammingError("Syntax error or access violation", f"{_SERVER}CREATE TABLE permission denied in database 'd'."), Denied),
+        (mssql_python.ProgrammingError("Syntax error or access violation", f'{_SERVER}Cannot open database "d" requested by the login. The login failed.'), Denied),
+        (mssql_python.ProgrammingError("Syntax error or access violation", f"{_SERVER}Incorrect syntax near 'FORM'."), Failed),
+        (mssql_python.IntegrityError("Integrity constraint violation", f"{_SERVER}Violation of PRIMARY KEY constraint 'pk_t'. Cannot insert duplicate key in object 'dbo.t'."), Conflict),
+        (mssql_python.IntegrityError("Integrity constraint violation", f"{_SERVER}Cannot insert duplicate key row in object 'dbo.t' with unique index 'ix'."), Conflict),
+        (mssql_python.IntegrityError("Integrity constraint violation", f'{_SERVER}The INSERT statement conflicted with the FOREIGN KEY constraint "fk_t".'), Rejected),
+        (mssql_python.IntegrityError("Integrity constraint violation", f"{_SERVER}Cannot insert the value NULL into column 'n', table 'd.dbo.t'; column does not allow nulls."), Rejected),
+        (mssql_python.OperationalError("Serialization failure", f"{_SERVER}Transaction (Process ID 93) was deadlocked on lock resources with another process."), Conflict),
+        (mssql_python.ProgrammingError("Base table or view not found", f"{_SERVER}Invalid object name 'nowhere'."), Failed),
+        (ValueError("not the driver's"), Failed),
+    ],
+    ids=[
+        "query-timeout", "refused", "connection-lost", "login-timeout", "login", "select-permission", "create-permission", "database-4060", "syntax",
+        "primary-key", "unique-index", "foreign-key", "not-null", "deadlock", "no-table", "not-the-drivers",
+    ],
+)  # fmt: skip
+def test_a_sql_server_error_is_the_kind_its_sqlstate_and_its_message_say(error: BaseException, kind: type[ServiceError]) -> None:
+    assert mssql.kind_of(error) is kind
+
+
+def _oracle(message: str, code: int = 0) -> oracledb.Error:
+    return oracledb.DatabaseError(oracledb._Error(message, code=code))  # noqa: SLF001 -- the driver's own error object, as it raises it
+
+
+@pytest.mark.parametrize(
+    ("error", "kind"),
+    [
+        (_oracle("DPY-4024: call timeout of 1000 ms exceeded"), Timeout),
+        (_oracle("DPY-4011: the database or network closed the connection\nsocket timed out while recovering from previous socket timeout"), Timeout),
+        (_oracle("ORA-03156: OCI call timed out", 3156), Timeout),
+        (_oracle("DPY-4011: the database or network closed the connection"), Unavailable),
+        (_oracle("ORA-03113: end-of-file on communication channel", 3113), Unavailable),
+        (_oracle("DPY-6005: cannot connect to database (CONNECTION_ID=x). [Errno 111] Connection refused"), Unavailable),
+        (_oracle("DPY-1001: not connected to database"), Unavailable),
+        (_oracle("ORA-12541: Cannot connect. No listener at host 127.0.0.1 port 1521.", 12541), Unavailable),
+        (_oracle("ORA-01017: invalid credential or not authorized; logon denied", 1017), Denied),
+        (_oracle("ORA-01031: insufficient privileges", 1031), Denied),
+        (_oracle("ORA-00001: unique constraint (ETL.PK_T) violated", 1), Conflict),
+        (_oracle("ORA-00060: deadlock detected while waiting for resource", 60), Conflict),
+        (_oracle("ORA-02291: integrity constraint (ETL.FK_T) violated - parent key not found", 2291), Rejected),
+        (_oracle('ORA-01400: cannot insert NULL into ("ETL"."T"."N")', 1400), Rejected),
+        (_oracle("ORA-00900: invalid SQL statement", 900), Failed),
+        (oracle.HungLoginError("Oracle at x accepted a connection but did not log in within 5s"), Unavailable),
+        (ValueError("not the driver's"), Failed),
+    ],
+    ids=[
+        "call-timeout", "call-timeout-unanswered", "thick-call-timeout", "closed", "end-of-file", "refused", "not-connected", "no-listener",
+        "login", "privilege", "unique", "deadlock", "foreign-key", "not-null", "syntax", "hung-login", "not-the-drivers",
+    ],
+)  # fmt: skip
+def test_an_oracle_error_is_the_kind_its_code_says(error: BaseException, kind: type[ServiceError]) -> None:
+    assert oracle.kind_of(error) is kind
+
+
+def test_a_drivers_error_is_raised_as_its_kind_with_the_drivers_message_as_its_reason_and_its_notes() -> None:
+    error = mssql_python.IntegrityError("Integrity constraint violation", f"{_SERVER}Violation of PRIMARY KEY constraint 'pk_t'.\nThe duplicate key value is (1).")
+    error.add_note("while writing etl.prices")
+    with pytest.raises(Conflict) as raised, failures("warehouse", (mssql_python.Error,), mssql.kind_of):
+        raise error
+    found = raised.value
+    assert (found.resource, found.status, found.detail, found.__cause__, found.__notes__) == (
+        "warehouse", None, "database warehouse refused the statement for a unique key, or chose it as a deadlock's victim", error, ["while writing etl.prices"],
+    )  # fmt: skip
+    assert found.reason == "Driver Error: Integrity constraint violation; DDBC Error: [Microsoft][SQL Server]Violation of PRIMARY KEY constraint 'pk_t'. The duplicate key value is (1)."
+    assert str(found) == f"{found.detail}: {found.reason}"
+    with pytest.raises(ValueError, match="not the driver's"), failures("warehouse", (mssql_python.Error,), mssql.kind_of):
+        raise ValueError("not the driver's")  # noqa: EM101, TRY003 -- an error of the test's own
+
+
+def test_a_block_whose_cleanup_fails_too_raises_its_own_failure(caplog: pytest.LogCaptureFixture) -> None:
+    """After a call timeout breaks the connection, its rollback fails too; the timeout is what the caller must see. A
+    rollback that fails after a block that did not is the failure, and is raised."""
+    timed_out = Timeout("database warehouse's statement did not finish within its timeout", resource="warehouse", reason="DPY-4024: call timeout of 1000 ms exceeded")
+    boundary = Boundary("warehouse", (oracledb.Error,), oracle.kind_of)
+
+    def roll_back() -> None:
+        closed = _oracle("DPY-1001: not connected to database")  # on the connection the timeout broke
+        boundary.call(_raises, closed)
+
+    with caplog.at_level(logging.WARNING), pytest.raises(Timeout) as raised, ending("warehouse", roll_back, "roll back"):
+        raise timed_out
+    assert raised.value is timed_out
+    assert [record.getMessage() for record in caplog.records] == ["database warehouse could not roll back; the failure that ended its work, if any, is the one raised"]
+    with pytest.raises(Unavailable, match="database warehouse could not be reached, or lost the connection: DPY-1001"), ending("warehouse", roll_back, "roll back"):
+        pass
+
+
+def _raises(error: BaseException) -> None:
+    raise error
+
+
+class _Failing:
+    """A driver's cursor whose statements fail as the test lists them, one error for each, in order."""
+
+    def __init__(self, errors: list[BaseException | None]) -> None:
+        self.errors = errors
+        self.rowcount = 1
+
+    def execute(self, sql: str, *binds: object) -> None:
+        del sql, binds
+        if (error := self.errors.pop(0)) is not None:
+            raise error
+
+    def fetchone(self) -> tuple[int]:
+        return (0,)
+
+    def close(self) -> None:
+        pass
+
+
+class _FailingConnection:
+    def __init__(self, cursor: _Failing) -> None:
+        self._cursor = cursor
+
+    def cursor(self) -> _Failing:
+        return self._cursor
+
+
+def _writer(*errors: BaseException | None) -> MssqlWriter:
+    """basis-core's SQL Server writer, through the boundary, on a driver whose statements fail as `errors` says."""
+    raw = _FailingConnection(_Failing(list(errors)))
+    return MssqlWriter("warehouse", mssql.Connection(raw, Boundary("warehouse", (mssql_python.Error,), mssql.kind_of)), 10, "etl.publishes")  # ty: ignore[invalid-argument-type] -- a driver without a database
+
+
+_DUPLICATE = mssql_python.IntegrityError("Integrity constraint violation", f"{_SERVER}Violation of PRIMARY KEY constraint 'pk_publishes'. Cannot insert duplicate key in object 'etl.publishes'.")
+_DENIED = mssql_python.ProgrammingError("Syntax error or access violation", f"{_SERVER}The SELECT permission was denied on the object 'publishes', database 'd', schema 'etl'.")
+
+
+def test_a_writers_statement_raises_its_kind_as_it_fails_so_its_caller_may_catch_it() -> None:
+    writer = _writer(_DUPLICATE, None)
+    with pytest.raises(Conflict) as raised:
+        writer.published("r1")
+    assert (raised.value.resource, writer.published("r1")) == ("warehouse", False)  # caught where it was raised, and the transaction goes on
+
+
+def test_a_statement_that_fails_while_its_caller_handles_another_raises_its_own_kind() -> None:
+    writer = _writer(_DUPLICATE, _DENIED)
+
+    def record_or_update() -> None:
+        try:
+            writer.published("r1")
+        except Conflict:
+            writer.published("r1")  # as an UPDATE would be, in place of the INSERT a duplicate key refused
+
+    with pytest.raises(Denied) as raised:
+        record_or_update()
+    cause = raised.value.__cause__  # the driver's error, raised while the Conflict was handled
+    assert cause is not None
+    assert type(cause.__context__) is Conflict
 
 
 class Email(Model):
@@ -196,8 +362,8 @@ class _Connection:
     def commit(self) -> None:
         self.executed.append("commit")
 
-    def fetch_df_batches(self, sql: str, binds: object, *, size: int, fetch_decimals: bool) -> list[pa.Table]:
-        del binds, size, fetch_decimals
+    def fetch_df_batches(self, sql: str, binds: object, *, size: int) -> list[pa.Table]:
+        del binds, size
         self.executed.append(sql)
         return [pa.table({"PRICE": [1, 2, 3]})]
 

@@ -37,11 +37,12 @@ from opentelemetry.trace import Tracer
 from basis.api import fakes, outboxes
 from basis.api.opened import HttpClient, OpenDatabase, client, faked, open_one, unconfigured
 from basis.api.outboxes import Failure, Row
-from basis.api.resources import DatabaseResource, DeadlineExceededError, HttpResource
-from basis.api.service import Service, ServiceError
+from basis.api.resources import DatabaseResource, HttpResource
+from basis.api.service import DeclarationError, Service
 from basis.api.settings import Settings
 from basis.core import opened
 from basis.core.databases import Statements
+from basis.core.errors import Timeout
 from basis.core.logs import utc_now
 from basis.core.settings import SettingsError
 
@@ -95,7 +96,7 @@ def plan(service: Service, settings: Settings, given: fakes.Fakes) -> Plan:
             f"service {service.name} keeps no outbox, so basis relay has no calls to make: declare one where a route sends a call after its commit,"
             " as api.database(NAME, ..., outbox=api.outbox(TABLE, ...)), or schedule no relay"
         )
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     reached: list[DatabaseResource | HttpResource] = [*outboxed, *(resource for resource in service.resources if isinstance(resource, HttpResource))]
     by_name = faked(given, reached, "which basis relay does not reach: fake the databases whose outboxes it relays, and the services it calls")
     if missing := [found for resource in reached if resource.name not in by_name and (found := unconfigured(resource, settings, written=True)) is not None]:
@@ -118,7 +119,7 @@ async def _relay_all(planned: Plan, tracer: Tracer, now: Callable[[], datetime])
                 fake = planned.fakes.get(resource.name)
                 reaching = fake.client(resource.name) if isinstance(fake, fakes.Http) else client(resource.name, planned.settings.http[resource.name])
                 made.append(reaching)
-                clients[resource.name] = HttpClient(opened.HttpClient(resource, reaching, tracer))
+                clients[resource.name] = HttpClient(opened.HttpClient(resource, reaching, tracer, waits=fake.waits if isinstance(fake, fakes.Http) else opened.SYSTEM_WAITS))
         found: list[Relayed] = []
         for resource in planned.outboxed:
             database = open_one(resource, planned.settings, planned.fakes.get(resource.name), tracer, set())
@@ -263,7 +264,7 @@ class _Run:
                 raise
             self._running = asyncio.get_running_loop().create_task(_settled(running))
             detail = f"{what} in database {resource.name} did not finish within its deadline of {resource.deadline_s:g}s"
-            raise DeadlineExceededError(resource.name, resource.deadline_s, detail=detail) from error
+            raise Timeout(detail, resource=resource.name) from error
         except asyncio.CancelledError:
             self._running = asyncio.get_running_loop().create_task(_settled(running))
             raise

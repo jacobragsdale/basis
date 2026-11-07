@@ -36,6 +36,15 @@ and names the fields it refuses, if any, when it is raised:
     raise PeriodReversed(f"{end} is before {start}", errors=[api.ParameterError(detail="ends before start", parameter="end")])
     raise BookClosed(f"{book} is closed", errors=[api.PointerError(detail="closed", pointer=api.pointer("book"))])
 
+A resource's failure that the handler does not handle, one of basis-core's kinds of `ServiceError`, which basis-api
+gives as `api.Timeout`, `api.Unavailable` and the rest, answers its kind's problem: a `Timeout` 504, an `Unavailable`
+503, which a UI may retry, and every other kind 502, each of type `service-` and the kind in kebab case, such as
+`service-not-found`, so that none is taken for a service's own error of the same name. Its `detail` is the error's,
+which names the resource and never holds what a database's driver said:
+
+    {"type": "service-unavailable", "title": "A service or database the request calls is unavailable", "status": 503,
+     "detail": "pricing answered 503 to GET /prices/US0001", "instance": "urn:uuid:019a..."}
+
 An error FastAPI or Starlette raise, such as no route (404) or the wrong method (405), gets `about:blank` with the
 status's own phrase as its title, and an `HTTPException` whose detail is not a sentence, such as a dict, carries it as
 `data`. Any other exception gets a bare 500, which says nothing of what failed, while the log says everything."""
@@ -53,7 +62,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from starlette.exceptions import HTTPException
 from starlette.responses import Response
 
-from basis.core.errors import BasisError
+from basis.core.errors import KINDS, BadReply, BasisError, Conflict, Denied, Failed, NotFound, Rejected, ServiceError, Timeout, Unavailable
 from basis.core.model import Model
 
 MEDIA_TYPE = "application/problem+json"
@@ -64,7 +73,7 @@ _NO_HEADERS: Mapping[str, str] = MappingProxyType({})
 _JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 
-class ServiceError(BasisError, TypeError):
+class DeclarationError(BasisError, TypeError):
     """A service that does not declare what basis needs; the message says what to declare, and `basis` prints it as
     one line."""
 
@@ -92,16 +101,16 @@ class Error(Exception):
         status = getattr(cls, "status", None)
         if not isinstance(status, int) or status not in _STATUSES:
             msg = f"{cls.__qualname__} declares no error status: give it `status = HTTPStatus.NOT_FOUND`, or another 4xx or 5xx, or declare it `abstract=True`, a base for errors that do"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         title = getattr(cls, "title", None)
         if not isinstance(title, str) or not title.strip():
             msg = f'{cls.__qualname__} declares no title: give it `title = "..."`, what kind of problem it is, in the same words every time'
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if status == HTTPStatus.UNAUTHORIZED and "www-authenticate" not in {name.lower() for name in cls.headers}:
             msg = f'{cls.__qualname__} is a 401, whose response carries a challenge: raise api.SignInRequiredError instead, or give it `headers = MappingProxyType({{"WWW-Authenticate": "Bearer"}})`'
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if "type" not in vars(cls):
-            cls.type = re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "-", cls.__name__.removesuffix("Error") or cls.__name__).lower()
+            cls.type = _kebab(cls.__name__.removesuffix("Error") or cls.__name__)
 
     def __init__(self, detail: str, *, errors: Sequence[FieldError] = ()) -> None:
         if self._abstract:
@@ -113,6 +122,35 @@ class Error(Exception):
         super().__init__(detail)
         self.detail = detail
         self.errors: tuple[FieldError, ...] = tuple(errors)
+
+
+def _kebab(name: str) -> str:
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "-", name).lower()
+
+
+_SERVICE_PROBLEMS: Mapping[type[ServiceError], tuple[HTTPStatus, str]] = MappingProxyType({
+    Timeout: (HTTPStatus.GATEWAY_TIMEOUT, "A call took longer than its deadline"),
+    Unavailable: (HTTPStatus.SERVICE_UNAVAILABLE, "A service or database the request calls is unavailable"),
+    NotFound: (HTTPStatus.BAD_GATEWAY, "A service the request called has no such thing"),
+    Conflict: (HTTPStatus.BAD_GATEWAY, "A service or database the request called refused it as a conflict"),
+    Rejected: (HTTPStatus.BAD_GATEWAY, "A service or database the request called refused it as invalid"),
+    Denied: (HTTPStatus.BAD_GATEWAY, "A service or database the request called denied it"),
+    BadReply: (HTTPStatus.BAD_GATEWAY, "A service the request called answered with a reply that is not the one it declares"),
+    Failed: (HTTPStatus.BAD_GATEWAY, "A call the request made failed"),
+})  # fmt: skip
+"""The status and the title of each kind of `ServiceError`'s problem."""
+
+type Answerable = type[Error | ServiceError]
+"""An error a route may answer with: an `api.Error` subclass, or a kind of basis-core's `ServiceError`."""
+
+
+def described(error: Answerable) -> tuple[int, str, str]:
+    """The status, the type and the title of the problem a route answers `error` with."""
+    if issubclass(error, ServiceError):
+        kind = next(found for found in KINDS if issubclass(error, found))
+        status, title = _SERVICE_PROBLEMS[kind]
+        return status, f"service-{_kebab(kind.__name__)}", title
+    return error.status, error.type, error.title
 
 
 class PointerError(Model):
@@ -179,6 +217,9 @@ def problem(error: Exception, request_id: UUID | None) -> tuple[Problem, Mapping
             return ValidationProblem(type=error.type, title=error.title, status=error.status, detail=error.detail, instance=instance, errors=error.errors), error.headers
         case Error():
             return Problem(type=error.type, title=error.title, status=error.status, detail=error.detail, instance=instance), error.headers
+        case ServiceError():
+            status, kind, title = described(type(error))
+            return Problem(type=kind, title=title, status=status, detail=error.detail, instance=instance), _NO_HEADERS
         case RequestValidationError():
             invalid = HTTPStatus.UNPROCESSABLE_CONTENT
             return ValidationProblem(type="invalid-request", title="The request is not valid", status=invalid, instance=instance, errors=_field_errors(error.errors())), _NO_HEADERS

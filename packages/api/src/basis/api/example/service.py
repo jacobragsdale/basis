@@ -367,11 +367,9 @@ async def record_settlement(
 async def _clean_price(pricing: api.Client, security: str) -> CleanPrice:
     try:
         return await pricing.get(f"/prices/{security}", CleanPrice)
-    except api.CallFailedError as failed:
-        if failed.reply == HTTPStatus.NOT_FOUND:
-            msg = f"the pricing service has no price for {security}"
-            raise Unpriced(msg) from failed
-        raise
+    except api.NotFound as missing:  # every other kind of failure answers its own problem
+        msg = f"the pricing service has no price for {security}"
+        raise Unpriced(msg) from missing
 
 
 async def _bond(warehouse: api.Reader, security: str) -> Bond:

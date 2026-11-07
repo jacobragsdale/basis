@@ -24,9 +24,10 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
 | core `tables.py` | What a run writes, in the terms every part shares: `Column`, `IDENTIFIER`, `Changes`, `Delete`, `Range`, and the `Target` protocol that `outputs.Target` meets. |
 | `params.py`, core `model.py` | `Params` (strict), and the lax base model for records. |
 | `inputs.py`, `outputs.py` | `Query`, `Fetch`, `File`, `Clock`, `Ids` and `Inputs`, with the `Handles` a run gives a transform; `Table`, the write modes, `Target` and `Outputs`. |
-| core `resources.py` | The resources every part declares alike: `http`, `clock` and `ids`, their protocols, and `DeadlineExceededError` and `CallFailedError`. It opens nothing, so `inputs.py` imports it. |
+| core `resources.py` | The resources every part declares alike: `http`, `clock` and `ids`, and their protocols. It opens nothing, so `inputs.py` imports it. |
+| core `errors.py` | `BasisError`, and `ServiceError` with its kinds, `Timeout`, `Unavailable`, `NotFound`, `Conflict`, `Rejected`, `Denied`, `BadReply` and `Failed`, which every resource raises, real or fake: a fetch's GET and a database's statements among them, so a run's `error` names the kind. |
 | core `interval.py` | `Interval`: a run's span, its parsing and its binds. |
-| `loader.py` | Loading a job's inputs, each database in one read-only transaction, each fetch's GET, or from a folder of files, each thread in a copy of the run's context, so its spans are the run's; `json_rows`, the one place a fetch's rows become a frame. |
+| `loader.py` | Loading a job's inputs, each database in one read-only transaction, each fetch's GET, or from a folder of files, each thread in a copy of the run's context, so its spans are the run's; `json_rows`, the one place a fetch's rows become a frame, whose refusal of a reply is a `BadReply`. |
 | core `opened.py`, `fakes.py`, `deadlines.py` | basis-core's resources as a run opens them: another service's client from the settings alone, with each call's span and deadline, the system's clock and new ids; their fakes; and each call's deadline. |
 | `changes.py` | From outputs to conformed `Changes` per table, and the core's checks on them. |
 | core `destination.py` | `TableSpec`, a destination as its database describes it, and the checks that a row and its values fit it. |

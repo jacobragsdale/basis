@@ -41,9 +41,10 @@ from starlette.responses import Response
 from basis.api import errors, openapi, opened, origins, routes, tokens
 from basis.api.fakes import Fakes
 from basis.api.requests import HEALTH, REQUEST_ID, Requests
-from basis.api.service import STATE, Runtime, Service, ServiceError
+from basis.api.service import STATE, DeclarationError, Runtime, Service
 from basis.api.settings import Settings, read
 from basis.core import traces
+from basis.core.errors import ServiceError
 from basis.core.model import Model
 
 log = logging.getLogger(__name__)
@@ -102,7 +103,7 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | 
         settings = read(service.settings)
     elif not isinstance(settings, service.settings):
         msg = f"service {service.name}'s settings are {service.settings.__qualname__}, so build it with those, not a {type(settings).__qualname__}"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     configured = settings
     planned = opened.plan(service, configured, fakes or {})
     identity = tokens.plan(service, configured)
@@ -117,7 +118,7 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | 
         nonlocal started
         if started:
             msg = f"service {service.name}'s app has started once already: build another with api.build"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         started = True
         if (exporter := traces.exporter(configured.traces)) is not None:
             provider.add_span_processor(exporter)
@@ -156,7 +157,7 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | 
             Middleware(Requests),
             *([Middleware(tokens.Bearer, verifier=identity)] if identity is not None else []),  # Bearer inside Requests
         ],
-        exception_handlers={errors.Error: _problem, HTTPException: _problem, RequestValidationError: _problem},
+        exception_handlers={errors.Error: _problem, ServiceError: _problem, HTTPException: _problem, RequestValidationError: _problem},
         telemetry={
             "tracer_provider": provider,
             "metrics": False,

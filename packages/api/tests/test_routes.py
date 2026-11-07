@@ -3,23 +3,24 @@ the errors it declares, each listed in the OpenAPI document."""
 
 import asyncio
 import re
+import threading
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
 from enum import StrEnum
 from http import HTTPStatus
-from time import sleep
 from typing import Annotated, Literal
 from uuid import UUID
 
 import pytest
 from fastapi import BackgroundTasks, Body, FastAPI, Query
 from fastapi.testclient import TestClient
+from opentelemetry.trace import NoOpTracer
 from pydantic import AfterValidator, AliasChoices, AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, RootModel, TypeAdapter, field_validator
 
 from basis import api
-from basis.api import fakes, strict
+from basis.api import deadlines, fakes, opened, strict
 
 
 class Side(StrEnum):
@@ -104,15 +105,14 @@ async def from_pricing(pricing: Annotated[api.Client, api.given(PRICING)]) -> Qu
 
 async def from_the_cache(prices: Annotated[api.Cache[Quote], api.given(PRICES)]) -> Quote:
     async def load() -> Quote:
-        await asyncio.sleep(0.5)
-        return Quote(security="X", price=Decimal(1))
+        await asyncio.Event().wait()  # a load that never ends, which the deadline stops
+        raise AssertionError
 
     return await prices.get("X", load)
 
 
-async def write_then_dawdle(order: Order, warehouse: Annotated[api.Writer, api.given(WAREHOUSE)]) -> Order:
+async def write(order: Order, warehouse: Annotated[api.Writer, api.given(WAREHOUSE)]) -> Order:
     await warehouse.execute(INSERT, security=order.security)
-    await asyncio.sleep(0.2)  # past its route's deadline, before the commit
     return order
 
 
@@ -129,14 +129,19 @@ SERVICE = _service(
     api.get("/warehouse", from_the_warehouse, deadline_s=0.05, response=list[Quote], errors=[]),
     api.get("/pricing", from_pricing, deadline_s=0.05, response=Quote, errors=[]),
     api.get("/cache", from_the_cache, deadline_s=0.05, response=Quote, errors=[]),
-    api.post("/dawdle", write_then_dawdle, deadline_s=0.1, response=Order, errors=[]),
+    api.post("/write", write, deadline_s=0.1, response=Order, errors=[]),
 )
 
 
-def _waits(binds: Mapping[str, api.Bind]) -> list[Mapping[str, object]]:
-    del binds
-    sleep(0.5)  # on the database's thread, as a driver blocks
-    return []
+def _held(release: threading.Event, answer: fakes.Rows | int) -> fakes.Respond:
+    """`answer`, given on the database's thread once the test releases it, as a driver blocks on a lock."""
+
+    def held(binds: Mapping[str, api.Bind]) -> fakes.Rows | int:
+        del binds
+        release.wait(30)
+        return answer
+
+    return fakes.Respond(held)
 
 
 def _pricing() -> FastAPI:
@@ -144,22 +149,37 @@ def _pricing() -> FastAPI:
 
     @pricing.get("/slowly")
     async def slowly() -> dict[str, str]:
-        await asyncio.sleep(0.5)
-        return {"security": "X", "price": "1"}
+        await asyncio.Event().wait()  # an answer that never comes, which the deadline stops
+        raise AssertionError
 
     return pricing
 
 
-@pytest.fixture
-def warehouse() -> fakes.Database:
-    return fakes.Database(answers={SLOW: fakes.Respond(_waits), INSERT: 1})
+@dataclass
+class Warehouse:
+    """The fake warehouse, whose slow query holds its thread until the test is done with the app."""
+
+    database: fakes.Database
+    release: threading.Event
 
 
 @pytest.fixture
-def client(warehouse: fakes.Database) -> Iterator[TestClient]:
-    given: fakes.Fakes = {WAREHOUSE: warehouse, PRICING: fakes.Http(_pricing()), PRICES: fakes.Cache()}
+def held() -> Warehouse:
+    release = threading.Event()
+    return Warehouse(fakes.Database(answers={SLOW: _held(release, []), INSERT: 1}), release)
+
+
+@pytest.fixture
+def warehouse(held: Warehouse) -> fakes.Database:
+    return held.database
+
+
+@pytest.fixture
+def client(held: Warehouse) -> Iterator[TestClient]:
+    given: fakes.Fakes = {WAREHOUSE: held.database, PRICING: fakes.Http(_pricing()), PRICES: fakes.Cache()}
     with TestClient(api.build(SERVICE, settings=api.Settings.given(), fakes=given).asgi) as started:
         yield started
+        held.release.set()  # before the app stops, which waits for the statements still running
 
 
 def _ok(handler: Callable[..., object], **changed: object) -> Callable[[], api.Route]:
@@ -209,7 +229,7 @@ def embedded(security: str, order: Annotated[Order, Body(embed=True)]) -> Quote:
         (_ok(stale, errors=Stale), r"give errors=\[...\], each api.Error its handler may raise"),
         (_ok(stale, errors=[ValueError]), "declares <class 'ValueError'> among its errors"),
         (_ok(stale, errors=[Priced]), "a base that is never raised itself"),
-        (_ok(stale, errors=[api.DeadlineExceededError]), "which basis raises itself"),
+        (_ok(stale, errors=[api.Timeout]), "declares Timeout, a kind of api.ServiceError, which basis adds to each route that asks for what can raise it"),
         (_ok(stale, errors=[Stale, Stale]), "declares Stale twice"),
         (lambda: api.get("/lots/{number:int}", lot, deadline_s=1, response=Quote, errors=[]), r"converts \{number:int\} in its path: name the parameter alone, as \{number\}"),
         (_ok(by_time), "query parameter at holds time, a time of day, whose offset pydantic cannot require"),
@@ -224,13 +244,16 @@ def embedded(security: str, order: Annotated[Order, Body(embed=True)]) -> Quote:
     ],
 )  # fmt: skip
 def test_a_route_cannot_skip_its_declarations(declare: Callable[[], object], message: str) -> None:
-    with pytest.raises(api.ServiceError, match=message):
+    with pytest.raises(api.DeclarationError, match=message):
         declare()
 
 
 def test_basis_adds_the_errors_a_route_can_meet_to_those_it_declares() -> None:
     routes = {route.name: route.answers for route in SERVICE.routes}
-    assert (routes["stale"], routes["from_the_warehouse"], routes["from_pricing"]) == ((Stale,), (api.DeadlineExceededError,), (api.DeadlineExceededError, api.CallFailedError))
+    every = (api.Timeout, api.Unavailable, api.NotFound, api.Conflict, api.Rejected, api.Denied, api.BadReply, api.Failed)
+    assert (routes["stale"], routes["from_the_warehouse"], routes["from_pricing"]) == (
+        (Stale,), (api.Timeout, api.Unavailable, api.Conflict, api.Rejected, api.Denied, api.Failed), every,
+    )  # fmt: skip
 
 
 class _Rating(StrEnum):
@@ -348,12 +371,38 @@ def test_a_routes_deadline_caps_each_call_its_resources_make(client: TestClient,
     assert (response.status_code, response.json()["detail"]) == (HTTPStatus.GATEWAY_TIMEOUT, f"{resource} did not answer within what was left of route {route}'s deadline of 0.05s")
 
 
-def test_a_write_never_commits_once_its_routes_deadline_has_passed(client: TestClient, warehouse: fakes.Database) -> None:
-    response = client.post("/dawdle", json={"security": "X", "quantity": 1, "price": "1"})
-    assert (response.status_code, response.json()["detail"]) == (
-        HTTPStatus.GATEWAY_TIMEOUT,
-        "route write_then_dawdle's deadline of 0.1s passed before warehouse's commit, so the request's writes there are rolled back, never committed",
-    )
+def test_a_write_never_commits_once_its_routes_deadline_has_passed() -> None:
+    """The write's statement holds its thread until the test releases it, after the route has answered: so its route's
+    deadline passes first whatever the machine's speed, and nothing commits."""
+    release = threading.Event()
+    warehouse = fakes.Database(answers={INSERT: _held(release, 1)})
+    given: fakes.Fakes = {WAREHOUSE: warehouse, PRICING: fakes.Http(_pricing()), PRICES: fakes.Cache()}
+    with TestClient(api.build(SERVICE, settings=api.Settings.given(), fakes=given).asgi) as client:
+        response = client.post("/write", json={"security": "X", "quantity": 1, "price": "1"})
+        release.set()  # the statement ends, and its transaction rolls back, before the app stops
+    assert (response.status_code, response.json()["type"]) == (HTTPStatus.GATEWAY_TIMEOUT, "service-timeout")
+    assert (warehouse.committed, warehouse.rolled_back) == ([], [fakes.Statement(INSERT, {"security": "X"})])
+
+
+def test_a_write_whose_routes_deadline_passed_before_its_commit_is_rolled_back() -> None:
+    """The commit's own check of the route's deadline, with no race: the statement runs under the database's own
+    deadline, and the commit under a route's deadline of 0s, which has passed before it begins."""
+    warehouse = fakes.Database(answers={INSERT: 1})
+    service = _service(api.post("/write", write, deadline_s=1, response=Order, errors=[]))
+
+    async def main() -> None:
+        given: fakes.Fakes = {WAREHOUSE: warehouse, PRICING: fakes.Http(_pricing()), PRICES: fakes.Cache()}
+        resources = await opened.Resources.open(opened.plan(service, api.Settings.given(), given), NoOpTracer())
+        try:
+            session = resources.session(WAREHOUSE, writes=True)
+            await session.execute(INSERT, security="X")
+            with deadlines.route("write", 0), pytest.raises(api.Timeout) as raised:
+                await session.end(commit=True)
+        finally:
+            await resources.close()
+        assert raised.value.detail == "route write's deadline of 0s passed before warehouse's commit, so the request's writes there are rolled back, never committed"
+
+    asyncio.run(main())
     assert (warehouse.committed, warehouse.rolled_back) == ([], [fakes.Statement(INSERT, {"security": "X"})])
 
 
@@ -365,7 +414,15 @@ def test_each_error_a_route_answers_with_is_in_the_openapi_document_as_a_problem
     assert _at(document, "paths", "/warehouse", "get", "responses") == {
         "200": _at(document, "paths", "/warehouse", "get", "responses", "200"),
         "422": {"description": "invalid-request: The request is not valid", "content": invalid},
-        "504": {"description": "deadline-exceeded: A call took longer than its deadline", "content": problem},
+        "502": {
+            "description": (
+                "service-conflict: A service or database the request called refused it as a conflict; service-rejected: A service or database the request called refused it as invalid;"
+                " service-denied: A service or database the request called denied it; service-failed: A call the request made failed"
+            ),
+            "content": problem,
+        },
+        "503": {"description": "service-unavailable: A service or database the request calls is unavailable", "content": problem},
+        "504": {"description": "service-timeout: A call took longer than its deadline", "content": problem},
     }
     assert _at(document, "paths", "/stale/{security}", "get", "responses", "409") == {"description": "stale: The quote is stale", "content": problem}
     schemas = _at(document, "components", "schemas")
@@ -477,7 +534,7 @@ class Sets(BaseModel):
     ids=["alias-choices", "by-name", "a-set-of-dataclasses"],
 )
 def test_a_body_reads_each_field_by_one_key_and_holds_no_set_of_what_basis_checks(kind: type, message: str) -> None:
-    with pytest.raises(api.ServiceError, match=message):
+    with pytest.raises(api.DeclarationError, match=message):
         strict.shape("/a", _taking(kind), "taking")
 
 
@@ -499,7 +556,7 @@ def later(tasks: BackgroundTasks) -> dict[str, str]:
 
 
 def test_a_route_runs_no_background_tasks() -> None:
-    with pytest.raises(api.ServiceError, match="takes BackgroundTasks, whose work runs after the response, outside the route's deadline"):
+    with pytest.raises(api.DeclarationError, match="takes BackgroundTasks, whose work runs after the response, outside the route's deadline"):
         api.get("/later", later, deadline_s=1, response=dict[str, str], errors=[])
 
 
@@ -568,12 +625,12 @@ def tree() -> Tree:
     ids=["a-response-model", "a-mapping", "a-query-parameter", "a-body", "a-time-of-day"],
 )
 def test_a_route_whose_times_may_lack_their_offsets_is_refused_when_it_is_declared(declare: Callable[[], object], message: str) -> None:
-    with pytest.raises(api.ServiceError, match=re.escape(message)):
+    with pytest.raises(api.DeclarationError, match=re.escape(message)):
         declare()
 
 
 def test_the_fix_names_pydantics_aware_datetime() -> None:
-    with pytest.raises(api.ServiceError, match=re.escape("declare it pydantic's AwareDatetime, which refuses a time without its offset")):
+    with pytest.raises(api.DeclarationError, match=re.escape("declare it pydantic's AwareDatetime, which refuses a time without its offset")):
         api.get("/noon", at_noon_naively, deadline_s=1, response=NaiveStamp, errors=[])
 
 

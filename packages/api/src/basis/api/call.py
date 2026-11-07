@@ -30,7 +30,7 @@ from basis.api.app import build
 from basis.api.compute import ComputeFunction
 from basis.api.fakes import Compute, Fake, Faked
 from basis.api.server import logged
-from basis.api.service import Route, Service, ServiceError
+from basis.api.service import DeclarationError, Route, Service
 from basis.core.verbs import fail
 
 type Scalar = str | int | float | bool
@@ -58,13 +58,13 @@ def call(service: Service, name: str, request: str, *, resources: Literal["real"
     route = next((found for found in service.routes if found.name == name), None)
     if route is None:
         msg = f"service {service.name} has no route named {name}: give one of {', '.join(found.name for found in service.routes)}, its handler's name"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     try:
         given = Request.model_validate_json(request)
     except ValidationError as error:
         wrong = "; ".join(f"{'.'.join(map(str, entry['loc'])) or 'the request'}: {entry['msg']}" for entry in error.errors(include_url=False, include_input=False))
         msg = f'the request to {name} is not valid: {wrong}: give one JSON object of "path", "query", "headers" and "body", each where the route needs it'
-        raise ServiceError(msg) from None
+        raise DeclarationError(msg) from None
     logged(service)
     faked: dict[Faked, Fake] = dev.fakes(service) if resources == "fake" else {}
     for other in service.routes:  # another route's compute functions are never called here, so they start no process
@@ -96,10 +96,10 @@ def _url(route: Route, given: Request) -> str:
     keys = {parameter.key for parameter in route.reads.path}
     if missing := sorted(keys - set(given.path)):
         msg = f'{route.name}\'s path {route.path} needs {", ".join(missing)}: give each in the request\'s path, as {{"path": {{"{missing[0]}": ...}}}}'
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     if unknown := sorted(set(given.path) - keys):
         msg = f"{route.name}'s path {route.path} has no {', '.join(unknown)}: give only {', '.join(sorted(keys)) or 'none'} in the request's path"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     url = route.path
     for key, value in given.path.items():
         url = url.replace(f"{{{key}}}", quote(_text(value), safe=""))

@@ -11,7 +11,8 @@ Every call through one has a span of its own, and every call that can wait a dea
 left of the deadline around it where that is shorter (`basis.core.deadlines`). `basis.core.opened` opens each, and
 `basis.core.fakes` holds a fake of each, which replaces only what the resource reaches. The clock and the ids never
 wait, so they have no deadline, and their spans record each value, so that a recorded run replays them. A call that
-does not finish in time raises `DeadlineExceededError`, and another service's failure `CallFailedError`.
+fails raises one of the kinds of `basis.core.errors.ServiceError`, whether its resource is real or a fake: `Timeout`
+when it does not finish in time, and the kind of another service's failure otherwise.
 
 This module opens nothing, so a part's declarations import it; each part says how its code declares and is given them."""
 
@@ -91,11 +92,12 @@ def seconds(name: str, deadline_s: float) -> float:
 
 
 class Client(Protocol):
-    """Another HTTP service. Each call's reply is validated as `reply`, from JSON; a reply that is not a 2xx, a
-    service that cannot be reached, or a body that is not a `reply` raises `CallFailedError`, and a call that does not
-    finish within its deadline `DeadlineExceededError`. `path` is the service's own, after its base URL, and anything in
-    it that came from outside must be validated first: a path parameter's pattern, say. Each call carries its span on
-    to the service, as `traceparent`."""
+    """Another HTTP service. Each call's reply is validated as `reply`, from JSON. A call that fails raises the kind of
+    `basis.core.errors.ServiceError` its failure is: `Timeout` past its deadline or for a 504, `Unavailable` for a
+    service that cannot be reached or answers 502, 503 or 429, which a GET makes again with backoff while its deadline
+    allows, `BadReply` for a body that is not a `reply`, and the kind of any other status that is not a 2xx. `path` is
+    the service's own, after its base URL, and anything in it that came from outside must be validated first: a path
+    parameter's pattern, say. Each call carries its span on to the service, as `traceparent`."""
 
     async def call[T](self, method: HttpMethod, path: str, reply: type[T], /, *, query: Query | None = None, body: Body = None) -> T: ...
 
@@ -114,23 +116,3 @@ class Ids(Protocol):
     def new(self) -> UUID:
         """A new UUIDv7."""
         ...
-
-
-class DeadlineExceededError(Exception):
-    """A call that did not finish within its deadline."""
-
-    def __init__(self, resource: str, deadline_s: float, *, detail: str | None = None) -> None:
-        super().__init__(detail if detail is not None else f"{resource} did not answer within its deadline of {deadline_s:g}s")
-        self.resource = resource
-        self.deadline_s = deadline_s
-
-
-class CallFailedError(Exception):
-    """Another service's failure: code that has something better to say, such as that the other service has no such
-    thing, catches it and says so."""
-
-    def __init__(self, detail: str, *, resource: str, reply: int | None) -> None:
-        super().__init__(detail)
-        self.resource = resource
-        self.reply = reply
-        """The status the other service replied with, or None when it gave no reply."""

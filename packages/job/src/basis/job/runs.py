@@ -39,7 +39,7 @@ from basis.core.databases import Database
 from basis.core.destination import TableSpec, check_table, check_values
 from basis.core.interval import Interval
 from basis.core.logs import utc_now
-from basis.core.opened import client
+from basis.core.opened import SYSTEM_WAITS, Waits, client
 from basis.core.publish import refused_overlap
 from basis.core.runs import Regression
 from basis.core.settings import Settings, SettingsError, Traces, publish_refusal, variable
@@ -202,15 +202,16 @@ def _checked(job: Job, faked: Mapping[str, fakes.Fake]) -> dict[str, fakes.Fake]
 
 
 def _reach(settings: Settings, faked: Mapping[str, fakes.Fake]) -> Reach:
-    """The client of each service a fetch names: its fake, or as the settings configure it."""
+    """The client of each service a fetch names, and how it waits between attempts: its fake's, or as the settings
+    configure it, waiting as the system does."""
 
-    def reach(name: str) -> httpx2.AsyncClient:
+    def reach(name: str) -> tuple[httpx2.AsyncClient, Waits]:
         if isinstance(fake := faked.get(name), fakes.Http):
-            return fake.client(name)
+            return fake.client(name), fake.waits
         if (service := settings.http.get(name)) is None:
             msg = f"the service {name} is not configured, and a fetch reads it: set {variable(('http', name, 'url'))}, as .env.example shows"
             raise SettingsError(msg)
-        return client(name, service)
+        return client(name, service), SYSTEM_WAITS
 
     return reach
 

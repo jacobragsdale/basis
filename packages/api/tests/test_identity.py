@@ -219,7 +219,7 @@ def _unchallenged() -> object:
     ids=["a-user-that-is-not-api-user", "no-user-declared", "another-user-declared", "a-user-that-cannot-be-none", "a-claim-basis-verifies", "the-subject-again", "a-401-without-a-challenge"],
 )
 def test_a_declaration_that_asks_for_a_user_wrongly_is_refused(declare: Callable[[], object], message: str) -> None:
-    with pytest.raises(api.ServiceError, match=message):
+    with pytest.raises(api.DeclarationError, match=message):
         declare()
 
 
@@ -257,7 +257,7 @@ def desk_through_two(user: Annotated[Trader, Depends(through)]) -> dict[str, str
 def test_a_dependency_that_asks_for_the_user_is_refused_as_one_that_asks_for_a_resource(handler: Callable[..., dict[str, str]], message: str) -> None:
     """Else the route would read the user without its parameters showing it, past the checks of its service and its
     annotation."""
-    with pytest.raises(api.ServiceError, match=message):
+    with pytest.raises(api.DeclarationError, match=message):
         api.get("/desk", handler, deadline_s=5, response=dict[str, str], errors=[])  # ty: ignore[invalid-argument-type] -- a named function
 
 
@@ -325,7 +325,7 @@ def _allowing() -> object:
     ids=["alias-choices", "alias-path", "validation-alias", "alias-generator", "validate-by-name", "populate-by-name", "extra-allow"],
 )
 def test_a_user_names_each_claim_by_its_field_or_a_plain_alias_alone(declare: Callable[[], object], message: str) -> None:
-    with pytest.raises(api.ServiceError, match=message):
+    with pytest.raises(api.DeclarationError, match=message):
         declare()
 
 
@@ -359,7 +359,7 @@ def test_sign_in_required_is_in_the_openapi_document_of_each_route_that_asks_for
 
 
 def test_a_route_that_declares_sign_in_required_is_refused_since_basis_adds_it() -> None:
-    with pytest.raises(api.ServiceError, match=r"me declares SignInRequiredError, which basis adds to each route whose parameters ask for the user: remove it from errors=\[\.\.\.\]"):
+    with pytest.raises(api.DeclarationError, match=r"me declares SignInRequiredError, which basis adds to each route whose parameters ask for the user: remove it from errors=\[\.\.\.\]"):
         api.get("/me", me, deadline_s=5, response=dict[str, object], errors=[api.SignInRequiredError])
 
 

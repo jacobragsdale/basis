@@ -33,7 +33,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Generic, ParamSpec, Protocol, TypeVar, final
 
-from basis.api.errors import ServiceError
+from basis.api.errors import DeclarationError
 
 MODULE = "compute"
 """The name of a compute function's module, or of a package it is in."""
@@ -57,29 +57,29 @@ class ComputeFunction(Generic[P, R_co]):  # noqa: UP046 -- covariant in its resu
         function: object = self.function
         if not inspect.isfunction(function) or function.__name__ == "<lambda>":
             msg = f"api.compute({function!r}): a compute function is a named function, declared with def at the top level of its module"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         name, module = function.__name__, function.__module__
         if inspect.iscoroutinefunction(function) or inspect.isgeneratorfunction(function) or inspect.isasyncgenfunction(function):
             msg = f"compute function {name} is not a plain def: a compute function computes and returns, so declare it with def, without await or yield"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if function.__qualname__ != name or getattr(sys.modules.get(module), name, None) is not function:
             msg = f"compute function {function.__qualname__} is not at the top level of {module}: move it there, since it crosses to the pool's processes by its name"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if MODULE not in module.split("."):
             msg = f"compute function {name} is in {module}: move it to a module named {MODULE}, or into a package of that name, which the import contract keeps free of I/O"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         signature = inspect.signature(function, eval_str=True)
         kinds = {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
         for parameter in signature.parameters.values():
             if parameter.kind not in kinds:
                 msg = f"compute function {name}'s parameter {parameter.name} is {parameter.kind.description}: give it only parameters a call can pass in order"
-                raise ServiceError(msg)
+                raise DeclarationError(msg)
             if parameter.annotation is inspect.Parameter.empty:
                 msg = f"compute function {name}'s parameter {parameter.name} has no type: annotate it, as the handler's api.Compute[[...], ...] lists it"
-                raise ServiceError(msg)
+                raise DeclarationError(msg)
         if signature.return_annotation is inspect.Signature.empty:
             msg = f"compute function {name} has no return type: annotate it, as the handler's api.Compute[[...], ...] gives it"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         object.__setattr__(self, "name", name)  # frozen: set once, from the function
         object.__setattr__(self, "parameters", tuple(parameter.annotation for parameter in signature.parameters.values()))
         object.__setattr__(self, "result", signature.return_annotation)

@@ -130,7 +130,7 @@ def test_a_declared_errors_type_is_its_name_in_kebab_case(name: str, kind: str) 
     ids=["no-status", "success-status", "no-title"],
 )
 def test_an_error_declares_its_status_and_title(declared: dict[str, object], message: str) -> None:
-    with pytest.raises(api.ServiceError, match=message):
+    with pytest.raises(api.DeclarationError, match=message):
         type("Undeclared", (api.Error,), declared)
 
 
@@ -150,7 +150,7 @@ class UnpricedTodayError(UnpricedError):
 def test_an_abstract_base_declares_nothing_and_its_subclasses_everything() -> None:
     assert problem(UnpricedError("no price for T1"), REQUEST)[0].type == "unpriced"
     assert (UnpricedTodayError.status, UnpricedTodayError.type) == (HTTPStatus.NOT_FOUND, "unpriced-today")  # a status may be inherited
-    with pytest.raises(api.ServiceError, match="declares no error status"):
+    with pytest.raises(api.DeclarationError, match="declares no error status"):
         type("Bare", (PricingError,), {})
 
 

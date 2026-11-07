@@ -263,7 +263,7 @@ def test_the_published_development_key_is_one_key() -> None:
 def test_only_the_development_key_signs() -> None:
     settings = api.Settings.given(identity=identity({"kind": "jwks", "url": "https://signin.internal.example/jwks.json"}))
     assert settings.identity is not None
-    with pytest.raises(api.ServiceError, match="sign signs with the development key, and these settings verify with jwks"):
+    with pytest.raises(api.DeclarationError, match="sign signs with the development key, and these settings verify with jwks"):
         tokens.sign(settings.identity, "jsmith", issued=NOW, expires=NOW)
 
 
@@ -512,7 +512,7 @@ def test_the_set_is_fetched_once_the_app_has_started_and_exports_spans(signin: S
     with TestClient(app.asgi):
         pass
     assert '"name": "identity keys GET"' in capsys.readouterr().err
-    with pytest.raises(api.ServiceError, match="has started once already"), TestClient(app.asgi):
+    with pytest.raises(api.DeclarationError, match="has started once already"), TestClient(app.asgi):
         pass
     assert signin.fetches == 1
 

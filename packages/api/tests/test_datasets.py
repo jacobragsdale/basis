@@ -260,5 +260,5 @@ def test_a_dataset_that_is_not_flat_rows_is_refused_when_its_route_is_declared(r
     def handler() -> None: ...
 
     handler.__annotations__["return"] = response
-    with pytest.raises(api.ServiceError, match=message.replace("[", r"\[").replace("]", r"\]")):
+    with pytest.raises(api.DeclarationError, match=message.replace("[", r"\[").replace("]", r"\]")):
         api.get("/rows", handler, deadline_s=1, response=response, errors=[], dataset=True)

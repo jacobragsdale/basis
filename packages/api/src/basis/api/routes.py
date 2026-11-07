@@ -5,8 +5,9 @@
 - it reads the request strictly first (`strict.py`): the path and the query by their types' grammars, and a JSON body
   in pydantic's strict mode, which FastAPI's handler then gets as the value basis made, and never validates again, so a
   validator runs once; a body sent to a route that declares none is refused;
-- an `api.Error` the route does not declare, or an `HTTPException` raised inside it, answers 500 as a defect, logged
-  once by the request boundary with what the route should have declared;
+- an `api.Error` the route does not declare, a kind of `api.ServiceError` that nothing it asks for raises, or an
+  `HTTPException` raised inside it, answers 500 as a defect, logged once by the request boundary with what the route
+  should have declared;
 - a dataset route answers Arrow when the request asks for it (`arrow.py`), the rows validated as its response first;
 - its operation in the OpenAPI document has its handler's name as its id, and lists each error the route answers with
   under its status, a 422 as a `ValidationProblem` and any other as a `Problem`, and a dataset route's Arrow beside its
@@ -32,9 +33,10 @@ from starlette.types import Receive, Scope, Send
 
 from basis.api import arrow, deadlines, strict
 from basis.api.dataset import Rows
-from basis.api.errors import Error, Problem, ValidationProblem
+from basis.api.errors import Error, Problem, ValidationProblem, described
 from basis.api.identity import SignInRequiredError
 from basis.api.service import Route, Service
+from basis.core.errors import ServiceError
 
 _INVALID = "invalid-request: The request is not valid"
 _ARROW: ContextVar[bool] = ContextVar("basis.api.routes.arrow", default=False)
@@ -133,6 +135,14 @@ class Served(APIRoute):
                     msg = f"{declared.name} raised {type(error).__qualname__}, which its route does not declare: {fix}"
                     raise UndeclaredError(msg) from error
                 raise
+            except ServiceError as error:
+                if not isinstance(error, declared.answers):
+                    msg = (
+                        f"{declared.name} raised {type(error).__qualname__} of {error.resource}, which nothing its route asks for raises:"
+                        " reach each resource through what the handler asks for with api.given, which adds the kinds it raises to the route's errors"
+                    )
+                    raise UndeclaredError(msg) from error
+                raise
             except HTTPException as error:
                 msg = f"{declared.name} raised an HTTPException {error.status_code}, which no route declares: raise an api.Error subclass, and declare it in the route's errors=[...]"
                 raise UndeclaredError(msg) from error
@@ -194,7 +204,8 @@ def responses(declared: Route) -> dict[int | str, dict[str, object]]:
     JSON."""
     by_status: dict[int, list[str]] = {HTTPStatus.UNPROCESSABLE_CONTENT: [_INVALID]}
     for error in declared.answers:
-        by_status.setdefault(error.status, []).append(f"{error.type}: {error.title}")
+        status, kind, title = described(error)
+        by_status.setdefault(status, []).append(f"{kind}: {title}")
     listed: dict[int | str, dict[str, object]] = {
         status: {"model": ValidationProblem if status == HTTPStatus.UNPROCESSABLE_CONTENT else Problem, "description": "; ".join(kinds)} for status, kinds in sorted(by_status.items())
     }

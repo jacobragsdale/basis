@@ -4,8 +4,9 @@ test gives; and what every call through one gets, real or fake: a span of its ow
 call that can wait, a deadline.
 
 A deadline is the declared `deadline_s`, from when the call is made, or what is left of the route's deadline where that
-is shorter (`deadlines.py`): a call that has not finished by then raises `DeadlineExceededError`, a 504 problem. The
-database drivers block, so a database's statements run on a thread pool of the database's own, `max_concurrent`
+is shorter (`deadlines.py`): a call that has not finished by then raises `Timeout`, a 504 problem. Every other failure
+of a resource's is the kind of `ServiceError` basis-core makes of it, real or fake, which a route answers as its problem
+(`errors.problem`) unless its handler handles it. The database drivers block, so a database's statements run on a thread pool of the database's own, `max_concurrent`
 threads, one statement at a time on the request's one connection; waiting for a thread counts against the statement's
 deadline, and the driver's own timeout, set to what is left of it, stops the statement on the server too. The commit that ends the request's transaction has the same deadline, and the route's caps
 it too; a rollback has the database's alone, so that the connection always goes back.
@@ -30,9 +31,9 @@ import contextvars
 import logging
 import time
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable, Collection, Coroutine, Generator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Coroutine, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import AbstractContextManager, ExitStack, contextmanager
+from contextlib import AbstractContextManager, ExitStack
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -47,15 +48,15 @@ from pydantic import ValidationError
 from basis.api import deadlines, fakes, outboxes
 from basis.api.compute import ComputeFunction
 from basis.api.pool import Call, InProcess, Pool, Runs
-from basis.api.resources import Bind, Body, CacheResource, CallFailedError, ClockResource, DatabaseResource, DeadlineExceededError, HttpMethod, HttpResource, IdsResource, Query, Resource, SendMethod
-from basis.api.service import Service, ServiceError
+from basis.api.resources import Bind, Body, CacheResource, ClockResource, DatabaseResource, HttpMethod, HttpResource, IdsResource, Query, Resource, SendMethod
+from basis.api.service import DeclarationError, Service
 from basis.api.settings import Settings
 from basis.core import logs, opened
-from basis.core import resources as core
 from basis.core.databases import Statements, open_database
 from basis.core.databases.base import SYSTEMS
 from basis.core.destination import Dialect
-from basis.core.opened import NewIds, SystemClock, adapter, client, content, utc_now
+from basis.core.errors import ServiceError, Timeout
+from basis.core.opened import SYSTEM_WAITS, NewIds, SystemClock, adapter, client, content, utc_now
 from basis.core.settings import MssqlSettings, SettingsError, variable
 
 log = logging.getLogger(__name__)
@@ -107,10 +108,10 @@ def plan(service: Service, settings: Settings, given: fakes.Fakes) -> Plan:
         if isinstance(resource, ComputeFunction):
             if resource not in compute:
                 msg = f"a fake is given for the compute function {resource.name}, which no route of service {service.name} asks for: fake the ones its routes run"
-                raise ServiceError(msg)
+                raise DeclarationError(msg)
             if not isinstance(fake, fakes.Compute):
                 msg = f"the compute function {resource.name} is given a fakes.{type(fake).__name__}: give it fakes.Compute()"
-                raise ServiceError(msg)
+                raise DeclarationError(msg)
             in_process.add(resource)
     outside = f"which service {service.name} does not declare: fake the service's own resources"
     by_name = faked({resource: fake for resource, fake in given.items() if not isinstance(resource, ComputeFunction)}, service.resources, outside)
@@ -149,10 +150,10 @@ def faked(given: fakes.Fakes, reached: Collection[Resource], outside: str) -> di
     for resource, fake in given.items():
         if isinstance(resource, ComputeFunction) or resource not in reached:
             msg = f"a fake is given for {resource.name}, {outside}"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         if not fits(resource, fake):
             msg = f"{resource.name} is given a fakes.{type(fake).__name__}, which does not fake its kind of resource: give it the fake of its kind"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
         by_name[resource.name] = fake
     return by_name
 
@@ -273,7 +274,8 @@ class Resources:
             case HttpResource():
                 reaching = fake.client(resource.name) if isinstance(fake, fakes.Http) else client(resource.name, planned.settings.http[resource.name])
                 self._clients.append(reaching)
-                self._handles[resource.name] = HttpClient(opened.HttpClient(resource, reaching, tracer))
+                waits = fake.waits if isinstance(fake, fakes.Http) else SYSTEM_WAITS
+                self._handles[resource.name] = HttpClient(opened.HttpClient(resource, reaching, tracer, waits=waits))
             case CacheResource():
                 monotonic = fake.monotonic if isinstance(fake, fakes.Cache) else time.monotonic
                 self._handles[resource.name] = MemoryCache(resource, monotonic, tracer)
@@ -318,6 +320,7 @@ class Resources:
 def open_one(resource: DatabaseResource, settings: Settings, fake: fakes.Fake | None, tracer: Tracer, closing: set[asyncio.Task[None]]) -> OpenDatabase:
     """`resource`, opened as `fake`, or as the settings configure it: connecting to nothing yet."""
     if isinstance(fake, fakes.Database):
+        fake.opened_as(resource.name)
         return OpenDatabase(resource, fake, "fake", tracer, closing, None)
     kind = settings.database(resource.name).kind
     return OpenDatabase(resource, open_database(settings, resource.name), SYSTEMS[kind], tracer, closing, kind)
@@ -345,7 +348,7 @@ async def _answers(database: OpenDatabase, *, writes: bool) -> None:
                             f"database {database.resource.name}'s outbox {declared.table} cannot be read through its write login ({type(error).__name__}: {' '.join(str(error).split())}):"
                             " create it with `basis ddl SERVICE --dialect DIALECT`, and let that login select, insert and update its rows"
                         )
-                        raise ServiceError(msg) from error
+                        raise DeclarationError(msg) from error
 
     resource = database.resource
     with database.span("open"):
@@ -356,7 +359,8 @@ async def _answers(database: OpenDatabase, *, writes: bool) -> None:
                 await asyncio.shield(connecting)
         except TimeoutError as error:
             if deadline.expired():
-                raise DeadlineExceededError(resource.name, resource.deadline_s) from error
+                msg = f"{resource.name} did not answer within its deadline of {resource.deadline_s:g}s"
+                raise Timeout(msg, resource=resource.name) from error
             raise
 
 
@@ -530,9 +534,9 @@ class DatabaseSession:
     def _refused(self, failure: BaseException) -> BaseException:
         """What a request answers whose writes were rolled back because `failure` stopped one of its statements."""
         resource = self._database.resource
-        if isinstance(failure, DeadlineExceededError | asyncio.CancelledError):
+        if isinstance(failure, Timeout | asyncio.CancelledError):
             detail = f"a statement in {resource.name} did not finish before a deadline, so the request's writes there are rolled back, never committed"
-            return DeadlineExceededError(resource.name, resource.deadline_s, detail=detail)
+            return Timeout(detail, resource=resource.name)
         msg = f"a statement in {resource.name} failed and the handler carried on, so the request's writes there are rolled back, never committed: let the statement's error end the request"
         refused = RuntimeError(msg)
         refused.__cause__ = failure
@@ -546,7 +550,7 @@ class DatabaseSession:
         if (route := limit.enclosing) is not None and limit.seconds <= 0:  # the route's deadline has passed, so its writes never commit
             await self._roll_back(stack)
             detail = f"{route.whose}'s deadline of {route.seconds:g}s passed before {resource.name}'s commit, so the request's writes there are rolled back, never committed"
-            raise DeadlineExceededError(resource.name, route.seconds, detail=detail)
+            raise Timeout(detail, resource=resource.name)
         with self._database.span("commit"):
             committing = self._database.run(lambda: _commit(statements, stack))
             deadline = asyncio.timeout(limit.seconds)
@@ -560,7 +564,7 @@ class DatabaseSession:
                 route = limit.enclosing
                 whose = f"what was left of {route.whose}'s deadline of {route.seconds:g}s" if route is not None else f"its deadline of {resource.deadline_s:g}s"
                 detail = f"{resource.name}'s commit did not finish within {whose}: whether the request's writes there committed, the log says when it ends"
-                raise DeadlineExceededError(resource.name, route.seconds if route is not None else resource.deadline_s, detail=detail) from error
+                raise Timeout(detail, resource=resource.name) from error
             except asyncio.CancelledError:
                 self._database.outlive(_fate(committing, resource.name, "commit"))
                 raise
@@ -706,8 +710,8 @@ def _commit(statements: Statements, stack: ExitStack) -> None:
 
 
 class HttpClient:
-    """Another service, as `api.Client` gives it: basis-core's client, whose failures are the problems a route answers,
-    and `send`."""
+    """Another service, as `api.Client` gives it: basis-core's client, whose failures, its kinds of `ServiceError`, are
+    the problems a route answers, and `send`."""
 
     def __init__(self, calls: opened.HttpClient) -> None:
         self._calls = calls
@@ -727,8 +731,7 @@ class HttpClient:
         return await self.call("POST", path, reply, query=query, body=body)
 
     async def call[T](self, method: HttpMethod, path: str, reply: type[T], /, *, query: Query | None = None, body: Body = None) -> T:
-        with _problems():
-            return await self._calls.call(method, path, reply, query=query, body=body)
+        return await self._calls.call(method, path, reply, query=query, body=body)
 
     async def send(self, method: SendMethod, path: str, body: Body = None, /, *, key: str) -> None:
         outboxes.checked(path, key)
@@ -737,8 +740,7 @@ class HttpClient:
         if writing is not None and serving is not None and writing[0] is serving:  # the route serving this request writes
             await writing[1].enqueue(self, method, path, sent.decode() if sent is not None else None, key)
             return
-        with _problems():
-            await self._calls.request(method, path, content=sent, headers={"idempotency-key": key}, attributes={"basis.idempotency_key": key})
+        await self._calls.request(method, path, content=sent, headers={"idempotency-key": key}, attributes={"basis.idempotency_key": key})
 
     async def deliver(self, row: outboxes.Row) -> outboxes.Failure | None:
         """Make the call an outbox's row holds, once: None when the service accepts it, and otherwise why it did not,
@@ -746,20 +748,9 @@ class HttpClient:
         key, sent = row.idempotency_key, row.body.encode() if row.body is not None else None
         try:
             await self._calls.request(row.method, row.path, content=sent, headers={"idempotency-key": key}, attributes={"basis.idempotency_key": key, "basis.outbox.row": row.id})
-        except (core.CallFailedError, core.DeadlineExceededError) as failed:  # its span records it
-            return outboxes.Failure(str(failed), failed.reply if isinstance(failed, core.CallFailedError) else None)
+        except ServiceError as failed:  # its span records it
+            return outboxes.Failure.of(failed)
         return None
-
-
-@contextmanager
-def _problems() -> Generator[None]:
-    """basis-core's failures of a call as the problems a route answers: the same failure, as basis-api's error."""
-    try:
-        yield
-    except core.CallFailedError as error:
-        raise CallFailedError.of(error) from error
-    except core.DeadlineExceededError as error:
-        raise DeadlineExceededError.of(error) from error
 
 
 class _Abandoned(Exception):  # noqa: N818 -- not an error a caller sees: a waiter loads the value itself

@@ -59,7 +59,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from basis.api import errors
 from basis.api.identity import USER, Algorithm, Development, Identity, InvalidTokenError, Jwks, KeysUnavailableError, Machine, PublicKey, User, refuse_development
 from basis.api.requests import HEALTH, REQUEST_ID
-from basis.api.service import Service, ServiceError
+from basis.api.service import DeclarationError, Service
 from basis.api.settings import Settings
 from basis.core import logs
 from basis.core.settings import SettingsError, variable
@@ -536,7 +536,7 @@ def sign(identity: Identity, subject: str, *, issued: datetime, expires: datetim
     names, with `claims` besides those: for a test, or `basis dev`, whose settings verify with the development key."""
     if not isinstance(identity.keys, Development):
         msg = f"sign signs with the development key, and these settings verify with {identity.keys.kind}: set {variable(('identity', 'keys', 'kind'))} to development, in a test or on a desktop"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     if issued.tzinfo is None or expires.tzinfo is None:
         msg = "a token's times are aware datetimes, such as datetime(2026, 1, 1, tzinfo=UTC)"
         raise ValueError(msg)

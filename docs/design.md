@@ -274,7 +274,7 @@ once, whether the request or the relay made the call, and retried no more, and t
 ERROR line, naming the call, its key and the status. Delivery is therefore at least once, and the firm's services drop
 a duplicate by its `Idempotency-Key`. basis provides the outbox table's DDL, as it does the ledger's, through `basis
 ddl`. A route that writes no database makes the call at once, since it has nothing to undo, and a failure there
-answers 502.
+answers as its kind of service error does (see [What jobs and APIs share](#what-jobs-and-apis-share)).
 
 Identity is optional. A request with a token has it verified (signature, expiry, issuer and audience), and an invalid or
 expired token is refused rather than treated as anonymous, so a broken sign-in in a UI fails loudly. A handler sees the

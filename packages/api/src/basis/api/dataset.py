@@ -36,7 +36,7 @@ from pydantic import BaseModel, RootModel, TypeAdapter
 from pydantic.fields import FieldInfo
 
 from basis.api import strict
-from basis.api.errors import ServiceError
+from basis.api.errors import DeclarationError
 
 type Kind = Literal["utf8", "int64", "float64", "bool", "decimal", "date32", "timestamp"]
 
@@ -93,13 +93,13 @@ def rows(response: object, route: str) -> Rows:
     model = strict.bare(arguments[0]) if get_origin(kind) in {list, tuple} and len(arguments) == 1 else None
     if not (isinstance(model, type) and issubclass(model, BaseModel)) or issubclass(model, RootModel):
         msg = f"{route} declares a dataset, and answers {strict.named(kind)}: a dataset is rows, so answer list[Row], Row a model whose fields are its columns"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     if model.model_config.get("extra") == "allow":
         msg = f"{route}'s dataset rows, {model.__qualname__}, allow keys beyond their fields, which no column holds: drop extra='allow'"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     if model.model_computed_fields:
         msg = f"{route}'s dataset rows, {model.__qualname__}, compute {', '.join(model.model_computed_fields)}, which no column holds: make each a field"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     columns = tuple(_column(route, model, name, field) for name, field in model.model_fields.items() if field.exclude is not True)
     return Rows(model, columns, TypeAdapter(cast("type[Sequence[BaseModel]]", kind)))  # a value's type, which ty cannot read as one
 
@@ -114,7 +114,7 @@ def _column(route: str, model: type[BaseModel], name: str, field: FieldInfo) -> 
     kind: Kind | None = "timestamp" if annotation is strict.AWARE else next((found for scalar, found in _KINDS if isinstance(annotation, type) and issubclass(annotation, scalar)), None)
     if kind is None:
         msg = f"{where} is {strict.named(annotation)}, which Arrow's columns do not hold: give it str, int, float, bool, Decimal, date, AwareDatetime, UUID, a Literal or an Enum, or T | None"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     if kind != "decimal":
         return Column(key, name, kind, nullable, text=isinstance(annotation, type) and issubclass(annotation, UUID))
     digits = next((value for found in metadata if isinstance(value := getattr(found, "max_digits", None), int)), None)
@@ -122,7 +122,7 @@ def _column(route: str, model: type[BaseModel], name: str, field: FieldInfo) -> 
     if digits is None or places is None or not 0 <= places <= digits <= MAX_DIGITS:
         example = "Annotated[Decimal, Field(max_digits=18, decimal_places=2)]"
         msg = f"{where} is a decimal, which a column holds with one precision and one scale: declare them, as {example}, with at most {MAX_DIGITS} digits"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     return Column(key, name, kind, nullable, precision=digits, scale=places)
 
 

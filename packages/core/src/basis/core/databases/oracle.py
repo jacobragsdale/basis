@@ -8,17 +8,24 @@ upsert and an insert of new rows are a `MERGE` per row, from `dual`, and a delet
 
 Each statement a reader or a writer runs has a span, and so does each commit and rollback (`base.span`). `statements`
 runs a caller's own SQL, binding `:name` by name: each round trip's deadline is the driver's call timeout, in
-milliseconds, after which the driver breaks the call off."""
+milliseconds, after which the driver breaks the call off.
+
+A failure of the driver's is the kind of `basis.core.errors.ServiceError` its Oracle or driver code says (`kind_of`),
+as each call through the connection or a cursor of it raises it (`Connection`, `Cursor`). Thin mode reports a call
+past its timeout as `DPY-4024`, or, when the database does not answer the break either, as `DPY-4011` saying its
+socket timed out: both are a `Timeout`, and any other `DPY-4011`, a connection closed, is
+`Unavailable`. A login the database accepts and never answers is `Unavailable` too, as SQL Server's is."""
 
 import logging
 import math
 import threading
 import time
-from collections.abc import Callable, Generator, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from concurrent.futures import Future, wait
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from functools import partial
+from typing import Any
 
 import oracledb
 import polars as pl
@@ -42,7 +49,9 @@ from basis.core.databases.base import (
     span,
     statement,
 )
+from basis.core.databases.failures import Boundary, ending, failures, quietly
 from basis.core.destination import DestColumn, TableSpec
+from basis.core.errors import Conflict, Denied, Failed, Rejected, ServiceError, Timeout, Unavailable
 from basis.core.interval import Interval
 from basis.core.logs import ms_since
 from basis.core.settings import OracleSettings, publish_refusal, unpublishable
@@ -53,9 +62,42 @@ CONNECT_TIMEOUT_S = 30
 """The longest a login waits, however long its round trips may take."""
 _BIND = r"(?<![:\w]):{name}\b"
 _KIND = "oracle"
+_TIMEOUTS = frozenset({1013, 3156})
+"""A call cancelled, as its timeout cancels it, and a call past its timeout, in thick mode."""
+_UNAVAILABLE = frozenset({1033, 1034, 1089, 1090, 1092, 3113, 3114, 3135, 12153, 12170, 12203})
+"""The instance starting, stopping or gone, a connection lost, and the TNS errors of reaching it, besides 12500 to 12599."""
+_DENIED = frozenset({1017, 1031, 1035, 1045, 1950, 28000, 28001})
+"""A login refused, locked or expired, and a privilege missing: to the session, to a statement, or to a tablespace."""
+_CONFLICTS = frozenset({1, 60, 8177})
+"""A unique constraint, a deadlock's victim, and a serializable transaction's conflict."""
+_REJECTED = frozenset({1400, 1407, 2290, 2291, 2292})
+"""A null where none may be, a check constraint, and a foreign key either way."""
 
 
-def connect(settings: OracleSettings, *, user: str, password: str) -> oracledb.Connection:
+class HungLoginError(TimeoutError):
+    """A database that accepted the connection and did not log it in within the login's timeout."""
+
+
+def kind_of(error: BaseException) -> type[ServiceError]:
+    """The kind of failure a driver's error is, by its Oracle error number or its driver code."""
+    if isinstance(error, HungLoginError):
+        return Unavailable
+    found = error.args[0] if isinstance(error, oracledb.Error) and error.args else None
+    if not isinstance(found, oracledb._Error):  # noqa: SLF001 -- the driver's documented error object, which each of its errors holds
+        return Failed
+    code, full = found.code, found.full_code
+    if full == "DPY-4024" or code in _TIMEOUTS or (full == "DPY-4011" and "timed out" in found.message):
+        return Timeout
+    if full.startswith("DPY-6") or full in {"DPY-4011", "DPY-1001"} or code in _UNAVAILABLE or 12500 <= code < 12600:  # noqa: PLR2004 -- the TNS errors of reaching a database
+        return Unavailable
+    kinds: tuple[tuple[frozenset[int], type[ServiceError]], ...] = ((_DENIED, Denied), (_CONFLICTS, Conflict), (_REJECTED, Rejected))
+    return next((kind for codes, kind in kinds if code in codes), Failed)
+
+
+_DRIVER = (oracledb.Error, HungLoginError)
+
+
+def connect(settings: OracleSettings, *, database: str, user: str, password: str) -> Connection:
     """A connection with a deadline on its login and on every round trip. Thin mode bounds only the TCP connect: a
     database that accepts TCP but never answers the login would hang the run, so the login runs in a thread that the
     run stops waiting for."""
@@ -64,12 +106,78 @@ def connect(settings: OracleSettings, *, user: str, password: str) -> oracledb.C
     login = partial(oracledb.connect, user=user, password=password, dsn=settings.dsn)
     connected: Future[oracledb.Connection] = Future()
     threading.Thread(target=_resolve, args=(connected, login), daemon=True).start()
-    if not wait([connected], timeout=(deadline := min(CONNECT_TIMEOUT_S, settings.timeout_s))).done:
-        msg = f"Oracle at {settings.dsn} accepted a connection but did not log in within {deadline}s: the listener or the database is hung"
-        raise TimeoutError(msg)
-    connection = connected.result()
+    with failures(database, _DRIVER, kind_of):
+        if not wait([connected], timeout=(deadline := min(CONNECT_TIMEOUT_S, settings.timeout_s))).done:
+            msg = f"Oracle at {settings.dsn} accepted a connection but did not log in within {deadline}s: the listener or the database is hung"
+            raise HungLoginError(msg)
+        raw = connected.result()
+    connection = Connection(raw, Boundary(database, _DRIVER, kind_of))
     connection.call_timeout = settings.timeout_s * 1000
     return connection
+
+
+@dataclass(frozen=True)
+class Cursor:
+    """A cursor of the driver's, each of whose calls raises the driver's errors as their kinds (`kind_of`). Closing
+    it never raises: a cursor that cannot close, as on a connection already lost, is logged, and the error of what it
+    ran, if any, is the one raised."""
+
+    raw: oracledb.Cursor
+    boundary: Boundary
+
+    @property
+    def rowcount(self) -> int:
+        return self.raw.rowcount
+
+    def execute(self, sql: str, binds: object = None) -> None:
+        self.boundary.call(self.raw.execute, sql, binds)
+
+    def executemany(self, sql: str, rows: object) -> None:
+        self.boundary.call(self.raw.executemany, sql, rows)
+
+    def fetchone(self) -> tuple[Any, ...] | None:
+        return self.boundary.call(self.raw.fetchone)
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return self.boundary.call(self.raw.fetchall)
+
+    def close(self) -> None:
+        quietly(self.boundary.database, self.raw.close, "close a cursor")
+
+
+@dataclass
+class Connection:
+    """A connection of the driver's, each of whose calls raises the driver's errors as their kinds, as its cursors'
+    and its batches' do. Closing it never raises, as a cursor's does not."""
+
+    raw: oracledb.Connection
+    boundary: Boundary
+
+    @property
+    def call_timeout(self) -> int:
+        return self.raw.call_timeout
+
+    @call_timeout.setter
+    def call_timeout(self, milliseconds: int) -> None:
+        self.boundary.call(setattr, self.raw, "call_timeout", milliseconds)
+
+    def cursor(self) -> Cursor:
+        return Cursor(self.boundary.call(self.raw.cursor), self.boundary)
+
+    def fetch_df_batches(self, sql: str, binds: Mapping[str, object] | None, *, size: int) -> Iterator[oracledb.DataFrame]:
+        """The query's rows in batches of `size`, its `NUMBER(p,s)`s as decimals, each batch fetched through the
+        boundary."""
+        given = dict(binds) if binds is not None else None
+        return self.boundary.each(self.boundary.call(self.raw.fetch_df_batches, sql, given, size=size, fetch_decimals=True))
+
+    def commit(self) -> None:
+        self.boundary.call(self.raw.commit)
+
+    def rollback(self) -> None:
+        self.boundary.call(self.raw.rollback)
+
+    def close(self) -> None:
+        quietly(self.boundary.database, self.raw.close, "close its connection")
 
 
 def _resolve[T](future: Future[T], call: Callable[[], T]) -> None:
@@ -101,15 +209,11 @@ class OracleDatabase:
             msg = f"database {self.name!r} {reason}: {fix}"
             raise LookupError(msg)
         start = time.perf_counter()
-        with closing(connect(self.settings, user=write.user, password=write.password.get_secret_value())) as connection:
+        with closing(connect(self.settings, database=self.name, user=write.user, password=write.password.get_secret_value())) as connection:
             log.info("connected", extra={"database": self.name, "access": "write", "connect_ms": ms_since(start)})
             writer = OracleWriter(self.name, connection, self.settings.max_rows, write.ledger)
-            try:
+            with ending(self.name, lambda: writer.committed or _roll_back(self.name, connection), "roll back"):
                 yield writer
-            finally:
-                if not writer.committed:
-                    with span(self.name, _KIND, "rollback"):
-                        connection.rollback()
 
     @contextmanager
     def statements(self, *, writes: bool) -> Generator[OracleStatements]:
@@ -121,20 +225,17 @@ class OracleDatabase:
             msg = f"database {self.name!r} has no write settings: set BASIS_DATABASES__{self.name.upper()}__WRITE__USER and __PASSWORD"
             raise LookupError(msg)
         start = time.perf_counter()
-        with closing(connect(self.settings, user=write.user, password=write.password.get_secret_value())) as connection:
+        with closing(connect(self.settings, database=self.name, user=write.user, password=write.password.get_secret_value())) as connection:
             log.debug("connected", extra={"database": self.name, "access": "write", "connect_ms": ms_since(start)})
             statements = OracleStatements(self.name, connection, self.settings.timeout_s, self.settings.max_rows, writes=True)
-            try:
+            with ending(self.name, lambda: statements.committed or connection.rollback(), "roll back"):
                 yield statements
-            finally:
-                if not statements.committed:
-                    connection.rollback()
 
     @contextmanager
-    def _read_transaction(self, *, level: int) -> Generator[oracledb.Connection]:
+    def _read_transaction(self, *, level: int) -> Generator[Connection]:
         """A connection through the read login, in a transaction at the settings' isolation, rolled back at the end."""
         start = time.perf_counter()
-        with closing(connect(self.settings, user=self.settings.user, password=self.settings.password.get_secret_value())) as connection:
+        with closing(connect(self.settings, database=self.name, user=self.settings.user, password=self.settings.password.get_secret_value())) as connection:
             log.log(level, "connected", extra={"database": self.name, "access": "read", "connect_ms": ms_since(start)})
             if self.settings.isolation == "read_only":
                 with closing(connection.cursor()) as cursor, statement(self.name, _KIND, _READ_ONLY):
@@ -148,7 +249,7 @@ class OracleDatabase:
 _READ_ONLY = "SET TRANSACTION READ ONLY"
 
 
-def _roll_back(database: str, connection: oracledb.Connection) -> None:
+def _roll_back(database: str, connection: Connection) -> None:
     with span(database, _KIND, "rollback"):
         connection.rollback()
 
@@ -156,7 +257,7 @@ def _roll_back(database: str, connection: oracledb.Connection) -> None:
 @dataclass
 class OracleReader:
     database: str
-    connection: oracledb.Connection
+    connection: Connection
     max_rows: int
 
     def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pl.DataFrame:
@@ -165,14 +266,14 @@ class OracleReader:
         rows = 0
         try:
             with statement(self.database, _KIND, sql) as traced:
-                for batch in self.connection.fetch_df_batches(sql, binds or None, size=10_000, fetch_decimals=True):
+                for batch in self.connection.fetch_df_batches(sql, binds or None, size=10_000):
                     frame = pl.DataFrame(batch)
                     rows += frame.height
                     if rows > self.max_rows:
                         raise TooManyRowsError(what, self.max_rows)
                     frames.append(frame)
                 traced.set_attribute("db.response.returned_rows", rows)
-        except oracledb.DatabaseError as error:
+        except ServiceError as error:
             if "ORA-01466" in str(error):
                 error.add_note(
                     "a table this query reads changed its definition (a TRUNCATE counts) seconds before the run's read-only transaction began:"
@@ -310,7 +411,7 @@ class OracleWriter(OracleReader):
 @dataclass
 class OracleStatements:
     database: str
-    connection: oracledb.Connection
+    connection: Connection
     limit_s: int
     """The settings' `timeout_s`, which bounds every round trip's own."""
     max_rows: int
@@ -321,7 +422,7 @@ class OracleStatements:
         self._deadline(timeout_s)
         batches: list[pa.Table] = []
         rows = 0
-        for batch in self.connection.fetch_df_batches(sql, dict(binds) or None, size=FETCH_ROWS, fetch_decimals=True):
+        for batch in self.connection.fetch_df_batches(sql, dict(binds) or None, size=FETCH_ROWS):
             table = pa.table(batch)
             rows += table.num_rows
             if rows > self.max_rows:

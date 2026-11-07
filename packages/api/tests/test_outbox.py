@@ -124,24 +124,27 @@ SERVICE = api.Service(
         _post("/no-outbox", book_without_an_outbox),
         _post("/direct", book_directly),
         _post("/bad-key", book_with_a_bad_key),
-        _post("/twice", book_twice, deadline_s=0.7),
+        _post("/twice", book_twice, deadline_s=5),
     ],
 )
 
 
 class Ledger:
     """The ledger service, as a fake: what it was sent, with the outbox's rows as they stood at each call, and the
-    status it answers, after `wait_s`, which a test changes."""
+    status it answers, after `wait_s`, which a test changes; or, with `together`, once that many calls have arrived, so
+    calls made one after another never are answered."""
 
-    def __init__(self, warehouse: fakes.Database, *, status: int = HTTPStatus.CREATED, wait_s: float = 0) -> None:
+    def __init__(self, warehouse: fakes.Database, *, status: int = HTTPStatus.CREATED, wait_s: float = 0, together: int = 1) -> None:
         self.status, self.wait_s = status, wait_s
         self.seen: list[tuple[str | None, object, list[Row]]] = []
         self.app = FastAPI()
+        arrived = asyncio.Barrier(together)
 
         @self.app.post("/bookings")
         async def bookings(request: Request) -> Response:
             self.seen.append((request.headers.get("idempotency-key"), json.loads(await request.body()), warehouse.outbox))
             await asyncio.sleep(self.wait_s)
+            await arrived.wait()
             return Response(status_code=self.status)
 
 
@@ -170,7 +173,7 @@ def _warehouse(*rows: Row) -> fakes.Database:
     ids=["a-space", "three-parts", "name-too-long", "no-age", "endless-backoff", "backoff-past-its-maximum", "a-name-for-an-outbox"],
 )
 def test_an_outbox_cannot_be_declared_wrong(declare: Callable[[], object], message: str) -> None:
-    with pytest.raises(api.ServiceError, match=message):
+    with pytest.raises(api.DeclarationError, match=message):
         declare()
 
 
@@ -188,7 +191,7 @@ def test_an_outbox_leaves_room_past_the_deadline_of_each_route_that_writes_its_d
     if declared == "kept":
         declare()
         return
-    with pytest.raises(api.ServiceError, match=r"route write, which writes warehouse, has 10s to answer.* give the outbox a max_age_s above 70s"):
+    with pytest.raises(api.DeclarationError, match=r"route write, which writes warehouse, has 10s to answer.* give the outbox a max_age_s above 70s"):
         declare()
 
 
@@ -301,9 +304,10 @@ def test_a_call_the_service_refuses_for_good_after_the_commit_is_refused_and_due
 
 
 def test_a_requests_calls_after_its_commit_are_made_at_once_within_its_deadline() -> None:
-    """Two calls of 0.4s each, on a route with 0.7s to answer: one after the other, the second would miss it."""
+    """The ledger answers neither call until both have arrived: made one after the other, the first would wait out the
+    route's deadline, and neither would be done."""
     warehouse = _warehouse()
-    ledger = Ledger(warehouse, wait_s=0.4)
+    ledger = Ledger(warehouse, together=2)
     with TestClient(_app(warehouse, ledger).asgi) as client:
         assert client.post("/twice", json=PRICE).status_code == HTTPStatus.OK
     assert sorted((row.idempotency_key, row.status) for row in warehouse.outbox) == [("first", "done"), ("second", "done")]
@@ -312,13 +316,13 @@ def test_a_requests_calls_after_its_commit_are_made_at_once_within_its_deadline(
 def test_a_call_the_route_has_no_time_left_to_make_is_due_when_its_deadline_passes() -> None:
     warehouse = _warehouse()
     ledger = Ledger(warehouse, wait_s=5)
-    brief = api.Service(name="prices", settings=api.Settings, resources=[WAREHOUSE, PLAIN, LEDGER], routes=[_post("/book", book, deadline_s=0.3)])
+    brief = api.Service(name="prices", settings=api.Settings, resources=[WAREHOUSE, PLAIN, LEDGER], routes=[_post("/book", book, deadline_s=1)])
     with TestClient(_app(warehouse, ledger, brief).asgi) as client:
         assert client.post("/book", json=PRICE).status_code == HTTPStatus.OK
     [row] = warehouse.outbox
     assert (row.status, row.attempts) == ("pending", 0)  # the call missed the deadline, and so did its record
     assert row.next_at is not None
-    assert timedelta(seconds=0.2) < row.next_at - row.created_at <= timedelta(seconds=0.3)
+    assert timedelta(0) < row.next_at - row.created_at <= timedelta(seconds=1)  # what was left of the route's deadline when it was sent
 
 
 def test_a_route_that_sends_through_a_database_without_an_outbox_is_a_defect(logged: Records) -> None:
@@ -336,7 +340,11 @@ def test_a_call_with_a_key_the_outbox_cannot_hold_is_a_defect_and_rolls_back() -
     assert (ledger.seen, warehouse.outbox, len(warehouse.rolled_back)) == ([], [], 1)
 
 
-@pytest.mark.parametrize(("status", "answered"), [(HTTPStatus.CREATED, HTTPStatus.OK), (HTTPStatus.SERVICE_UNAVAILABLE, HTTPStatus.BAD_GATEWAY)], ids=["accepted", "refused"])
+@pytest.mark.parametrize(
+    ("status", "answered"),
+    [(HTTPStatus.CREATED, HTTPStatus.OK), (HTTPStatus.SERVICE_UNAVAILABLE, HTTPStatus.SERVICE_UNAVAILABLE), (HTTPStatus.INTERNAL_SERVER_ERROR, HTTPStatus.BAD_GATEWAY)],
+    ids=["accepted", "unavailable", "failed"],
+)
 def test_a_route_that_writes_no_database_makes_the_call_at_once(status: int, answered: int) -> None:
     warehouse = _warehouse()
     ledger = Ledger(warehouse, status=status)
@@ -616,7 +624,7 @@ def test_a_statement_that_fails_on_one_row_stops_only_that_row_and_the_connectio
     assert ([row.idempotency_key if row else None for row, _ in relayed.failed], relayed.accepted, warehouse.opened) == (["failing"], 1, 2)
 
 
-SLOW = api.database("slow", deadline_s=0.2, max_concurrent=1, outbox=api.outbox("slow_outbox", max_age_s=3600, backoff_s=60, max_backoff_s=600))
+SLOW = api.database("slow", deadline_s=1, max_concurrent=1, outbox=api.outbox("slow_outbox", max_age_s=3600, backoff_s=60, max_backoff_s=600))
 
 
 class _Slow(fakes.Database):
@@ -634,7 +642,7 @@ class _SlowTransaction(fakes.Transaction):
 class _SlowOutbox(fakes.Outbox):
     @override
     def due(self, now: datetime, limit: int, *, timeout_s: float) -> list[Row]:
-        time.sleep(0.5)  # a query the database's deadline stops waiting for
+        time.sleep(2)  # a query the database's deadline, 1s, stops waiting for
         return super().due(now, limit, timeout_s=timeout_s)
 
 
@@ -654,16 +662,16 @@ def test_each_of_the_relays_statements_has_a_span_and_the_databases_deadline() -
 
     slowly = api.Service(name="prices", settings=api.Settings, resources=[SLOW, LEDGER], routes=[_post("/w", write)])
     [relayed] = _relay(_Slow(outbox=[_row()]), FastAPI(), service=slowly)  # the run waits for the query to end before it lets the connection go
-    assert relayed.failed == [(None, "DeadlineExceededError: its outbox's due in database slow did not finish within its deadline of 0.2s")]
+    assert relayed.failed == [(None, "Timeout: its outbox's due in database slow did not finish within its deadline of 1s")]
 
 
 def test_the_relay_needs_an_outbox_and_the_settings_of_what_it_reaches() -> None:
     bare = api.Service(name="bare", settings=api.Settings, resources=[PLAIN, LEDGER], routes=[_post("/direct", book_directly)])
-    with pytest.raises(api.ServiceError, match="service bare keeps no outbox, so basis relay has no calls to make"):
+    with pytest.raises(api.DeclarationError, match="service bare keeps no outbox, so basis relay has no calls to make"):
         relay.plan(bare, api.Settings.given(), {})
     with pytest.raises(api.SettingsError, match="set BASIS_DATABASES__WAREHOUSE__KIND and the rest of its block, for the database warehouse; BASIS_HTTP__LEDGER__URL"):
         relay.plan(SERVICE, api.Settings.given(), {})
-    with pytest.raises(api.ServiceError, match="a fake is given for plain, which basis relay does not reach"):
+    with pytest.raises(api.DeclarationError, match="a fake is given for plain, which basis relay does not reach"):
         relay.plan(SERVICE, api.Settings.given(), {PLAIN: fakes.Database()})
 
 

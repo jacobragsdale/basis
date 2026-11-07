@@ -215,7 +215,7 @@ def without_pricing() -> dict[fakes.Faked, fakes.Fake]:
     ids=["none", "no-module", "no-function", "not-a-function", "a-service-unfaked"],
 )
 def test_dev_and_call_run_on_the_fakes_a_service_declares_and_no_others(reference: str | None, message: str) -> None:
-    with pytest.raises(api.ServiceError, match=re.escape(message)):
+    with pytest.raises(api.DeclarationError, match=re.escape(message)):
         dev.fakes(_with_fakes(reference))
 
 

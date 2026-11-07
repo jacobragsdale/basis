@@ -50,22 +50,21 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
-from http import HTTPStatus
 from typing import Annotated, Generic, Literal, Protocol, TypeAliasType, TypeVar, get_args, get_origin
 from uuid import UUID
 
 from pydantic import BaseModel
 
 from basis.api.compute import ComputeFunction
-from basis.api.errors import Error, ServiceError
+from basis.api.errors import DeclarationError
 from basis.core import resources as core
 from basis.core.resources import NAME, Body, ClockResource, HttpMethod, HttpResource, IdsResource, Query, QueryValue
 from basis.core.settings import LEDGER as TABLE
 
 __all__ = [
-    "NAME", "TABLE", "TABLE_LENGTH", "Bind", "Body", "Cache", "CacheResource", "CallFailedError", "Client", "Clock", "ClockResource", "DatabaseResource",
-    "DeadlineExceededError", "HttpMethod", "HttpResource", "Ids", "IdsResource", "Opened", "Outbox", "Query", "QueryValue", "Reader", "Resource", "SendMethod",
-    "Session", "Writer", "cache", "check_outboxes", "clock", "database", "http", "ids", "outbox",
+    "NAME", "TABLE", "TABLE_LENGTH", "Bind", "Body", "Cache", "CacheResource", "Client", "Clock", "ClockResource", "DatabaseResource", "HttpMethod",
+    "HttpResource", "Ids", "IdsResource", "Opened", "Outbox", "Query", "QueryValue", "Reader", "Resource", "SendMethod", "Session", "Writer", "cache",
+    "check_outboxes", "clock", "database", "http", "ids", "outbox",
 ]  # fmt: skip
 
 type Bind = str | int | float | Decimal | bool | date | datetime | UUID | bytes | None
@@ -135,10 +134,10 @@ def database(name: str, *, deadline_s: float, max_concurrent: int, outbox: Outbo
     writes in that database's SQL; with `outbox`, where the calls its routes send wait (`api.outbox`)."""
     if isinstance(max_concurrent, bool) or not isinstance(max_concurrent, int) or max_concurrent < 1:
         msg = f"database {name} runs at most {max_concurrent!r} statements at once: give it max_concurrent, a whole number of 1 or more"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     if outbox is not None and not isinstance(outbox, Outbox):
         msg = f"database {name}'s outbox is {outbox!r}: declare it with api.outbox(TABLE, max_age_s=..., backoff_s=..., max_backoff_s=...)"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     return DatabaseResource(_named(name, "database"), _deadline(name, deadline_s), max_concurrent, outbox)
 
 
@@ -148,17 +147,17 @@ def outbox(table: str, *, max_age_s: float, backoff_s: float, max_backoff_s: flo
     twice as long as before, up to `max_backoff_s`."""
     if not isinstance(table, str) or not re.fullmatch(TABLE, table):
         msg = f"api.outbox({table!r}): an outbox's table is a name, or schema.name, of letters, digits, underscores and $, which its SQL names unquoted"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     if len(bare := table.rpartition(".")[2]) > TABLE_LENGTH:
         msg = f"outbox {table}'s name is {len(bare)} characters: give it {TABLE_LENGTH} at most, after its schema, so its key's constraint, pk_NAME, fits the 128 both databases allow"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     for field, seconds in (("max_age_s", max_age_s), ("backoff_s", backoff_s), ("max_backoff_s", max_backoff_s)):
         if isinstance(seconds, bool) or not isinstance(seconds, int | float) or not 0 < seconds < math.inf:
             msg = f"outbox {table}'s {field} is {seconds!r}: give it the seconds, above 0"
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
     if backoff_s > max_backoff_s:
         msg = f"outbox {table} waits {backoff_s:g}s after a first failure, longer than its max_backoff_s of {max_backoff_s:g}s: give max_backoff_s at least backoff_s"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     return Outbox(table, max_age_s, backoff_s, max_backoff_s)
 
 
@@ -174,7 +173,7 @@ def check_outboxes(service: str, written: Iterable[tuple[str, float, DatabaseRes
                 f" has {deadline_s:g}s to answer, after which a call it sent waits a backoff of {declared.backoff_s:g}s for basis relay:"
                 f" give the outbox a max_age_s above {deadline_s + declared.backoff_s:g}s"
             )
-            raise ServiceError(msg)
+            raise DeclarationError(msg)
 
 
 def http(name: str, *, deadline_s: float) -> HttpResource:
@@ -190,14 +189,14 @@ def cache[V](name: str, value: type[V], *, ttl_s: float, max_entries: int, deadl
     _named(name, "cache")
     if ttl_s <= 0:
         msg = f"cache {name} keeps values for {ttl_s}s: give it ttl_s, the seconds a value is kept, above 0"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     if max_entries < 1:
         msg = f"cache {name} keeps at most {max_entries} values: give it max_entries of 1 or more"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     if not _immutable(value):
         held = getattr(value, "__qualname__", repr(value))
         msg = f"cache {name} holds {held}, which can change, and every request that reads it shares one: hold a frozen model or dataclass whose fields are too, a tuple of them, or a scalar"
-        raise ServiceError(msg)
+        raise DeclarationError(msg)
     return CacheResource(name, value, ttl_s, max_entries, _deadline(name, deadline_s))
 
 
@@ -259,11 +258,11 @@ def _deadline(name: str, deadline_s: float) -> float:
 @contextmanager
 def _declaring() -> Generator[None]:
     """basis-core's checks of a resource's declaration, whose failure is a service's: the one place their error becomes
-    a `ServiceError`, so the API and basis-core never disagree on what a name or a deadline is."""
+    a `DeclarationError`, so the API and basis-core never disagree on what a name or a deadline is."""
     try:
         yield
     except core.ResourceError as error:
-        raise ServiceError(str(error)) from None
+        raise DeclarationError(str(error)) from None
 
 
 class Reader(Protocol):
@@ -289,9 +288,11 @@ class Writer(Reader, Protocol):
 
 class Client(core.Client, Protocol):
     """Another HTTP service, as basis-core's `Client` calls it, and `send`. Each call's reply is validated as `reply`,
-    from JSON; a reply that is not a 2xx, a service that cannot be reached, or a body that is not a `reply` raises
-    `CallFailedError`. `path` is the service's own, after its base URL, and anything in it that a request supplied must
-    be validated first: a path parameter's pattern, say. Each call carries the request's trace on, as `traceparent`."""
+    from JSON, and a call that fails raises the kind of `api.ServiceError` its failure is, as basis-core's `Client`
+    says: a handler, or the repository it passes the client to, catches a kind that means something to it, as
+    `api.NotFound` for a thing the service does not have, and lets the rest answer their problems. `path` is the
+    service's own, after its base URL, and anything in it that a request supplied must be validated first: a path
+    parameter's pattern, say. Each call carries the request's trace on, as `traceparent`."""
 
     async def send(self, method: SendMethod, path: str, body: Body = None, /, *, key: str) -> None:
         """A call that changes the other service's state, with `key` as its `Idempotency-Key`: the service drops a call
@@ -317,31 +318,6 @@ class Cache[V](Protocol):
 
 Clock = core.Clock
 Ids = core.Ids
-
-
-class DeadlineExceededError(core.DeadlineExceededError, Error):
-    """basis-core's, as the 504 problem a route answers."""
-
-    status = HTTPStatus.GATEWAY_TIMEOUT
-    title = "A call took longer than its deadline"
-
-    @classmethod
-    def of(cls, error: core.DeadlineExceededError) -> DeadlineExceededError:
-        """basis-core's `error` as the problem it is in a request: the same resource, deadline and detail."""
-        return error if isinstance(error, cls) else cls(error.resource, error.deadline_s, detail=str(error))
-
-
-class CallFailedError(core.CallFailedError, Error):
-    """Another service's failure, basis-core's, as the 502 problem a route answers: a handler that has something better
-    to say, such as a 404 of its own when the other service has no such thing, catches it and raises its own error."""
-
-    status = HTTPStatus.BAD_GATEWAY
-    title = "A call to another service failed"
-
-    @classmethod
-    def of(cls, error: core.CallFailedError) -> CallFailedError:
-        """basis-core's `error` as the problem it is in a request: the same detail, resource and reply."""
-        return error if isinstance(error, cls) else cls(str(error), resource=error.resource, reply=error.reply)
 
 
 class Opened(Protocol):
