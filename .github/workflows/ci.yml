@@ -324,6 +324,7 @@ jobs:
           with open_database(GivenSettings(databases={"loads": database}), "loads").reading() as reader:
               read = reader.fetch(f"SELECT CAST(N'{text}' COLLATE Latin1_General_100_CI_AS_SC_UTF8 AS varchar(max)) AS v", None, what="the check").item()
           where = {"LC_CTYPE": locale.setlocale(locale.LC_CTYPE), "encoding": locale.getencoding(), "utf8": fetches_char_as_utf8(sys.platform, locale.getencoding())}
+          assert where["utf8"], where  # so a text the default read happens to keep cannot pass
           assert read == text, (where, read)
           print(where, ascii(read))
           PY

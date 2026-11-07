@@ -12,7 +12,6 @@ Each statement a reader or a writer runs has a span, and so does each commit and
 runs a caller's own SQL, binding `%(name)s` by name: each statement's deadline is the driver's query timeout, in whole
 seconds, which SQL Server enforces by cancelling the statement on the server too."""
 
-import codecs
 import locale
 import logging
 import math
@@ -77,18 +76,14 @@ def fetches_char_as_utf8(platform: str, encoding: str) -> bool:
     Unicode's Basic Multilingual Plane, emoji among them, from `varchar(max)` values, with no error: through Arrow, and
     through `fetch*` where one straddles the driver's chunks of 4,095 UTF-16 units (docs/spikes/sqlserver-json.md).
 
-    Fetched as char, the data comes in the charset of the process's locale, off Windows, and in UTF-8 for a charset the
-    driver does not convert to, ASCII among them: so it is exact under a UTF-8 locale, as in basis's image
-    (`LANG=C.UTF-8`), and under the C or POSIX locale, as where `LC_ALL=C` stops Python coercing it to C.UTF-8; both
-    verified on Linux. Under ISO-8859-1, Arrow raises and `fetch*` returns bytes. On Windows it comes in the ANSI code
-    page, so the fetch is unverified there, and likely wrong: Windows keeps the default until the spike's checklist for
-    the port shows it exact."""
-    if platform == "win32":
-        return False
-    try:
-        return codecs.lookup(encoding).name in {"utf-8", "ascii"}
-    except LookupError:  # a charset Python does not know: keep the default, which is exact but for the defect
-        return False
+    Fetched as char, the data comes in the charset of the process's locale, and in UTF-8 for a charset the driver does
+    not convert to, as glibc's C and POSIX locales' `ANSI_X3.4-1968`: so on Linux it is exact under a UTF-8 locale, as
+    in basis's image (`LANG=C.UTF-8`), and under the C locale, where `LC_ALL=C` stops Python coercing it to C.UTF-8.
+    Under ISO-8859-1, Arrow raises and `fetch*` returns bytes, so any other charset keeps the default. Elsewhere it is
+    unverified, and keeps the default until the spike's checklist for the port shows it exact: on Windows, where it
+    comes in the ANSI code page and is likely wrong, and on macOS. It is decided as each connection opens, from the
+    locale then, so a later `setlocale` in the process does not change a connection already open."""
+    return platform == "linux" and (encoding.replace("-", "").lower() == "utf8" or encoding == "ANSI_X3.4-1968")
 
 
 def target_of(connection_string: str) -> str:

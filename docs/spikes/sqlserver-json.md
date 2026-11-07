@@ -137,10 +137,12 @@ character that straddles the driver's chunks of 4,095 UTF-16 units in a `varchar
 `"a" * 4094 + "😀b"`. Arrow dropped `["😀"]`'s emoji from a `varchar(200)` UTF-8 column too, wherever the result had a
 `varchar(max)` or `nvarchar(max)` column beside it. The UTF-8 char fetch read each exactly, and code page 1252 `varchar`
 and `nvarchar` text as well. Under an ISO-8859-1 locale on Linux it does not: Arrow raises `UnicodeDecodeError`, and
-`fetchall` returns `bytes`, with each character Latin-1 lacks replaced. So basis-core sets it on each connection off
-Windows, where the locale is UTF-8 or C (`fetches_char_as_utf8` in `packages/core/src/basis/core/databases/mssql.py`),
-and keeps the driver's default on Windows and under any other locale. `packages/job/tests/integration/test_text.py`
-reads and publishes such text.
+`fetchall` returns `bytes`, with each character Latin-1 lacks replaced. So basis-core sets it on each connection on
+Linux, where the locale is UTF-8 or glibc's C (`fetches_char_as_utf8` in
+`packages/core/src/basis/core/databases/mssql.py`), and keeps the driver's default on Windows and macOS, both
+unverified, and under any other locale. `packages/job/tests/integration/test_text.py` reads and publishes such text, a
+`json` column's on SQL Server 2025, and code page 1252 `varchar(10)` columns filled with `é` and with `€`, whose UTF-8
+is 20 and 30 bytes: through Arrow and `fetchall`, the UTF-8 char fetch cut none of them.
 
 **In basis's image.** A job repo's image, built from the managed Dockerfile on `python:3.14-slim` and run under its
 own environment, has `LANG=C.UTF-8` from that base, so its connections fetch char data as UTF-8, and read `["😀"]`
@@ -148,10 +150,10 @@ exactly. With `LANG` unset, or `LANG=C`, Python's locale coercion (PEP 538) sets
 result. `LC_ALL=C`, `LC_ALL=POSIX` or `PYTHONCOERCECLOCALE=0` leaves the C locale, whose charset is ASCII
 (`ANSI_X3.4-1968`). The driver does not convert to ASCII, and sends UTF-8 instead: its programming guidelines for
 Linux and macOS say that for a locale whose charset is not in its list, "it defaults to UTF-8" (from docs, read
-2026-11-07). The UTF-8 char fetch read exactly there too, in the image, so the rule takes ASCII as well. With it, each
-of these six environments read the emoji exactly through basis in the image; under a rule of UTF-8 alone, the last
-three lost it. CI's job-image reads one from a `varchar(max)` through basis in the image, under the image's own locale,
-and fails if it is lost.
+2026-11-07). The UTF-8 char fetch read exactly there too, in the image, so the rule takes that charset as well, by
+glibc's name for it alone. With it, each of these six environments read the emoji exactly through basis in the image;
+under a rule of UTF-8 alone, the last three lost it. CI's job-image reads one from a `varchar(max)` through basis in
+the image, under the image's own locale, and fails if the rule is off there or the emoji is lost.
 
 ## 3. Writing
 
@@ -1138,3 +1140,6 @@ Send back:
   whose "arrow with UTF-8 char fetch equal" says whether that fix holds on Windows, and any `raised` line that is not
   in this result. basis-core sets the UTF-8 char fetch in WSL, where the encoding is UTF-8, and keeps the driver's
   default on Windows, unverified, until these lines show it exact there (`fetches_char_as_utf8`).
+
+A note, not a step: macOS keeps the driver's default too, unverified, as developers there are rare. The probe, run on a
+Mac with its `locale.getencoding()`, would say whether `fetches_char_as_utf8` can take macOS as it takes Linux.
