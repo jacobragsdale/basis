@@ -20,6 +20,7 @@ import pyarrow as pa
 from starlette.types import ASGIApp
 
 from basis.api.resources import Bind
+from basis.core.databases.base import Statements
 
 type Rows = Sequence[Mapping[str, object]]
 
@@ -56,13 +57,20 @@ class Database:
         self._lock = threading.Lock()
 
     @contextmanager
-    def statements(self, *, writes: bool) -> Generator[Transaction]:
-        transaction = Transaction(self, writes=writes)
+    def statements(self, *, writes: bool) -> Generator[Statements]:
+        transaction = self.transaction(writes=writes)
         try:
             yield transaction
         finally:
+            if not transaction.committed:
+                transaction.roll_back()
             with self._lock:
                 (self.committed if transaction.committed else self.rolled_back).extend(transaction.changed)
+
+    def transaction(self, *, writes: bool) -> Transaction:
+        """A new transaction. A test whose database commits or rolls back slowly, or fails to, returns a `Transaction`
+        of its own whose `commit` or `roll_back` does."""
+        return Transaction(self, writes=writes)
 
     def answer(self, sql: str, binds: Mapping[str, Bind]) -> Rows | int:
         with self._lock:
@@ -101,6 +109,9 @@ class Transaction:
     def commit(self) -> None:
         self._refuse_reads("commit")
         self.committed = True
+
+    def roll_back(self) -> None:
+        """What ending the transaction without committing takes, which is nothing here."""
 
     def _refuse_reads(self, what: str) -> None:
         if not self.writes:

@@ -18,7 +18,10 @@ has started:
     async def bond(security: str, warehouse: Annotated[api.Reader, api.given(WAREHOUSE)]) -> Bond: ...
 
 What a handler asks for is checked when its route is declared, and when its service is: that it asks for what the
-service gives, annotated as what it gets, and from an `async def` where the calls are awaited.
+service gives, annotated as what it gets, and from an `async def` where the calls are awaited. A handler asks for its
+resources in its own parameters, never through a dependency of its own (`Depends(helper)`), which a route refuses:
+the handler's signature then shows everything the route reaches, which the checks, and the records of its requests,
+read from it. A helper takes what the handler was given as an argument.
 
 A repo lists its service as an entry point in the `basis.apis` group, `NAME = "module:attribute"`, which is how
 `basis serve` finds it."""
@@ -95,6 +98,12 @@ class Route:
         object.__setattr__(self, "name", handler.__name__)  # frozen: set once, from the handler
         if self.status not in range(200, 300):
             msg = f"route {self.path!r} succeeds with status {self.status}: give a 2xx, and raise an api.Error for each way it fails"
+            raise ServiceError(msg)
+        for path, resource in _asked_within(handler, (), set()):
+            msg = (
+                f"{self.name}'s dependency {' -> '.join(path)} asks for {resource.name}: ask for it in {self.name}'s own parameters,"
+                " and pass what it gives to the dependency, so the route shows everything it reaches"
+            )
             raise ServiceError(msg)
         asks = tuple(_asks_for(handler))
         object.__setattr__(self, "asks", asks)
@@ -255,6 +264,30 @@ def _asks_for(handler: FunctionType) -> Iterator[Ask]:
                 yield Ask(parameter.name, base, marker.dependency.kind)
             elif isinstance(marker, params.Depends) and isinstance(marker.dependency, (_GivenDatabase, _GivenResource)):
                 yield Ask(parameter.name, base, marker.dependency.resource)
+
+
+def _asked_within(call: object, path: tuple[str, ...], seen: set[int]) -> Iterator[tuple[tuple[str, ...], Resource]]:
+    """Each resource that a dependency of `call`'s, at any depth, asks for, with the dependencies that lead to it:
+    `call`'s own parameters ask for theirs where `path` is empty."""
+    if id(call) in seen:
+        return
+    seen.add(id(call))
+    try:
+        signature = inspect.signature(call, eval_str=True)  # ty: ignore[invalid-argument-type] -- FastAPI calls any callable it is given
+    except TypeError, ValueError:  # a builtin, whose parameters FastAPI does not read either
+        return
+    for parameter in signature.parameters.values():
+        annotation: object = parameter.annotation
+        base, metadata = (get_args(annotation)[0], get_args(annotation)[1:]) if get_origin(annotation) is Annotated else (annotation, ())
+        for marker in (*metadata, parameter.default):
+            if not isinstance(marker, params.Depends):
+                continue
+            dependency = marker.dependency if marker.dependency is not None else base  # `Depends()` depends on the type
+            if isinstance(dependency, _GivenDatabase | _GivenResource):
+                if path:
+                    yield (*path, parameter.name), dependency.resource
+            elif not isinstance(dependency, _Given) and callable(dependency):
+                yield from _asked_within(dependency, (*path, getattr(dependency, "__name__", type(dependency).__name__)), seen)
 
 
 def _written(route: Route, asks: Sequence[Ask]) -> DatabaseResource | None:

@@ -4,14 +4,15 @@ commits once the response validates, and rolls back when the handler raises or t
 request's reads see its own writes; a statement past its deadline is stopped on the server, and its request's writes
 are rolled back; and the example's SQL runs on SQL Server. Every test makes its own tables and drops them after."""
 
+import contextlib
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from http import HTTPStatus
-from typing import Annotated, Literal
+from typing import Annotated, Literal, override
 from uuid import UUID
 
 import mssql_python
@@ -19,12 +20,18 @@ import oracledb
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import BaseModel, ConfigDict, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from basis import api
 from basis.api import fakes
 from basis.api.example import service as example
+from basis.core.databases import Statements, open_database
+from basis.core.settings import GivenSettings
+
+type Records = Callable[[], list[dict[str, object]]]  # the `logged` fixture's
 
 pytestmark = pytest.mark.integration
 
@@ -125,8 +132,8 @@ def mssql() -> Iterator[Scratch]:
     yield from scratch_of("mssql")
 
 
-WAREHOUSE = api.database("warehouse", deadline_s=10)
-QUICK = api.database("quick", deadline_s=1)
+WAREHOUSE = api.database("warehouse", deadline_s=10, max_concurrent=4)
+QUICK = api.database("quick", deadline_s=1, max_concurrent=4)
 
 
 class Price(BaseModel):
@@ -134,6 +141,9 @@ class Price(BaseModel):
 
     security: str
     price: Decimal
+
+
+CACHED = api.cache("cached", Price, ttl_s=60, max_entries=10, deadline_s=1)
 
 
 class Refused(api.Error):
@@ -173,16 +183,32 @@ def _service(scratch: Scratch) -> api.Service:
         await quick.execute(insert, security=price.security, price=price.price)
         return price
 
+    async def write_then_cache(price: Price, warehouse: Annotated[api.Writer, api.given(WAREHOUSE)], cached: Annotated[api.Cache[Price], api.given(CACHED)]) -> Price:
+        """Writes, then loads a cache's value with a query that waits on a lock, which the cache's deadline, shorter
+        than the database's, stops; and carries on past it."""
+        await warehouse.execute(insert, security=price.security, price=price.price)
+
+        async def load() -> Price:
+            return await warehouse.fetch_one(Price, f"SELECT security, price FROM {scratch.table}_locked") or price
+
+        with contextlib.suppress(api.DeadlineExceededError):
+            await cached.get(price.security, load)
+        return price
+
     routes = [
         api.get("/prices/{security}", read), api.post("/prices", write), api.post("/read-your-writes", write_and_read), api.post("/refused", refuse),
-        api.post("/misanswered", misanswer), api.post("/slowly", write_slowly),
+        api.post("/misanswered", misanswer), api.post("/slowly", write_slowly), api.post("/cached-write", write_then_cache),
     ]  # fmt: skip
-    return api.Service(name="scratch", settings=api.Settings, resources=[WAREHOUSE, QUICK], routes=routes)
+    return api.Service(name="scratch", settings=api.Settings, resources=[WAREHOUSE, QUICK, CACHED], routes=routes)
+
+
+def _app(scratch: Scratch, given: Mapping[api.Resource, fakes.Fake] | None = None) -> api.App:
+    settings = api.Settings.given(databases={"warehouse": scratch.settings, "quick": scratch.settings})
+    return api.build(_service(scratch), settings=settings, fakes=given)
 
 
 def _client(scratch: Scratch) -> TestClient:
-    settings = api.Settings.given(databases={"warehouse": scratch.settings, "quick": scratch.settings})
-    return TestClient(api.build(_service(scratch), settings=settings).asgi)
+    return TestClient(_app(scratch).asgi)
 
 
 def _stored(scratch: Scratch) -> list[tuple[object, ...]]:
@@ -234,6 +260,93 @@ def test_a_statement_past_its_deadline_stops_on_the_server_and_its_write_rolls_b
     assert _stored(mssql) == []
 
 
+@contextlib.contextmanager
+def _locked(scratch: Scratch, table: str) -> Generator[mssql_python.Connection | oracledb.Connection]:
+    """A connection holding `table` locked, in a transaction of its own, which the caller rolls back to let go."""
+    holder = scratch.connect()
+    try:
+        cursor = holder.cursor()
+        cursor.execute(f"SELECT security FROM {table} WITH (TABLOCKX, HOLDLOCK)")
+        cursor.fetchall()
+        yield holder
+    finally:
+        holder.rollback()
+        holder.close()
+
+
+def test_a_write_never_answers_2xx_when_another_deadline_stops_its_query(mssql: Scratch) -> None:
+    """The query that loads a cache's value waits on a lock until the cache's deadline stops it, and the handler carries
+    on: the request answers 504, and its write rolls back once the query ends."""
+    locked = f"{mssql.table}_locked"
+    mssql.execute(f"CREATE TABLE {locked} (security varchar(12), price decimal(18,6))")
+    try:
+        with _locked(mssql, locked) as holder, _client(mssql) as client:
+            response = client.post("/cached-write", json=PRICE)
+            holder.rollback()  # the query ends, and the request's transaction rolls back after it
+        assert (response.status_code, response.json()["detail"]) == (
+            HTTPStatus.GATEWAY_TIMEOUT,
+            "a statement in warehouse did not finish before a deadline, so the request's writes there are rolled back, never committed",
+        )
+    finally:
+        mssql.drop(locked)
+    assert _stored(mssql) == []
+
+
+class _SlowCommit(fakes.Database):
+    """The scratch database itself, through basis-core, whose commits wait `wait_s` before SQL Server's own, as one
+    waits on a slow log."""
+
+    def __init__(self, scratch: Scratch, wait_s: float) -> None:
+        super().__init__()
+        self.real = open_database(GivenSettings(databases={"quick": scratch.settings}), "quick")
+        self.wait_s = wait_s
+
+    @override
+    @contextlib.contextmanager
+    def statements(self, *, writes: bool) -> Generator[Statements]:
+        with self.real.statements(writes=writes) as statements:
+            yield _Slowed(statements, self.wait_s)
+
+
+@dataclass
+class _Slowed:
+    statements: Statements
+    wait_s: float
+
+    def query(self, sql: str, binds: Mapping[str, api.Bind], *, timeout_s: float) -> object:
+        return self.statements.query(sql, binds, timeout_s=timeout_s)
+
+    def execute(self, sql: str, binds: Mapping[str, api.Bind], *, timeout_s: float) -> int:
+        return self.statements.execute(sql, binds, timeout_s=timeout_s)
+
+    def commit(self) -> None:
+        time.sleep(self.wait_s)
+        self.statements.commit()
+
+
+def test_a_commit_past_its_deadline_is_a_504_and_the_log_says_it_committed(mssql: Scratch, logged: Records) -> None:
+    app = _app(mssql, {QUICK: _SlowCommit(mssql, wait_s=1.5)})
+    spans = InMemorySpanExporter()
+    app.provider.add_span_processor(SimpleSpanProcessor(spans))
+    with TestClient(app.asgi) as client:
+        response = client.post("/slowly", json=PRICE)
+        read = client.get("/prices/US0000000000")  # a read, which ends in a rollback, of a security nothing wrote
+    assert (response.status_code, response.json()["detail"]) == (
+        HTTPStatus.GATEWAY_TIMEOUT,
+        "quick's commit did not finish within its deadline of 1s: whether the request's writes there committed, the log says when it ends",
+    )
+    assert _stored(mssql) == [("US912810TM64", Decimal("101.250000"))]
+    assert [record["message"] for record in logged() if record.get("ended") == "commit"] == ["quick's commit finished after its deadline, and committed the request's writes"]
+    ending = {span.name: dict(span.attributes or {}) for span in spans.get_finished_spans() if span.name in {"quick commit", "warehouse rollback"}}
+    assert (read.status_code, ending) == (
+        HTTPStatus.NOT_FOUND,
+        {
+            "quick commit": {"db.system.name": "fake", "basis.resource": "quick", "basis.deadline_s": 1},
+            "warehouse rollback": {"db.system.name": "microsoft.sql_server", "basis.resource": "warehouse", "basis.deadline_s": 10},
+        },
+    )
+
+
 def _blocked_by(scratch: Scratch, session: object) -> int:
     """How many requests still wait on `session`'s locks, once SQL Server has had a moment to cancel any whose timeout
     passed: the driver's timeout cancels a statement on the server, and stops it holding the request's connection."""
@@ -245,7 +358,9 @@ def _blocked_by(scratch: Scratch, session: object) -> int:
     return int(str(waiting))
 
 
-BONDS = "CREATE TABLE bonds (security_id varchar(12) PRIMARY KEY, coupon_rate decimal(9,6) NOT NULL, convention varchar(8) NOT NULL, frequency int NOT NULL, maturity date NOT NULL)"
+BONDS = (
+    "CREATE TABLE bonds (security_id varchar(12) PRIMARY KEY, coupon_rate decimal(9,6) NOT NULL, convention varchar(8) NOT NULL, frequency int NOT NULL, issued date NOT NULL, maturity date NOT NULL)"
+)
 SETTLEMENTS = (
     "CREATE TABLE settlements (settlement_id uniqueidentifier PRIMARY KEY, security_id varchar(12) NOT NULL, face decimal(18,2) NOT NULL,"
     " settle date NOT NULL, accrued decimal(18,2) NOT NULL, recorded_at datetimeoffset NOT NULL)"
@@ -255,7 +370,7 @@ SETTLEMENTS = (
 def test_the_examples_reads_and_writes_run_on_sql_server(mssql: Scratch) -> None:
     for table in ("settlements", "bonds"):
         mssql.drop(table)
-    mssql.execute(BONDS, SETTLEMENTS, "INSERT INTO bonds VALUES ('US912810TM64', 0.045, '30/360', 2, '2034-11-15')")
+    mssql.execute(BONDS, SETTLEMENTS, "INSERT INTO bonds VALUES ('US912810TM64', 0.045, '30/360', 2, '2024-11-15', '2034-11-15')")
     at = datetime(2026, 11, 6, 14, 30, tzinfo=UTC)
     given: dict[api.Resource, fakes.Fake] = {example.PRICING: fakes.Http(FastAPI()), example.TERMS: fakes.Cache(), example.CLOCK: fakes.Clock(at=at), example.IDS: fakes.Ids()}
     try:
@@ -267,7 +382,7 @@ def test_the_examples_reads_and_writes_run_on_sql_server(mssql: Scratch) -> None
     finally:
         for table in ("settlements", "bonds"):
             mssql.drop(table)
-    assert bond == {"security_id": "US912810TM64", "coupon_rate": "0.045000", "convention": "30/360", "frequency": 2, "maturity": "2034-11-15"}
+    assert bond == {"security_id": "US912810TM64", "coupon_rate": "0.045000", "convention": "30/360", "frequency": 2, "issued": "2024-11-15", "maturity": "2034-11-15"}
     assert recorded.status_code == HTTPStatus.CREATED
     [(settlement_id, security, face, settle, accrued, recorded_at)] = stored
     assert (UUID(str(settlement_id)), security, face, settle, accrued) == (UUID("00000000-0000-7000-8000-000000000001"), "US912810TM64", Decimal("1000000.00"), date(2026, 11, 6), Decimal("21375.00"))

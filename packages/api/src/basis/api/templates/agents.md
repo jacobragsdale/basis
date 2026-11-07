@@ -12,12 +12,16 @@ Rules to keep:
   where it calls blocking code, `async def` only where it awaits.
 - A handler takes the service's settings as `Annotated[Settings, api.given(Settings)]`, never from the environment.
 - A handler reaches the outside only through a resource the service declares, each by name with its deadline:
-  `api.database` (a handler asks for an `api.Reader`, or an `api.Writer` where its route writes), `api.http`
-  (`api.Client`), `api.cache` (`api.Cache[Value]`), `api.clock` (`api.Clock`) and `api.ids` (`api.Ids`), as
-  `Annotated[api.Reader, api.given(WAREHOUSE)]`. It never imports a database driver or an HTTP client, or reads the
-  time or makes an id itself. A handler that asks for a database, a service or a cache is `async def`.
+  `api.database` (a handler asks for an `api.Reader`, or an `api.Writer` where its route writes; its `max_concurrent`
+  bounds the statements that run at once), `api.http` (`api.Client`), `api.cache` (`api.Cache[Value]`, of a frozen
+  model), `api.clock` (`api.Clock`) and `api.ids` (`api.Ids`), as `Annotated[api.Reader, api.given(WAREHOUSE)]`, in
+  the handler's own parameters, never a dependency's. It never imports a database driver or an HTTP client, or reads
+  the time or makes an id itself. A handler that asks for a database, a service or a cache is `async def`.
 - A route's statements share one transaction, which commits after the handler returns and its response validates, and
-  rolls back when either fails. A route writes one database at most, and a GET none.
+  rolls back when either fails, or when a statement fails or misses its deadline, even if the handler carries on. A
+  route writes one database at most, and a GET none.
+- Another service's URL, CA bundle and proxy are its settings, `BASIS_HTTP__NAME__URL`, `__CA_BUNDLE` and `__PROXY`;
+  basis reads no `SSL_CERT_FILE` or `HTTP_PROXY`.
 - A handler fails by raising a subclass of `api.Error` that declares its `status` and `title`, and the caller gets a
   problem details response. Any other exception is a bare 500, logged once with its traceback.
 - Settings are `BASIS_*` variables, read once at startup; one that is missing stops the API with one `ERROR` line.

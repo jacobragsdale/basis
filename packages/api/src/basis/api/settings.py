@@ -8,7 +8,7 @@ import re
 from contextvars import ContextVar
 from typing import Annotated, Literal, Self, override
 
-from pydantic import Field, HttpUrl, ValidationError, model_validator
+from pydantic import Field, FilePath, HttpUrl, ValidationError, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from pydantic_settings import SettingsError as SourceError
 
@@ -45,8 +45,16 @@ class Traces(Model):
 
 
 class HttpService(Model):
+    """Another service, and how to reach it: from these settings alone, never `SSL_CERT_FILE`, `HTTP_PROXY` or the
+    like, which configure nothing basis decides."""
+
     url: HttpUrl
     """The service's base URL, which each call's path follows, such as `https://pricing.internal.example/api`."""
+    ca_bundle: FilePath | None = None
+    """A PEM file of the certificate authorities the service's certificate must chain to, such as the firm's own,
+    in place of the operating system's trusted ones. Without it, the operating system's are trusted."""
+    proxy: HttpUrl | None = None
+    """The proxy each call goes through, such as `http://proxy.internal.example:8080`. Without it, calls go direct."""
 
 
 class Settings(core.Settings):

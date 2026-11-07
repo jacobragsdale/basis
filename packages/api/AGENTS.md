@@ -31,13 +31,17 @@ Paths are under `src/basis/api/`.
 ## Rules to keep
 
 - A service's declarations, and the example's, import no server, exporter, database driver, HTTP client or fake;
-  `lint-imports` enforces it. A handler reaches the outside only through a resource that `api.given` gives it.
-- Every resource is declared by name with everything it needs, its deadline included, and basis guesses none of it.
-  Every call through one has a deadline and a span, in `opened.py`, whether the resource is real or fake; a fake
-  replaces only what the resource reaches.
+  `lint-imports` enforces it. A handler reaches the outside only through a resource that `api.given` gives it, in its
+  own parameters: a route refuses one asked for in a dependency of the handler's, so its signature shows all it reaches.
+- Every resource is declared by name with everything it needs, its deadline and a database's `max_concurrent`
+  included, and basis guesses none of it. Every call through one has a span, and every call that can wait a deadline,
+  in `opened.py`, whether the resource is real or fake; a fake replaces only what the resource reaches.
 - A request's statements in a database share one transaction, which commits only after the handler returns and the
-  response validates, and rolls back otherwise; a route writes one database at most, and a GET none. A statement past
-  its deadline is never followed by a commit.
+  response validates, and rolls back otherwise; a route writes one database at most, and a GET none. A statement that
+  fails, misses its deadline or is cancelled is never followed by a commit, and the request answers an error, not a
+  2xx. Each database's statements run on its own thread pool; the commit and the rollback have its deadline too.
+- How the app reaches another service is its settings' alone: its URL, CA bundle and proxy, never `SSL_CERT_FILE`,
+  `HTTP_PROXY` or any other variable of the environment's.
 - Every error a client sees is a problem from `errors.problem`. A new kind of error is a case there, or an `Error`
   subclass; never a response built in a handler.
 - An unexpected error is logged once, by the request boundary, with its traceback, and its message never reaches the

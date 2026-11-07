@@ -11,12 +11,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from basis.api.example import service
-from basis.api.example.service import BOND, RECORD, Bond, Convention, Matured, Settings, day_count, last_coupon
+from basis.api.example.service import BOND, RECORD, Bond, Convention, Matured, NotIssued, Settings, day_count, last_coupon
 
 PERIOD = {"face": "1000000", "rate": "0.045", "convention": "30/360"}
 ISIN = "US912810TM64"
 UNPRICED = "US912810TN48"
-TERMS = {"security_id": ISIN, "coupon_rate": Decimal("0.045"), "convention": "30/360", "frequency": 2, "maturity": date(2034, 11, 15)}
+TERMS = {"security_id": ISIN, "coupon_rate": Decimal("0.045"), "convention": "30/360", "frequency": 2, "issued": date(2024, 11, 15), "maturity": date(2034, 11, 15)}
 AT = datetime(2026, 11, 6, 14, 30, tzinfo=UTC)
 
 
@@ -85,17 +85,27 @@ def test_day_count(start: date, end: date, convention: Convention, expected: tup
         (date(2034, 8, 31), 2, date(2028, 3, 15), date(2028, 2, 29)),
         (date(2034, 11, 15), 12, date(2026, 11, 6), date(2026, 10, 15)),
         (date(2034, 11, 15), 1, date(2026, 11, 6), date(2025, 11, 15)),
+        (date(2034, 11, 15), 2, date(2025, 3, 1), date(2025, 1, 10)),
     ],
-    ids=["semiannual", "on-a-coupon-date", "last-period", "month-end", "month-end-in-a-leap-year", "monthly", "annual"],
+    ids=["semiannual", "on-a-coupon-date", "last-period", "month-end", "month-end-in-a-leap-year", "monthly", "annual", "first-period-from-its-issue"],
 )
 def test_last_coupon(maturity: date, frequency: int, settle: date, expected: date) -> None:
-    bond = Bond.model_validate(TERMS | {"maturity": maturity, "frequency": frequency})
+    bond = Bond.model_validate(TERMS | {"issued": date(2025, 1, 10) if settle.year == 2025 else TERMS["issued"], "maturity": maturity, "frequency": frequency})
     assert last_coupon(bond, settle) == expected
 
 
-def test_a_bond_that_has_matured_has_no_last_coupon() -> None:
-    with pytest.raises(Matured):
-        last_coupon(Bond.model_validate(TERMS), date(2034, 11, 15))
+@pytest.mark.parametrize(("settle", "refused"), [(date(2034, 11, 15), Matured), (date(2024, 11, 14), NotIssued), (date(1, 1, 1), NotIssued)], ids=["at-maturity", "before-issue", "the-first-day"])
+def test_a_settlement_outside_the_bonds_life_has_no_last_coupon(settle: date, refused: type[api.Error]) -> None:
+    with pytest.raises(refused):
+        last_coupon(Bond.model_validate(TERMS), settle)
+
+
+@pytest.mark.parametrize(("path", "settle"), [(f"/bonds/{ISIN}/dirty-price", "0001-01-01"), ("/settlements", "1900-01-01")], ids=["price", "settlement"])
+def test_a_settlement_before_the_bond_is_issued_is_refused(client: TestClient, warehouse: fakes.Database, path: str, settle: str) -> None:
+    holding = {"face": "100.00", "settle": settle}
+    response = client.get(path, params=holding) if path.startswith("/bonds") else client.post(path, json=holding | {"security_id": ISIN})
+    assert (response.status_code, response.json()["type"]) == (HTTPStatus.UNPROCESSABLE_CONTENT, "not-issued")
+    assert warehouse.committed == []
 
 
 def test_accrued_interest(client: TestClient) -> None:
@@ -135,7 +145,7 @@ def test_conventions(client: TestClient) -> None:
 
 def test_a_bonds_terms_come_from_the_warehouse(client: TestClient) -> None:
     response = client.get(f"/bonds/{ISIN}")
-    assert response.json() == {"security_id": ISIN, "coupon_rate": "0.045", "convention": "30/360", "frequency": 2, "maturity": "2034-11-15"}
+    assert response.json() == {"security_id": ISIN, "coupon_rate": "0.045", "convention": "30/360", "frequency": 2, "issued": "2024-11-15", "maturity": "2034-11-15"}
 
 
 @pytest.mark.parametrize(

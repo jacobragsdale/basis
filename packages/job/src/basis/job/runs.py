@@ -31,7 +31,7 @@ from basis.core.destination import TableSpec, check_table, check_values
 from basis.core.interval import Interval
 from basis.core.logs import utc_now
 from basis.core.runs import Regression
-from basis.core.settings import Settings
+from basis.core.settings import Settings, publish_refusal
 from basis.core.snapshots import InputRecord, PublishRecord, RunRecord, Snapshot, Status
 from basis.core.storage import Root
 from basis.core.tables import Changes
@@ -147,8 +147,8 @@ def _check_destinations(targets: Mapping[str, Target], settings: Settings, datab
                 log.info("not checking the destination: its database is not configured", extra={"database": database, "outputs": sorted(tables)})
             continue
         opened = databases(database)
-        if publishing and not opened.writable:
-            reasons.append(f"database {database!r} has no write settings, and the run publishes to it: set BASIS_DATABASES__{database.upper()}__WRITE__*")
+        if publishing and (refused := publish_refusal(database, settings.database(database))) is not None:
+            reasons.append(f"database {database!r} {refused[0]}, and the run publishes to it: {refused[1]}")
         with opened.reading() as reader:
             for name, target in tables.items():
                 spec = reader.describe(target.table)

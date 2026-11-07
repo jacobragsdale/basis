@@ -60,6 +60,11 @@ class Matured(api.Error):
     title = "The bond matures on or before the settlement date"
 
 
+class NotIssued(api.Error):
+    status = HTTPStatus.UNPROCESSABLE_CONTENT
+    title = "The bond is issued after the settlement date"
+
+
 class Period(BaseModel):
     """The query: a bond's face amount and coupon, and the period to accrue over. An unknown parameter is refused."""
 
@@ -105,6 +110,8 @@ class Bond(BaseModel):
     convention: Convention
     frequency: Literal[1, 2, 4, 12]
     """Coupons a year, the last of them paid at maturity."""
+    issued: date
+    """The date it was issued, from which its first coupon period accrues."""
     maturity: date
 
 
@@ -160,7 +167,7 @@ class Settlement(BaseModel):
     recorded_at: datetime
 
 
-WAREHOUSE = api.database("warehouse", deadline_s=5)
+WAREHOUSE = api.database("warehouse", deadline_s=5, max_concurrent=8)
 """Where each bond's terms are, and where settlements are recorded."""
 PRICING = api.http("pricing", deadline_s=2)
 """The pricing service, which quotes each bond's clean price."""
@@ -169,7 +176,7 @@ TERMS = api.cache("bond_terms", Bond, ttl_s=300, max_entries=10_000, deadline_s=
 CLOCK = api.clock("clock")
 IDS = api.ids("ids")
 
-BOND = "SELECT security_id, coupon_rate, convention, frequency, maturity FROM bonds WHERE security_id = %(security)s"
+BOND = "SELECT security_id, coupon_rate, convention, frequency, issued, maturity FROM bonds WHERE security_id = %(security)s"
 RECORD = "INSERT INTO settlements (settlement_id, security_id, face, settle, accrued, recorded_at) VALUES (%(settlement_id)s, %(security)s, %(face)s, %(settle)s, %(accrued)s, %(recorded_at)s)"
 
 
@@ -196,16 +203,22 @@ def accrue(face: Decimal, rate: Decimal, start: date, end: date, convention: Con
 
 
 def last_coupon(bond: Bond, settle: date) -> date:
-    """The coupon date on or before `settle`: counting back from maturity by the coupon's months, each on the
-    maturity's day of the month, or the month's last day where it has fewer days."""
+    """The date the interest accrued at `settle` runs from: the coupon date on or before it, counting back from maturity
+    by the coupon's months, each on the maturity's day of the month, or the month's last day where it has fewer days;
+    or the issue date, in the first period. A settlement outside the bond's life, before its issue or on or after its
+    maturity, is refused."""
+    if settle < bond.issued:
+        msg = f"{bond.security_id} is issued on {bond.issued}, and the settlement date is {settle}"
+        raise NotIssued(msg)
     if settle >= bond.maturity:
         msg = f"{bond.security_id} matures on {bond.maturity}, and the settlement date is {settle}"
         raise Matured(msg)
     step = 12 // bond.frequency
-    periods = 1
+    months = 12 * (bond.maturity.year - settle.year) + bond.maturity.month - settle.month
+    periods = max(1, months // step)  # the coupon in settle's month or after it, so at most one step more is needed
     while (coupon := _months_before(bond.maturity, step * periods)) > settle:
         periods += 1
-    return coupon
+    return max(coupon, bond.issued)
 
 
 def _months_before(day: date, months: int) -> date:

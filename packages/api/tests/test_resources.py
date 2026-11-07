@@ -1,16 +1,27 @@
 import asyncio
 import contextlib
+import dataclasses
+import ipaddress
+import json
+import ssl
 import threading
 from collections.abc import Awaitable, Callable, Generator, Mapping
-from datetime import UTC, datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from http import HTTPStatus
-from typing import Annotated, override
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Annotated, Literal, override
 from uuid import UUID
 
 import httpx2
 import pytest
-from fastapi import FastAPI, HTTPException, Request
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -21,8 +32,11 @@ from pydantic import BaseModel, ConfigDict
 from basis import api
 from basis.api import fakes
 from basis.api.app import Stage
-from basis.api.opened import MemoryCache
+from basis.api.opened import MemoryCache, adapter
+from basis.core.databases.base import Statements
 from basis.core.settings import SettingsError
+
+type Records = Callable[[], list[dict[str, object]]]  # the `logged` fixture's
 
 
 class Price(BaseModel):
@@ -37,16 +51,18 @@ class Refused(api.Error):
     title = "The price is refused"
 
 
-WAREHOUSE = api.database("warehouse", deadline_s=1)
-QUICK = api.database("quick", deadline_s=0.05)
+WAREHOUSE = api.database("warehouse", deadline_s=1, max_concurrent=4)
+QUICK = api.database("quick", deadline_s=0.05, max_concurrent=4)
 PRICING = api.http("pricing", deadline_s=0.5)
 PRICES = api.cache("prices", Price, ttl_s=60, max_entries=2, deadline_s=1)
+ONCE = api.cache("once", Price, ttl_s=60, max_entries=2, deadline_s=0.05)
 CLOCK = api.clock("clock")
 IDS = api.ids("ids")
 SECURITY = "US912810TM64"
 SELECT = "SELECT security, price FROM prices WHERE security = %(security)s"
 INSERT = "INSERT INTO prices (security, price) VALUES (%(security)s, %(price)s)"
 SLOW = "SELECT security, price FROM prices WITH (HOLDLOCK)"
+FAILS = "UPDATE prices SET price = price * 2"
 AT = datetime(2026, 11, 6, 14, 30, tzinfo=UTC)
 PRICE = {"security": SECURITY, "price": "101.25"}
 
@@ -92,6 +108,51 @@ async def set_then_wait(price: Price, quick: Annotated[api.Writer, api.given(QUI
     return price
 
 
+async def set_then_cache_slowly(price: Price, warehouse: Annotated[api.Writer, api.given(WAREHOUSE)], once: Annotated[api.Cache[Price], api.given(ONCE)]) -> Price:
+    """Writes, then loads a cache's value with a query, which the cache's deadline, shorter than the database's, stops;
+    and carries on past it."""
+    await warehouse.execute(INSERT, security=price.security, price=price.price)
+
+    async def load() -> Price:
+        return await warehouse.fetch_one(Price, SLOW) or price
+
+    with contextlib.suppress(api.DeadlineExceededError):
+        await once.get(price.security, load)
+    return price
+
+
+async def set_then_carry_on(price: Price, warehouse: Annotated[api.Writer, api.given(WAREHOUSE)]) -> Price:
+    """Writes, then carries on past a statement that fails."""
+    await warehouse.execute(INSERT, security=price.security, price=price.price)
+    with contextlib.suppress(RuntimeError):
+        await warehouse.execute(FAILS)
+    return price
+
+
+async def read_again(quick: Annotated[api.Reader, api.given(QUICK)]) -> Price:
+    """Reads past a query that missed its deadline, once the query has ended on the connection."""
+    with contextlib.suppress(api.DeadlineExceededError):
+        await quick.fetch(Price, SLOW)
+    for _ in range(500):
+        try:
+            if (found := await quick.fetch_one(Price, SELECT, security=SECURITY)) is not None:
+                return found
+        except RuntimeError:  # the query that missed its deadline still runs on the connection
+            await asyncio.sleep(0.01)
+    raise AssertionError
+
+
+async def set_quickly(price: Price, quick: Annotated[api.Writer, api.given(QUICK)]) -> Price:
+    await quick.execute(INSERT, security=price.security, price=price.price)
+    return price
+
+
+async def set_quickly_then_refuse(price: Price, quick: Annotated[api.Writer, api.given(QUICK)]) -> Price:
+    await quick.execute(INSERT, security=price.security, price=price.price)
+    msg = f"{price.security} is refused after all"
+    raise Refused(msg)
+
+
 async def quote(security: str, pricing: Annotated[api.Client, api.given(PRICING)]) -> Price:
     return await pricing.get(f"/prices/{security}", Price)
 
@@ -107,7 +168,7 @@ def stamp(clock: Annotated[api.Clock, api.given(CLOCK)], ids: Annotated[api.Ids,
 SERVICE = api.Service(
     name="prices",
     settings=api.Settings,
-    resources=[WAREHOUSE, QUICK, PRICING, PRICES, CLOCK, IDS],
+    resources=[WAREHOUSE, QUICK, PRICING, PRICES, ONCE, CLOCK, IDS],
     routes=[
         api.get("/prices/{security}", read_price),
         api.post("/prices", set_price),
@@ -116,6 +177,11 @@ SERVICE = api.Service(
         api.post("/misanswered", set_then_misanswer),
         api.get("/slow", slow_read),
         api.post("/stubborn", set_then_wait),
+        api.post("/cached-write", set_then_cache_slowly),
+        api.post("/carried-on", set_then_carry_on),
+        api.get("/again", read_again),
+        api.post("/quick", set_quickly),
+        api.post("/quick-refused", set_quickly_then_refuse),
         api.get("/quotes/{security}", quote),
         api.get("/cached/{security}", cached),
         api.get("/stamp", stamp),
@@ -139,7 +205,9 @@ def _pricing(*, status: int = HTTPStatus.OK, body: object = None, wait_s: float 
 
 
 def _app(warehouse: fakes.Database | None = None, *, quick: fakes.Database | None = None, pricing: FastAPI | None = None, **settings: object) -> api.App:
-    given: dict[api.Resource, fakes.Fake] = {WAREHOUSE: warehouse or fakes.Database(), QUICK: quick or fakes.Database(), PRICES: fakes.Cache(), CLOCK: fakes.Clock(at=AT), IDS: fakes.Ids()}
+    given: dict[api.Resource, fakes.Fake] = {
+        WAREHOUSE: warehouse or fakes.Database(), QUICK: quick or fakes.Database(), PRICES: fakes.Cache(), ONCE: fakes.Cache(), CLOCK: fakes.Clock(at=AT), IDS: fakes.Ids(),
+    }  # fmt: skip
     if pricing is not None or "http" not in settings:
         given[PRICING] = fakes.Http(pricing or _pricing())
     return api.build(SERVICE, settings=api.Settings.given(**settings), fakes=given)
@@ -180,20 +248,72 @@ async def _two_writes(first: Annotated[api.Writer, api.given(WAREHOUSE)], second
 async def _undeclared(pricing: Annotated[api.Client, api.given(PRICING)]) -> None: ...
 
 
+async def _reads_a_price(warehouse: Annotated[api.Reader, api.given(WAREHOUSE)]) -> Price | None:
+    return await warehouse.fetch_one(Price, SELECT, security=SECURITY)
+
+
+async def _via_a_dependency(found: Annotated[Price | None, Depends(_reads_a_price)]) -> None: ...
+async def _priced(found: Annotated[Price | None, Depends(_reads_a_price)]) -> Price | None:
+    return found
+
+
+async def _via_two_dependencies(found: Annotated[Price | None, Depends(_priced)]) -> None: ...
+
+
+class _Pricer:
+    def __init__(self, warehouse: Annotated[api.Reader, api.given(WAREHOUSE)]) -> None:
+        self.warehouse = warehouse
+
+
+async def _via_a_class(pricer: Annotated[_Pricer, Depends()]) -> None: ...
+
+
 class Mutable(BaseModel):
     price: Decimal
+
+
+class Listed(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    prices: list[Decimal]
+
+
+@dataclasses.dataclass
+class Loose:
+    price: Decimal
+
+
+@dataclasses.dataclass(frozen=True)
+class Fixed:
+    security: str
+    price: Decimal
+    priced_on: date | None
+
+
+class Plain:
+    price = Decimal(1)
 
 
 @pytest.mark.parametrize(
     ("declare", "message"),
     [
-        (lambda: api.database("Warehouse", deadline_s=1), "lower-case letters, digits and underscores"),
+        (lambda: api.database("Warehouse", deadline_s=1, max_concurrent=4), "lower-case letters, digits and underscores"),
         (lambda: api.http("pricing-service", deadline_s=1), "lower-case letters, digits and underscores"),
-        (lambda: api.database("warehouse", deadline_s=0), "give it deadline_s, the seconds each call may take, above 0"),
+        (lambda: api.database("warehouse", deadline_s=0, max_concurrent=4), "give it deadline_s, the seconds each call may take, above 0"),
         (lambda: api.http("pricing", deadline_s=float("nan")), "give it deadline_s"),
         (lambda: api.cache("prices", Price, ttl_s=0, max_entries=1, deadline_s=1), "give it ttl_s"),
         (lambda: api.cache("prices", Price, ttl_s=1, max_entries=0, deadline_s=1), "give it max_entries of 1 or more"),
+        (lambda: api.database("warehouse", deadline_s=1, max_concurrent=0), "give it max_concurrent, a whole number of 1 or more"),
+        (lambda: api.database("warehouse", deadline_s=1, max_concurrent=True), "give it max_concurrent, a whole number of 1 or more"),
         (lambda: api.cache("prices", Mutable, ttl_s=1, max_entries=1, deadline_s=1), "holds Mutable, which can change"),
+        (lambda: api.cache("prices", dict[str, Price], ttl_s=1, max_entries=1, deadline_s=1), "which can change"),
+        (lambda: api.cache("prices", list[Price], ttl_s=1, max_entries=1, deadline_s=1), "which can change"),
+        (lambda: api.cache("prices", Listed, ttl_s=1, max_entries=1, deadline_s=1), "holds Listed, which can change"),
+        (lambda: api.cache("prices", Loose, ttl_s=1, max_entries=1, deadline_s=1), "holds Loose, which can change"),
+        (lambda: api.cache("prices", Plain, ttl_s=1, max_entries=1, deadline_s=1), "holds Plain, which can change"),
+        (lambda: api.get("/w", _via_a_dependency), "_via_a_dependency's dependency _reads_a_price -> warehouse asks for warehouse: ask for it in _via_a_dependency's own parameters"),
+        (lambda: api.get("/w", _via_two_dependencies), "_via_two_dependencies's dependency _priced -> _reads_a_price -> warehouse asks for warehouse"),
+        (lambda: api.get("/w", _via_a_class), "_via_a_class's dependency _Pricer -> warehouse asks for warehouse"),
         (lambda: api.get("/w", _as_writer_in_a_get), "a GET only reads"),
         (lambda: api.post("/w", _as_a_client), r"asks for warehouse, a database: annotate it Annotated\[api.Reader"),
         (lambda: api.post("/w", _as_another_cache), r"a cache of Price: annotate it Annotated\[api.Cache\[Price\]"),
@@ -201,18 +321,35 @@ class Mutable(BaseModel):
         (lambda: api.get("/w", _twice), "asks for warehouse twice"),
         (lambda: api.post("/w", _two_writes), "writes warehouse and quick, and a request commits one transaction"),
         (_service(api.get("/w", _undeclared)), "asks for pricing, which service prices does not declare"),
-        (_service(api.get("/p/{security}", read_price), resources=[WAREHOUSE, api.database("warehouse", deadline_s=2)]), "declares warehouse twice"),
+        (_service(api.get("/p/{security}", read_price), resources=[WAREHOUSE, api.database("warehouse", deadline_s=2, max_concurrent=4)]), "declares warehouse twice"),
         (_service(api.get("/p/{security}", read_price), resources=[WAREHOUSE, "pricing"]), "has a str among its resources"),
         (lambda: api.given("warehouse"), "or one of its resources"),  # ty: ignore[invalid-argument-type] -- wrong on purpose
     ],
     ids=[
-        "name", "hyphen", "no-deadline", "nan-deadline", "no-ttl", "no-entries", "mutable-value", "writes-in-a-get", "wrong-kind",
+        "name", "hyphen", "no-deadline", "nan-deadline", "no-ttl", "no-entries", "no-threads", "threads-as-a-bool", "mutable-value", "a-dict", "a-list",
+        "a-frozen-model-of-a-list", "an-unfrozen-dataclass", "a-plain-class", "in-a-dependency", "in-a-dependencys-dependency", "in-a-class-dependency", "writes-in-a-get", "wrong-kind",
         "another-cache", "sync-handler", "asked-twice", "two-written", "undeclared", "same-name", "not-a-resource", "given-a-name",
     ],
 )  # fmt: skip
 def test_resources_cannot_be_declared_wrong(declare: Callable[[], object], message: str) -> None:
     with pytest.raises(api.ServiceError, match=message):
         declare()
+
+
+@pytest.mark.parametrize("value", [Price, tuple[Price, ...], tuple[Price, Fixed], Fixed, Decimal, Price | None, Literal["A", "B"], frozenset[str]], ids=str)
+def test_a_cache_holds_what_its_type_proves_never_changes(value: type) -> None:
+    assert api.cache("prices", value, ttl_s=1, max_entries=1, deadline_s=1).value == value
+
+
+def _security(security: str) -> str:
+    return security.upper()
+
+
+async def _with_a_plain_dependency(security: Annotated[str, Depends(_security)], warehouse: Annotated[api.Reader, api.given(WAREHOUSE)]) -> None: ...
+
+
+def test_a_dependency_that_asks_for_no_resource_is_the_handlers_own_business() -> None:
+    assert api.get("/w/{security}", _with_a_plain_dependency).asks[0].given == WAREHOUSE
 
 
 def test_a_route_knows_the_database_it_writes() -> None:
@@ -234,10 +371,16 @@ def test_a_database_a_route_writes_needs_its_write_login() -> None:
         api.build(SERVICE, settings=api.Settings.given(databases={"warehouse": warehouse}), fakes={QUICK: fakes.Database(), PRICING: fakes.Http(_pricing())})
 
 
+def test_an_oracle_database_a_route_writes_needs_its_write_user_and_password() -> None:
+    warehouse = {"kind": "oracle", "dsn": "nowhere:1521/X", "user": "reader", "password": "x", "mode": "thin", "isolation": "read_only", "timeout_s": 5, "max_rows": 100}
+    with pytest.raises(SettingsError, match="set BASIS_DATABASES__WAREHOUSE__WRITE__USER and BASIS_DATABASES__WAREHOUSE__WRITE__PASSWORD, the login through which routes write warehouse"):
+        api.build(SERVICE, settings=api.Settings.given(databases={"warehouse": warehouse}), fakes={QUICK: fakes.Database(), PRICING: fakes.Http(_pricing())})
+
+
 @pytest.mark.parametrize(
     ("given", "message"),
     [
-        ({api.database("elsewhere", deadline_s=1): fakes.Database()}, "a fake is given for elsewhere, which service prices does not declare"),
+        ({api.database("elsewhere", deadline_s=1, max_concurrent=4): fakes.Database()}, "a fake is given for elsewhere, which service prices does not declare"),
         ({WAREHOUSE: fakes.Clock(at=AT)}, "warehouse is given a fakes.Clock"),
     ],
     ids=["undeclared", "wrong-kind"],
@@ -276,6 +419,46 @@ def test_a_route_that_reads_never_commits() -> None:
     with TestClient(_app(warehouse).asgi) as client:
         assert client.get(f"/prices/{SECURITY}").json() == PRICE  # the fake refuses a commit of a transaction that only reads
     assert (warehouse.committed, warehouse.rolled_back) == ([], [])
+
+
+def test_a_write_never_answers_2xx_when_another_deadline_stops_its_query() -> None:
+    """The cache's deadline, shorter than the database's, stops the query that loads its value, and the handler
+    carries on past it: the request, whose write is rolled back, answers 504."""
+    release = threading.Event()
+    warehouse = fakes.Database(answers={INSERT: 1, SLOW: _held(release)})
+    with TestClient(_app(warehouse).asgi) as client:
+        response = client.post("/cached-write", json=PRICE)
+        release.set()
+    detail = "a statement in warehouse did not finish before a deadline, so the request's writes there are rolled back, never committed"
+    assert (response.status_code, response.json()["detail"]) == (HTTPStatus.GATEWAY_TIMEOUT, detail)
+    assert (warehouse.committed, warehouse.rolled_back) == ([], [_statement()])
+
+
+def _deadlocked(_: Mapping[str, api.Bind]) -> int:
+    msg = "the transaction was chosen as a deadlock victim"
+    raise RuntimeError(msg)
+
+
+def test_a_write_never_answers_2xx_after_a_statement_fails() -> None:
+    warehouse = fakes.Database(answers={INSERT: 1, FAILS: fakes.Respond(_deadlocked)})
+    with TestClient(_app(warehouse).asgi) as client:
+        response = client.post("/carried-on", json=PRICE)
+    assert response.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+    assert (warehouse.committed, warehouse.rolled_back) == ([], [_statement()])
+
+
+def _waits(seconds: float) -> fakes.Respond:
+    def answer(_: Mapping[str, api.Bind]) -> list[Mapping[str, object]]:
+        threading.Event().wait(seconds)
+        return []
+
+    return fakes.Respond(answer)
+
+
+def test_a_connection_takes_statements_again_once_the_one_that_missed_its_deadline_ends() -> None:
+    quick = fakes.Database(answers={SLOW: _waits(0.2), SELECT: [{"security": SECURITY, "price": Decimal("101.25")}]})
+    with TestClient(_app(quick=quick).asgi) as client:
+        assert client.get("/again").json() == PRICE
 
 
 def test_rows_that_do_not_fit_the_model_are_a_defect() -> None:
@@ -317,6 +500,89 @@ def test_a_write_never_commits_after_a_statement_misses_its_deadline() -> None:
     assert (quick.committed, quick.rolled_back) == ([], [_statement()])
 
 
+NARROW = api.database("narrow", deadline_s=0.2, max_concurrent=1)
+
+
+async def narrow_read(narrow: Annotated[api.Reader, api.given(NARROW)]) -> list[Price]:
+    return await narrow.fetch(Price, SLOW)
+
+
+def test_a_statement_waits_for_one_of_its_databases_threads_within_its_deadline() -> None:
+    """One thread, held by the first request's statement: the second request's statement waits for it, misses its
+    deadline doing so, and never reaches the database."""
+    release, entered = threading.Event(), threading.Event()
+    reached: list[Mapping[str, api.Bind]] = []
+
+    def answer(binds: Mapping[str, api.Bind]) -> list[Mapping[str, object]]:
+        reached.append(binds)
+        entered.set()
+        release.wait(5)
+        return []
+
+    service = api.Service(name="narrow", settings=api.Settings, resources=[NARROW], routes=[api.get("/slow", narrow_read)])
+    app = api.build(service, settings=api.Settings.given(), fakes={NARROW: fakes.Database(answers={SLOW: fakes.Respond(answer)})})
+    with TestClient(app.asgi) as client, ThreadPoolExecutor(1) as pool:
+        first = pool.submit(client.get, "/slow")
+        entered.wait(5)
+        second = client.get("/slow")
+        release.set()
+        statuses = [first.result().status_code, second.status_code]
+    assert (statuses, len(reached)) == ([HTTPStatus.GATEWAY_TIMEOUT, HTTPStatus.GATEWAY_TIMEOUT], 1)
+
+
+@dataclasses.dataclass
+class _Held(fakes.Transaction):
+    """A transaction whose commit, or rollback, waits until the test releases it, as one does on a slow log."""
+
+    release: threading.Event = dataclasses.field(default_factory=threading.Event)
+    holds: Literal["commit", "rollback"] = "commit"
+
+    @override
+    def commit(self) -> None:
+        if self.holds == "commit":
+            self.release.wait(5)
+        super().commit()
+
+    @override
+    def roll_back(self) -> None:
+        if self.holds == "rollback" and self.changed:  # a request's, not the check at startup
+            self.release.wait(5)
+        super().roll_back()
+
+
+class _Holding(fakes.Database):
+    def __init__(self, holds: Literal["commit", "rollback"]) -> None:
+        super().__init__(answers={INSERT: 1})
+        self.release, self.holds = threading.Event(), holds
+
+    @override
+    def transaction(self, *, writes: bool) -> fakes.Transaction:
+        return _Held(self, writes=writes, release=self.release, holds=self.holds)
+
+
+def test_a_commit_past_its_deadline_is_a_504_and_the_log_says_how_it_ended(logged: Records) -> None:
+    quick = _Holding("commit")
+    with TestClient(_app(quick=quick).asgi) as client:
+        response = client.post("/quick", json=PRICE)
+        quick.release.set()
+    detail = "quick's commit did not finish within its deadline of 0.05s: whether the request's writes there committed, the log says when it ends"
+    assert (response.status_code, response.json()["detail"]) == (HTTPStatus.GATEWAY_TIMEOUT, detail)
+    assert quick.committed == [_statement()]
+    assert [record["message"] for record in logged() if record.get("ended") == "commit"] == ["quick's commit finished after its deadline, and committed the request's writes"]
+
+
+def test_a_rollback_past_its_deadline_leaves_the_requests_own_answer_and_the_log_says_how_it_ended(logged: Records) -> None:
+    quick = _Holding("rollback")
+    with TestClient(_app(quick=quick).asgi) as client:
+        response = client.post("/quick-refused", json=PRICE)
+        quick.release.set()
+    assert (response.status_code, response.json()["type"], quick.rolled_back) == (HTTPStatus.CONFLICT, "refused", [_statement()])
+    assert [record["message"] for record in logged() if record.get("resource") == "quick"] == [
+        "quick's rollback did not finish within its deadline of 0.05s: it goes on, and the log says when it ends",
+        "quick's rollback finished after its deadline",
+    ]
+
+
 def test_a_call_to_another_service_past_its_deadline_is_a_504() -> None:
     with TestClient(_app(pricing=_pricing(wait_s=5)).asgi) as client:
         response = client.get(f"/quotes/{SECURITY}")
@@ -346,17 +612,19 @@ def test_every_call_through_a_resource_has_a_span_in_the_requests_trace() -> Non
     exporter = _spans(app)
     with TestClient(app.asgi) as client:
         client.post("/prices", json=PRICE).raise_for_status()
+        client.get(f"/prices/{SECURITY}").raise_for_status()
         client.get(f"/cached/{SECURITY}").raise_for_status()
         client.get("/stamp").raise_for_status()
     spans = exporter.get_finished_spans()
-    execute, commit = _named(spans, "warehouse execute"), _named(spans, "warehouse commit")
+    execute, commit, rollback = _named(spans, "warehouse execute"), _named(spans, "warehouse commit"), _named(spans, "warehouse rollback")
     assert dict(execute.attributes or {}) == {"db.system.name": "fake", "db.query.text": INSERT, "basis.resource": "warehouse", "basis.deadline_s": 1}
+    assert dict(commit.attributes or {}) == dict(rollback.attributes or {}) == {"db.system.name": "fake", "basis.resource": "warehouse", "basis.deadline_s": 1}
     called, cache = _named(spans, "pricing GET"), _named(spans, "prices get")
     assert {"http.request.method": "GET", "url.path": f"/prices/{SECURITY}", "http.response.status_code": 200}.items() <= dict(called.attributes or {}).items()
     assert dict(cache.attributes or {}) == {"basis.resource": "prices", "basis.deadline_s": 1, "basis.cache.hit": False}
     assert dict(_named(spans, "clock now").attributes or {})["basis.value"] == "2026-11-06T14:30:00+00:00"
     servers = {span.context.trace_id: span for span in spans if span.name.startswith(("POST", "GET"))}
-    for span in (execute, commit, called, cache):
+    for span in (execute, commit, rollback, called, cache):
         assert span.parent is not None
         assert span.context.trace_id in servers
     assert called.parent is not None
@@ -389,6 +657,93 @@ def test_a_service_that_cannot_be_reached_is_a_502() -> None:
     assert (response.status_code, response.json()["detail"]) == (HTTPStatus.BAD_GATEWAY, f"pricing could not be reached for GET /prices/{SECURITY}: ConnectError")
 
 
+_SIGNS_CERTIFICATES = x509.KeyUsage(
+    digital_signature=False, content_commitment=False, key_encipherment=False, data_encipherment=False, key_agreement=False, key_cert_sign=True, crl_sign=True,
+    encipher_only=False, decipher_only=False,
+)  # fmt: skip
+
+
+def _authority(directory: Path) -> tuple[Path, ssl.SSLContext]:
+    """A certificate authority's PEM, as the firm's would be, and a server's TLS context with a certificate it signed
+    for 127.0.0.1."""
+    key, server_key = ec.generate_private_key(ec.SECP256R1()), ec.generate_private_key(ec.SECP256R1())
+    issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "the firm's test CA")])
+    start, end = datetime(2020, 1, 1, tzinfo=UTC), datetime(2100, 1, 1, tzinfo=UTC)
+    authority = (
+        x509.CertificateBuilder().subject_name(issuer).issuer_name(issuer).public_key(key.public_key()).serial_number(1).not_valid_before(start).not_valid_after(end)
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(_SIGNS_CERTIFICATES, critical=True)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False).sign(key, hashes.SHA256())
+    )  # fmt: skip
+    server = (
+        x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])).issuer_name(issuer).public_key(server_key.public_key())
+        .serial_number(2).not_valid_before(start).not_valid_after(end)
+        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()), critical=False).sign(key, hashes.SHA256())
+    )  # fmt: skip
+    bundle, chain, private = directory / "ca.pem", directory / "server.pem", directory / "server.key"
+    bundle.write_bytes(authority.public_bytes(serialization.Encoding.PEM))
+    chain.write_bytes(server.public_bytes(serialization.Encoding.PEM))
+    private.write_bytes(server_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(chain, private)
+    return bundle, context
+
+
+class _Prices(BaseHTTPRequestHandler):
+    """Answers every GET with a price, as the pricing service, or a proxy in front of it, would."""
+
+    def do_GET(self) -> None:
+        body = json.dumps({"security": self.path.rsplit("/", 1)[-1], "price": "99.50"}).encode()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    @override
+    def log_message(self, format: str, *args: object) -> None:
+        del format, args
+
+
+@contextlib.contextmanager
+def _serving(context: ssl.SSLContext | None = None) -> Generator[int]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Prices)
+    if context is not None:
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server.server_address[1]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _quoted(http: dict[str, object]) -> httpx2.Response:
+    with TestClient(_app(http={"pricing": http}).asgi) as client:
+        return client.get(f"/quotes/{SECURITY}")
+
+
+def test_another_services_certificate_is_checked_against_the_declared_ca_bundle_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bundle, context = _authority(tmp_path)
+    monkeypatch.setenv("SSL_CERT_FILE", str(bundle))  # read by nothing basis decides
+    with _serving(context) as port:
+        trusting = _quoted({"url": f"https://127.0.0.1:{port}", "ca_bundle": str(bundle)})
+        undeclared = _quoted({"url": f"https://127.0.0.1:{port}"})
+    assert trusting.json() == {"security": SECURITY, "price": "99.50"}
+    assert (undeclared.status_code, undeclared.json()["detail"]) == (HTTPStatus.BAD_GATEWAY, f"pricing could not be reached for GET /prices/{SECURITY}: ConnectError")
+
+
+def test_calls_go_through_the_declared_proxy_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    with _serving() as port:
+        monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{port}")  # read by nothing basis decides
+        proxied = _quoted({"url": "http://127.0.0.1:9", "proxy": f"http://127.0.0.1:{port}"})  # nothing serves the discard port: only the proxy answers
+        direct = _quoted({"url": "http://127.0.0.1:9"})
+    assert proxied.json() == {"security": SECURITY, "price": "99.50"}
+    assert direct.status_code == HTTPStatus.BAD_GATEWAY
+
+
 # The cache
 
 
@@ -407,6 +762,11 @@ def _counting(made: list[str], *, fails: bool = False) -> Callable[[str], Callab
         return load
 
     return loader
+
+
+def test_each_type_is_validated_by_one_adapter() -> None:
+    assert adapter(Price) is adapter(Price)
+    assert adapter(list[Price]) is adapter(list[Price])
 
 
 def test_a_value_is_kept_until_its_time_to_live_passes() -> None:
@@ -510,7 +870,7 @@ class _Opening(fakes.Database):
 
     @override
     @contextlib.contextmanager
-    def statements(self, *, writes: bool) -> Generator[fakes.Transaction]:
+    def statements(self, *, writes: bool) -> Generator[Statements]:
         self.entered.set()
         self.release.wait(5)
         with super().statements(writes=writes) as transaction:

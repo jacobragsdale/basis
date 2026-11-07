@@ -25,7 +25,7 @@ from basis.core.databases.base import FETCH_ROWS, LEDGER_COLUMNS, Bind, Counts, 
 from basis.core.destination import DestColumn, TableSpec
 from basis.core.interval import Interval
 from basis.core.logs import ms_since
-from basis.core.settings import MssqlSettings
+from basis.core.settings import MssqlSettings, publish_refusal, unpublishable
 from basis.core.tables import Changes, Delete, Target
 
 log = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ class MssqlDatabase:
 
     @property
     def writable(self) -> bool:
-        return self.settings.write is not None and self.settings.write.ledger is not None
+        return publish_refusal(self.name, self.settings) is None
 
     @contextmanager
     def reading(self) -> Generator[MssqlReader]:
@@ -70,11 +70,9 @@ class MssqlDatabase:
     @contextmanager
     def writing(self) -> Generator[MssqlWriter]:
         write = self.settings.write
-        if write is None:
-            msg = f"database {self.name!r} has no write settings: set BASIS_DATABASES__{self.name.upper()}__WRITE__CONNECTION_STRING and __LEDGER"
-            raise LookupError(msg)
-        if write.ledger is None:
-            msg = f"database {self.name!r} has no ledger, which a publish writes in its transaction: set BASIS_DATABASES__{self.name.upper()}__WRITE__LEDGER"
+        if write is None or write.ledger is None:
+            reason, fix = unpublishable(self.name, self.settings)
+            msg = f"database {self.name!r} {reason}: {fix}"
             raise LookupError(msg)
         start = time.perf_counter()
         with closing(connect_to(write.connection_string.get_secret_value(), self.settings.timeout_s, autocommit=False)) as connection:

@@ -1,7 +1,7 @@
 """The resources a service declares: everything its handlers reach outside the process. Each is declared by name, with
 everything it needs stated, and none of it guessed:
 
-    WAREHOUSE = api.database("warehouse", deadline_s=5)
+    WAREHOUSE = api.database("warehouse", deadline_s=5, max_concurrent=8)
     PRICING = api.http("pricing", deadline_s=2)
     TERMS = api.cache("bond_terms", Terms, ttl_s=300, max_entries=10_000, deadline_s=5)
     CLOCK = api.clock("clock")
@@ -10,33 +10,39 @@ everything it needs stated, and none of it guessed:
     service = api.Service(name="accruals", settings=Settings, resources=[WAREHOUSE, PRICING, TERMS, CLOCK, IDS], routes=[...])
 
 The app opens each one when it starts, and readiness reports 503 until all of them are open; it closes them when it
-stops. Every call a handler makes through one has a deadline, the declared `deadline_s`, and a span of its own, and
-for tests each has a fake, in `basis.api.fakes`. A handler asks for a resource with `api.given`, as it asks for its
-settings, annotated with what it gets:
+stops. Every call a handler makes through one that can wait has a deadline, the declared `deadline_s`, and every call
+has a span of its own; for tests each resource has a fake, in `basis.api.fakes`. A handler asks for a resource with
+`api.given`, as it asks for its settings, annotated with what it gets, and only in its own parameters, never in a
+dependency of its own, so that a route's signature shows everything it reaches:
 
 | Declared with | A handler asks for | Configured by |
 |---|---|---|
-| `api.database(name, deadline_s=)` | `api.Reader`, or `api.Writer` in a route that writes it | basis-core's `BASIS_DATABASES__NAME__*` |
-| `api.http(name, deadline_s=)` | `api.Client` | `BASIS_HTTP__NAME__URL` |
+| `api.database(name, deadline_s=, max_concurrent=)` | `api.Reader`, or `api.Writer` in a route that writes it | basis-core's `BASIS_DATABASES__NAME__*` |
+| `api.http(name, deadline_s=)` | `api.Client` | `BASIS_HTTP__NAME__URL`, and `__CA_BUNDLE` and `__PROXY` where it needs them |
 | `api.cache(name, Value, ttl_s=, max_entries=, deadline_s=)` | `api.Cache[Value]` | nothing: it is in the process |
 | `api.clock(name)` | `api.Clock` | nothing |
 | `api.ids(name)` | `api.Ids` | nothing |
 
 A database's statements in one request share one transaction. A route that writes commits it only after its handler
 returns and its response validates, and rolls it back when the handler raises or the response does not validate; a
-route that reads never commits. A request commits one transaction, so a route writes one database at most, and a GET
-route writes none. The clock and the ids are resources so that a recorded request replays the times and ids it saw;
-they never wait, so they have no deadline.
+route that reads never commits. A statement that fails, or does not finish, rolls the transaction back even when the
+handler carries on, and a request whose writes were rolled back never answers 2xx. A request commits one transaction,
+so a route writes one database at most, and a GET route writes none. The clock and the ids are resources so that a
+recorded request replays the times and ids it saw; they never wait, so they have no deadline.
 
 Database, HTTP and cache calls are awaited, so a handler that asks for one is `async def`."""
 
+import dataclasses
 import re
+import types
+import typing
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, is_dataclass
-from datetime import date, datetime
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from enum import Enum
 from http import HTTPStatus
-from typing import Generic, Literal, Protocol, TypeVar
+from typing import Annotated, Generic, Literal, Protocol, TypeAliasType, TypeVar, get_args, get_origin
 from uuid import UUID
 
 from pydantic import BaseModel, JsonValue
@@ -58,7 +64,11 @@ class DatabaseResource:
     name: str
     """The name its settings are under, as `BASIS_DATABASES__WAREHOUSE__KIND` for `warehouse`."""
     deadline_s: float
-    """Seconds each statement may take, its connection's login included."""
+    """Seconds each statement may take, its connection's login and its wait for a thread included, and the commit or
+    rollback that ends a request's transaction."""
+    max_concurrent: int
+    """The most of its statements that run at once, each on a thread of the database's own pool: what the database can
+    take from one replica of the API. A statement that waits for a thread waits within its deadline."""
 
 
 @dataclass(frozen=True)
@@ -98,10 +108,13 @@ class IdsResource:
 type Resource = DatabaseResource | HttpResource | CacheResource[object] | ClockResource | IdsResource
 
 
-def database(name: str, *, deadline_s: float) -> DatabaseResource:
+def database(name: str, *, deadline_s: float, max_concurrent: int) -> DatabaseResource:
     """A database basis-core's settings configure under `name`, SQL Server or Oracle, whose statements a handler
     writes in that database's SQL."""
-    return DatabaseResource(_named(name, "database"), _deadline(name, deadline_s))
+    if isinstance(max_concurrent, bool) or not isinstance(max_concurrent, int) or max_concurrent < 1:
+        msg = f"database {name} runs at most {max_concurrent!r} statements at once: give it max_concurrent, a whole number of 1 or more"
+        raise ServiceError(msg)
+    return DatabaseResource(_named(name, "database"), _deadline(name, deadline_s), max_concurrent)
 
 
 def http(name: str, *, deadline_s: float) -> HttpResource:
@@ -119,10 +132,44 @@ def cache[V](name: str, value: type[V], *, ttl_s: float, max_entries: int, deadl
     if max_entries < 1:
         msg = f"cache {name} keeps at most {max_entries} values: give it max_entries of 1 or more"
         raise ServiceError(msg)
-    if (isinstance(value, type) and issubclass(value, BaseModel) and value.model_config.get("frozen") is not True) or (is_dataclass(value) and not value.__dataclass_params__.frozen):  # ty: ignore[unresolved-attribute] -- a dataclass type has its params
-        msg = f"cache {name} holds {value.__qualname__}, which can change, and every request that reads it shares one: make it frozen"
+    if not _immutable(value):
+        held = getattr(value, "__qualname__", repr(value))
+        msg = f"cache {name} holds {held}, which can change, and every request that reads it shares one: hold a frozen model or dataclass whose fields are too, a tuple of them, or a scalar"
         raise ServiceError(msg)
     return CacheResource(name, value, ttl_s, max_entries, _deadline(name, deadline_s))
+
+
+_SCALARS = (str, bytes, int, float, Decimal, date, time, timedelta, UUID, types.NoneType, Enum)
+"""Types whose values never change: a bool is an int, a datetime a date, and an Enum's members are fixed."""
+
+
+def _immutable(kind: object, within: frozenset[type] = frozenset()) -> bool:
+    """Whether no value of `kind` can change once made, as far as its type proves: a scalar, a frozen pydantic model or
+    dataclass whose fields are immutable too, or a tuple, frozenset, union or literal of those. Anything else, such as
+    a dict, a list or a plain class, cannot be proved so. `within` holds the models being checked, for one that refers
+    to itself."""
+    if isinstance(kind, TypeAliasType):
+        return _immutable(kind.__value__, within)
+    origin = get_origin(kind)
+    if origin is Annotated:
+        return _immutable(get_args(kind)[0], within)
+    if origin is Literal:
+        return True
+    if origin in {typing.Union, types.UnionType, tuple, frozenset}:
+        return all(argument is Ellipsis or _immutable(argument, within) for argument in get_args(kind))
+    return origin is None and isinstance(kind, type) and _immutable_class(kind, within)
+
+
+def _immutable_class(kind: type, within: frozenset[type]) -> bool:
+    if kind in within or issubclass(kind, _SCALARS):
+        return True
+    if issubclass(kind, BaseModel):
+        return kind.model_config.get("frozen") is True and all(_immutable(found.annotation, within | {kind}) for found in kind.model_fields.values())
+    if dataclasses.is_dataclass(kind):
+        frozen = getattr(getattr(kind, "__dataclass_params__", None), "frozen", False) is True
+        hints = typing.get_type_hints(kind, include_extras=True)
+        return frozen and all(_immutable(hints[found.name], within | {kind}) for found in dataclasses.fields(kind))
+    return False
 
 
 def clock(name: str) -> ClockResource:
@@ -207,8 +254,8 @@ class DeadlineExceededError(Error):
     status = HTTPStatus.GATEWAY_TIMEOUT
     title = "A call took longer than its deadline"
 
-    def __init__(self, resource: str, deadline_s: float) -> None:
-        super().__init__(f"{resource} did not answer within its deadline of {deadline_s:g}s")
+    def __init__(self, resource: str, deadline_s: float, *, detail: str | None = None) -> None:
+        super().__init__(detail if detail is not None else f"{resource} did not answer within its deadline of {deadline_s:g}s")
         self.resource = resource
         self.deadline_s = deadline_s
 
