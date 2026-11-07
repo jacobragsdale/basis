@@ -1,7 +1,17 @@
+import logging
+import socket
+import time
+from collections.abc import Generator
+from pathlib import Path
+
+import mssql_python
+import oracledb
 import pytest
 
 from basis.core.databases import open_database
-from basis.core.settings import GivenSettings, publish_refusal
+from basis.core.databases.base import end_reading
+from basis.core.databases.oracle import connect
+from basis.core.settings import GivenSettings, OracleSettings, publish_refusal
 
 MSSQL = {"kind": "mssql", "connection_string": "Server=nowhere", "isolation": "snapshot", "timeout_s": 5, "max_rows": 10}
 ORACLE = {"kind": "oracle", "dsn": "nowhere:1521/X", "user": "reader", "password": "x", "mode": "thin", "isolation": "read_only", "timeout_s": 5, "max_rows": 10}
@@ -43,3 +53,49 @@ def test_a_publish_without_a_ledger_names_the_setting(database: dict[str, object
     found = open_database(GivenSettings(databases={"warehouse": database}), "warehouse")
     with pytest.raises(LookupError, match=r"has a write login but no ledger, which a publish writes in its transaction: set BASIS_DATABASES__WAREHOUSE__WRITE__LEDGER$"), found.writing():
         pass
+
+
+def test_a_rollback_that_fails_leaves_the_error_that_ended_the_transaction(caplog: pytest.LogCaptureFixture) -> None:
+    """After a call timeout breaks the connection, its rollback fails too; the timeout is what the caller must see."""
+
+    def broken() -> None:
+        msg = "DPY-4011: the database or network closed the connection"
+        raise ConnectionError(msg)
+
+    def read() -> None:
+        try:
+            msg = "DPY-4024: call timeout of 240000 ms exceeded"
+            raise TimeoutError(msg)
+        finally:
+            end_reading("warehouse", broken)
+
+    with caplog.at_level(logging.WARNING), pytest.raises(TimeoutError, match="call timeout"):
+        read()
+    assert [record.getMessage() for record in caplog.records] == ["could not roll back a transaction that only read; closing its connection"]
+
+
+def test_oracle_in_thick_mode_loads_its_client_libraries_from_the_folder_given(tmp_path: Path) -> None:
+    settings = OracleSettings.model_validate(ORACLE | {"mode": "thick", "client_lib_dir": tmp_path})
+
+    with pytest.raises(oracledb.DatabaseError, match=f"DPI-1047: Cannot locate .*{tmp_path}"):  # an empty folder: no client there
+        connect(settings, user=settings.user, password=settings.password.get_secret_value())
+
+
+@pytest.fixture
+def hung_database() -> Generator[str]:
+    """An address that accepts connections and never answers, as a hung database does."""
+    with socket.create_server(("127.0.0.1", 0)) as server:
+        yield f"127.0.0.1,{server.getsockname()[1]}"
+
+
+def test_a_login_the_database_never_answers_ends_at_its_timeout(hung_database: str) -> None:
+    """The login waits `timeout_s`, here 1 second, rather than the 30 seconds that are the most a login ever waits.
+    Oracle's login is bounded the same way, in a thread the read stops waiting for, which a test cannot tidy away."""
+    database = MSSQL | {"connection_string": f"Server=tcp:{hung_database};Database=X;UID=u;PWD=p", "timeout_s": 1}
+    found = open_database(GivenSettings(databases={"books": database}), "books")
+    start = time.monotonic()
+
+    with pytest.raises(mssql_python.OperationalError), found.statements(writes=False):
+        pass
+
+    assert time.monotonic() - start < 10

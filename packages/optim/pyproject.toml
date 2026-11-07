@@ -6,13 +6,13 @@ readme = "README.md"
 authors = [{ name = "Jacob Ragsdale", email = "jacobragsdale@protonmail.com" }]
 requires-python = ">=3.14"
 dependencies = [
+    # basis-core's databases, settings, logs, storage and run store; optim takes basis's own version when it releases
+    # with it (roadmap step 3.6), and depends on basis-core at exactly that version, as every basis package does
+    "basis-core==0.0.0",
     "cvxpy>=1.9.3",
-    "grimp>=3.17",
     "highspy>=1.15.1",
     "httpx>=0.28.1",
-    "mssql-python>=1.16.0",
     "numpy>=2.5.4",
-    "oracledb>=26.0.1",
     "pandas>=3.0.6",
     "pyarrow>=26.0.0",
     "pydantic>=2.14.1",
@@ -30,25 +30,15 @@ optim = "optim.pytest_plugin"
 [project.optional-dependencies]
 copt = ["coptpy>=8.0.7"]  # the licensed COPT solver; tests run it size-limited, without a license
 
+[tool.uv.sources]
+basis-core = { workspace = true }
+
 [build-system]
-requires = ["uv_build>=0.12.7,<0.13.0"]
+requires = ["uv_build>=0.13.6,<0.14"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-name = "optim"
-
-[dependency-groups]
-dev = [
-    "coptpy>=8.0.7",
-    "import-linter>=2.15",
-    "pandas-stubs>=3.0.5.260914",
-    "pre-commit>=4.7.0",
-    "pytest>=9.1.1",
-    "pytest-randomly>=5.0.0",
-    "ruff>=0.17.1",
-    "scipy-stubs>=1.18.1.1",
-    "ty>=0.0.89",
-]
 
 [tool.ruff]
 line-length = 200
@@ -71,11 +61,13 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "INP001"]  # pytest asserts; tests/ is not a package
+"tests/integration/**" = ["S101", "INP001", "S608"]  # builds SQL around the scratch table each test makes and names
 "src/optim/example/tests/**" = ["S101"]  # the example's tests, which each model's tests/ gets
 "src/optim/example/{model.py,rules/**}" = ["ARG001"]  # hooks and rules share their signatures, so most leave an argument unused
 "src/optim/templates/**" = ["INP001"]  # a model repo's files, which the generator copies
 
 [tool.ruff.lint.isort]
+known-first-party = ["basis"]  # basis-core, which this workspace builds beside optim, sorts with optim's own imports
 split-on-trailing-comma = false
 
 [tool.ruff.lint.mccabe]
@@ -84,31 +76,3 @@ max-complexity = 15
 [tool.ruff.format]
 docstring-code-format = true
 skip-magic-trailing-comma = true
-
-[tool.pytest.ini_options]
-addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration'"
-testpaths = ["tests", "src/optim/example"]
-pythonpath = ["tests"]  # test modules share `builders`
-xfail_strict = true  # An xfail that starts passing is a failure, not a silent pass.
-filterwarnings = [
-    "error",  # pandas 3 chained assignment only warns; the lost write is otherwise invisible.
-    # Add narrow, dated `ignore::` entries with a reason for third-party
-    # deprecations you do not control. Never widen this back to "default".
-]
-markers = [
-    "integration: needs a real database, container, or network; excluded from the default run",
-]
-
-[tool.coverage.run]
-branch = true  # Statement coverage hides the untaken half of every condition.
-source = ["src/optim"]  # coverage of tests/ is noise
-
-[tool.coverage.report]
-show_missing = true
-skip_covered = true
-exclude_also = [
-    "if TYPE_CHECKING:",
-    "raise NotImplementedError",
-    "@overload",
-]
-# Deliberately no fail_under: coverage is a diagnostic here, not a CI gate.

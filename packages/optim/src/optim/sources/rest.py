@@ -7,18 +7,28 @@ from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date
+from typing import Annotated
 
 import httpx
-from pydantic import HttpUrl, TypeAdapter
+from pydantic import Field, HttpUrl, TypeAdapter
 
-from optim.logs import ms_since
-from optim.sources import Columns, Param, SourceSettings, TooManyRowsError
+from basis.core.logs import ms_since
+from optim.schema import Model
+from optim.sources import Columns, Param, TooManyRowsError
 
 log = logging.getLogger(__name__)
 
 
-class ApiSettings(SourceSettings):
+class ApiSettings(Model):
+    """The API, and how hard a run may press it, how long it may take to answer, and how much it may return."""
+
     url: HttpUrl
+    max_concurrent: Annotated[int, Field(ge=1)]
+    """Calls this process has open to the API at once; the loader holds the rest."""
+    timeout_s: Annotated[int, Field(ge=1)]
+    """The deadline on every call."""
+    max_rows: Annotated[int, Field(ge=1)]
+    """The most records a call may return: one that returns more fails, rather than filling the run's memory."""
 
 
 def client(settings: ApiSettings) -> httpx.Client:

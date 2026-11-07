@@ -21,7 +21,22 @@ import mssql_python
 import polars as pl
 import pyarrow as pa
 
-from basis.core.databases.base import FETCH_ROWS, LEDGER_COLUMNS, Bind, Counts, LedgerEntry, TooManyRowsError, binds_named, check_count, for_writing, ledger_values, lower_cased, naive_in_zone, slices
+from basis.core.databases.base import (
+    FETCH_ROWS,
+    LEDGER_COLUMNS,
+    Bind,
+    Counts,
+    LedgerEntry,
+    TooManyRowsError,
+    binds_named,
+    check_count,
+    end_reading,
+    for_writing,
+    ledger_values,
+    lower_cased,
+    naive_in_zone,
+    slices,
+)
 from basis.core.destination import DestColumn, TableSpec
 from basis.core.interval import Interval
 from basis.core.logs import ms_since
@@ -119,8 +134,12 @@ class MssqlDatabase:
             try:
                 yield connection
             finally:
-                with closing(connection.cursor()) as cursor:
-                    cursor.execute("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION")
+                end_reading(self.name, lambda: _roll_back(connection))
+
+
+def _roll_back(connection: mssql_python.Connection) -> None:
+    with closing(connection.cursor()) as cursor:
+        cursor.execute("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION")
 
 
 @dataclass

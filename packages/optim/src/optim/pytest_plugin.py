@@ -8,6 +8,7 @@ write goes to the allowlist (`optim_e2e_writes`: the QA snapshot root and orders
 first portfolios from its `portfolios` dataset, and `QA.portfolios` picks portfolios by what they hold, with a
 read-only query, for a model that lists none."""
 
+import os
 import re
 import subprocess
 import sys
@@ -19,15 +20,15 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from optim import models
+from basis.core.databases.mssql import target_of
+from basis.core.settings import MssqlSettings
+from optim import models, snapshots
 from optim.context import open_context
 from optim.contract import LISTING, declared
 from optim.runs import today
-from optim.settings import Settings
-from optim.snapshots import read_results
+from optim.settings import Settings, refuse_renamed
+from optim.snapshots import Saved
 from optim.sources import Param, SourceName
-from optim.sources.mssql import target
-from optim.storage import Root
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -42,16 +43,22 @@ def pytest_configure(config: pytest.Config) -> None:
 
 def qa_problems(settings: Settings, *, markers: Sequence[str], writes: Sequence[str]) -> list[str]:
     """Why the environment is not safe for the e2e suite: a configured source or destination without a QA marker, or
-    a write outside the allowlist. None when it is."""
-    named = {"OPTIM_SNAPSHOT_ROOT": settings.snapshot_root or ""}
-    named |= {"OPTIM_CACHE_ROOT": settings.cache_root} if settings.cache_root else {}
-    named |= {"OPTIM_ORACLE__DSN": settings.oracle.dsn} if settings.oracle else {}
-    named |= {"OPTIM_MSSQL__CONNECTION_STRING": target(settings.mssql.connection_string.get_secret_value())} if settings.mssql else {}
-    named |= {"OPTIM_REST__URL": str(settings.rest.url)} if settings.rest else {}
-    if settings.orders:
-        named |= {"OPTIM_ORDERS__CONNECTION_STRING": target(settings.orders.connection_string.get_secret_value()), "OPTIM_ORDERS__TABLE": settings.orders.table}
+    a write outside the allowlist. None when it is. Every database the settings configure is checked, read and write
+    logins both, whether or not a model reads it."""
+    named = {"BASIS_SNAPSHOT_ROOT": settings.snapshot_root or ""}
+    named |= {"BASIS_OPTIM__CACHE_ROOT": settings.optim.cache_root} if settings.optim.cache_root is not None else {}
+    for name, database in settings.databases.items():
+        block = f"BASIS_DATABASES__{name.upper()}__"
+        if isinstance(database, MssqlSettings):
+            named[f"{block}CONNECTION_STRING"] = target_of(database.connection_string.get_secret_value())
+            if database.write is not None:
+                named[f"{block}WRITE__CONNECTION_STRING"] = target_of(database.write.connection_string.get_secret_value())
+        else:
+            named[f"{block}DSN"] = database.dsn
+    named |= {"BASIS_OPTIM__REST__URL": str(settings.optim.rest.url)} if settings.optim.rest is not None else {}
+    named |= {"BASIS_OPTIM__ORDERS__TABLE": settings.optim.orders.table} if settings.optim.orders is not None else {}
     problems = [f"{name} ({value}) contains none of the QA markers {list(markers)}" for name, value in named.items() if not any(m.lower() in value.lower() for m in markers)]
-    written = {name: value for name, value in named.items() if name in ("OPTIM_SNAPSHOT_ROOT", "OPTIM_CACHE_ROOT", "OPTIM_ORDERS__TABLE")}
+    written = {name: value for name, value in named.items() if name in ("BASIS_SNAPSHOT_ROOT", "BASIS_OPTIM__CACHE_ROOT", "BASIS_OPTIM__ORDERS__TABLE")}
     problems += [f"{name} ({value}) is not in optim_e2e_writes {list(writes)}" for name, value in written.items() if value not in writes]
     return problems
 
@@ -63,7 +70,7 @@ _READ_ONLY = re.compile(r"^\s*(--[^\n]*\n\s*|/\*.*?\*/\s*)*(SELECT|WITH)\b", re.
 class E2ERun:
     run_id: str
     exit_code: int
-    snapshot: Root
+    snapshot: Saved
 
 
 @dataclass(frozen=True)
@@ -103,20 +110,20 @@ class QA:
         if not (found := re.search(r"^run (\S+)$", ran.stdout, re.MULTILINE)):
             msg = f"optim run did not complete (exit {ran.returncode}):\n{ran.stderr[-4000:]}"
             raise AssertionError(msg)
-        return E2ERun(found.group(1), ran.returncode, self.settings.snapshots() / found.group(1))
+        return E2ERun(found.group(1), ran.returncode, snapshots.find([self.settings.snapshots()], found.group(1)))
 
     def replay(self, run: E2ERun) -> E2ERun:
         ran = subprocess.run([*self.command, "replay", run.run_id, "--label", "purpose=e2e"], cwd=self.root, capture_output=True, text=True, check=False)  # noqa: S603 -- the configured command
         if not (found := re.search(r"^run (\S+)$", ran.stdout, re.MULTILINE)):
             msg = f"optim replay did not complete (exit {ran.returncode}):\n{ran.stderr[-4000:]}"
             raise AssertionError(msg)
-        return E2ERun(found.group(1), ran.returncode, self.settings.snapshots() / found.group(1))
+        return E2ERun(found.group(1), ran.returncode, snapshots.find([self.settings.snapshots()], found.group(1)))
 
     def smoke(self, model: str, params: Path, portfolios: Sequence[str], *args: str) -> E2ERun:
         """Every model's smoke case: the run completes, each portfolio is accepted or rejected with reasons, and its
         replay gives the same trades for the solves that did not stop at a time limit."""
         ran = self.run(model, params, portfolios, *args)
-        results = read_results(ran.snapshot)
+        results = ran.snapshot.results()
         decisions = results["decisions"]
         if set(decisions["portfolio_id"]) != set(portfolios):
             msg = f"the run decided {sorted(decisions['portfolio_id'])}, not {sorted(portfolios)}"
@@ -125,7 +132,7 @@ class QA:
             msg = f"rejected without reasons: {sorted(silent)}"
             raise AssertionError(msg)
         timed_out = set(decisions.loc[decisions["stop"] == "limit", "portfolio_id"])
-        again = read_results(self.replay(ran).snapshot)["trades"]
+        again = self.replay(ran).snapshot.results()["trades"]
         key = ["portfolio_id", "security_id", "side", "quantity"]
         before, after = (frame.loc[~frame["portfolio_id"].isin(timed_out), key].sort_values(key).reset_index(drop=True) for frame in (results["trades"], again))
         pd.testing.assert_frame_equal(before, after, obj="trades, run then replayed")
@@ -134,7 +141,8 @@ class QA:
 
 @pytest.fixture(scope="session")
 def optim_qa(pytestconfig: pytest.Config) -> QA:
-    """The QA environment, from `OPTIM_*` settings, or a failure that says why it is not safe to run against."""
+    """The QA environment, from `BASIS_*` settings, or a failure that says why it is not safe to run against."""
+    refuse_renamed(os.environ)
     settings = Settings()
     markers, writes = pytestconfig.getini("optim_qa_markers"), pytestconfig.getini("optim_e2e_writes")
     if problems := qa_problems(settings, markers=markers, writes=writes):

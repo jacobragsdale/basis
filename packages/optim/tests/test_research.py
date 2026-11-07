@@ -7,15 +7,17 @@ from pathlib import Path
 
 import cvxpy as cp
 import pandas as pd
+import pyarrow as pa
 import pytest
-from builders import EXAMPLE, Clock, Rows, loader
+from fakes import EXAMPLE, Clock, Rows, loader, saved
 from toys.scarce import Supply
 
+from basis.core.storage import Root
 from optim import models, research
 from optim.cli import main
 from optim.datasets import HOLDINGS, SECURITIES
-from optim.runs import open_snapshot, run_model
-from optim.storage import Root
+from optim.runs import open_snapshot, read_snapshot, run_model
+from optim.snapshots import Manifest, Saved
 from optim.testing import AS_OF, CASH, frame
 
 SOURCE = Rows(
@@ -26,11 +28,11 @@ SOURCE = Rows(
 )
 
 
-def saved(tmp_path: Path, model: str, *, labels: dict[str, str] | None = None, **values: object) -> Root:
+def toy_run(tmp_path: Path, model: str, *, labels: dict[str, str] | None = None, **values: object) -> Saved:
     root = Root.at(tmp_path / "snapshots")
     (tmp_path / "params.json").write_text(json.dumps(values))
     ran = run_model(loader(SOURCE), root, models.load(model), tmp_path / "params.json", as_of_date=AS_OF, portfolio_ids=["P1", "P2", "P3"], labels=labels or {}, clock=Clock())
-    return root / ran.run_id
+    return saved(root, ran.run_id)
 
 
 def variants(tmp_path: Path, **files: dict[str, object]) -> list[Path]:
@@ -41,7 +43,7 @@ def variants(tmp_path: Path, **files: dict[str, object]) -> list[Path]:
 
 
 def test_a_sweep_decides_the_snapshot_once_per_variant_into_one_table(tmp_path: Path) -> None:
-    snapshot = open_snapshot(saved(tmp_path, "toys.basic"))
+    snapshot = read_snapshot(toy_run(tmp_path, "toys.basic"))
 
     table = research.sweep(snapshot, variants(tmp_path, a={"buy": "A"}, bad={"buy": "BAD"}, unsolved={"unsolved": ["P2"]}))
 
@@ -50,7 +52,7 @@ def test_a_sweep_decides_the_snapshot_once_per_variant_into_one_table(tmp_path: 
 
 
 def test_a_sweep_refuses_a_misspelled_variant_before_any_decides(tmp_path: Path) -> None:
-    snapshot = open_snapshot(saved(tmp_path, "toys.basic"))
+    snapshot = read_snapshot(toy_run(tmp_path, "toys.basic"))
 
     with pytest.raises(ValueError, match=r"bad\.json"):
         research.sweep(snapshot, variants(tmp_path, a={"buy": "A"}, bad={"bye": "A"}))
@@ -58,22 +60,23 @@ def test_a_sweep_refuses_a_misspelled_variant_before_any_decides(tmp_path: Path)
 
 def test_regress_lists_every_trade_and_status_that_today_s_code_changes(tmp_path: Path) -> None:
     """The saved run is edited as an older version of the model would have decided it: P1 bought more of A."""
-    snapshot = saved(tmp_path, "toys.basic", labels={"purpose": "production"})
-    saved(tmp_path, "toys.basic", labels={"purpose": "research"})
-    trades = pd.read_parquet(Path(snapshot.path) / "trades.parquet")
+    snapshot = toy_run(tmp_path, "toys.basic", labels={"purpose": "production"})
+    toy_run(tmp_path, "toys.basic", labels={"purpose": "research"})
+    trades = snapshot.results()["trades"]
     trades.loc[trades["portfolio_id"] == "P1", "quantity"] = 2000.0
-    trades.to_parquet(Path(snapshot.path) / "trades.parquet", index=False)
+    edited = snapshot.info.datasets | {"results/trades": snapshot.store.put(pa.Table.from_pandas(trades, preserve_index=False))}
+    snapshot.path.write_bytes(Manifest.model_validate(snapshot.info.model_dump() | {"datasets": edited}).model_dump_json().encode())
 
-    changes = research.regress(models.load("toys.basic"), snapshot.parent, labels={"purpose": "production"})
+    changes = research.regress(models.load("toys.basic"), snapshot.store.root, labels={"purpose": "production"})
 
     assert changes[["portfolio_id", "security_id", "side", "before", "after"]].to_dict("records") == [{"portfolio_id": "P1", "security_id": "A", "side": "buy", "before": 2000.0, "after": 1000.0}]
-    assert research.regress(models.load("toys.basic"), snapshot.parent, labels={"purpose": "research"}).empty
+    assert research.regress(models.load("toys.basic"), snapshot.store.root, labels={"purpose": "research"}).empty
 
 
 def test_one_portfolio_decided_from_python_hands_back_what_it_saw_and_the_problem_it_solved(tmp_path: Path) -> None:
     ran = run_model(loader(Rows({})), Root.at(tmp_path), models.load("optim.example.model"), EXAMPLE / "params" / "default.json", as_of_date=date(2026, 10, 16), data_dir=EXAMPLE / "tests" / "fixture")
 
-    trial = research.trial(open_snapshot(Root.at(tmp_path) / ran.run_id), "P1")
+    trial = research.trial(open_snapshot(ran.run_id, snapshots=tmp_path), "P1")  # by its id, as a quant opens one
 
     assert isinstance(trial.problem, cp.Problem)
     assert trial.problem.status == "optimal"
@@ -85,7 +88,7 @@ def test_one_portfolio_decided_from_python_hands_back_what_it_saw_and_the_proble
 
 def test_one_portfolio_of_a_model_that_reserves_decides_after_those_before_it(tmp_path: Path) -> None:
     """Largest cash first: P1 takes 1,000,000 of the 1,100,000, P3 80,000, and P2 the 20,000 left."""
-    trial = research.trial(open_snapshot(saved(tmp_path, "toys.scarce", supply=1_100_000.0)), "P2")
+    trial = research.trial(read_snapshot(toy_run(tmp_path, "toys.scarce", supply=1_100_000.0)), "P2")
 
     assert trial.market == Supply(left=20_000.0)
     assert trial.outcome.decision is not None
@@ -110,8 +113,8 @@ def test_describe_tells_an_agent_what_a_model_takes_reads_and_reports(capsys: py
 
 
 def test_the_sweep_command_writes_its_table(tmp_path: Path) -> None:
-    snapshot = saved(tmp_path, "toys.basic")
+    snapshot = toy_run(tmp_path, "toys.basic")
     variants(tmp_path, a={"buy": "A"})
 
-    assert main(["sweep", snapshot.path, str(tmp_path / "variants"), "--out", str(tmp_path / "sweep.csv")]) == 0
+    assert main(["sweep", snapshot.path.path, str(tmp_path / "variants"), "--out", str(tmp_path / "sweep.csv")]) == 0
     assert pd.read_csv(tmp_path / "sweep.csv")["variant"].tolist() == ["a", "a", "a"]

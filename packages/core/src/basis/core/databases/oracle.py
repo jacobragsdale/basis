@@ -23,7 +23,22 @@ import oracledb
 import polars as pl
 import pyarrow as pa
 
-from basis.core.databases.base import FETCH_ROWS, LEDGER_COLUMNS, Bind, Counts, LedgerEntry, TooManyRowsError, binds_named, check_count, for_writing, ledger_values, lower_cased, naive_in_zone, slices
+from basis.core.databases.base import (
+    FETCH_ROWS,
+    LEDGER_COLUMNS,
+    Bind,
+    Counts,
+    LedgerEntry,
+    TooManyRowsError,
+    binds_named,
+    check_count,
+    end_reading,
+    for_writing,
+    ledger_values,
+    lower_cased,
+    naive_in_zone,
+    slices,
+)
 from basis.core.destination import DestColumn, TableSpec
 from basis.core.interval import Interval
 from basis.core.logs import ms_since
@@ -122,7 +137,7 @@ class OracleDatabase:
             try:
                 yield connection
             finally:
-                connection.rollback()
+                end_reading(self.name, connection.rollback)
 
 
 @dataclass

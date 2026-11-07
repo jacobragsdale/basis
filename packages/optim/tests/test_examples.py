@@ -6,16 +6,15 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from builders import EXAMPLE, Rows, loader
+from fakes import EXAMPLE, Rows, loader, saved
 
+from basis.core.storage import Root
 from optim import Decision, models
 from optim.cli import main
 from optim.example import model, prep
 from optim.example.datasets.controls import CONTROLS
 from optim.example.tests.builders import MARKET, params, portfolio
 from optim.runs import replay_run, run_model
-from optim.snapshots import read_info, read_results
-from optim.storage import Root
 from optim.testing import AS_OF, frame
 
 EXAMPLE_MODEL = models.load("optim.example.model")
@@ -32,7 +31,7 @@ def test_the_example_rebalances_within_its_limits_controls_and_mandates(tmp_path
     own floor of AA- rules out B, and its mandate caps Financials, B and C, at 4%."""
     root, run_id = run_example(tmp_path)
 
-    results = read_results(root / run_id)
+    results = saved(root, run_id).results()
     trades = results["trades"].set_index(["portfolio_id", "security_id"])["quantity"]
 
     assert results["decisions"]["status"].tolist() == ["accepted", "accepted"]
@@ -43,9 +42,9 @@ def test_the_example_rebalances_within_its_limits_controls_and_mandates(tmp_path
 def test_the_example_replays_to_the_same_trades(tmp_path: Path) -> None:
     root, run_id = run_example(tmp_path)
 
-    replayed = replay_run(root / run_id, root)
+    replayed = replay_run(saved(root, run_id), root)
 
-    assert read_results(root / replayed.run_id)["trades"].equals(read_results(root / run_id)["trades"])
+    assert saved(root, replayed.run_id).results()["trades"].equals(saved(root, run_id).results()["trades"])
 
 
 def decide(*bonds: dict[str, object], **datasets: pd.DataFrame) -> Decision:
@@ -87,9 +86,9 @@ def test_a_portfolio_with_nothing_it_may_hold_or_buy_decides_nothing() -> None:
 
 def test_optim_run_on_the_fixture_decides_as_of_its_date(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """As a run from Python does: the fixture's rows are of the date in its `fixture.json`."""
-    monkeypatch.setenv("OPTIM_SNAPSHOT_ROOT", str(tmp_path))
+    monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", str(tmp_path))
 
     assert main(["run", "optim.example.model", "--params", str(EXAMPLE / "params" / "default.json"), "--data", str(EXAMPLE / "tests" / "fixture")]) == 0
 
     run_id = capsys.readouterr().out.splitlines()[0].removeprefix("run ")
-    assert read_info(Root.at(tmp_path) / run_id).as_of_date == AS_OF
+    assert saved(Root.at(tmp_path), run_id).info.as_of_date == AS_OF

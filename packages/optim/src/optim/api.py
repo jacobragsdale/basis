@@ -6,8 +6,8 @@ takes the model's module first, `from models.income import model`, and runs as `
   or a folder above it, up to the repo's root.
 - The settings file's variables are set for the call alone and restored after it, so calls with different settings
   files do not mix, and logs are text unless the settings say otherwise.
-- The snapshot is saved in the repo's `snapshots/`, unless `snapshots` says elsewhere; delete the folder whenever you
-  like.
+- The run is saved in the repo's `snapshots/`, a run store of its own, unless `snapshots` says elsewhere; delete the
+  folder whenever you like.
 - No orders are written, whatever the settings file configures: only `optim run` writes them.
 
 An error raises, with its traceback, so a debugger stops where it surfaced; a hook's error rejects its portfolio alone,
@@ -24,13 +24,14 @@ from types import ModuleType
 import pandas as pd
 from dotenv import dotenv_values
 
-from optim import logs, models, research
+from basis.core import logs
+from basis.core.storage import Root
+from optim import models, research, snapshots
 from optim.context import open_context
 from optim.models import LoadedModel
-from optim.runs import NO_LABELS, Run, datasets_of, fixture_date, open_snapshot, replay_run, run_model, today
-from optim.settings import Settings
-from optim.snapshots import read_info
-from optim.storage import Root
+from optim.runs import NO_LABELS, Run, datasets_of, fixture_date, read_snapshot, replay_run, run_model, today
+from optim.settings import Settings, refuse_renamed
+from optim.snapshots import Saved
 
 
 def run(
@@ -55,7 +56,7 @@ def run(
     - `env`: the settings file, which says where each dataset's source is; None reads the process's environment alone.
     - `data`: a folder whose files, `NAME.csv` or `NAME.parquet`, replace those datasets' sources, such as
       `tests/fixture`.
-    - `workers`: processes that decide; None is `OPTIM_WORKERS`, or 1, which decides in this process.
+    - `workers`: processes that decide; None is `BASIS_OPTIM__WORKERS`, or 1, which decides in this process.
     - `snapshots`: where to save the run, a path or a URL; None is the repo's `snapshots/`."""
     loaded = _loaded(model)
     data_dir = loaded.directory / data if data is not None else None
@@ -76,7 +77,7 @@ def run(
                 as_of_date=as_of_date,
                 portfolio_ids=portfolios,
                 data_dir=data_dir,
-                workers=workers or settings.workers,
+                workers=workers or settings.optim.workers,
                 labels=labels,
             )
     sys.stdout.write(ran.summary())
@@ -96,14 +97,14 @@ def replay(
 ) -> Run:
     """Decide a saved run of `model` again, with the code you have now and other params if given, save it as a new run,
     print what `optim replay` prints, and return it. `run` is a run's id, in the repo's `snapshots/` or under the
-    settings file's `OPTIM_SNAPSHOT_ROOT`, such as production's, or a snapshot's path or URL. `portfolios` decides
-    those alone; for a model that reserves, the portfolios before them in its order decide again too."""
+    settings file's `BASIS_SNAPSHOT_ROOT`, such as production's, or the path or URL of its manifest. `portfolios`
+    decides those alone; for a model that reserves, the portfolios before them in its order decide again too."""
     loaded = _loaded(model)
     root = _snapshot_root(loaded.directory, snapshots)
     with _environment(_settings_file(loaded.directory, env)):
         settings = Settings()
         snapshot = _saved(loaded, run, root, settings)
-        ran = replay_run(snapshot, root, params_file=loaded.directory / params if params else None, portfolio_ids=portfolios, workers=workers or settings.workers, labels=labels)
+        ran = replay_run(snapshot, root, params_file=loaded.directory / params if params is not None else None, portfolio_ids=portfolios, workers=workers or settings.optim.workers, labels=labels)
     sys.stdout.write(ran.summary())
     return ran
 
@@ -115,8 +116,8 @@ def sweep(model: ModuleType, run: str, *, params: Sequence[str | Path], env: str
     loaded = _loaded(model)
     with _environment(_settings_file(loaded.directory, env)):
         settings = Settings()
-        snapshot = open_snapshot(_saved(loaded, run, _snapshot_root(loaded.directory, snapshots), settings))
-        return research.sweep(snapshot, [loaded.directory / path for path in params], workers=workers or settings.workers)
+        snapshot = read_snapshot(_saved(loaded, run, _snapshot_root(loaded.directory, snapshots), settings))
+        return research.sweep(snapshot, [loaded.directory / path for path in params], workers=workers or settings.optim.workers)
 
 
 def _loaded(model: ModuleType) -> LoadedModel:
@@ -142,9 +143,11 @@ def _environment(settings_file: Path | None) -> Generator[None]:
     the environment as it was after it. Worker processes the run starts inherit them."""
     saved = dict(os.environ)
     os.environ.update({key: value for key, value in (dotenv_values(settings_file) if settings_file else {}).items() if value is not None})
-    os.environ.setdefault("OPTIM_LOG_FORMAT", "text")
-    logs.setup()
+    os.environ.setdefault("BASIS_LOG_FORMAT", "text")  # set, rather than setup's default, so the run's worker processes read it too
     try:
+        logs.include("optim")
+        logs.setup()
+        refuse_renamed(os.environ)
         yield
     finally:
         os.environ.clear()
@@ -152,24 +155,27 @@ def _environment(settings_file: Path | None) -> Generator[None]:
 
 
 def _snapshot_root(folder: Path, snapshots: str | Path | None) -> Root:
-    """`snapshots`, or else the repo's `snapshots/`: the folder beside the nearest `pyproject.toml` above the model's."""
+    """The run store at `snapshots`, or else the repo's `snapshots/`: the folder beside the nearest `pyproject.toml`
+    above the model's."""
     if snapshots is not None:
         return Root.at(snapshots if "://" in str(snapshots) else folder / snapshots)
     repo = next((directory for directory in (folder, *folder.parents) if (directory / "pyproject.toml").exists()), Path.cwd())
     return Root.at(repo / "snapshots")
 
 
-def _saved(model: LoadedModel, run: str, local: Root, settings: Settings) -> Root:
-    """The snapshot `run` names, which must be of `model`: a path or URL, or a run's id in `local` or under
-    `OPTIM_SNAPSHOT_ROOT`."""
+def _saved(model: LoadedModel, run: str, local: Root, settings: Settings) -> Saved:
+    """The run `run` names, which must be of `model`: its manifest's path or URL, or its id in `local` or under
+    `BASIS_SNAPSHOT_ROOT`."""
     if "/" in run or "\\" in run:
-        snapshot = Root.at(run if "://" in run else model.directory / run)
+        saved = snapshots.read(Root.at(run if "://" in run else model.directory / run))
     else:
-        roots = [local, *([Root.at(settings.snapshot_root)] if settings.snapshot_root else [])]
-        if (snapshot := next((root / run for root in roots if (root / run / "run.json").exists()), None)) is None:
-            msg = f"no run {run} in {' or '.join(root.location for root in roots)}: is OPTIM_SNAPSHOT_ROOT set in the settings file?"
-            raise LookupError(msg)
-    if (saved := read_info(snapshot).model).module != model.module:
-        msg = f"{snapshot.location} is a run of {saved.name} ({saved.module}), not of {model.name}"
+        roots = [local, *([Root.at(settings.snapshot_root)] if settings.snapshot_root is not None else [])]
+        try:
+            saved = snapshots.find(roots, run)
+        except LookupError as error:
+            error.add_note("is BASIS_SNAPSHOT_ROOT set in the settings file?")
+            raise
+    if (of := saved.info.model).module != model.module:
+        msg = f"run {saved.info.run_id} is a run of {of.name} ({of.module}), not of {model.name}"
         raise ValueError(msg)
-    return snapshot
+    return saved

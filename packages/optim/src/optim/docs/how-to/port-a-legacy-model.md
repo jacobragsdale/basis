@@ -148,7 +148,7 @@ To sanity-check the port:
    the column and the row. Press Run: the run prints its id and a row per portfolio.
 3. Compare each portfolio's outcomes in `results.decisions` (`turnover`, `cash` and `trades`, among others) and
    `results.metrics` (the model's own) with the old system's, where it reports them. A rejected portfolio's reasons are
-   in `results.reasons`. The same tables are in the repo's `snapshots/RUN_ID/`; the
+   in `results.reasons`. The same tables are in the run's snapshot, in the repo's `snapshots/`; the
    [snapshot reference](../reference.md#snapshots) lists every column.
 4. Optional: for a portfolio with a large gap, diff its trades with the old system's, by security. Export them as
    `old/trades.csv`, with `portfolio_id`, `security_id`, `side` (`buy` or `sell`) and `quantity` in the holdings'

@@ -20,14 +20,14 @@ from typing import Literal, Self
 
 import pandas as pd
 
+from basis.core.logs import brief, ms_since, timed, to_json, utc_now
 from optim.contract import LISTING
 from optim.data.cache import Cache
 from optim.data.dataset import Dataset
 from optim.data.frames import empty_frame
-from optim.logs import brief, ms_since, timed, to_json, utc_now
 from optim.schema import Model
-from optim.sources import Param, Source, SourceName
-from optim.sources.sql import read_sql
+from optim.sources import Param, Source, SourceName, is_database
+from optim.sources.database import read_sql
 
 log = logging.getLogger(__name__)
 _stop: ContextVar[threading.Event | None] = ContextVar("_stop", default=None)  # set when a call in a `TaskGroup` fails
@@ -71,7 +71,7 @@ class TaskGroup:
 
 
 class DatasetRead(Model):
-    """How a run got one dataset, as its snapshot's `run.json` records it."""
+    """How a run got one dataset, as its manifest records it under `reads`."""
 
     source: str
     """Where it was read from: a source's name, or for a file, `file:` and its path."""
@@ -96,7 +96,7 @@ class Reads:
                 self._by_dataset[dataset] = read
 
     def by_dataset(self) -> dict[str, DatasetRead]:
-        """By dataset name, so a run's `run.json` lists them in the same order whichever load finished first."""
+        """By dataset name, so a run's manifest lists them in the same order whichever load finished first."""
         with self._lock:
             return dict(sorted(self._by_dataset.items()))
 
@@ -165,7 +165,7 @@ class Loader:
         whether all of them did."""
         loader = replace(self, refresh=True)
         with ThreadPoolExecutor() as pool:
-            futures = {pool.submit(loader.load, d, as_of_date=as_of_date): d.name for d in datasets if d.cache}
+            futures = {pool.submit(loader.load, d, as_of_date=as_of_date): d.name for d in datasets if d.cache is not None}
         failed = [(name, error) for future, name in futures.items() if (error := future.exception())]
         for name, error in failed:
             log.error("could not warm %s", name, exc_info=error)
@@ -206,7 +206,8 @@ class Loader:
 def _configured(sources: Mapping[SourceName, Source], name: SourceName, *, reader: str = "a dataset read per portfolio") -> Source:
     """The source, or an error that names the settings it needs."""
     if (source := sources.get(name)) is None:
-        msg = f"{reader} reads from {name}, which is not configured: set OPTIM_{name.upper()}__* (see .env.example)"
+        needs = f"BASIS_DATABASES__{name.upper()}__* and BASIS_OPTIM__DATABASES__{name.upper()}__MAX_CONCURRENT" if is_database(name) else f"BASIS_OPTIM__{name.upper()}__*"
+        msg = f"{reader} reads from {name}, which is not configured: set {needs} (see .env.example)"
         raise LookupError(msg)
     return source
 
@@ -218,7 +219,7 @@ def _skip_if_stopped() -> None:
 
 def _cache_key(dataset: Dataset, params: Mapping[str, Param]) -> str:
     """Changes whenever the params, the SQL or the row schema change, so a deploy never reads what older code cached."""
-    query = read_sql(str(dataset.query)) if dataset.source in ("oracle", "mssql") else str(dataset.query)  # a REST path is keyed as given
+    query = read_sql(str(dataset.query)) if is_database(dataset.source) else str(dataset.query)  # a REST path or a file is keyed as given
     payload = json.dumps([json.dumps(dataset.row.model_json_schema(), sort_keys=True), query, params], sort_keys=True, default=str)
     return f"{dataset.name}/{hashlib.sha256(payload.encode()).hexdigest()[:16]}"  # no `:`, which Windows refuses in a file name
 
@@ -245,7 +246,7 @@ def load_data(loader: Loader, datasets: Mapping[str, Dataset], as_of_date: date,
         with TaskGroup() as group:  # in a thread, as every load is: the main thread waits in Python, where a stop signal reaches it
             first = group.submit(loader.load, listing, as_of_date=as_of_date)
         listed[listing.name] = first.result()
-        portfolio_ids, whole = list(dict.fromkeys(listed[listing.name]["portfolio_id"])), [dataset for dataset in whole if dataset is not listing]
+        portfolio_ids, whole = list(dict.fromkeys(str(portfolio_id) for portfolio_id in listed[listing.name]["portfolio_id"])), [dataset for dataset in whole if dataset is not listing]
     with timed(log, "loaded data", as_of_date=as_of_date, portfolios=len(portfolio_ids)), TaskGroup() as group:
         market = group.submit(loader.load_all, *whole, as_of_date=as_of_date)
         batches = [group.submit(_load_batch, loader, per_portfolio, batch, as_of_date) for batch in batched(portfolio_ids, BATCH, strict=False)]

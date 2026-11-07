@@ -21,7 +21,6 @@ class Row(Model):
 
 
 Id = Annotated[str, StringConstraints(min_length=1, max_length=64)]  # a key from a source system: security, portfolio, sleeve
-RunId = Annotated[str, StringConstraints(pattern=r"^[0-9A-Za-z][0-9A-Za-z._-]{0,127}$")]  # names a snapshot directory
 Cusip = Annotated[str, StringConstraints(pattern=r"^[0-9A-Z*@#]{8}[0-9]$")]
 Isin = Annotated[str, StringConstraints(pattern=r"^[A-Z]{2}[0-9A-Z]{9}[0-9]$")]
 Currency = Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]  # ISO 4217

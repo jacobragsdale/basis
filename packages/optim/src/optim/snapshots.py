@@ -1,48 +1,58 @@
 """A snapshot of every run: what it was asked, the datasets it loaded and every decision, so any decision can be
-explained and replayed. One directory per run under the snapshot root, holding `run.json`, a Parquet file per result
-table, and `inputs/`, a Parquet file per dataset exactly as loaded. What a model derived from those is not saved:
-replay derives it again with the same code. `RunInfo` is `run.json`; the result tables' row models are below."""
+explained and replayed. Runs are kept in basis-core's run store (`basis.core.storage.Store`), under the package
+`optim`: each run a manifest, `runs/optim/MODEL/RUN_ID.json`, that holds its record (`RunInfo`) and names each dataset
+it saved by the hash of its object, `objects/HASH.parquet`, which the store holds once however many runs save it:
+
+    inputs/NAME       each dataset exactly as loaded
+    results/NAME      the result tables: decisions, trades, reasons and metrics
+
+`MODEL` is the model's name as the run gave it. What a model derived from its inputs is not saved: replay derives it
+again with the same code. The objects are written first and the manifest last, so a reader never sees a run whose
+datasets are missing. The result tables' row models are below."""
 
 import logging
 import subprocess
-import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Literal, Self
+from typing import Annotated, Literal, Self, cast
 
 import pandas as pd
-from pydantic import AwareDatetime, JsonValue
+import pyarrow as pa
+from pydantic import AwareDatetime, Field, JsonValue
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from basis.core.storage import DIGEST, Root, Store
 from optim.data.dataset import Dataset
 from optim.data.frames import conform, to_columns
 from optim.data.loader import DatasetRead
 from optim.decide import Outcome
 from optim.schema import Id, Model, Row
-from optim.storage import Root
 
 log = logging.getLogger(__name__)
+PACKAGE = "optim"
+"""The part whose runs these are, which names their folder in the store."""
 
 
 class _Built(BaseSettings):
     """What an image says about itself: the commit, baked in at build (`--build-arg GIT_SHA`), and the image, which the
     scheduler sets."""
 
-    model_config = SettingsConfigDict(env_prefix="OPTIM_", extra="ignore", frozen=True)
+    model_config = SettingsConfigDict(env_prefix="BASIS_", extra="ignore", frozen=True)
 
     git_sha: str | None = None
     image: str | None = None
 
 
 class Code(Model):
-    """The model's code a run ran, as `run.json` records it."""
+    """The model's code a run ran, as its manifest records it."""
 
     git_sha: str | None
-    """The commit: `OPTIM_GIT_SHA`, baked into the image, or else the HEAD of the checkout the model's module is in.
+    """The commit: `BASIS_GIT_SHA`, baked into the image, or else the HEAD of the checkout the model's module is in.
     Null when neither is known."""
     image: str | None
-    """The image, from `OPTIM_IMAGE`. Null outside an image."""
+    """The image, from `BASIS_IMAGE`. Null outside an image."""
     dirty: bool | None
     """Whether the checkout had changes not yet committed, so `git_sha` is not the whole story. Null in an image."""
 
@@ -81,11 +91,11 @@ class Replayed(Model):
 
 
 class RunInfo(Model):
-    """A snapshot's `run.json`: what the run was asked, with which code and data, and when. It holds nothing the
-    snapshot's other files hold. A field added after 0.1.0 has a default, so older snapshots still load."""
+    """A run's record, in its manifest: what the run was asked, with which code and data, and when. It holds nothing
+    the run's datasets hold. A field added from here on has a default, so older runs still load."""
 
     run_id: str
-    """A UUIDv7, which names the directory and sorts by when runs started."""
+    """A UUIDv7, which names the manifest and sorts by when runs started."""
     optim_version: str
     model: ModelInfo
     as_of_date: date
@@ -106,7 +116,7 @@ class RunInfo(Model):
     """When every dataset had loaded; for a replay, when its snapshot had been read."""
     finished_at: AwareDatetime
     """When the last decision was made, just before the snapshot was written."""
-    datasets: dict[str, DatasetRead] | None
+    reads: dict[str, DatasetRead] | None = None
     """Where each dataset was read from, and when. Null for a replay, whose data is the run's it replays."""
     order: list[Id] | None = None
     """For a model that reserves, the order its portfolios decided in, one at a time; null when they decided at once."""
@@ -119,7 +129,7 @@ class DecisionRow(Row):
 
     portfolio_id: Id
     status: Literal["accepted", "rejected"]
-    """`accepted`: it may trade. `rejected`: `reasons.parquet` says why not."""
+    """`accepted`: it may trade. `rejected`: the `reasons` table says why not."""
     trades: int
     value: float | None
     """The portfolio's value before trading, cash included, at each security's unit value."""
@@ -200,50 +210,101 @@ def result_frames(outcomes: Sequence[Outcome]) -> dict[str, pd.DataFrame]:
     }
 
 
-def save(root: Root, info: RunInfo, inputs: Mapping[str, pd.DataFrame], outcomes: Sequence[Outcome]) -> Root:
-    """Write `root/RUN_ID/`. The directory appears only once it is complete: it is written under a hidden name and
-    renamed. `inputs` are the datasets the run loaded, by name."""
-    # writes every dataset every run; store each once per content hash if snapshots grow too fast
-    partial, path = root / f".{info.run_id}.{uuid.uuid4().hex}.partial", root / info.run_id
-    (partial / "run.json").write_bytes(info.model_dump_json(indent=2).encode())
-    for name, frame in ({f"inputs/{name}": frame for name, frame in inputs.items()} | result_frames(outcomes)).items():
-        (partial / f"{name}.parquet").write_frame(frame)
-    partial.move_to(path)
-    log.info("saved snapshot %s", path.location)
-    return path
+RESULTS: dict[str, type[Row]] = {"decisions": DecisionRow, "trades": TradeRow, "reasons": ReasonRow, "metrics": MetricRow}
 
 
-def read_info(snapshot: Root) -> RunInfo:
-    if not (snapshot / "run.json").exists():
-        msg = f"{snapshot.location} has no run.json: it is not a snapshot"
-        raise FileNotFoundError(msg)
+class Manifest(RunInfo):
+    """A run as the store keeps it: its record, and the datasets it saved."""
+
+    datasets: dict[str, Annotated[str, Field(pattern=f"^{DIGEST.pattern}$")]]
+    """Each dataset the run saved, `inputs/NAME` and `results/NAME`, by its object's hash."""
+
+
+@dataclass(frozen=True)
+class Saved:
+    """A saved run, its manifest read once."""
+
+    store: Store
+    path: Root
+    """Where its manifest is."""
+    info: Manifest
+
+    def inputs(self, datasets: Mapping[str, Dataset]) -> dict[str, pd.DataFrame]:
+        """The datasets the run loaded, by name, each validated as a load validates it, so a run saved before a model
+        changed a dataset's row model fails here, naming the dataset and the column."""
+        frames = {}
+        for dataset in datasets.values():
+            if (found := self.info.datasets.get(f"inputs/{dataset.name}")) is None:
+                msg = f"run {self.info.run_id} has no {dataset.name} dataset: it was saved before the model read it"
+                raise FileNotFoundError(msg)
+            try:
+                frames[dataset.name] = dataset.to_frame(to_columns(self._frame(found)))
+            except ValueError as error:
+                error.add_note(f"while reading run {self.info.run_id}'s {dataset.name}, {self.store.object(found).location}")
+                raise
+        return frames
+
+    def results(self) -> dict[str, pd.DataFrame]:
+        """The run's result tables, by name, `decisions`, `trades`, `reasons` and `metrics`, typed as the run wrote them."""
+        return {name: conform(row, [self._frame(self.info.datasets[f"results/{name}"])], name=name) for name, row in RESULTS.items()}
+
+    def _frame(self, digest: str) -> pd.DataFrame:
+        return cast("pd.DataFrame", self.store.object(digest).read_table().to_pandas())  # pyarrow is untyped
+
+
+def save(root: Root, info: RunInfo, inputs: Mapping[str, pd.DataFrame], outcomes: Sequence[Outcome]) -> Saved:
+    """Save a new run in the store at `root`: each dataset the store does not hold yet, then its manifest. `inputs` are
+    the datasets the run loaded, by name."""
+    store = Store(root)
+    path = store.manifest(PACKAGE, info.model.name, info.run_id)
+    if path.exists():
+        msg = f"run {info.run_id} is in the store already, at {path.location}: a new run takes a new id"
+        raise FileExistsError(msg)
+    frames = {f"inputs/{name}": frame for name, frame in inputs.items()} | {f"results/{name}": frame for name, frame in result_frames(outcomes).items()}
+    manifest = Manifest.model_validate(info.model_dump() | {"datasets": {key: store.put(_table(frame)) for key, frame in frames.items()}})
+    path.write_bytes(manifest.model_dump_json(indent=2).encode())
+    log.info("saved run %s", path.location)
+    return Saved(store, path, manifest)
+
+
+def _table(frame: pd.DataFrame) -> pa.Table:
+    """A frame as the store hashes it: its columns alone, without pandas' own metadata, which names pandas' version and
+    would store the same data once per version. Every frame is validated again as it is read back."""
+    return pa.Table.from_pandas(frame, preserve_index=False).replace_schema_metadata(None)
+
+
+def read(path: Root) -> Saved:
+    """The run whose manifest is at `path`, `ROOT/runs/optim/MODEL/RUN_ID.json`, in the store at `ROOT`."""
+    package = path.parent.parent
+    if not path.name.endswith(".json") or package.name != PACKAGE or package.parent.name != "runs":
+        msg = f"{path.location} is not a run of optim's: give a run's id, or the path of its manifest, ROOT/runs/{PACKAGE}/MODEL/RUN_ID.json"
+        raise LookupError(msg)
     try:
-        return RunInfo.model_validate_json((snapshot / "run.json").read_bytes())
+        manifest = Manifest.model_validate_json(path.read_bytes())
     except ValueError as error:
-        error.add_note(f"while reading {snapshot.location}/run.json, which an older optim may have written")
+        error.add_note(f"while reading the manifest {path.location}, which another version of optim may have written")
         raise
+    return Saved(Store(package.parent.parent), path, manifest)
 
 
-def read_inputs(snapshot: Root, datasets: Mapping[str, Dataset]) -> dict[str, pd.DataFrame]:
-    """The datasets a run loaded, by name, each validated as a load validates it, so a snapshot saved before a model
-    changed a dataset's row model fails here, naming the dataset and the column."""
-    frames = {}
-    for dataset in datasets.values():
-        file = snapshot / "inputs" / f"{dataset.name}.parquet"
-        if not file.exists():
-            msg = f"{snapshot.location} has no {dataset.name} dataset: the run was saved before the model read it"
-            raise FileNotFoundError(msg)
+def find(roots: Sequence[Root], run_id: str) -> Saved:
+    """The run with id `run_id`, from the first store of `roots` that holds it."""
+    for root in roots:
         try:
-            frames[dataset.name] = dataset.to_frame(to_columns(file.read_frame()[0]))
-        except ValueError as error:
-            error.add_note(f"while reading {file.location}")
-            raise
-    return frames
+            path = Store(root).find(run_id)
+        except LookupError:
+            continue
+        return read(path)
+    msg = f"no run {run_id} in {' or '.join(root.location for root in roots)}"
+    raise LookupError(msg)
 
 
-def read_results(snapshot: Root) -> dict[str, pd.DataFrame]:
-    """A snapshot's result tables, by name: `decisions`, `trades`, `reasons` and `metrics`."""
-    return {name: (snapshot / f"{name}.parquet").read_frame()[0] for name in ("decisions", "trades", "reasons", "metrics")}
+def runs_of(root: Root, names: Iterable[str]) -> Iterator[Saved]:
+    """The runs saved under any of `names`, a model's name and its module path, newest first, each manifest read only
+    when it is reached: run ids sort by when their runs started."""
+    store = Store(root)
+    paths = sorted((path for name in dict.fromkeys(names) for path in store.manifests(PACKAGE, name)), key=lambda path: path.name, reverse=True)
+    return (read(path) for path in paths)
 
 
 def checkout(where: Path) -> tuple[str | None, bool | None]:

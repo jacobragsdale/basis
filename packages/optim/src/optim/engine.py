@@ -14,7 +14,7 @@ from concurrent.futures.process import BrokenProcessPool
 from functools import partial
 from typing import cast
 
-from optim import logs
+from basis.core import logs
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ def each_portfolio[S, R](work: Callable[[S, str], R], state: S, portfolio_ids: S
         for i, result in zip(lost, _in_pool(work, state, [portfolio_ids[i] for i in lost], workers, failed), strict=True):
             results[i] = result
     if lost := [portfolio_ids[i] for i, result in enumerate(results) if result is None]:
-        log.error("a worker process died again, so %d portfolios have no result; give the run more memory or fewer OPTIM_WORKERS", len(lost), extra={"examples": lost[:20]})
+        log.error("a worker process died again, so %d portfolios have no result; give the run more memory or fewer BASIS_OPTIM__WORKERS", len(lost), extra={"examples": lost[:20]})
     return [failed(portfolio_id, "error: its worker process died") if result is None else result for portfolio_id, result in zip(portfolio_ids, results, strict=True)]
 
 
@@ -69,7 +69,7 @@ _work: Callable[[str], object] | None = None  # this worker process's work, with
 def _start_worker(work: Callable[[str], object], fields: dict[str, object], packages: list[str]) -> None:
     global _work  # noqa: PLW0603 -- the ProcessPoolExecutor initializer pattern: one copy per worker, not per task
     _work = work
-    logs.setup()  # a spawned worker starts without the parent's logging; it reads the same OPTIM_LOG_* variables
+    logs.setup()  # a spawned worker starts without the parent's logging; it reads the same BASIS_LOG_* variables
     logs.bind(**fields)  # nor its bound fields, such as the run's id
     for package in packages:
         logs.include(package)

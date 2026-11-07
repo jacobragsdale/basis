@@ -9,7 +9,7 @@ Follow `uv run optim docs how-to/compare-params-with-a-sweep`. In short:
 
 1. Learn what the model takes and reports: `uv run optim describe MODEL` prints its params schema, datasets and
    metrics as JSON.
-2. Pick a saved run to sweep: a run id in the repo's `snapshots/`, or under the settings file's `OPTIM_SNAPSHOT_ROOT`,
+2. Pick a saved run to sweep: a run id in the repo's `snapshots/`, or under the settings file's `BASIS_SNAPSHOT_ROOT`,
    such as production's in `.env.prod`.
 3. Write one params file per variant beside `default.json`, in `models/MODEL/params/`, each a whole, valid params file.
    A variant changes params alone, such as a limit or a term's weight; a new constraint or term is code (see

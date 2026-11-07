@@ -119,9 +119,10 @@ nothing about the port.
 
 1. **A fresh run decides the same.** Generate a model repo from the basis checkout with its first model named `income`,
    run that model on its fixture from `main.py` as in step 3 above, and compare its run with `record.py compare`. It
-   must print `matches the oracle`. `record.py` reads optim 0.2.0's snapshot layout; if the ported optim saves its runs
-   in the run store instead, a manifest at `runs/optim/income/RUN_ID.json` naming `objects/HASH.parquet`, add a `load`
-   for that layout that returns the same `Tables`, and change nothing else in the script or the JSON files.
+   must print `matches the oracle`. The ported optim saves its runs in the run store, a manifest at
+   `runs/optim/income/RUN_ID.json` naming `objects/HASH.parquet`, so give `compare` the manifest,
+   `SCRATCH/sma-optimizer/snapshots/runs/optim/income/RUN_ID.json`; `record.py` reads both layouts, through a `load`
+   for each that returns the same `Tables`.
 2. **`basis regress` over this snapshot lists no change.** From the generated repo, regress over this folder's
    `snapshot/` must replay the run with the ported code, list nothing and exit 0. It finds the run by its model's name,
    `income`, or its module, `models.income.model`, so the generated repo's model must keep that name. If the ported

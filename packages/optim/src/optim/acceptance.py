@@ -79,5 +79,4 @@ def review(decision: Decision, decided: Decision, holdings: pd.DataFrame, securi
 
 def _worth(quantities: pd.Series, unit: pd.Series) -> float:
     """Quantities by security at their unit values, summed; an unknown security is worth nothing here."""
-    worth: float = (quantities * unit.reindex(quantities.index, fill_value=0.0)).sum()
-    return worth
+    return float((quantities * unit.reindex(quantities.index, fill_value=0.0)).sum())

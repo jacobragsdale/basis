@@ -1,5 +1,5 @@
 """The command line, for Airflow, Docker, CI and agents; an analyst runs a model's `main.py` instead, which calls the
-same code (`optim.api`). Settings come from `OPTIM_*` environment variables; choose the settings file explicitly:
+same code (`optim.api`). Settings come from `BASIS_*` environment variables; choose the settings file explicitly:
 
 uv run --env-file .env optim run income --params models/income/params/default.json
 uv run --env-file .env optim run income --params models/income/params/default.json --portfolios P1 P2 --as-of 2026-10-16
@@ -24,15 +24,18 @@ import sys
 from collections.abc import Callable, Sequence
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 
-from optim import logs, models, new, research, sync
+from basis.core import logs
+from basis.core.storage import Root
+from optim import models, new, research, snapshots, sync
 from optim.context import open_context
 from optim.contract import LISTING, declared
-from optim.runs import Run, fixture_date, open_snapshot, replay_run, run_model, today
-from optim.settings import Settings
-from optim.storage import Root
+from optim.runs import Run, fixture_date, read_snapshot, replay_run, run_model, today
+from optim.settings import Settings, refuse_renamed
+from optim.snapshots import Saved
 
 log = logging.getLogger(__name__)
 
@@ -40,10 +43,12 @@ log = logging.getLogger(__name__)
 def main(argv: Sequence[str] | None = None) -> int:
     """Exit 0 only when every portfolio was accepted. An error is logged once, with its root cause, and exits 1."""
     args = _parser().parse_args(argv)
-    handler: Callable[[argparse.Namespace], int] = args.handler  # each command's, set by `_command`
+    handler = cast("Callable[[argparse.Namespace], int]", args.handler)  # each command's, set by `_command`; a Namespace is untyped
     signal.signal(signal.SIGTERM, _stopped)
     try:
+        logs.include("optim")
         logs.setup()
+        refuse_renamed(os.environ)
         with logs.timed(log, f"finished {args.command}") as fields:
             fields["exit_code"] = code = handler(args)
     except Exception:
@@ -63,7 +68,7 @@ def _run(args: argparse.Namespace) -> int:
     """The only thing that writes orders, where the environment configures a table."""
     settings, model = Settings(), models.load(args.model)
     with open_context(settings, cache=not args.no_cache) as ctx:
-        as_of_date, workers, labels = args.as_of or fixture_date(args.data) or today(), args.workers or settings.workers, dict(args.labels)
+        as_of_date, workers, labels = args.as_of or fixture_date(args.data) or today(), args.workers or settings.optim.workers, dict(args.labels)
         ran = run_model(
             ctx.loader, settings.snapshots(), model, args.params, as_of_date=as_of_date, portfolio_ids=args.portfolios, data_dir=args.data, workers=workers, labels=labels, orders=ctx.orders
         )
@@ -73,7 +78,7 @@ def _run(args: argparse.Namespace) -> int:
 def _replay(args: argparse.Namespace) -> int:
     """Reads a snapshot and writes one: no sources or cache."""
     settings = Settings()
-    ran = replay_run(_snapshot(args.run), settings.snapshots(), params_file=args.params, portfolio_ids=args.portfolios, workers=args.workers or settings.workers, labels=dict(args.labels))
+    ran = replay_run(_snapshot(args.run), settings.snapshots(), params_file=args.params, portfolio_ids=args.portfolios, workers=args.workers or settings.optim.workers, labels=dict(args.labels))
     return _report(ran)
 
 
@@ -82,7 +87,7 @@ def _sweep(args: argparse.Namespace) -> int:
     if not (variants := sorted(args.variants.glob("*.json"))):
         msg = f"{args.variants} has no params files (*.json) to sweep"
         raise FileNotFoundError(msg)
-    _write(research.sweep(open_snapshot(_snapshot(args.run)), variants, workers=args.workers or 1), args.out)
+    _write(research.sweep(read_snapshot(_snapshot(args.run)), variants, workers=args.workers or 1), args.out)
     return 0
 
 
@@ -135,8 +140,8 @@ def _docs(args: argparse.Namespace) -> int:
 
 def _warm(args: argparse.Namespace) -> int:
     settings = Settings()
-    if settings.cache_root is None:
-        msg = "warm needs OPTIM_CACHE_ROOT: without it there is no cache to fill"
+    if settings.optim.cache_root is None:
+        msg = "warm needs BASIS_OPTIM__CACHE_ROOT: without it there is no cache to fill"
         raise ValueError(msg)
     read_whole = (dataset for name in args.models for attribute, dataset in declared(models.load(name).data).items() if attribute == LISTING or not dataset.per_portfolio)
     datasets = {dataset.name: dataset for dataset in read_whole}
@@ -159,9 +164,9 @@ def _report(ran: Run) -> int:
     return 0 if ran.ok else 1
 
 
-def _snapshot(run: str) -> Root:
-    """A run by the path or URL of its snapshot, or by its id, under `OPTIM_SNAPSHOT_ROOT`."""
-    return Root.at(run) if "/" in run or "\\" in run else Settings().snapshots() / run
+def _snapshot(run: str) -> Saved:
+    """A run by the path or URL of its manifest, or by its id, under `BASIS_SNAPSHOT_ROOT`."""
+    return snapshots.read(Root.at(run)) if "/" in run or "\\" in run else snapshots.find([Settings().snapshots()], run)
 
 
 def _label(text: str) -> tuple[str, str]:
@@ -186,8 +191,8 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
 
     deciding = argparse.ArgumentParser(add_help=False)
-    deciding.add_argument("--label", type=_label, action="append", default=[], dest="labels", metavar="KEY=VALUE", help="recorded in the run's run.json, e.g. purpose=production; repeat for more")
-    deciding.add_argument("--workers", type=int, help="worker processes (default: OPTIM_WORKERS, or 1)")
+    deciding.add_argument("--label", type=_label, action="append", default=[], dest="labels", metavar="KEY=VALUE", help="recorded in the run's manifest, e.g. purpose=production; repeat for more")
+    deciding.add_argument("--workers", type=int, help="worker processes (default: BASIS_OPTIM__WORKERS, or 1)")
     tabled = argparse.ArgumentParser(add_help=False)
     tabled.add_argument("--out", type=Path, help="write the table to this .csv or .parquet file (default: CSV on stdout)")
     tabled.add_argument("--workers", type=int, help="worker processes (default: 1)")
@@ -202,17 +207,17 @@ def _parser() -> argparse.ArgumentParser:
     run_command.add_argument("--no-cache", action="store_true", help="read every dataset live")
 
     replay_command = _command(commands, "replay", _replay, "decide a saved run again with today's code, and other params if given; reads only the snapshot", deciding)
-    replay_command.add_argument("run", help="a run id under OPTIM_SNAPSHOT_ROOT, or a snapshot's path or URL")
+    replay_command.add_argument("run", help="a run id under BASIS_SNAPSHOT_ROOT, or the path or URL of its manifest")
     replay_command.add_argument("--params", type=Path, help="a params JSON file (default: the params the run used)")
     replay_command.add_argument("--portfolios", nargs="+", help="only these portfolios (default: every portfolio in the run)")
 
     sweep_command = _command(commands, "sweep", _sweep, "decide a saved run once per params file in a directory, into one comparison table; reads only the snapshot", tabled)
-    sweep_command.add_argument("run", help="a run id under OPTIM_SNAPSHOT_ROOT, or a snapshot's path or URL")
+    sweep_command.add_argument("run", help="a run id under BASIS_SNAPSHOT_ROOT, or the path or URL of its manifest")
     sweep_command.add_argument("variants", type=Path, help="a directory of params JSON files, one per variant")
 
     regress_command = _command(commands, "regress", _regress, "replay a model's recent runs with today's code, and list every trade that changed; exits 1 if any did", tabled)
     regress_command.add_argument("model", help="a model's name in the optim.models entry points, or its module path")
-    regress_command.add_argument("--snapshots", help="the snapshot root to read, such as production's (default: OPTIM_SNAPSHOT_ROOT)")
+    regress_command.add_argument("--snapshots", help="the snapshot root to read, such as production's (default: BASIS_SNAPSHOT_ROOT)")
     regress_command.add_argument("--last", type=int, default=20, help="how many of the most recent runs (default: 20)")
     regress_command.add_argument("--label", type=_label, action="append", default=[], dest="labels", metavar="KEY=VALUE", help="only runs labelled so, e.g. purpose=production")
 

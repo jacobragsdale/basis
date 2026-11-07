@@ -66,8 +66,15 @@ class Root:
             return bytes(stream.read())
 
     def write_bytes(self, data: bytes) -> None:
-        with _replacing(self) as temporary, self.fs.open_output_stream(temporary.path) as stream:
+        with self.writing() as stream:
             stream.write(data)
+
+    @contextmanager
+    def writing(self) -> Generator[pa.NativeFile]:
+        """A stream to write the file through, as it is made, rather than whole from memory: under a temporary name,
+        renamed onto this one when the block succeeds, and deleted when it fails."""
+        with _replacing(self) as temporary, self.fs.open_output_stream(temporary.path) as stream:
+            yield stream
 
     def read_table(self) -> pa.Table:
         """A Parquet file, with the types it was written with: decimals keep their precision, datetimes their zone."""
