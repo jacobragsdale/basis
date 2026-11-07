@@ -194,10 +194,11 @@ def _saved(root: Root, run_id: str, name: str | None) -> tuple[Snapshot, jobs.Jo
 
 
 def _replay(args: ReplayArgs) -> int:
-    root = Settings().snapshots()
+    settings = Settings()
+    root = settings.snapshots()
     source, job = _saved(root, args.run_id, args.job)
     with deliberate(ValueError):  # a run of another job, or one that did not save what the job reads now
-        result, diffs = runs.replay(job, source, params=args.params, snapshot_root=root)
+        result, diffs = runs.replay(job, source, params=args.params, snapshot_root=root, tracing=settings.traces)
     _print({"run_id": result.record.run_id, "replay_of": args.run_id, "status": result.record.status, "reasons": result.record.reasons, "differences": [vars(entry) for entry in diffs]})
     if result.ok:
         return 0
@@ -270,6 +271,7 @@ def describe(job: jobs.Job) -> dict[str, object]:
         "module": job.module,
         "params": job.params.model_json_schema(),
         "inputs": {name: {"source": dataset.describe(), "empty": dataset.empty, "columns": _columns(dataset.row.columns)} for name, dataset in job.inputs.declared().items()},
+        "given": {name: resource.kind for name, resource in job.inputs.declared_resources().items()},
         "outputs": {
             name: {
                 "database": table.target.database,

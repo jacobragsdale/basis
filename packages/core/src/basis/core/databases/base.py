@@ -4,8 +4,10 @@ the run writes there, and the ledger row of each, has been written. Identifiers 
 names and a table's name, which the part that declares them restricts to letters, digits, underscores and `$`, as
 `basis.job`'s rows and outputs do, so they are never quoted and never come from data; every value is bound.
 
-A caller that writes its own SQL, such as an API's request, runs it through `Statements` instead: one connection's
-transaction, whose statements bind their values by name, each under a deadline of its own."""
+Every statement a reader or a writer runs, and each commit and rollback, has a span, on the tracer of the run that
+runs it (`basis.core.traces.tracer`). A caller that writes its own SQL, such as an API's request, runs it through
+`Statements` instead: one connection's transaction, whose statements bind their values by name, each under a deadline
+of its own, and which the caller gives a span of its own, with its deadline."""
 
 import logging
 import re
@@ -20,12 +22,16 @@ from zoneinfo import ZoneInfo
 
 import polars as pl
 import pyarrow as pa
+from opentelemetry.trace import Span, SpanKind
 
+from basis.core import traces
 from basis.core.destination import TableSpec
 from basis.core.interval import Interval
 from basis.core.tables import Changes, Target
 
 log = logging.getLogger(__name__)
+SYSTEMS = {"mssql": "microsoft.sql_server", "oracle": "oracle.db"}
+"""OpenTelemetry's `db.system.name` for each kind of database."""
 FETCH_ROWS = 10_000
 """Rows per round trip when reading."""
 WRITE_ROWS = 50_000
@@ -203,3 +209,18 @@ def check_count(what: str, expected: int, counted: int) -> None:
     if counted != expected:
         msg = f"{what} wrote {counted} rows, and the run computed {expected}: nothing is committed"
         raise RuntimeError(msg)
+
+
+def span(database: str, kind: str, operation: str, sql: str | None = None) -> AbstractContextManager[Span]:
+    """The span of one statement on `database`, of `kind` (`mssql` or `oracle`), named after its first keyword, or of
+    `operation`, such as a commit, without SQL of its own; on the tracer of the run that runs it."""
+    attributes: dict[str, str] = {"db.system.name": SYSTEMS[kind], "basis.resource": database}
+    if sql is not None:
+        attributes["db.query.text"] = sql
+    return traces.tracer().start_as_current_span(f"{database} {operation}", kind=SpanKind.CLIENT, attributes=attributes)
+
+
+def statement(database: str, kind: str, sql: str) -> AbstractContextManager[Span]:
+    """The span of `sql` on `database`: `span`, named after its first keyword, such as `warehouse SELECT`."""
+    words = sql.split(None, 1)
+    return span(database, kind, words[0].upper() if words else "statement", sql)

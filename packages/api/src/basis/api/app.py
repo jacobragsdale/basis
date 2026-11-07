@@ -5,8 +5,8 @@
 - inside it, for a service that declares a user, each request's bearer token verified (`tokens.py`);
 - outside it, the answers to the pages of the other origins the settings allow, if any (`origins.py`);
 - one exception map (`errors.problem`) for every error a handler or FastAPI raises;
-- FastAPI's own telemetry, on the app's tracer provider (`traces.py`), which reads `traceparent` in and makes each
-  request's server span;
+- FastAPI's own telemetry, on the app's tracer provider (`basis.core.traces`), which reads `traceparent` in and makes
+  each request's server span;
 - a lifespan that adds the settings' span exporter, opens the service's resources (`opened.py`) and starts its
   compute pool (`pool.py`), marks the app ready, and on shutdown closes them and flushes the spans;
 - each route as `routes.py` serves it: within its deadline, reading its request strictly, and answering only the errors
@@ -38,11 +38,12 @@ from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from basis.api import errors, openapi, opened, origins, routes, tokens, traces
+from basis.api import errors, openapi, opened, origins, routes, tokens
 from basis.api.fakes import Fakes
 from basis.api.requests import HEALTH, REQUEST_ID, Requests
 from basis.api.service import STATE, Runtime, Service, ServiceError
 from basis.api.settings import Settings, read
+from basis.core import traces
 from basis.core.model import Model
 
 log = logging.getLogger(__name__)
@@ -107,8 +108,8 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | 
     identity = tokens.plan(service, configured)
     writes = {route.handler: route.writes for route in service.routes if route.writes is not None}
     lifecycle = Lifecycle()
-    provider = traces.provider(service.name)
-    tracer = provider.get_tracer("basis.api")
+    provider = traces.provider(service.name, version=configured.git_sha, environment=None)  # step 5.6 names the environment
+    tracer = provider.get_tracer(traces.SCOPE)
     started = False
 
     @asynccontextmanager

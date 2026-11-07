@@ -5,7 +5,8 @@ the steps around it that every part takes the same way."""
 import itertools
 import logging
 import time
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Generator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from functools import cache
@@ -67,10 +68,11 @@ class Replay[P]:
     """Every input the run saved, by name."""
 
 
-def replaying[P](source: Snapshot, *, name: str, module: str, params: Path | None, parse: Callable[[str], P], reads: Collection[str]) -> Replay[P]:  # noqa: PLR0913 -- the part says what it is and reads, by keyword
+@contextmanager
+def replaying[P](source: Snapshot, *, name: str, module: str, params: Path | None, parse: Callable[[str], P], reads: Collection[str]) -> Generator[Replay[P]]:  # noqa: PLR0913 -- the part says what it is and reads, by keyword
     """Open `source`, a run of the part `name` (or of its `module`), to run it again with the run's params or `params`,
-    which `parse` validates. `reads` names the inputs the part reads now, each of which the run must have saved. The
-    replay's id is bound to every record logged from here on."""
+    which `parse` validates. `reads` names the inputs the part reads now, each of which the run must have saved. Every
+    record logged in the block carries the replay's id, `name` and the run it replays, and none logged after it does."""
     original = source.record()
     if original.job not in {name, module}:
         msg = f"run {original.run_id} is a run of {original.job}, not {name}"
@@ -78,13 +80,13 @@ def replaying[P](source: Snapshot, *, name: str, module: str, params: Path | Non
     params_text = params.read_text(encoding="utf-8") if params is not None else source.params_json()
     parsed = parse(params_text)
     run_id = snapshots.new_run_id()
-    logs.bind(run_id=run_id, job=name, replay_of=original.run_id)
-    saved = source.inputs()
-    if missing := sorted(set(reads) - set(saved)):
-        msg = f"run {original.run_id} did not read {missing}, which the job reads now: a replay runs on what the run read"
-        raise ValueError(msg)
-    params_path = str(params) if params is not None else f"run {original.run_id}"
-    return Replay(original, run_id, parsed, params_text, params_path, saved)
+    with logs.fields(run_id=run_id, job=name, replay_of=original.run_id):
+        saved = source.inputs()
+        if missing := sorted(set(reads) - set(saved)):
+            msg = f"run {original.run_id} did not read {missing}, which the job reads now: a replay runs on what the run read"
+            raise ValueError(msg)
+        params_path = str(params) if params is not None else f"run {original.run_id}"
+        yield Replay(original, run_id, parsed, params_text, params_path, saved)
 
 
 def resume(  # noqa: PLR0913 -- the part says what it is and writes, by keyword

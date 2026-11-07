@@ -3,7 +3,8 @@
     app = api.build(service, settings=Settings.given(), fakes={WAREHOUSE: fakes.Database(answers={BOND: [row]}), CLOCK: fakes.Clock(at=...), SOLVE: fakes.Compute()})
 
 A fake stands in only for what the resource reaches: the database's connection, the other service's network, the
-system's clock. Everything around it is the app's own, as in production: each call's deadline and span, the
+system's clock. The fakes of another service, the clock and the ids are basis-core's (`basis.core.fakes`), which a
+job's tests use too. Everything around it is the app's own, as in production: each call's deadline and span, the
 transaction that commits only after the response validates, the checks of every reply, and the cache's loads and
 expiry. A resource a test gives no fake opens as its settings say, so a test that fakes nothing reaches nothing only
 when its settings configure nothing."""
@@ -12,17 +13,17 @@ import threading
 from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from datetime import datetime
 
-import httpx2
 import pyarrow as pa
-from starlette.types import ASGIApp
 
 from basis.api.compute import ComputeFunction
 from basis.api.outboxes import Row
 from basis.api.resources import Bind, Resource
 from basis.core.databases.base import Statements
+from basis.core.fakes import Clock, Http, Ids
+
+__all__ = ["Answer", "Cache", "Clock", "Compute", "Database", "Fake", "Faked", "Fakes", "Http", "Ids", "Outbox", "Respond", "Rows", "Statement", "Transaction"]
 
 type Rows = Sequence[Mapping[str, object]]
 
@@ -211,17 +212,6 @@ class Outbox:
         return True
 
 
-class Http:
-    """Another service, as an ASGI app the test gives, such as a FastAPI app with the routes the handler calls, or the
-    other service's own basis app. Calls reach it in the process, through the app's own client."""
-
-    def __init__(self, app: ASGIApp) -> None:
-        self.app = app
-
-    def client(self, name: str) -> httpx2.AsyncClient:
-        return httpx2.AsyncClient(transport=httpx2.ASGITransport(app=self.app), base_url=f"http://{name}")
-
-
 class Cache:
     """The cache as it runs, on a clock of the test's own, which only `advance` moves: a value expires when the test
     has advanced past its time to live."""
@@ -234,37 +224,6 @@ class Cache:
 
     def advance(self, seconds: float) -> None:
         self._seconds += seconds
-
-
-class Clock:
-    """The time is `at`, until the test advances it."""
-
-    def __init__(self, *, at: datetime) -> None:
-        if at.tzinfo is None:
-            msg = f"the fake clock's time {at} has no time zone: give it one, as datetime(..., tzinfo=UTC)"
-            raise ValueError(msg)
-        self._at = at.astimezone(UTC)
-
-    def now(self) -> datetime:
-        return self._at
-
-    def advance(self, by: timedelta) -> None:
-        self._at += by
-
-
-class Ids:
-    """UUIDv7s that count up from 1, in their random bits, at the epoch: `00000000-0000-7000-8000-000000000001`, then
-    `...0002`, so a test can name each id a handler makes."""
-
-    def __init__(self) -> None:
-        self._made = 0
-        self._lock = threading.Lock()
-
-    def new(self) -> UUID:
-        with self._lock:
-            self._made += 1
-            made = self._made
-        return UUID(int=(7 << 76) | (0b10 << 62) | made)
 
 
 class Compute:

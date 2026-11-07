@@ -24,6 +24,8 @@ into the Dockerfile.
 |---|---|---|
 | Add a column | the row in `jobs/JOB/rows.py`, then the SQL or the transform | `basis docs job/reference` |
 | Read another table | a `Query` in `Inputs`, its SQL in `jobs/JOB/sql/`, a file in the fixture | `basis docs job/reference` |
+| Read from another service | a `Fetch` in `Inputs`, its `BASIS_HTTP__NAME__URL` in each settings file, a file in the fixture | `basis docs job/reference` |
+| Use the time or new ids | a `Clock` or `Ids` in `Inputs`, and the fixture's `now` | `basis docs job/reference` |
 | Write another table | a `Table` in `Outputs`, naming its write mode | `basis docs job/reference` |
 | Change what the job computes | `transform` in `jobs/JOB/job.py`, and its tests | `basis docs job/reference` |
 | Add a reason not to write | `check` in `jobs/JOB/job.py` | `basis docs job/reference` |

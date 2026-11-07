@@ -7,8 +7,9 @@ types exactly. The driver's bulk copy is not used: it opens a connection of its 
 Upserts are an UPDATE then an INSERT of the keys still missing, never `MERGE`, whose history of defects in SQL Server
 is long; the INSERT locks the keys it checks, so two writers never insert one key twice.
 
-`statements` runs a caller's own SQL, binding `%(name)s` by name: each statement's deadline is the driver's query
-timeout, in whole seconds, which SQL Server enforces by cancelling the statement on the server too."""
+Each statement a reader or a writer runs has a span, and so does each commit and rollback (`base.span`). `statements`
+runs a caller's own SQL, binding `%(name)s` by name: each statement's deadline is the driver's query timeout, in whole
+seconds, which SQL Server enforces by cancelling the statement on the server too."""
 
 import logging
 import math
@@ -36,6 +37,8 @@ from basis.core.databases.base import (
     lower_cased,
     naive_in_zone,
     slices,
+    span,
+    statement,
 )
 from basis.core.destination import DestColumn, TableSpec
 from basis.core.interval import Interval
@@ -80,7 +83,7 @@ class MssqlDatabase:
     @contextmanager
     def reading(self) -> Generator[MssqlReader]:
         with self._read_transaction(level=logging.INFO) as connection:
-            yield MssqlReader(connection, self.settings.max_rows)
+            yield MssqlReader(self.name, connection, self.settings.max_rows)
 
     @contextmanager
     def writing(self) -> Generator[MssqlWriter]:
@@ -92,12 +95,13 @@ class MssqlDatabase:
         start = time.perf_counter()
         with closing(connect_to(write.connection_string.get_secret_value(), self.settings.timeout_s, autocommit=False)) as connection:
             log.info("connected", extra={"database": self.name, "access": "write", "connect_ms": ms_since(start)})
-            writer = MssqlWriter(connection, self.settings.max_rows, write.ledger)
+            writer = MssqlWriter(self.name, connection, self.settings.max_rows, write.ledger)
             try:
                 yield writer
             finally:
                 if not writer.committed:
-                    connection.rollback()
+                    with span(self.name, _KIND, "rollback"):
+                        connection.rollback()
 
     @contextmanager
     def statements(self, *, writes: bool) -> Generator[MssqlStatements]:
@@ -129,27 +133,33 @@ class MssqlDatabase:
             log.log(level, "connected", extra={"database": self.name, "access": "read", "connect_ms": ms_since(start)})
             with closing(connection.cursor()) as cursor:
                 isolation = "SNAPSHOT" if self.settings.isolation == "snapshot" else "READ COMMITTED"
-                cursor.execute(f"SET TRANSACTION ISOLATION LEVEL {isolation}")
-                cursor.execute("BEGIN TRANSACTION")
+                for sql in (f"SET TRANSACTION ISOLATION LEVEL {isolation}", "BEGIN TRANSACTION"):
+                    with statement(self.name, _KIND, sql):
+                        cursor.execute(sql)
             try:
                 yield connection
             finally:
-                end_reading(self.name, lambda: _roll_back(connection))
+                end_reading(self.name, lambda: _roll_back(self.name, connection))
 
 
-def _roll_back(connection: mssql_python.Connection) -> None:
-    with closing(connection.cursor()) as cursor:
-        cursor.execute("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION")
+def _roll_back(database: str, connection: mssql_python.Connection) -> None:
+    with closing(connection.cursor()) as cursor, span(database, _KIND, "rollback", _ROLL_BACK):
+        cursor.execute(_ROLL_BACK)
+
+
+_KIND = "mssql"
+_ROLL_BACK = "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION"
 
 
 @dataclass
 class MssqlReader:
+    database: str
     connection: mssql_python.Connection
     max_rows: int
 
     def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pl.DataFrame:
         binds = binds_named(sql, _BIND, interval, what=what)
-        with closing(self.connection.cursor()) as cursor:
+        with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql) as traced:
             if binds:
                 cursor.execute(sql, binds)
             else:
@@ -163,10 +173,11 @@ class MssqlReader:
                     reader.close()
                     raise TooManyRowsError(what, self.max_rows)
                 frames.append(_frame(batch))
+            traced.set_attribute("db.response.returned_rows", rows)
             return pl.concat(frames) if frames else _frame(reader.schema.empty_table())
 
     def describe(self, table: str) -> TableSpec | None:
-        with closing(self.connection.cursor()) as cursor:
+        with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, _DESCRIBE):
             cursor.execute(_DESCRIBE, {"table": table})
             rows = cursor.fetchall()
         if not rows:
@@ -214,19 +225,20 @@ class MssqlWriter(MssqlReader):
     committed: bool = False
 
     def published(self, run_id: str) -> bool:
-        with closing(self.connection.cursor()) as cursor:
-            cursor.execute(f"SELECT COUNT(*) FROM {self.ledger} WHERE run_id = %(run_id)s", {"run_id": run_id})
+        sql = f"SELECT COUNT(*) FROM {self.ledger} WHERE run_id = %(run_id)s"
+        with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql):
+            cursor.execute(sql, {"run_id": run_id})
             row = cursor.fetchone()
         return row is not None and int(str(row[0])) > 0
 
     def overlapping(self, job: str, output: str, interval: Interval) -> list[str]:
         binds = {"job": job, "output": output} | interval.binds()
-        with closing(self.connection.cursor()) as cursor:
-            cursor.execute(
-                f"SELECT DISTINCT run_id FROM {self.ledger} WITH (UPDLOCK, HOLDLOCK)"
-                " WHERE job = %(job)s AND output = %(output)s AND interval_start < %(interval_end)s AND interval_end > %(interval_start)s",
-                binds,
-            )
+        sql = (
+            f"SELECT DISTINCT run_id FROM {self.ledger} WITH (UPDLOCK, HOLDLOCK)"
+            " WHERE job = %(job)s AND output = %(output)s AND interval_start < %(interval_end)s AND interval_end > %(interval_start)s"
+        )
+        with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql):
+            cursor.execute(sql, binds)
             return sorted(str(row[0]) for row in cursor.fetchall())
 
     def apply(self, target: Target, changes: Changes, spec: TableSpec) -> Counts:
@@ -243,20 +255,22 @@ class MssqlWriter(MssqlReader):
             check_count(f"the insert into {target.table}", changes.insert.height, inserted)
         return Counts(deleted, upserted, inserted_new, inserted)
 
-    def _execute(self, statement: str, binds: tuple[object, ...] = ()) -> int:
-        with closing(self.connection.cursor()) as cursor:
+    def _execute(self, sql: str, binds: tuple[object, ...] = ()) -> int:
+        with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql):
             if binds:
-                cursor.execute(statement, binds)
+                cursor.execute(sql, binds)
             else:
-                cursor.execute(statement)
+                cursor.execute(sql)
             return max(cursor.rowcount, 0)
 
     def _insert(self, table: str, frame: pl.DataFrame) -> int:
-        statement = f"INSERT INTO {table} ({', '.join(frame.columns)}) VALUES ({', '.join('?' * frame.width)})"
+        sql = f"INSERT INTO {table} ({', '.join(frame.columns)}) VALUES ({', '.join('?' * frame.width)})"
         written = 0
         with closing(self.connection.cursor()) as cursor:
-            for part in slices(frame):
-                cursor.executemany(statement, part.rows())
+            for part in slices(frame):  # each batch a statement, and a span, of its own
+                with statement(self.database, _KIND, sql) as traced:
+                    cursor.executemany(sql, part.rows())
+                    traced.set_attribute("db.operation.batch.size", part.height)
                 written += max(cursor.rowcount, 0)
         return written
 
@@ -310,7 +324,8 @@ class MssqlWriter(MssqlReader):
         self._execute(f"INSERT INTO {self.ledger} ({', '.join(LEDGER_COLUMNS)}) VALUES ({', '.join('?' * len(values))})", values)
 
     def commit(self) -> None:
-        self.connection.commit()
+        with span(self.database, _KIND, "commit"):
+            self.connection.commit()
         self.committed = True
 
 

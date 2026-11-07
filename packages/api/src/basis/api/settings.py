@@ -7,9 +7,9 @@ and a missing or invalid one stops it there, with one line that names the variab
 
 import re
 from contextvars import ContextVar
-from typing import Annotated, Literal, Self, override
+from typing import Annotated, Self, override
 
-from pydantic import Field, FilePath, HttpUrl, PrivateAttr, ValidationError, model_validator
+from pydantic import Field, PrivateAttr, ValidationError
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from pydantic_settings import SettingsError as SourceError
 
@@ -31,35 +31,6 @@ class Serve(Model):
     last export of spans, which `traces.timeout_s` bounds, the defaults fit in Kubernetes' 30-second grace period."""
 
 
-class Traces(Model):
-    exporter: Literal["otlp", "console"]
-    """`otlp` sends spans to a collector over OTLP/HTTP; `console` prints them to stdout, to see them on a desktop."""
-    endpoint: HttpUrl | None = None
-    """The collector's traces endpoint, for `otlp` only, such as `http://otel-collector:4318/v1/traces`."""
-    timeout_s: Annotated[float, Field(gt=0)] = 5
-    """Seconds each export to the collector may take."""
-
-    @model_validator(mode="after")
-    def _endpoint_for_otlp(self) -> Self:
-        if (self.exporter == "otlp") != (self.endpoint is not None):
-            msg = "the otlp exporter needs an endpoint, BASIS_TRACES__ENDPOINT, and the console exporter takes none"
-            raise ValueError(msg)
-        return self
-
-
-class HttpService(Model):
-    """Another service, and how to reach it: from these settings alone, never `SSL_CERT_FILE`, `HTTP_PROXY` or the
-    like, which configure nothing basis decides."""
-
-    url: HttpUrl
-    """The service's base URL, which each call's path follows, such as `https://pricing.internal.example/api`."""
-    ca_bundle: FilePath | None = None
-    """A PEM file of the certificate authorities the service's certificate must chain to, such as the firm's own,
-    in place of the operating system's trusted ones. Without it, the operating system's are trusted."""
-    proxy: HttpUrl | None = None
-    """The proxy each call goes through, such as `http://proxy.internal.example:8080`. Without it, calls go direct."""
-
-
 class Pool(Model):
     """The processes a service's compute functions run in, which start with the app."""
 
@@ -70,10 +41,6 @@ class Pool(Model):
 
 class Settings(core.Settings):
     serve: Serve = Field(default_factory=Serve)
-    traces: Traces | None = None
-    """Where the API's spans go. Without it they go nowhere, so a test or a desktop needs no collector."""
-    http: dict[str, HttpService] = Field(default_factory=dict)
-    """Each other service the API calls, by the name its `api.http` declaration gives."""
     compute: Pool | None = None
     """The process pool, `BASIS_COMPUTE__WORKERS`, which a service whose routes ask for a compute function must give."""
     identity: Identity | None = None

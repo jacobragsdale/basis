@@ -51,7 +51,8 @@ from basis.api.errors import Error, FieldError, ParameterError, PointerError, Pr
 from basis.api.identity import SignInRequiredError, User
 from basis.api.resources import Bind, Cache, CallFailedError, Client, Clock, DeadlineExceededError, Ids, Outbox, Reader, Resource, Writer, cache, clock, database, http, ids, outbox
 from basis.api.service import Route, Service, delete, get, given, load, patch, post, put
-from basis.api.settings import Serve, Settings, SettingsError, Traces
+from basis.api.settings import Serve, Settings, SettingsError
+from basis.core.settings import Traces
 
 if TYPE_CHECKING:
     from basis.api.app import App, build

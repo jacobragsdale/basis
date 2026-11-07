@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from basis.core.interval import Interval
 from basis.core.tables import Changes, Delete, Range
-from basis.job.inputs import File, Inputs, Query
+from basis.job.inputs import Clock, Fetch, File, Ids, Inputs, Query
 from basis.job.outputs import Append, InsertNew, Manual, Outputs, Replace, ReplaceWhere, Table, Upsert
 from basis.job.params import Params
 from basis.job.rows import MaxLength, Precision, Row, Zone
@@ -23,8 +23,11 @@ __all__ = [
     "VERSION",
     "Append",
     "Changes",
+    "Clock",
     "Delete",
+    "Fetch",
     "File",
+    "Ids",
     "Inputs",
     "InsertNew",
     "Interval",

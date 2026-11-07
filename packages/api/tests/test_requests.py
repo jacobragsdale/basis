@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Callable
 from http import HTTPStatus
 from typing import Annotated
@@ -133,11 +134,14 @@ def test_a_request_without_a_traceparent_starts_its_own_trace() -> None:
 def test_spans_go_only_where_the_settings_say(capsys: pytest.CaptureFixture[str]) -> None:
     with TestClient(_app().asgi) as client:
         client.get("/prices/US912810TM64")
-    assert capsys.readouterr().out == ""
+    out, err = capsys.readouterr()
+    assert (out, "SpanKind" in err) == ("", False)
     with TestClient(_app(traces={"exporter": "console"}).asgi) as client:
         client.get("/health/ready")
         response = client.get("/prices/US912810TM64", headers={"traceparent": f"00-{TRACE}-{CALLER_SPAN}-01"})
-    server = [span for span in _spans(capsys.readouterr().out) if span["kind"] == "SpanKind.SERVER"]
+    out, err = capsys.readouterr()  # stderr, as stdout carries a command's results
+    server = [span for span in _spans(err) if span["kind"] == "SpanKind.SERVER"]
+    assert out == ""
     assert [(span["name"], span["parent_id"]) for span in server] == [("GET /prices/{security}", f"0x{CALLER_SPAN}")]
     context = server[0]["context"]
     assert isinstance(context, dict)
@@ -194,18 +198,14 @@ def test_errors_from_routing_are_problems_too(method: str, path: str, status: in
     assert headers.items() <= response.headers.items()
 
 
-def _spans(out: str) -> list[dict[str, object]]:
-    """ConsoleSpanExporter's output: one indented JSON object per span, one after another."""
-    decoder, at = json.JSONDecoder(), 0
+def _spans(err: str) -> list[dict[str, object]]:
+    """ConsoleSpanExporter's output on stderr: one indented JSON object per span, each starting on a line of its own
+    with `{`. Anything else on stderr, such as a record a handler another test left behind could not write, is not a
+    span."""
+    decoder = json.JSONDecoder()
     spans: list[dict[str, object]] = []
-    while (at := _skip_space(out, at)) < len(out):
-        span, at = decoder.raw_decode(out, at)
+    for found in re.finditer(r"^\{$", err, flags=re.MULTILINE):
+        span, _ = decoder.raw_decode(err, found.start())
         assert isinstance(span, dict)
         spans.append({str(key): value for key, value in span.items()})
     return spans
-
-
-def _skip_space(text: str, at: int) -> int:
-    while at < len(text) and text[at].isspace():
-        at += 1
-    return at

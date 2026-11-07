@@ -171,7 +171,8 @@ forbidden_modules = [
     "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.storage",
     "basis.core.settings", "basis.core.new", "basis.core.sync", "basis.core.testing", "basis.core.command",
     "basis.core.check", "basis.core.verbs", "basis.core.hooks", "basis.core.hygiene", "basis.core.clone", "basis.core.full", "basis.core.invalid",
-    "basis.core.qa", "basis.core.review", "basis.core.doctor", "basis.core.upgrade", "mssql_python", "oracledb",
+    "basis.core.qa", "basis.core.review", "basis.core.doctor", "basis.core.upgrade", "basis.core.opened", "basis.core.fakes", "basis.core.traces",
+    "mssql_python", "oracledb", "httpx2",
 ]
 ignore_imports = [
     "basis.job -> basis.job.api",  # `etl.run` and `etl.replay` load on first use, which job code never makes
@@ -185,12 +186,13 @@ source_modules = [
     "basis.api.dataset", "basis.api.origins", "basis.api.example.service",
 ]
 forbidden_modules = [
-    "basis.api.app", "basis.api.requests", "basis.api.server", "basis.api.traces", "basis.api.cli", "basis.api.sync", "basis.api.opened",
+    "basis.api.app", "basis.api.requests", "basis.api.server", "basis.api.cli", "basis.api.sync", "basis.api.opened",
     "basis.api.fakes", "basis.api.routes", "basis.api.pool", "basis.api.call", "basis.api.dev", "basis.api.tokens", "basis.api.outboxes", "basis.api.relay",
     "jwt", "cryptography", "uvicorn",
     "basis.api.openapi", "basis.api.contract", "basis.api.arrow",
     "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.command", "basis.core.check", "basis.core.hooks",
-    "basis.core.hygiene", "basis.core.sync", "mssql_python", "oracledb", "httpx", "httpx2", "requests", "urllib3", "aiohttp",
+    "basis.core.hygiene", "basis.core.sync", "basis.core.opened", "basis.core.fakes", "basis.core.traces",
+    "mssql_python", "oracledb", "httpx", "httpx2", "requests", "urllib3", "aiohttp",
 ]
 ignore_imports = [
     "basis.api -> basis.api.app",  # `api.build` loads on first use, which a service's modules never make
@@ -204,7 +206,7 @@ source_modules = ["basis.api.example.compute"]
 forbidden_modules = [
     "basis.api.app", "basis.api.call", "basis.api.cli", "basis.api.compute", "basis.api.deadlines", "basis.api.dev", "basis.api.errors", "basis.api.fakes",
     "basis.api.identity", "basis.api.opened", "basis.api.outboxes", "basis.api.pool", "basis.api.relay", "basis.api.requests", "basis.api.resources", "basis.api.routes", "basis.api.server",
-    "basis.api.service", "basis.api.settings", "basis.api.strict", "basis.api.sync", "basis.api.tokens", "basis.api.traces", "basis.api.example.service",
+    "basis.api.service", "basis.api.settings", "basis.api.strict", "basis.api.sync", "basis.api.tokens", "basis.api.example.service",
     "basis.api.example.dev", "basis.api.dataset", "basis.api.arrow", "basis.api.origins", "basis.api.openapi", "basis.api.contract", "basis.core",
     "fastapi", "starlette", "uvicorn", "pydantic_settings", "mssql_python", "oracledb", "httpx", "httpx2", "requests", "urllib3", "aiohttp",
 ]

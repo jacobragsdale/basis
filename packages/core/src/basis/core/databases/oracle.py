@@ -6,8 +6,9 @@ Thin mode, the default, needs no client libraries. Thick mode loads Oracle Clien
 encryption and older servers need. A write binds whole frames to batched statements, with no staging table: an
 upsert and an insert of new rows are a `MERGE` per row, from `dual`, and a delete by values is a `DELETE` per row.
 
-`statements` runs a caller's own SQL, binding `:name` by name: each round trip's deadline is the driver's call
-timeout, in milliseconds, after which the driver breaks the call off."""
+Each statement a reader or a writer runs has a span, and so does each commit and rollback (`base.span`). `statements`
+runs a caller's own SQL, binding `:name` by name: each round trip's deadline is the driver's call timeout, in
+milliseconds, after which the driver breaks the call off."""
 
 import logging
 import math
@@ -38,6 +39,8 @@ from basis.core.databases.base import (
     lower_cased,
     naive_in_zone,
     slices,
+    span,
+    statement,
 )
 from basis.core.destination import DestColumn, TableSpec
 from basis.core.interval import Interval
@@ -49,6 +52,7 @@ log = logging.getLogger(__name__)
 CONNECT_TIMEOUT_S = 30
 """The longest a login waits, however long its round trips may take."""
 _BIND = r"(?<![:\w]):{name}\b"
+_KIND = "oracle"
 
 
 def connect(settings: OracleSettings, *, user: str, password: str) -> oracledb.Connection:
@@ -87,7 +91,7 @@ class OracleDatabase:
     @contextmanager
     def reading(self) -> Generator[OracleReader]:
         with self._read_transaction(level=logging.INFO) as connection:
-            yield OracleReader(connection, self.settings.max_rows)
+            yield OracleReader(self.name, connection, self.settings.max_rows)
 
     @contextmanager
     def writing(self) -> Generator[OracleWriter]:
@@ -99,12 +103,13 @@ class OracleDatabase:
         start = time.perf_counter()
         with closing(connect(self.settings, user=write.user, password=write.password.get_secret_value())) as connection:
             log.info("connected", extra={"database": self.name, "access": "write", "connect_ms": ms_since(start)})
-            writer = OracleWriter(connection, self.settings.max_rows, write.ledger)
+            writer = OracleWriter(self.name, connection, self.settings.max_rows, write.ledger)
             try:
                 yield writer
             finally:
                 if not writer.committed:
-                    connection.rollback()
+                    with span(self.name, _KIND, "rollback"):
+                        connection.rollback()
 
     @contextmanager
     def statements(self, *, writes: bool) -> Generator[OracleStatements]:
@@ -132,16 +137,25 @@ class OracleDatabase:
         with closing(connect(self.settings, user=self.settings.user, password=self.settings.password.get_secret_value())) as connection:
             log.log(level, "connected", extra={"database": self.name, "access": "read", "connect_ms": ms_since(start)})
             if self.settings.isolation == "read_only":
-                with closing(connection.cursor()) as cursor:
-                    cursor.execute("SET TRANSACTION READ ONLY")
+                with closing(connection.cursor()) as cursor, statement(self.name, _KIND, _READ_ONLY):
+                    cursor.execute(_READ_ONLY)
             try:
                 yield connection
             finally:
-                end_reading(self.name, connection.rollback)
+                end_reading(self.name, lambda: _roll_back(self.name, connection))
+
+
+_READ_ONLY = "SET TRANSACTION READ ONLY"
+
+
+def _roll_back(database: str, connection: oracledb.Connection) -> None:
+    with span(database, _KIND, "rollback"):
+        connection.rollback()
 
 
 @dataclass
 class OracleReader:
+    database: str
     connection: oracledb.Connection
     max_rows: int
 
@@ -150,12 +164,14 @@ class OracleReader:
         frames: list[pl.DataFrame] = []
         rows = 0
         try:
-            for batch in self.connection.fetch_df_batches(sql, binds or None, size=10_000, fetch_decimals=True):
-                frame = pl.DataFrame(batch)
-                rows += frame.height
-                if rows > self.max_rows:
-                    raise TooManyRowsError(what, self.max_rows)
-                frames.append(frame)
+            with statement(self.database, _KIND, sql) as traced:
+                for batch in self.connection.fetch_df_batches(sql, binds or None, size=10_000, fetch_decimals=True):
+                    frame = pl.DataFrame(batch)
+                    rows += frame.height
+                    if rows > self.max_rows:
+                        raise TooManyRowsError(what, self.max_rows)
+                    frames.append(frame)
+                traced.set_attribute("db.response.returned_rows", rows)
         except oracledb.DatabaseError as error:
             if "ORA-01466" in str(error):
                 error.add_note(
@@ -167,7 +183,7 @@ class OracleReader:
 
     def describe(self, table: str) -> TableSpec | None:
         owner, _, name = table.upper().rpartition(".")
-        with closing(self.connection.cursor()) as cursor:
+        with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, _DESCRIBE):
             cursor.execute(_DESCRIBE, {"owner": owner or None, "name": name})
             rows = cursor.fetchall()
         if not rows:
@@ -205,19 +221,24 @@ class OracleWriter(OracleReader):
     committed: bool = False
 
     def published(self, run_id: str) -> bool:
-        with closing(self.connection.cursor()) as cursor:
-            cursor.execute(f"SELECT COUNT(*) FROM {self.ledger} WHERE run_id = :run_id", {"run_id": run_id})
+        sql = f"SELECT COUNT(*) FROM {self.ledger} WHERE run_id = :run_id"
+        with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql):
+            cursor.execute(sql, {"run_id": run_id})
             row = cursor.fetchone()
         return row is not None and int(str(row[0])) > 0
 
     def overlapping(self, job: str, output: str, interval: Interval) -> list[str]:
         binds = {"job": job, "output": output} | interval.binds()
+        lock = f"LOCK TABLE {self.ledger} IN SHARE ROW EXCLUSIVE MODE"
+        sql = f"SELECT run_id FROM {self.ledger} WHERE job = :job AND output = :output AND interval_start < :interval_end AND interval_end > :interval_start"
         with closing(self.connection.cursor()) as cursor:
             # Oracle has no range locks: a row lock covers only ledger rows that exist, so a second run of the same new
             # interval would pass. Locking the table holds every other append to this database until this one commits.
-            cursor.execute(f"LOCK TABLE {self.ledger} IN SHARE ROW EXCLUSIVE MODE")
-            cursor.execute(f"SELECT run_id FROM {self.ledger} WHERE job = :job AND output = :output AND interval_start < :interval_end AND interval_end > :interval_start", binds)
-            return sorted({str(row[0]) for row in cursor.fetchall()})
+            with statement(self.database, _KIND, lock):
+                cursor.execute(lock)
+            with statement(self.database, _KIND, sql):
+                cursor.execute(sql, binds)
+                return sorted({str(row[0]) for row in cursor.fetchall()})
 
     def apply(self, target: Target, changes: Changes, spec: TableSpec) -> Counts:
         deleted = upserted = inserted_new = inserted = 0
@@ -234,17 +255,19 @@ class OracleWriter(OracleReader):
             check_count(f"the insert into {target.table}", changes.insert.height, inserted)
         return Counts(deleted, upserted, inserted_new, inserted)
 
-    def _many(self, statement: str, frame: pl.DataFrame) -> int:
+    def _many(self, sql: str, frame: pl.DataFrame) -> int:
         written = 0
         with closing(self.connection.cursor()) as cursor:
-            for part in slices(frame):
-                cursor.executemany(statement, part)
+            for part in slices(frame):  # each batch a statement, and a span, of its own
+                with statement(self.database, _KIND, sql) as traced:
+                    cursor.executemany(sql, part)
+                    traced.set_attribute("db.operation.batch.size", part.height)
                 written += cursor.rowcount
         return written
 
-    def _execute(self, statement: str, binds: Sequence[object] = ()) -> int:
-        with closing(self.connection.cursor()) as cursor:
-            cursor.execute(statement, list(binds))
+    def _execute(self, sql: str, binds: Sequence[object] = ()) -> int:
+        with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql):
+            cursor.execute(sql, list(binds))
             return cursor.rowcount
 
     def _delete(self, target: Target, delete: Delete, spec: TableSpec) -> int:
@@ -268,18 +291,19 @@ class OracleWriter(OracleReader):
         key = target.key or ()
         source = ", ".join(f":{index} AS {name}" for index, name in enumerate(frame.columns, 1))
         on = " AND ".join(f"t.{name} = s.{name}" for name in key)
-        statement = f"MERGE INTO {target.table} t USING (SELECT {source} FROM dual) s ON ({on})"
+        sql = f"MERGE INTO {target.table} t USING (SELECT {source} FROM dual) s ON ({on})"
         if update and (values := [name for name in frame.columns if name not in key]):
-            statement += f" WHEN MATCHED THEN UPDATE SET {', '.join(f't.{name} = s.{name}' for name in values)}"
-        statement += f" WHEN NOT MATCHED THEN INSERT ({', '.join(frame.columns)}) VALUES ({', '.join(f's.{name}' for name in frame.columns)})"
-        return self._many(statement, frame)
+            sql += f" WHEN MATCHED THEN UPDATE SET {', '.join(f't.{name} = s.{name}' for name in values)}"
+        sql += f" WHEN NOT MATCHED THEN INSERT ({', '.join(frame.columns)}) VALUES ({', '.join(f's.{name}' for name in frame.columns)})"
+        return self._many(sql, frame)
 
     def record(self, entry: LedgerEntry) -> None:
         values = ledger_values(entry)
         self._execute(f"INSERT INTO {self.ledger} ({', '.join(LEDGER_COLUMNS)}) VALUES ({_positions(len(values))})", [int(value) if isinstance(value, bool) else value for value in values])
 
     def commit(self) -> None:
-        self.connection.commit()
+        with span(self.database, _KIND, "commit"):
+            self.connection.commit()
         self.committed = True
 
 

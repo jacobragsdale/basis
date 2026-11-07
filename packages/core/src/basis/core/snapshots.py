@@ -5,7 +5,8 @@ which holds the run's record, the params as the run read them, and the hash of e
     outputs/NAME/OPERATION        each table's frames: upsert, insert_new, insert and delete_matching
 
 Each dataset is an object the store holds once, however many runs save it: a replay in the same store stores only
-the outputs that changed. A run is saved before anything is written to a database, its objects first and its manifest
+the outputs that changed. The record keeps each time the run's clocks gave and each id its ids made, in order, so that a
+replay is given them again. A run is saved before anything is written to a database, its objects first and its manifest
 last, so a run that fails leaves what it read for a replay. After publishing, the manifest is rewritten with each
 database's outcome; its params and datasets never change. Inputs are stored as loaded, never derived frames: a replay
 runs the transform again on them, with the code of the day."""
@@ -16,9 +17,10 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Literal
+from uuid import UUID
 
 import polars as pl
-from pydantic import Field
+from pydantic import AwareDatetime, Field
 
 from basis.core.interval import Interval
 from basis.core.model import Model
@@ -90,6 +92,10 @@ class RunRecord(Model):
     """Every reason the run may not write, from the destinations, the outputs and the job's own check."""
     error: str | None = None
     publishes: dict[str, PublishRecord] = Field(default_factory=dict)
+    clocks: dict[str, list[AwareDatetime]] = Field(default_factory=dict)
+    """Each time each clock the run declares gave, by its name, in order, which a replay of the run is given again."""
+    ids: dict[str, list[UUID]] = Field(default_factory=dict)
+    """Each id each of the run's ids made, by its name, in order, which a replay of the run is given again."""
 
     def parsed_interval(self) -> Interval | None:
         return Interval.parse(self.interval) if self.interval is not None else None

@@ -5,13 +5,9 @@ description = "HTTP APIs on FastAPI: a service declares its routes and settings,
 license = "MIT"
 requires-python = ">=3.14"
 dependencies = [
-    "basis-core==0.0.0",  # every basis package depends on basis-core at exactly its own version
+    "basis-core==0.0.0",  # every basis package depends on basis-core at exactly its own version, which brings httpx2 and OpenTelemetry
     "cryptography>=50.0.2",  # the public keys a token verifies with, read from PEM
     "fastapi>=0.162.0",
-    "httpx2>=2.16.0",  # the client of the services an API calls, and the transport of their fakes
-    "opentelemetry-api>=1.45.2",
-    "opentelemetry-exporter-otlp-proto-http>=1.45.2",
-    "opentelemetry-sdk>=1.45.2",
     "pyarrow>=26.0.1",  # a dataset route's Arrow stream, as basis-core's snapshots already hold it: see basis.api.arrow
     "pyjwt[crypto]>=2.15.1",  # verifies bearer tokens: see basis.api.tokens
     "uvicorn>=0.54.0",

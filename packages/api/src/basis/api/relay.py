@@ -40,6 +40,7 @@ from basis.api.outboxes import Failure, Row
 from basis.api.resources import DatabaseResource, DeadlineExceededError, HttpResource
 from basis.api.service import Service, ServiceError
 from basis.api.settings import Settings
+from basis.core import opened
 from basis.core.databases import Statements
 from basis.core.logs import utc_now
 from basis.core.settings import SettingsError
@@ -115,9 +116,9 @@ async def _relay_all(planned: Plan, tracer: Tracer, now: Callable[[], datetime])
         for resource in planned.service.resources:
             if isinstance(resource, HttpResource):
                 fake = planned.fakes.get(resource.name)
-                opened = fake.client(resource.name) if isinstance(fake, fakes.Http) else client(resource.name, planned.settings.http[resource.name])
-                made.append(opened)
-                clients[resource.name] = HttpClient(resource, opened, tracer)
+                reaching = fake.client(resource.name) if isinstance(fake, fakes.Http) else client(resource.name, planned.settings.http[resource.name])
+                made.append(reaching)
+                clients[resource.name] = HttpClient(opened.HttpClient(resource, reaching, tracer))
         found: list[Relayed] = []
         for resource in planned.outboxed:
             database = open_one(resource, planned.settings, planned.fakes.get(resource.name), tracer, set())
@@ -127,8 +128,8 @@ async def _relay_all(planned: Plan, tracer: Tracer, now: Callable[[], datetime])
                 database.pool.shutdown(wait=False, cancel_futures=True)  # a statement past its deadline ends on the driver's timeout
         return found
     finally:
-        for opened in made:
-            await opened.aclose()
+        for reaching in made:
+            await reaching.aclose()
 
 
 @dataclass
