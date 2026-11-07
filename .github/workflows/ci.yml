@@ -81,3 +81,114 @@ jobs:
           uv run basis new job rates
           uv run basis --help
           uv run basis check
+      - name: Commit through its hooks, which fix and format the staged files, and refuse a lint error
+        working-directory: ${{ runner.temp }}/pricing-etl
+        run: |
+          test "$(git config core.hooksPath)" = .githooks
+          git config user.name ci && git config user.email ci@example.com
+          git add --all && git commit --quiet --message "First commit"
+          printf 'import os\n\n\ndef total(values: list[int]) -> int:\n    return sum( values )\n' > jobs/rates/totals.py
+          git add jobs/rates/totals.py && git commit --quiet --message "A file ruff fixes and formats"
+          test "$(git show HEAD:jobs/rates/totals.py)" = "$(printf 'def total(values: list[int]) -> int:\n    return sum(values)')"
+          printf 'def total(values):\n    return eval("sum(values)")\n' > jobs/rates/totals.py
+          git add jobs/rates/totals.py
+          if git commit --quiet --message "A lint error"; then echo "the commit hook let a lint error through" >&2; exit 1; fi
+          git reset --quiet --hard
+          uv run basis sync && test -z "$(git status --porcelain)"
+
+  job-image:
+    # The repo a developer makes with uvx, from this commit on GitHub: its checks, its image, and its example job
+    # published from the image to SQL Server.
+    runs-on: ubuntu-latest
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: Etl-test-1234
+        ports: ["1433:1433"]
+    env:
+      COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+      SERVER: Server=127.0.0.1,1433;UID=sa;PWD=Etl-test-1234;Encrypt=yes;TrustServerCertificate=yes
+    steps:
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.13.7"
+      - name: Make a job repo with uvx from this commit, and commit it through its hooks
+        run: |
+          cd "$RUNNER_TEMP"
+          uvx --from "git+https://github.com/${{ github.repository }}@$COMMIT#subdirectory=packages/job" basis-job new repo loads
+          cd loads
+          grep --quiet "rev = \"$COMMIT\"" pyproject.toml
+          uv run basis check
+          git config user.name ci && git config user.email ci@example.com
+          git add --all && git commit --quiet --message "First commit"
+      - name: Build its image
+        run: cd "$RUNNER_TEMP/loads" && docker build --tag loads --build-arg GIT_SHA="$(git rev-parse HEAD)" .
+      - name: Make the database, with the example's sources from its fixture, and its tables and ledger from basis ddl
+        run: |
+          cd "$RUNNER_TEMP"
+          cd loads
+          docker run --rm loads ddl positions --dialect mssql > "$RUNNER_TEMP/tables.sql"
+          docker run --rm loads ddl --ledger etl.publishes --dialect mssql > "$RUNNER_TEMP/ledger.sql"
+          uv run python - <<'PY'
+          import csv, os, time
+          from pathlib import Path
+          import mssql_python
+          for attempt in range(60):
+              try:
+                  connection = mssql_python.connect(os.environ["SERVER"] + ";Database=master", autocommit=True)
+                  break
+              except mssql_python.Error:
+                  time.sleep(2)
+          else:
+              raise SystemExit("SQL Server did not start")
+          connection.cursor().execute("CREATE DATABASE loads")
+          connection.cursor().execute("ALTER DATABASE loads SET ALLOW_SNAPSHOT_ISOLATION ON")
+          cursor = mssql_python.connect(os.environ["SERVER"] + ";Database=loads", autocommit=True).cursor()
+          cursor.execute("CREATE TABLE dbo.accounts (account_id varchar(20) PRIMARY KEY, name varchar(100) NOT NULL, closed bit NOT NULL)")
+          cursor.execute(
+              "CREATE TABLE dbo.trades (trade_id varchar(32) PRIMARY KEY, account_id varchar(20) NOT NULL, security_id varchar(12) NOT NULL,"
+              " trade_date date NOT NULL, side varchar(4) NOT NULL, quantity decimal(18,4) NOT NULL, price decimal(18,6) NOT NULL, booked_at datetime2 NOT NULL)"
+          )
+          for table in ("accounts", "trades"):
+              with Path(f"jobs/positions/tests/fixture/{table}.csv").open(encoding="utf-8") as file:
+                  header, *rows = list(csv.reader(file))
+              marks = ", ".join(f"%(c{index})s" for index in range(len(header)))
+              for row in rows:
+                  cursor.execute(f"INSERT INTO dbo.{table} VALUES ({marks})", {f"c{index}": {"true": 1, "false": 0}.get(value, value) for index, value in enumerate(row)})
+          cursor.execute("CREATE SCHEMA etl")
+          for script in ("tables.sql", "ledger.sql"):
+              cursor.execute((Path(os.environ["RUNNER_TEMP"]) / script).read_text(encoding="utf-8"))
+          PY
+      - name: Run the example job in the image, and publish it
+        run: |
+          cd "$RUNNER_TEMP"
+          mkdir --mode=777 runs
+          database="$SERVER;Database=loads"
+          docker run --rm --network host --volume "$RUNNER_TEMP/runs:/runs" --env BASIS_SNAPSHOT_ROOT=/runs \
+            --env BASIS_DATABASES__SOURCE__KIND=mssql --env "BASIS_DATABASES__SOURCE__CONNECTION_STRING=$database" \
+            --env BASIS_DATABASES__SOURCE__ISOLATION=snapshot --env BASIS_DATABASES__SOURCE__TIMEOUT_S=60 --env BASIS_DATABASES__SOURCE__MAX_ROWS=1000 \
+            --env BASIS_DATABASES__WAREHOUSE__KIND=mssql --env "BASIS_DATABASES__WAREHOUSE__CONNECTION_STRING=$database" \
+            --env BASIS_DATABASES__WAREHOUSE__ISOLATION=read_committed --env BASIS_DATABASES__WAREHOUSE__TIMEOUT_S=60 --env BASIS_DATABASES__WAREHOUSE__MAX_ROWS=1000 \
+            --env "BASIS_DATABASES__WAREHOUSE__WRITE__CONNECTION_STRING=$database" --env BASIS_DATABASES__WAREHOUSE__WRITE__LEDGER=etl.publishes \
+            loads run positions --params jobs/positions/params/default.json --interval 2026-11-05..2026-11-06 --publish
+      - name: Check what it published, and that its run records the image's commit
+        run: |
+          cd "$RUNNER_TEMP"
+          cd loads
+          uv run python - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          import mssql_python
+          cursor = mssql_python.connect(os.environ["SERVER"] + ";Database=loads").cursor()
+          counts = {}
+          for table in ("daily_positions", "account_activity", "etl.publishes"):
+              cursor.execute(f"SELECT COUNT(*) FROM {table}")
+              counts[table] = cursor.fetchone()[0]
+          assert counts == {"daily_positions": 3, "account_activity": 2, "etl.publishes": 2}, counts
+          [manifest] = (Path(os.environ["RUNNER_TEMP"]) / "runs/runs/job/positions").glob("*.json")
+          run = json.loads(manifest.read_text(encoding="utf-8"))
+          head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+          assert (run["status"], run["git_sha"]) == ("published", head), (run["status"], run["git_sha"], head)
+          PY

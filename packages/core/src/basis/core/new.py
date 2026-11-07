@@ -83,7 +83,7 @@ def repo(  # noqa: PLR0913 -- the part says what it adds and where its packages 
         write_templates(path, folder, {**values, "source": source})
 
 
-def sources(distributions: Mapping[str, str], *, version: str, index: str | None, checkout: Path | None, commit: Commit | None = None) -> str:
+def sources(distributions: Mapping[str, str], *, version: str, index: str | None, checkout: Path | None, commit: Commit | None) -> str:
     """The `pyproject.toml` lines that say where a repo's basis packages come from: `index`; a checkout of basis at
     `checkout`, installed editable; or, with neither, `commit`, the commit the part was installed from, or else basis's
     GitHub repository at `version`'s tag, which needs a release. `distributions` are the part's packages, by name, each

@@ -45,7 +45,12 @@ STEPS = (
 def check(repo: Path, files: Sequence[AgentFiles], *, run: Runner) -> int:
     """Run every check on the repo at `repo`, whose parts' agent files are `files`; 0 when every one passes."""
     failures = 0
-    if stale := sync.stale(repo, files):
+    try:
+        stale = sync.stale(repo, files)
+    except sync.SyncError as error:  # a file basis writes part of, which it cannot read; every other step still runs
+        sys.stderr.write(f"ERROR: {error}\n")
+        failures, stale = 1, []
+    if stale:
         names = ", ".join(path.relative_to(repo).as_posix() for path in stale)
         failures += fail(f"{names} {'does' if len(stale) == 1 else 'do'} not match what the installed basis writes", "run `uv run basis sync`, which rewrites or removes each")
     if (found := hooks.problem(repo)) is not None:

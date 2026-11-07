@@ -23,18 +23,21 @@ def transform(inputs: Inputs, params: Params) -> Outputs: ...
 
 You need [uv](https://docs.astral.sh/uv/) and git.
 
-basis has no release yet, so a job repo takes basis-job from a checkout of basis:
+basis has no release yet, so a job repo takes basis-job from the commit of basis that `uvx` installs from GitHub:
 
 ```sh
-git clone https://github.com/jacobragsdale/basis
-uv run --project basis basis-job new repo pricing-etl prices --framework-path basis
+uvx --from 'git+https://github.com/jacobragsdale/basis#subdirectory=packages/job' basis-job new repo pricing-etl prices
 cd pricing-etl
 uv run basis check
 ```
 
+To work on basis itself, make a repo from a checkout instead, which it installs editable:
+`uv run --project basis basis-job new repo pricing-etl prices --framework-path basis`.
+
 The repo holds one job, `jobs/prices/`, copied from the package's example: daily positions from trades. Around it are
-a README that maps each kind of change to the file it goes in, a `Dockerfile`, a `.env.example`, and the agent files
-`basis sync` keeps current. Its `pyproject.toml` declares the job part, as `[tool.basis] parts = ["job"]`, so its one
+a README that maps each kind of change to the file it goes in, a `.env.example`, and the framework files `basis sync`
+keeps current: the `Dockerfile`, the deploy pipeline in `azure-pipelines.yml`, the commit and push hooks in
+`.githooks/`, which every `basis` command turns on, `.gitattributes`, and the agent files. Its `pyproject.toml` declares the job part, as `[tool.basis] parts = ["job"]`, so its one
 command, `basis`, offers the job verbs: `uv run basis --help` lists them, and `uv run basis new job NAME` adds a job.
 To take every package from an internal package index instead, pass `--index URL`: it replaces PyPI for the whole repo,
 so it must proxy PyPI.

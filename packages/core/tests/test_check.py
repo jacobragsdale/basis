@@ -71,6 +71,15 @@ def test_agent_files_that_differ_from_what_the_parts_write_fail_and_say_to_sync(
     assert errors(capsys) == ["ERROR: AGENTS.md, .agents/skills/job-gone do not match what the installed basis writes: run `uv run basis sync`, which rewrites or removes each"]
 
 
+def test_claude_settings_basis_cannot_read_fail_and_every_other_step_still_runs(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    (repo / ".claude/settings.json").write_text("{", encoding="utf-8")
+    ran, run = runner()
+    assert check(repo, [FILES], run=run) == 1
+    assert len(ran) == 5
+    [line] = errors(capsys)
+    assert line.startswith(f"ERROR: {repo / '.claude/settings.json'} is not JSON, so basis cannot add its rules to it: ")
+
+
 def test_a_clone_that_runs_other_hooks_fails_and_says_how_to_run_the_repos(repo: Path, git: Git, capsys: pytest.CaptureFixture[str]) -> None:
     git(repo, "config", "core.hooksPath", "elsewhere")
     ran, run = runner()

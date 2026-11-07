@@ -53,12 +53,12 @@ DENY = (
     "Bash(git * commit *--no-verify*)",
     "Bash(git * push *--no-verify*)",
     "Bash(git commit -n *)",
-    "Bash(git commit * -n *)",
     "Bash(git commit * -n)",
-)
+)  # fmt: skip
 """Claude Code's rules against skipping the hooks: `--no-verify` anywhere in a commit or a push, after `git` alone or
-after options such as `-C DIR`, and `-n`, a commit's short form of it, on its own. A rule matches the command as an
-agent writes it, not every way of running git, so the hooks are as strong as `AGENTS.md`'s rule to keep them."""
+after options such as `-C DIR`, and `-n`, a commit's short form of it, as its first option or its last; a rule for
+`-n` between them would refuse a commit whose message holds ` -n `. A rule matches the command as an agent writes it,
+not every way of running git, so the hooks are as strong as `AGENTS.md`'s rule to keep them."""
 SCHEMA = "https://json.schemastore.org/claude-code-settings.json"
 _HEAD = 3
 """Lines a file's marker may be in: the first line can be one a format needs, such as a Dockerfile's `# syntax=`."""
