@@ -12,7 +12,12 @@ same steps:
 6. Publish, if asked and nothing gave a reason not to: each database in one transaction, with its ledger rows.
 
 A run that fails at any step records why in its manifest, and a run that loaded its inputs keeps them in its
-snapshot, so it can be replayed on a laptop with the code of the day."""
+snapshot, so it can be replayed on a laptop with the code of the day. It keeps each time its clocks gave and each id
+its ids made in its record, and a replay is given them again (`handles.py`).
+
+Every run, replay and resume is one trace (`basis.core.traces.trace`), whose root span every SQL statement and GET is
+a span under, exported where the settings say, and every record it logs carries the trace's ids and the job's name as
+`service`."""
 
 import logging
 import traceback
@@ -20,26 +25,34 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
+from uuid import UUID
 
+import httpx2
 import polars as pl
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.trace import Tracer
 from pydantic import ValidationError
 
-from basis.core import logs, publish, snapshots
+from basis.core import fakes, logs, publish, snapshots, traces
 from basis.core import runs as core_runs
 from basis.core.databases import Database
 from basis.core.destination import TableSpec, check_table, check_values
 from basis.core.interval import Interval
 from basis.core.logs import utc_now
+from basis.core.opened import client
 from basis.core.publish import refused_overlap
 from basis.core.runs import Regression
-from basis.core.settings import Settings, publish_refusal
+from basis.core.settings import Settings, SettingsError, Traces, publish_refusal, variable
 from basis.core.snapshots import InputRecord, PublishRecord, RunRecord, Snapshot, Status
 from basis.core.storage import Root
 from basis.core.tables import Changes
+from basis.job import handles
 from basis.job.changes import Planned, plan
 from basis.job.diff import OperationDiff, diff
-from basis.job.job import Job, repo_root
-from basis.job.loader import load
+from basis.job.handles import Kept
+from basis.job.inputs import Clock, Fetch
+from basis.job.job import Job, JobError, repo_root
+from basis.job.loader import Reach, load
 from basis.job.outputs import Target
 from basis.job.params import Params
 from basis.job.version import VERSION
@@ -93,16 +106,47 @@ def targets_of(job: Job) -> dict[str, Target]:
 
 
 def run(  # noqa: PLR0913 -- what the run reads and where it saves, by keyword
-    job: Job, settings: Settings, request: Request, *, snapshot_root: Root, clock: Callable[[], datetime] = utc_now, databases: Callable[[str], Database] | None = None
+    job: Job,
+    settings: Settings,
+    request: Request,
+    *,
+    snapshot_root: Root,
+    clock: Callable[[], datetime] = utc_now,
+    databases: Callable[[str], Database] | None = None,
+    faked: Mapping[str, fakes.Fake] | None = None,
+    provider: TracerProvider | None = None,
 ) -> Result:
     """Run `job` as `request` asks, reading and writing the databases `settings` configure, each opened by
-    `databases` when given, such as the QA tier's, which refuse a table it does not allow."""
+    `databases` when given, such as the QA tier's, which refuse a table it does not allow, and reaching the services
+    they configure. `faked` names the fakes of a test's own, by the name of what each fakes: a fetch's service, or a
+    clock or ids of the job's `Inputs`. The run is one trace, on `provider` where a test gives one."""
     params, params_text = read_params(job, request.params)
+    given = _checked(job, faked or {})
     run_id = snapshots.new_run_id()
-    logs.bind(run_id=run_id, job=job.name)
+    logs.bind(run_id=run_id, job=job.name, service=job.name)
+    with traces.trace("run", service=job.name, settings=settings.traces, version=request.git_sha, environment=None, given=provider, **{"basis.job": job.name, "basis.run_id": run_id}) as (tracer, _):
+        return _run(job, settings, request, _Run(params, params_text, run_id, snapshot_root, clock, databases, given, tracer))
+
+
+@dataclass(frozen=True)
+class _Run:
+    """A run under way, in its trace."""
+
+    params: Params
+    params_text: str
+    run_id: str
+    snapshot_root: Root
+    clock: Callable[[], datetime]
+    databases: Callable[[str], Database] | None
+    faked: Mapping[str, fakes.Fake]
+    tracer: Tracer
+
+
+def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
+    params, params_text, run_id, snapshot_root, clock = this.params, this.params_text, this.run_id, this.snapshot_root, this.clock
     started = clock()
     log.info("started", extra={"interval": str(request.interval) if request.interval else None, "params": str(request.params), "labels": request.labels, "version": VERSION})
-    databases = databases if databases is not None else core_runs.opener(settings)
+    databases = this.databases if this.databases is not None else core_runs.opener(settings)
     record = _Record(
         run_id=run_id, job=job.name, module=job.module, version=VERSION, git_sha=request.git_sha, started_at=started,
         interval=str(request.interval) if request.interval is not None else None, params_path=str(request.params),
@@ -114,16 +158,17 @@ def run(  # noqa: PLR0913 -- what the run reads and where it saves, by keyword
     if reasons:
         return _summarized(_finish(record.done("failed", reasons=reasons, finished_at=clock()), snapshot_root, params_text, {}, {}))
     try:
-        frames, inputs = load(job.inputs.declared(), request.interval, open_database=databases, data=request.data)
+        frames, inputs = load(job.inputs.declared(), request.interval, open_database=databases, reach=_reach(settings, this.faked), tracer=this.tracer, data=request.data)
     except Exception as error:
         log.exception("could not load the inputs")
         return _summarized(_finish(record.done("failed", error=_headline(error), finished_at=clock()), snapshot_root, params_text, {}, {}))
-    planned, reasons = _transform(job, params, frames, request.interval)
+    kept = handles.live(job.inputs, this.faked, this.tracer)
+    planned, reasons = _transform(job, params, frames, request.interval, kept)
     for name, entry in planned.items():
         if (spec := specs.get(name)) is not None and entry.changes is not None:
             reasons.extend(f"{name}: {reason}" for reason in check_values(entry.target, spec, entry.changes))
     status: Status = "failed" if reasons else "checked"
-    record = record.with_outputs(planned, inputs)
+    record = record.with_outputs(planned, inputs).with_made(kept)
     result = _finish(record.done(status, reasons=reasons, finished_at=clock()), snapshot_root, params_text, frames, planned)
     if reasons or not request.publish or result.snapshot is None:
         _summary(result.record)
@@ -135,6 +180,35 @@ def run(  # noqa: PLR0913 -- what the run reads and where it saves, by keyword
     snapshot = result.snapshot.save_record(final)
     _summary(final)
     return Result(final, snapshot, frames, planned)
+
+
+def _checked(job: Job, faked: Mapping[str, fakes.Fake]) -> dict[str, fakes.Fake]:
+    """The fakes a test gives, each of a service a fetch of the job's reaches, or of a clock or ids its `Inputs`
+    declare, by name, of its kind."""
+    declared: dict[str, type[fakes.Fake]] = {dataset.http: fakes.Http for dataset in job.inputs.declared().values() if isinstance(dataset, Fetch)}
+    declared |= {name: fakes.Clock if isinstance(given, Clock) else fakes.Ids for name, given in job.inputs.declared_resources().items()}
+    for name, fake in faked.items():
+        if (kind := declared.get(name)) is None:
+            msg = f"a fake is given for {name}, which {job.name} neither fetches from nor declares: fake the services its fetches name, and its Inputs' clocks and ids"
+            raise JobError(msg)
+        if not isinstance(fake, kind):
+            msg = f"{name} is given a fakes.{type(fake).__name__}, and {job.name} takes a fakes.{kind.__name__} for it"
+            raise JobError(msg)
+    return dict(faked)
+
+
+def _reach(settings: Settings, faked: Mapping[str, fakes.Fake]) -> Reach:
+    """The client of each service a fetch names: its fake, or as the settings configure it."""
+
+    def reach(name: str) -> httpx2.AsyncClient:
+        if isinstance(fake := faked.get(name), fakes.Http):
+            return fake.client(name)
+        if (service := settings.http.get(name)) is None:
+            msg = f"the service {name} is not configured, and a fetch reads it: set {variable(('http', name, 'url'))}, as .env.example shows"
+            raise SettingsError(msg)
+        return client(name, service)
+
+    return reach
 
 
 def failure_of(record: RunRecord, *, publish: bool) -> tuple[str, str] | None:
@@ -196,10 +270,10 @@ def _check_destinations(targets: Mapping[str, Target], settings: Settings, datab
     return specs, reasons
 
 
-def _transform(job: Job, params: Params, frames: Mapping[str, pl.DataFrame], interval: Interval | None) -> tuple[dict[str, Planned], list[str]]:
+def _transform(job: Job, params: Params, frames: Mapping[str, pl.DataFrame], interval: Interval | None, kept: Kept) -> tuple[dict[str, Planned], list[str]]:
     """Each table's changes, and every reason not to write them. A transform or check that raises is a reason that
     names the line of job code that raised; the log holds its traceback."""
-    inputs = job.inputs(frames, interval=interval)
+    inputs = job.inputs(frames, interval=interval, handles=kept.handles)
     try:
         with logs.timed(log, "transformed"):
             outputs = job.run_transform(inputs, params)
@@ -250,17 +324,23 @@ class _Record:
     again: bool = False
     inputs: dict[str, InputRecord] = field(default_factory=dict)
     outputs: dict[str, snapshots.OutputRecord] = field(default_factory=dict)
+    clocks: dict[str, list[datetime]] = field(default_factory=dict)
+    ids: dict[str, list[UUID]] = field(default_factory=dict)
 
     def with_outputs(self, planned: Mapping[str, Planned], inputs: Mapping[str, InputRecord]) -> _Record:
         outputs = {name: snapshots.output_record(entry.target.database, entry.target.table, type(entry.target.write).__name__, entry.changes) for name, entry in planned.items()}
         return replace(self, inputs=dict(inputs), outputs=outputs)
+
+    def with_made(self, kept: Kept) -> _Record:
+        """The record, with each value the run's clocks and ids gave its transform."""
+        return replace(self, clocks={name: list(values) for name, values in kept.clocks.items()}, ids={name: list(values) for name, values in kept.ids.items()})
 
     def done(self, status: Status, *, finished_at: datetime, reasons: list[str] | None = None, error: str | None = None, publishes: dict[str, PublishRecord] | None = None) -> RunRecord:
         return RunRecord(
             run_id=self.run_id, job=self.job, module=self.module, version=self.version, git_sha=self.git_sha, started_at=self.started_at,
             finished_at=finished_at, interval=self.interval, params_path=self.params_path, params_sha256=self.params_sha256, labels=self.labels,
             data=self.data, replay_of=self.replay_of, again=self.again, status=status, inputs=self.inputs, outputs=self.outputs, reasons=reasons or [], error=error,
-            publishes=publishes or {},
+            publishes=publishes or {}, clocks=self.clocks, ids=self.ids,
         )  # fmt: skip
 
 
@@ -296,9 +376,25 @@ def _summary(record: RunRecord) -> None:
     )
 
 
-def replay(job: Job, source: Snapshot, *, params: Path | None = None, snapshot_root: Root | None = None, clock: Callable[[], datetime] = utc_now) -> tuple[Result, list[OperationDiff]]:
+def replay(  # noqa: PLR0913 -- what it replays, and where it saves and traces, by keyword
+    job: Job,
+    source: Snapshot,
+    *,
+    params: Path | None = None,
+    snapshot_root: Root | None = None,
+    clock: Callable[[], datetime] = utc_now,
+    tracing: Traces | None = None,
+    provider: TracerProvider | None = None,
+) -> tuple[Result, list[OperationDiff]]:
     """Run a saved run's transform again on its inputs, with the code of the day and, if given, other params, and how
-    its changes differ from the run's. Reads no database and writes none."""
+    its changes differ from the run's: one trace, exported where `tracing` says, or on a test's `provider`. Reads no
+    database and writes none, and gives the transform the times and ids the run kept."""
+    with traces.trace("replay", service=job.name, settings=tracing, version=None, environment=None, given=provider, **{"basis.job": job.name, "basis.replay_of": source.run_id}) as (tracer, _):
+        logs.bind(service=job.name)
+        return _replay(job, source, params=params, snapshot_root=snapshot_root, clock=clock, tracer=tracer)
+
+
+def _replay(job: Job, source: Snapshot, *, params: Path | None, snapshot_root: Root | None, clock: Callable[[], datetime], tracer: Tracer) -> tuple[Result, list[OperationDiff]]:  # noqa: PLR0913 -- replay's, by keyword
     opened = core_runs.replaying(source, name=job.name, module=job.module, params=params, parse=job.params.model_validate_json, reads=job.inputs.declared())
     original = opened.original
     interval = original.parsed_interval()
@@ -309,8 +405,9 @@ def replay(job: Job, source: Snapshot, *, params: Path | None = None, snapshot_r
         inputs={name: InputRecord(source=f"snapshot: {original.run_id}", rows=frame.height, read_ms=0.0) for name, frame in opened.saved.items()},
     )  # fmt: skip
     frames = {name: opened.saved[name] for name in job.inputs.declared()}
-    planned, reasons = _transform(job, opened.params, frames, interval)
-    record = record.with_outputs(planned, record.inputs)
+    kept = handles.replayed(job.inputs, original, tracer)
+    planned, reasons = _transform(job, opened.params, frames, interval, kept)
+    record = record.with_outputs(planned, record.inputs).with_made(kept)
     result = _finish(record.done("failed" if reasons else "checked", reasons=reasons, finished_at=clock()), snapshot_root, opened.params_text, frames, planned)
     before = source.changes()
     targets = targets_of(job)
@@ -322,13 +419,14 @@ def resume(job: Job, source: Snapshot, settings: Settings, *, again: bool = Fals
     """Finish publishing a run that committed to some of its databases and failed on another, from its snapshot: told
     `again` as the run was, or as `again` says now."""
     record = source.record()
-    logs.bind(run_id=record.run_id, job=job.name)
-    if record.status == "published":
-        log.info("already published")
-        return record
-    final = core_runs.resume(source, record, name=job.name, targets=targets_of(job), databases=core_runs.opener(settings), version=VERSION, clock=clock, again=again)
-    _summary(final)
-    return final
+    logs.bind(run_id=record.run_id, job=job.name, service=job.name)
+    with traces.trace("resume", service=job.name, settings=settings.traces, version=settings.git_sha, environment=None, **{"basis.job": job.name, "basis.run_id": record.run_id}):
+        if record.status == "published":
+            log.info("already published")
+            return record
+        final = core_runs.resume(source, record, name=job.name, targets=targets_of(job), databases=core_runs.opener(settings), version=VERSION, clock=clock, again=again)
+        _summary(final)
+        return final
 
 
 def regress(job: Job, root: Root, *, last: int, labels: Mapping[str, str]) -> list[Regression[OperationDiff]]:

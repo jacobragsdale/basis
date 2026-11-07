@@ -1,0 +1,251 @@
+"""A job's run as one trace: a span for each SQL statement and each GET under its root, its records carrying the
+trace's ids and the job's name, and its clocks' and ids' values kept for its replay, which is a trace of its own."""
+
+import io
+import json
+import logging
+from collections.abc import Awaitable, Callable, Generator, Iterator, MutableMapping
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
+from decimal import Decimal
+from pathlib import Path
+from typing import Annotated, Any, Never
+from uuid import UUID
+
+import polars as pl
+import pyarrow as pa
+import pytest
+from builders import DAY, Price, params_file
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+import basis.job as etl
+from basis.core import fakes
+from basis.core.databases import Database
+from basis.core.databases.mssql import MssqlReader
+from basis.core.logs import JsonFormatter
+from basis.core.settings import GivenSettings
+from basis.core.storage import Root
+from basis.job import runs
+from basis.job.job import Job, JobError
+
+type Message = MutableMapping[str, Any]
+type Records = Callable[[], list[dict[str, object]]]
+
+
+@pytest.fixture
+def logged() -> Iterator[Records]:
+    """The records basis logs during the test, each as the JSON line basis-core writes it, at INFO."""
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(JsonFormatter())
+    framework = logging.getLogger("basis")
+    level = framework.level
+    framework.addHandler(handler)
+    framework.setLevel(logging.INFO)
+    try:
+        yield lambda: [json.loads(line) for line in stream.getvalue().splitlines()]
+    finally:
+        framework.removeHandler(handler)
+        framework.setLevel(level)
+
+
+class Stamped(etl.Row):
+    day: date
+    security_id: Annotated[str, etl.MaxLength(8)]
+    price: Annotated[Decimal, etl.Precision(18, 4)]
+    venue: Annotated[str, etl.MaxLength(8)]
+    stamped_at: Annotated[datetime, etl.Zone("UTC")]
+    price_id: Annotated[str, etl.MaxLength(36)]
+
+
+class Venue(etl.Row):
+    security_id: Annotated[str, etl.MaxLength(8)]
+    venue: Annotated[str, etl.MaxLength(8)]
+
+
+def stamping(sql: Path, *, more_ids: int = 0) -> Job:
+    """A job that reads prices from a database and venues from another service, and stamps each row with the time and
+    a new id; `more_ids` asks for that many ids besides, as a job changed since its run may."""
+
+    class Inputs(etl.Inputs):
+        prices = etl.Query(Price, database="source", sql=str(sql), empty="fail")
+        venues = etl.Fetch(Venue, http="venues", path="/venues/{start:%Y-%m-%d}", deadline_s=5, empty="fail")
+        clock = etl.Clock()
+        ids = etl.Ids()
+
+    class Outputs(etl.Outputs):
+        stamped = etl.Table(Stamped, database="warehouse", table="stamped", write=etl.Append())
+
+    def transform(inputs: Inputs, _params: etl.Params) -> Outputs:
+        joined = inputs.prices.join(inputs.venues, on="security_id", how="inner", validate="1:1").sort("security_id")
+        made = inputs.ids.new(joined.height)
+        inputs.ids.new(more_ids)
+        stamped = joined.select("day", "security_id", "price", "venue").with_columns(stamped_at=pl.lit(inputs.clock.now()), price_id=pl.Series([str(made_id) for made_id in made]))
+        return Outputs(stamped=stamped)
+
+    return Job("stamping", "tests.stamping", etl.Params, Inputs, Outputs, transform, None, Path(__file__).parent)
+
+
+class _Cursor:
+    def __init__(self, executed: list[str]) -> None:
+        self.executed = executed
+
+    def execute(self, sql: str, binds: object = None) -> None:
+        del binds
+        self.executed.append(sql)
+
+    def arrow_reader(self, *, batch_size: int) -> pa.RecordBatchReader:
+        del batch_size
+        batch = pa.record_batch({
+            "day": pa.array([date(2026, 11, 5)] * 2), "security_id": ["S1", "S2"], "price": pa.array([Decimal("100.5"), Decimal(99)], pa.decimal128(18, 4)),
+            "note": pa.array([None, None], pa.string()), "booked_at": pa.array([None, None], pa.timestamp("us")),
+        })  # fmt: skip
+        return pa.RecordBatchReader.from_batches(batch.schema, [batch])
+
+    def close(self) -> None:
+        pass
+
+
+class _Connection:
+    def __init__(self) -> None:
+        self.executed: list[str] = []
+
+    def cursor(self) -> _Cursor:
+        return _Cursor(self.executed)
+
+
+@dataclass(frozen=True)
+class _Driverless:
+    """basis-core's SQL Server reader, on a connection that answers every query with the same two prices."""
+
+    name: str
+
+    @property
+    def writable(self) -> bool:
+        return False
+
+    @contextmanager
+    def reading(self) -> Generator[MssqlReader]:
+        yield MssqlReader(self.name, _Connection(), 100)  # ty: ignore[invalid-argument-type] -- a connection without a driver
+
+    def writing(self) -> Never:
+        raise NotImplementedError
+
+    def statements(self, *, writes: bool) -> Never:
+        del writes
+        raise NotImplementedError
+
+
+def _databases(name: str) -> Database:
+    return _Driverless(name)
+
+
+def venues(*, status: int = 200) -> fakes.Http:
+    async def app(scope: Message, receive: Callable[[], Awaitable[Message]], send: Callable[[Message], Awaitable[None]]) -> None:
+        del scope
+        await receive()
+        body = json.dumps([{"security_id": "S1", "venue": "XNYS"}, {"security_id": "S2", "venue": "XLON"}]).encode()
+        await send({"type": "http.response.start", "status": status, "headers": [(b"content-type", b"application/json")]})
+        await send({"type": "http.response.body", "body": body})
+
+    return fakes.Http(app)
+
+
+def traced() -> tuple[TracerProvider, InMemorySpanExporter]:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return provider, exporter
+
+
+def run(tmp_path: Path, job: Job, provider: TracerProvider, **faked: fakes.Fake) -> runs.Result:
+    request = runs.Request(params_file(tmp_path), DAY)
+    return runs.run(job, GivenSettings(), request, snapshot_root=Root.at(tmp_path / "snapshots"), databases=_databases, faked=faked, provider=provider)
+
+
+@pytest.fixture
+def sql(tmp_path: Path) -> Path:
+    path = tmp_path / "prices.sql"
+    path.write_text("SELECT day, security_id, price, note, booked_at FROM prices WHERE day >= %(interval_start)s", encoding="utf-8")
+    return path
+
+
+def test_a_run_is_one_trace_with_a_span_for_each_statement_and_get_and_its_records_carry_its_ids(tmp_path: Path, sql: Path, logged: Records) -> None:
+    provider, exporter = traced()
+    result = run(tmp_path, stamping(sql), provider, venues=venues())
+    assert result.record.status == "checked", result.record
+    spans = exporter.get_finished_spans()
+    [root] = [span for span in spans if span.parent is None]
+    assert (root.name, dict(root.attributes or {})) == ("run", {"basis.job": "stamping", "basis.run_id": result.record.run_id})
+    assert {span.context.trace_id for span in spans} == {root.context.trace_id}
+    assert sorted(span.name for span in spans if span is not root) == ["clock now", "ids new", "ids new", "source SELECT", "venues GET"]
+    statement = next(span for span in spans if span.name == "source SELECT")
+    assert dict(statement.attributes or {})["db.query.text"] == sql.read_text(encoding="utf-8")
+    trace_id = f"{root.context.trace_id:032x}"
+    records = [record for record in logged() if record.get("run_id") == result.record.run_id]
+    assert records
+    assert {(record["trace_id"], record["service"]) for record in records} == {(trace_id, "stamping")}
+    assert any(record["message"] == "run summary" and record["span_id"] == f"{root.context.span_id:016x}" for record in records)
+
+
+def test_a_run_keeps_its_clocks_times_and_its_ids_and_a_replay_is_given_them_again(tmp_path: Path, sql: Path) -> None:
+    provider, _ = traced()
+    result = run(tmp_path, stamping(sql), provider, venues=venues())
+    assert result.snapshot is not None
+    stamped = result.planned["stamped"].changes
+    assert stamped is not None
+    assert stamped.insert is not None
+    kept = result.snapshot.record()
+    assert kept.clocks == {"clock": stamped.insert.get_column("stamped_at").unique().to_list()}
+    assert kept.ids == {"ids": [UUID(found) for found in stamped.insert.get_column("price_id").to_list()]}
+    replaying, spans = traced()
+    replayed, differences = runs.replay(stamping(sql), result.snapshot, provider=replaying)
+    assert (replayed.record.status, differences, replayed.record.clocks, replayed.record.ids) == ("checked", [], kept.clocks, kept.ids)
+    [root] = [span for span in spans.get_finished_spans() if span.parent is None]
+    assert (root.name, "venues GET" in {span.name for span in spans.get_finished_spans()}) == ("replay", False)  # a replay reaches no service
+
+
+def test_a_replay_that_asks_for_more_than_its_run_kept_is_given_new_ones_and_says_so(tmp_path: Path, sql: Path, logged: Records) -> None:
+    provider, _ = traced()
+    result = run(tmp_path, stamping(sql), provider, venues=venues())
+    assert result.snapshot is not None
+    replayed, differences = runs.replay(stamping(sql, more_ids=2), result.snapshot, provider=traced()[0])
+    assert (replayed.record.status, differences) == ("checked", [])
+    assert replayed.record.ids["ids"][:2] == result.record.ids["ids"]
+    assert len(set(replayed.record.ids["ids"])) == 4
+    said = [record["message"] for record in logged() if str(record["message"]).startswith("the replay asks")]
+    assert said == [f"the replay asks ids ids for more than run {result.record.run_id} kept: the rest are a replay's own"]
+
+
+def test_a_fixtures_clock_and_ids_are_fakes(tmp_path: Path, sql: Path) -> None:
+    at = datetime(2026, 11, 6, 6, 0, tzinfo=UTC)
+    result = run(tmp_path, stamping(sql), traced()[0], venues=venues(), clock=fakes.Clock(at=at), ids=fakes.Ids())
+    assert (result.record.clocks, result.record.ids) == ({"clock": [at]}, {"ids": [UUID("00000000-0000-7000-8000-000000000001"), UUID("00000000-0000-7000-8000-000000000002")]})
+
+
+@pytest.mark.parametrize(
+    ("faked", "message"),
+    [
+        ({"pricing": venues()}, "a fake is given for pricing, which stamping neither fetches from nor declares"),
+        ({"clock": fakes.Ids()}, "clock is given a fakes.Ids, and stamping takes a fakes.Clock for it"),
+    ],
+    ids=["undeclared", "wrong-kind"],
+)
+def test_a_fake_fakes_what_the_job_declares_of_its_kind(tmp_path: Path, sql: Path, faked: dict[str, fakes.Fake], message: str) -> None:
+    with pytest.raises(JobError, match=message):
+        run(tmp_path, stamping(sql), traced()[0], **faked)
+
+
+def test_a_service_the_settings_do_not_configure_fails_the_run_naming_its_variable(tmp_path: Path, sql: Path) -> None:
+    result = run(tmp_path, stamping(sql), traced()[0])
+    assert result.record.status == "failed"
+    assert result.record.error is not None
+    assert "set BASIS_HTTP__VENUES__URL" in result.record.error
+
+
+def test_a_service_that_fails_its_get_fails_the_run_naming_it(tmp_path: Path, sql: Path) -> None:
+    result = run(tmp_path, stamping(sql), traced()[0], venues=venues(status=503))
+    assert (result.record.status, result.record.error) == ("failed", "CallFailedError: venues answered 503 to GET /venues/2026-11-05")

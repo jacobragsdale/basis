@@ -305,7 +305,12 @@ stay simple.
 
 **Resources.** basis-api's resource model moves into `basis.core`: a resource is declared by name, every call that can
 wait has a deadline, every call has a trace span, and every resource has a fake. The HTTP client (httpx2, with a proxy
-and a CA bundle), the clock, ids and tracing move with it, so jobs get them too, and basis-api builds on core's.
+and a CA bundle), the clock, ids and tracing move with it, so jobs get them too, and basis-api builds on core's. A job
+declares them as it declares its datasets, so its transform stays pure and every run replays from its snapshot: a
+`Fetch` is a GET that binds the interval and answers a JSON list of rows, which the snapshot saves, and is the one way
+a job reaches another service; a `Clock` or `Ids` gives the transform values that the run's record keeps, so that a
+replay is given them again. basis-api keeps what is a request's own, a route's deadline, which caps its calls, its
+transaction, the outbox, the compute pool and identity, and the cache.
 
 **Traces and logs.** Traces go to Datadog. The OpenTelemetry SDK makes them, and basis posts them over OTLP/HTTP to the
 Datadog Agent on each AKS node, at the full URL `BASIS_TRACES__ENDPOINT` names, `http://$(HOST_IP):4318/v1/traces` in a

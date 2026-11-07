@@ -1,28 +1,36 @@
 """Loading a job's inputs, in the process that runs it, before the transform sees any of them. Every query on one
 database runs in one transaction that only reads, so the job sees that database at one moment, as the database's
-isolation allows; databases load at once, each on its own connection. Each frame is conformed to its row as it
-arrives, and an empty one fails the run unless its dataset allows it.
+isolation allows; databases load at once, each on its own connection, and so do the GETs of the job's fetches, each
+within its deadline. Each frame is conformed to its row as it arrives, and an empty one fails the run unless its
+dataset allows it. Every statement and every GET has a span in the run's trace, each thread running in a copy of the
+run's context.
 
 A run on files (`data=DIR`) reads each dataset that has a file in `DIR`, `NAME.csv` or `NAME.parquet`, instead of its
 source, which is how a laptop and the contract tests run on a fixture; a dataset with no file there is read from its
 source as usual. No run falls back from a source to a file."""
 
+import asyncio
+import contextvars
 import io
+import json
 import logging
 import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import httpx2
 import polars as pl
+from opentelemetry.trace import Tracer
 
 from basis.core.databases import Database
 from basis.core.interval import Interval
 from basis.core.logs import ms_since
+from basis.core.opened import HttpClient
 from basis.core.snapshots import InputRecord
 from basis.core.storage import Root
-from basis.job.inputs import Dataset, File, Query
-from basis.job.rows import conform
+from basis.job.inputs import Dataset, Fetch, File, Query
+from basis.job.rows import Row, conform
 
 log = logging.getLogger(__name__)
 
@@ -31,7 +39,13 @@ class EmptyInputError(ValueError):
     pass
 
 
-def load(datasets: Mapping[str, Dataset], interval: Interval | None, *, open_database: Callable[[str], Database], data: Path | None) -> tuple[dict[str, pl.DataFrame], dict[str, InputRecord]]:
+type Reach = Callable[[str], httpx2.AsyncClient]
+"""The client of the service a fetch names, as the settings or a fake reach it."""
+
+
+def load(  # noqa: PLR0913 -- what the run reads, and how it reaches it, by keyword
+    datasets: Mapping[str, Dataset], interval: Interval | None, *, open_database: Callable[[str], Database], reach: Reach, tracer: Tracer, data: Path | None
+) -> tuple[dict[str, pl.DataFrame], dict[str, InputRecord]]:
     """Every dataset's frame and where it came from, by name."""
     files = {name: found for name in datasets if data is not None and (found := _data_file(data, name)) is not None}
     frames: dict[str, pl.DataFrame] = {}
@@ -39,20 +53,25 @@ def load(datasets: Mapping[str, Dataset], interval: Interval | None, *, open_dat
     for name, path in files.items():
         frames[name], records[name] = _read_file(datasets[name], str(path), source=f"data: {path}")
     by_database: dict[str, dict[str, Query]] = {}
+    fetches: dict[str, Fetch] = {}
     for name, dataset in datasets.items():
         if name in files:
             continue
         match dataset:
             case Query():
                 by_database.setdefault(dataset.database, {})[name] = dataset
+            case Fetch():
+                fetches[name] = dataset
             case File():
                 frames[name], records[name] = _read_file(dataset, dataset.location(interval), source=f"file: {dataset.path}")
             case _:
                 msg = f"{name} is a {type(dataset).__name__}, which nothing reads"
                 raise TypeError(msg)
-    with ThreadPoolExecutor(max_workers=max(len(by_database), 1)) as pool:
-        futures = {database: pool.submit(_read_database, open_database(database), queries, interval) for database, queries in by_database.items()}
-    for future in futures.values():
+    with ThreadPoolExecutor(max_workers=max(len(by_database) + bool(fetches), 1)) as pool:
+        futures = [pool.submit(_copied(_read_database, open_database(database), queries, interval)) for database, queries in by_database.items()]
+        if fetches:
+            futures.append(pool.submit(_copied(lambda: asyncio.run(_fetch_all(fetches, interval, reach, tracer)))))
+    for future in futures:
         loaded = future.result()
         frames |= {name: frame for name, (frame, _) in loaded.items()}
         records |= {name: record for name, (_, record) in loaded.items()}
@@ -60,6 +79,13 @@ def load(datasets: Mapping[str, Dataset], interval: Interval | None, *, open_dat
         msg = f"{', '.join(empty)} returned no rows, which their datasets do not allow (empty='fail'): has the data landed?"
         raise EmptyInputError(msg)
     return {name: frames[name] for name in datasets}, {name: records[name] for name in datasets}
+
+
+def _copied[**A, T](work: Callable[A, T], *args: A.args, **kwargs: A.kwargs) -> Callable[[], T]:
+    """`work`, to run on another thread in a copy of this context, so that its spans are the run's and its records
+    carry the run's fields."""
+    context = contextvars.copy_context()
+    return lambda: context.run(work, *args, **kwargs)
 
 
 def _read_database(database: Database, queries: Mapping[str, Query], interval: Interval | None) -> dict[str, tuple[pl.DataFrame, InputRecord]]:
@@ -77,6 +103,68 @@ def _read_database(database: Database, queries: Mapping[str, Query], interval: I
             log.info("loaded", extra={"dataset": name, "source": record.source, "rows": record.rows, "ms": record.read_ms})
             loaded[name] = (frame, record)
     return loaded
+
+
+async def _fetch_all(fetches: Mapping[str, Fetch], interval: Interval | None, reach: Reach, tracer: Tracer) -> dict[str, tuple[pl.DataFrame, InputRecord]]:
+    """Each fetch's GET, at once, on one client for each service."""
+    clients: dict[str, httpx2.AsyncClient] = {}
+    try:
+        for fetch in fetches.values():
+            if fetch.http not in clients:
+                clients[fetch.http] = reach(fetch.http)
+        async with asyncio.TaskGroup() as group:
+            tasks = {name: group.create_task(_fetch(name, fetch, interval, HttpClient(fetch.resource, clients[fetch.http], tracer))) for name, fetch in fetches.items()}
+    except ExceptionGroup as failed:
+        raise failed.exceptions[0] from None  # the first fetch that failed, as a database's load names its one dataset; the others are cancelled
+    finally:
+        for client in clients.values():
+            await client.aclose()
+    return {name: task.result() for name, task in tasks.items()}
+
+
+async def _fetch(name: str, fetch: Fetch, interval: Interval | None, client: HttpClient) -> tuple[pl.DataFrame, InputRecord]:
+    start = time.perf_counter()
+    what = f"dataset {name} ({fetch.describe()})"
+    try:
+        response = await client.request("GET", fetch.location(interval))
+        frame = json_rows(response.content, fetch.row, what=what)
+    except Exception as error:
+        error.add_note(f"while loading {what}")
+        raise
+    record = InputRecord(source=fetch.describe(), rows=frame.height, read_ms=ms_since(start))
+    log.info("loaded", extra={"dataset": name, "source": record.source, "rows": record.rows, "ms": record.read_ms})
+    return frame, record
+
+
+def json_rows(content: bytes, row: type[Row], *, what: str) -> pl.DataFrame:
+    """A JSON list of objects as `row`'s frame: each value as its text, as a CSV's arrives, so that a number keeps the
+        digits it was sent with, and `conform` converts each value as it converts a CSV's. A field the row has no column
+        for, or a value that is an object or a list, is refused; a field an object leaves out is null. This and `conform` are
+    the one place a fetch's rows become a frame."""
+    parsed: object = json.loads(content, parse_float=str, parse_int=str)
+    entries: list[dict[str, object]] = []
+    for entry in parsed if isinstance(parsed, list) else [parsed]:
+        if not isinstance(parsed, list) or not isinstance(entry, dict):
+            msg = f"{what} is not a JSON list of objects, one per row"
+            raise TypeError(msg)
+        entries.append({str(key): value for key, value in entry.items()})
+    names = row.names()
+    if unknown := sorted({key for entry in entries for key in entry} - set(names)):
+        msg = f"{what} has fields its row has no column for: {', '.join(unknown)}"
+        raise ValueError(msg)
+    columns = {name: [_text(entry.get(name), what=what, name=name) for entry in entries] for name in names}
+    return conform(pl.DataFrame(columns, schema=dict.fromkeys(names, pl.String())), row, what=what, naive="in_zone")
+
+
+def _text(value: object, *, what: str, name: str) -> str | None:
+    match value:
+        case None | str():
+            return value
+        case bool():
+            return "true" if value else "false"
+        case _:
+            msg = f"{what} has an object or a list in {name}, and a row's values are flat"
+            raise TypeError(msg)
 
 
 def _read_file(dataset: Dataset, location: str, *, source: str) -> tuple[pl.DataFrame, InputRecord]:

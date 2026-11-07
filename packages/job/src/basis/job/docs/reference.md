@@ -11,7 +11,7 @@ not listed is named by its module path. The module exports:
 | Name | Required | What it is |
 |---|---|---|
 | `Params` | yes | A subclass of `etl.Params`: the job's parameters. |
-| `Inputs` | yes | A subclass of `etl.Inputs`: one `Query` or `File` attribute per dataset. |
+| `Inputs` | yes | A subclass of `etl.Inputs`: one `Query`, `Fetch` or `File` attribute per dataset, and a `Clock` or `Ids` attribute for each the transform uses. |
 | `Outputs` | yes | A subclass of `etl.Outputs`: one `Table` attribute per table written. |
 | `transform(inputs, params)` | yes | Returns an instance of `Outputs`, with every declared output by name. |
 | `check(inputs, outputs, params)` | no | Returns a list of reasons not to write; an empty list writes. |
@@ -63,6 +63,24 @@ A query binds only the run's interval, as naive UTC datetimes: `%(interval_start
 Server, `:interval_start` and `:interval_end` in Oracle. A query that names them in a run without an interval fails.
 An Oracle `NUMBER` without a precision arrives as a float; cast it in the query for a `Decimal` column.
 
+### `etl.Fetch(row, *, http, path, deadline_s, empty)`
+
+Rows another service answers a GET with: the one way a job reaches another service.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `row` | `type[etl.Row]` | The rows' columns. |
+| `http` | `str` | The service's name, as `BASIS_HTTP__NAME__*` configures it. |
+| `path` | `str` | The service's own path, after its base URL. `{start}` and `{end}` format the interval's ends, as `prices/{start:%Y-%m-%d}`. |
+| `deadline_s` | `float` | Seconds the GET may take, from the first byte sent to the last byte of the reply. |
+| `empty` | `"fail"` or `"allow"` | Whether a run may continue when the service answers no rows. |
+
+The service answers a JSON list of objects, one per row, each of the row's columns by name; a field the object leaves
+out is null, and a field the row has no column for, or a value that is an object or a list, fails the run. Each value
+is read as its text, as a CSV's is, so a number keeps the digits it was sent with. A reply that is not a 2xx, or one
+that takes longer than `deadline_s`, fails the run. The rows are saved in the snapshot like any input's, so a replay
+never calls the service.
+
 ### `etl.File(row, *, path, empty)`
 
 A `.csv` or `.parquet` file, by a path relative to the declaring file, or a URL that `pyarrow.fs` reads. `{start}` and
@@ -74,10 +92,18 @@ converted by the row; an empty field is null.
 A run given a folder of files (`--data DIR`, or `data=` from Python) reads each dataset that has `NAME.csv` or
 `NAME.parquet` there instead of its source. A folder with both for one dataset is an error.
 
+### `etl.Clock()` and `etl.Ids()`
+
+The time, and new ids, for a transform that needs them, named by their attributes on `Inputs`. `inputs.NAME.now()` is
+the time, in UTC; `inputs.NAME.new()` is a new UUIDv7, and `inputs.NAME.new(count)` a list of `count`, for a column's.
+A run keeps every value they give in its manifest, and a replay of the run is given the same values again, in the same
+order, so it changes nothing a transform makes from them. A replay that asks for more than its run kept is given, past
+them, the last time the run kept, or the run's start, and new ids, and logs that it did.
+
 ### `Inputs` instances
 
-`inputs.NAME` is the dataset's frame, `inputs.frames` maps every name to its frame, and `inputs.interval` is the run's
-`etl.Interval`, or `None`.
+`inputs.NAME` is the dataset's frame, or a clock's or ids', `inputs.frames` maps every dataset's name to its frame, and
+`inputs.interval` is the run's `etl.Interval`, or `None`.
 
 ## Outputs
 
@@ -225,7 +251,7 @@ returns the replay's result and its differences.
 Paths are relative to the job's folder. `env` names a settings file, looked for in the job's folder and each folder
 above it up to the repo's root; its variables are set for the call alone, and the process's environment overrides them. Snapshots are saved in the repo's
 `snapshots/`. `replay` looks for the run there, then under the settings file's `BASIS_SNAPSHOT_ROOT`. Given `data` and
-no `interval`, `run` uses the fixture's interval from `fixture.json`.
+no `interval`, `run` uses the fixture's interval from `fixture.json`, and its clocks read the fixture's `now`.
 
 ## Settings
 
@@ -245,11 +271,20 @@ Settings come only from environment variables, which a settings file can hold.
 | `BASIS_DATABASES__NAME__CLIENT_LIB_DIR` | Oracle, thick mode: where Oracle Instant Client is, if not on the library path. |
 | `BASIS_DATABASES__NAME__WRITE__USER`, `__WRITE__PASSWORD` | Oracle: the writing login. |
 | `BASIS_DATABASES__NAME__WRITE__LEDGER` | The ledger table in that database. |
+| `BASIS_HTTP__NAME__URL` | The base URL of the service a fetch names `NAME`. |
+| `BASIS_HTTP__NAME__CA_BUNDLE` | A PEM file of the certificate authorities the service's certificate chains to, in place of the system's. |
+| `BASIS_HTTP__NAME__PROXY` | The proxy the service's calls go through; without it, they go direct. `HTTP_PROXY` and `SSL_CERT_FILE` are never read. |
+| `BASIS_TRACES__EXPORTER` | `otlp`, to post each run's spans to `BASIS_TRACES__ENDPOINT`, or `console`, to write them to stderr. Without it, spans go nowhere. |
+| `BASIS_TRACES__ENDPOINT` | For `otlp`: the full URL spans are posted to, path and all, such as `http://$(HOST_IP):4318/v1/traces`, the Datadog Agent on the pod's node. |
+| `BASIS_TRACES__TIMEOUT_S` | Seconds each export may take, its retries included (default 5). An export that fails is logged and fails nothing. |
 | `BASIS_LOG_LEVEL` | `DEBUG`, `INFO` (default), `WARNING` or `ERROR`. |
 | `BASIS_LOG_FORMAT` | `json` (the commands' default) or `text` (the Python API's default). |
-| `BASIS_GIT_SHA` | The job repo's commit, which the run's manifest records; the generated `Dockerfile` sets it. |
+| `BASIS_GIT_SHA` | The job repo's commit, which the run's manifest records, and its spans carry as their version; the generated `Dockerfile` sets it. |
 
-`NAME` is the database's name in upper case. A database without a `WRITE` block can be read and never written. A
+No `OTEL_*` variable changes where spans go. Every run, replay and resume is one trace, with a span for each SQL
+statement and GET, and every JSON record it logs carries `trace_id`, `span_id` and the job's name as `service`.
+
+`NAME` is the database's or the service's name in upper case. A database without a `WRITE` block can be read and never written. A
 field a database's block does not have is an error; a variable the framework does not read is ignored.
 
 With `snapshot` or `read_only` isolation, every query a run makes on that database sees one moment. SQL Server's
@@ -274,7 +309,8 @@ The manifest holds the run's `run_id`, `job`, `module`, `version`, `git_sha`, `s
 `interval`, `params_path` (the params file, or `run RUN_ID` for a replay with that run's params), `params_sha256`,
 `labels`, `data`, `replay_of`, `status`, `inputs` (each dataset's source, rows and read time), `outputs` (each
 table's database, table, write mode, delete and rows by operation), `reasons`, `error`, `publishes` (each database's
-status, time, counts and error), `params` (the params file's text, as the run read it), and `datasets`: the hash of
+status, time, counts and error), `clocks` and `ids` (each value the run's clocks and ids gave, by name, in order),
+`params` (the params file's text, as the run read it), and `datasets`: the hash of
 each input, as `inputs/NAME`, and of each table's frames, as `outputs/NAME/upsert`, `insert_new`, `insert` and
 `delete_matching`. The params and datasets never change after the run saves them.
 
@@ -301,8 +337,11 @@ UTC), `rerun_safe`, `deleted`, `upserted`, `inserted_new`, `inserted` (as the da
   Set `params` or `fixture` on the subclass for other paths, relative to the job's folder.
 - `frame(row, *rows)`: a frame of `row` from partial rows, conformed as a load conforms it; a column a row leaves out
   is null.
-- `inputs(Inputs, *, interval=None, **frames)`: an `Inputs` instance; a dataset not given has no rows.
+- `inputs(Inputs, *, interval=None, now=None, **frames)`: an `Inputs` instance; a dataset not given has no rows. Each
+  clock reads `now`, which an `Inputs` with a clock needs, and each ids counts up from
+  `00000000-0000-7000-8000-000000000001`.
 - `check_params`, `check_fixture`, `check_imports`: the contract tests' checks, as functions. Whether the agent files match the installed version is `basis check`'s to say.
 
-A fixture is a folder with one `NAME.csv` or `NAME.parquet` per dataset and a `fixture.json` that gives its interval,
-as `{"interval": "2026-11-05..2026-11-06"}`, or `{"interval": null}`.
+A fixture is a folder with one `NAME.csv` or `NAME.parquet` per dataset, a fetch's among them, and a `fixture.json` that
+gives its interval, as `{"interval": "2026-11-05..2026-11-06"}`, or `{"interval": null}`, and, for a job with a clock,
+the time it reads, as `"now": "2026-11-06T06:00:00+00:00"`; its ids count up from 1.

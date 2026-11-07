@@ -21,8 +21,9 @@ from pathlib import Path
 from types import ModuleType
 
 from dotenv import dotenv_values
+from pydantic import AwareDatetime
 
-from basis.core import logs, settings
+from basis.core import fakes, logs, settings
 from basis.core import runs as core_runs
 from basis.core.interval import Interval
 from basis.core.model import Model
@@ -31,6 +32,7 @@ from basis.core.storage import Root
 from basis.job import job as jobs
 from basis.job import runs
 from basis.job.diff import OperationDiff
+from basis.job.inputs import Clock
 
 log = logging.getLogger(__name__)
 
@@ -46,16 +48,18 @@ def run(  # noqa: PLR0913 -- main.py writes every value out, by keyword
     snapshot_root: str | Path | None = None,
 ) -> runs.Result:
     """Run a job without publishing. `data` names a folder of files, such as `tests/fixture`, that replace the datasets
-    they name; with it and no `interval`, the fixture's own interval applies."""
+    they name; with it and no `interval`, the fixture's own interval applies, and its clocks read the fixture's time."""
     found = jobs.read(job)
     _setup_logs(found)
     folder = data if data is None else found.directory / data
+    faked: dict[str, fakes.Fake] = {}
     if interval is None and folder is not None:
-        interval = fixture_interval(folder)
+        fixture = read_fixture(folder)
+        interval, faked = fixture.interval, fixture_fakes(found, fixture)
     request = runs.Request(found.directory / params, Interval.parse(interval) if interval is not None else None, folder, dict(labels or {}))
     root = Root.at(found.directory / snapshot_root) if snapshot_root is not None else Root.at(jobs.repo_root(found.directory) / "snapshots")
     with _environment(_settings_file(found.directory, env)):
-        result = runs.run(found, Settings(), request, snapshot_root=root)
+        result = runs.run(found, Settings(), request, snapshot_root=root, faked=faked)
     _report(result)
     return result
 
@@ -83,15 +87,37 @@ def replay(job: ModuleType, run_id: str, *, params: str | Path | None = None, en
 class Fixture(Model):
     interval: str | None
     """`START..END`, or null for a job that runs without one."""
+    now: AwareDatetime | None = None
+    """The time each clock the job's `Inputs` declare reads, which a job that declares one must give."""
 
 
 def fixture_interval(folder: Path) -> str | None:
     """A fixture's interval, from its `fixture.json`: `{"interval": "2026-11-05..2026-11-06"}`, or null for none."""
+    return read_fixture(folder).interval
+
+
+def read_fixture(folder: Path) -> Fixture:
+    """A fixture's `fixture.json`: its interval, and the time its run's clocks read, as
+    `{"interval": "2026-11-05..2026-11-06", "now": "2026-11-06T06:00:00+00:00"}`."""
     path = folder / "fixture.json"
     if not path.exists():
         msg = f'{folder} has no fixture.json, which gives the fixture\'s interval: write {{"interval": "2026-11-05..2026-11-06"}}, or null'
         raise FileNotFoundError(msg)
-    return Fixture.model_validate_json(path.read_bytes()).interval
+    return Fixture.model_validate_json(path.read_bytes())
+
+
+def fixture_fakes(job: jobs.Job, fixture: Fixture) -> dict[str, fakes.Fake]:
+    """What a run on a fixture gives its clocks and ids: the fixture's time, and ids that count up from 1."""
+    given: dict[str, fakes.Fake] = {}
+    for name, resource in job.inputs.declared_resources().items():
+        if isinstance(resource, Clock):
+            if fixture.now is None:
+                msg = f'{job.name} declares a clock, {name}, and its fixture gives no time for it to read: add "now": "2026-11-06T06:00:00+00:00" to its fixture.json'
+                raise ValueError(msg)
+            given[name] = fakes.Clock(at=fixture.now)
+        else:
+            given[name] = fakes.Ids()
+    return given
 
 
 def _settings_file(directory: Path, env: str | Path | None) -> Path | None:
