@@ -170,7 +170,11 @@ of the `openapi.json` that this repo's example API produces.
   API that accepts a new one deploys before the UI that sends it.
 - **Errors.** Every error is an RFC 9457 problem details response, from one exception map.
 - **Identity.** A UI sends the user's JWT as a bearer token, and the API verifies it. A missing token is anonymous; an
-  invalid or expired one gets a 401.
+  invalid or expired one gets a 401 problem of type `invalid-token`, and a route that needs a user answers an anonymous
+  request with a 401 of type `sign-in-required`, each with a `WWW-Authenticate: Bearer` challenge. While the sign-in
+  system's keys cannot be fetched, a token whose key the API cannot look up gets a 503, `keys-unavailable`, which a UI
+  retries rather than signing the user out. In development, a UI signs its tokens with basis's published development
+  key.
 - **Datasets as Arrow.** A route that returns a dataset returns Arrow when the request asks for
   `application/vnd.apache.arrow.stream`, which is how parallax, basis-ui's grid, receives its data.
 - **One origin.** A UI and its API sit behind one host on the AKS cluster, the ingress routing `/api` to the API and the
@@ -206,6 +210,18 @@ expired token is refused rather than treated as anonymous, so a broken sign-in i
 user as `User | None`, so the type checker makes it handle the anonymous case, and the user goes into every log record,
 trace and request record. Tests and `basis dev` sign tokens with a development key that the settings refuse anywhere but
 a developer's desktop.
+
+A service that verifies tokens declares its user, `api.Service(..., user=User)`: a subclass of `api.User`, which holds
+the subject, `sub`, with a field for each other claim the service needs, and a token without one is refused. The claims
+basis verifies itself are not a service's to declare, and the user holds nothing else of the token. The settings name
+the issuer, the audience, the algorithms accepted, the leeway for clock skew, and the keys: the sign-in system's JWK set
+from its URL, fetched again when a token names a key it does not hold, or one public key from a file. Each is set
+explicitly, since the sign-in system's details are not yet known, and none is guessed. Only asymmetric algorithms are
+accepted, never `none` or HMAC, whose key would let every API that verifies a token make one too, and a key verifies
+only an algorithm it fits. The development key is published, so that tests, `basis dev` and a UI's development mode
+sign with it; settings read from the environment refuse it unless the machine is declared a desktop, by `desktop = true`
+in `basis/desktop.toml` in the user's own configuration folder, which no repo, image or deployment's variables hold, and
+refuse it in a container even then. Tokens are verified with PyJWT, which every basis environment already holds.
 
 `basis call ROUTE` runs a handler in-process with its real or fake resources and prints the response, so an agent
 exercises an endpoint without starting a server. Every request in production is recorded in the run store: the request,
@@ -369,6 +385,7 @@ Each fact was checked on 2026-11-06 against the source named, unless it says sec
 | On SWE-Sharp-Bench, agents resolved about 40% of C# tasks, against about 70% of Python tasks on SWE-bench Verified, on different task sets | arXiv 2511.02352 |
 | OpenAI's harness-engineering team kept `AGENTS.md` to about 100 lines and enforced its architecture with linters whose messages carry the fix | a third-party copy of OpenAI's post, since openai.com refuses automated fetches |
 | Anthropic measured a six-point spread on Terminal-Bench 2.0 from infrastructure alone, and advises skepticism of differences under three points | anthropic.com/engineering |
+| Every basis environment already holds PyJWT with its crypto extra, through mssql-python, azure-identity and msal (checked 2026-11-07) | `uv tree --invert --package pyjwt` |
 
 ## Not yet verified
 

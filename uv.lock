@@ -82,22 +82,26 @@ version = "0.0.0"
 source = { editable = "packages/api" }
 dependencies = [
     { name = "basis-core" },
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "httpx2" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "uvicorn" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "basis-core", editable = "packages/core" },
+    { name = "cryptography", specifier = ">=50.0.2" },
     { name = "fastapi", specifier = ">=0.162.0" },
     { name = "httpx2", specifier = ">=2.16.0" },
     { name = "opentelemetry-api", specifier = ">=1.45.2" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.45.2" },
     { name = "opentelemetry-sdk", specifier = ">=1.45.2" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.15.1" },
     { name = "uvicorn", specifier = ">=0.54.0" },
 ]
 

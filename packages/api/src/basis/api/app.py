@@ -2,6 +2,7 @@
 
 - its settings, read once here, so that a missing one stops the app before it serves, its resources' included;
 - the request boundary (`requests.py`): request ids, log fields, `traceparent` out, and the error no handler expected;
+- inside it, for a service that declares a user, each request's bearer token verified (`tokens.py`);
 - one exception map (`errors.problem`) for every error a handler or FastAPI raises;
 - FastAPI's own telemetry, on the app's tracer provider (`traces.py`), which reads `traceparent` in and makes each
   request's server span;
@@ -34,7 +35,7 @@ from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from basis.api import errors, opened, traces
+from basis.api import errors, opened, tokens, traces
 from basis.api.fakes import Fake
 from basis.api.requests import HEALTH, REQUEST_ID, Requests
 from basis.api.resources import Resource
@@ -101,6 +102,7 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Mapping[
         raise ServiceError(msg)
     configured = settings
     planned = opened.plan(service, configured, fakes or {})
+    verifier = tokens.plan(service, configured)
     writes = {route.handler: route.writes for route in service.routes if route.writes is not None}
     lifecycle = Lifecycle()
     provider = traces.provider(service.name)
@@ -125,7 +127,12 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Mapping[
         log.info(
             "%s is ready",
             service.name,
-            extra={"service": service.name, "traces": configured.traces.exporter if configured.traces is not None else None, "resources": [resource.name for resource in service.resources]},
+            extra={
+                "service": service.name,
+                "traces": configured.traces.exporter if configured.traces is not None else None,
+                "resources": [resource.name for resource in service.resources],
+                "identity": configured.identity.keys.kind if configured.identity is not None else None,
+            },
         )
         try:
             yield {STATE: Runtime(configured, resources, writes)}
@@ -140,8 +147,8 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Mapping[
 
     app = FastAPI(
         title=service.name,
-        lifespan=lifespan,
-        middleware=[Middleware(Requests)],
+        lifespan=tokens.lifespan(verifier, tracer, lifespan),
+        middleware=[Middleware(Requests), *([Middleware(tokens.Bearer, verifier=verifier)] if verifier is not None else [])],  # Bearer inside Requests
         exception_handlers={errors.Error: _problem, HTTPException: _problem, RequestValidationError: _problem},
         telemetry={
             "tracer_provider": provider,
