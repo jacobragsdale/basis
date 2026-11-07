@@ -10,7 +10,9 @@ is `Unavailable` is made again, after a backoff that starts at `RETRY_FIRST_S` a
 each wait jittered to between half and all of it, or after the reply's `Retry-After` seconds where that is longer, so
 long as the wait ends before the deadline; once none does, or the deadline cuts a resend short, the last `Unavailable`
 is raised, not a `Timeout`. The call's span counts the resends (`http.request.resend_count`). No other method, and no
-other kind, is made again.
+other kind, is made again. How a client waits is a resource of its own (`Waits`): the system's clock and sleep, or a
+fake's, which waits no time and moves its clock on by each wait, so a test makes every attempt a deadline allows at
+once.
 
 How a part reaches another service is its settings' alone: its URL, CA bundle and proxy, never `SSL_CERT_FILE`,
 `HTTP_PROXY` or any other variable of the environment's."""
@@ -24,6 +26,7 @@ from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from typing import Protocol
 from uuid import UUID
 
 import httpx2
@@ -48,6 +51,34 @@ _UNREACHABLE = (httpx2.NetworkError, httpx2.RemoteProtocolError, httpx2.ProxyErr
 before the reply."""
 
 
+class Waits(Protocol):
+    """How a client waits between attempts at a call: the clock its deadline is read on, the wait, and each wait's
+    jitter, the share of its backoff it waits."""
+
+    def monotonic(self) -> float: ...
+
+    async def sleep(self, seconds: float) -> None: ...
+
+    def jitter(self) -> float: ...
+
+
+class SystemWaits:
+    """The system's monotonic clock and sleep, and a jitter from half to all of each backoff, which spreads the
+    replicas' attempts."""
+
+    def monotonic(self) -> float:
+        return time.monotonic()
+
+    async def sleep(self, seconds: float) -> None:
+        await asyncio.sleep(seconds)
+
+    def jitter(self) -> float:
+        return random.uniform(0.5, 1)  # noqa: S311 -- jitter, which spreads the replicas' retries, not a secret
+
+
+SYSTEM_WAITS = SystemWaits()
+
+
 def client(name: str, service: HttpService) -> httpx2.AsyncClient:
     """The client of the service the settings name `name`: its certificate checked against the declared CA bundle or
     the operating system's trusted CAs, through the declared proxy or none, and nothing read from the environment."""
@@ -58,12 +89,14 @@ def client(name: str, service: HttpService) -> httpx2.AsyncClient:
 
 
 class HttpClient:
-    """Another service, as `Client` gives it: every call in a span of its own, within its deadline."""
+    """Another service, as `Client` gives it: every call in a span of its own, within its deadline, waiting between
+    attempts as `waits` does."""
 
-    def __init__(self, resource: HttpResource, client: httpx2.AsyncClient, tracer: Tracer) -> None:
+    def __init__(self, resource: HttpResource, client: httpx2.AsyncClient, tracer: Tracer, *, waits: Waits = SYSTEM_WAITS) -> None:
         self._resource = resource
         self._client = client
         self._tracer = tracer
+        self._waits = waits
 
     @property
     def name(self) -> str:
@@ -120,7 +153,8 @@ class HttpClient:
         limit = deadlines.limit(resource.name, resource.deadline_s)
         if limit.seconds <= 0:
             raise limit.exceeded()
-        ends_at = time.monotonic() + limit.seconds
+        waits = self._waits
+        ends_at = waits.monotonic() + limit.seconds
         resent = 0
         failure: ServiceError | None = None
         while True:
@@ -140,13 +174,13 @@ class HttpClient:
                 status = response.status_code
                 log.warning("%s answered %s to %s %s", resource.name, status, method, path, extra={"resource": resource.name, "reply": status, "body": response.text[:2000]})
                 failure = answered(status)(f"{resource.name} answered {status} to {method} {path}", resource=resource.name, status=status)
-            if (wait_s := _retry_in(method, failure, response, resent, ends_at)) is None:
+            if (wait_s := _retry_in(method, failure, response, resent=resent, ends_at=ends_at, waits=waits)) is None:
                 raise failure
             resent += 1
             span.set_attribute("http.request.resend_count", resent)
             span.add_event("basis.retry", {"basis.error": str(failure), "basis.wait_s": wait_s})
             log.info("%s is unavailable for %s %s: making it again in %.3gs", resource.name, method, path, wait_s, extra={"resource": resource.name, "resent": resent, "wait_s": wait_s})
-            await asyncio.sleep(wait_s)
+            await waits.sleep(wait_s)
 
     async def _attempt(  # noqa: PLR0913 -- the request's parts, by keyword
         self, method: HttpMethod, path: str, *, query: Query | None, content: bytes | None, headers: Mapping[str, str], limit: deadlines.Limit, ends_at: float
@@ -154,7 +188,7 @@ class HttpClient:
         """One attempt at the request, within what is left of the deadline: the service's reply, whatever its status.
         It raises `Timeout` once the deadline passes, and the transport's failure as `Unavailable` or `Failed`."""
         resource = self._resource
-        if (left_s := ends_at - time.monotonic()) <= 0:
+        if (left_s := ends_at - self._waits.monotonic()) <= 0:
             raise limit.exceeded()
         deadline = asyncio.timeout(left_s)
         try:
@@ -174,15 +208,15 @@ class HttpClient:
             raise Failed(msg, resource=resource.name) from error
 
 
-def _retry_in(method: HttpMethod, failure: ServiceError, response: httpx2.Response | None, resent: int, ends_at: float) -> float | None:
+def _retry_in(method: HttpMethod, failure: ServiceError, response: httpx2.Response | None, *, resent: int, ends_at: float, waits: Waits) -> float | None:  # noqa: PLR0913 -- what the attempt was, and its clock
     """The seconds to wait before making the request again after `failure`, its `resent`-th resend: only for an
-    `Unavailable` GET, and only where the wait ends before the deadline; otherwise None."""
+    `Unavailable` GET, and only where the wait ends before the deadline, on `waits`' clock; otherwise None."""
     if method != "GET" or not isinstance(failure, Unavailable):
         return None
-    wait_s = min(RETRY_MAX_S, RETRY_FIRST_S * 2.0 ** min(resent, 32)) * random.uniform(0.5, 1)  # noqa: S311 -- jitter, which spreads the replicas' retries, not a secret
+    wait_s = min(RETRY_MAX_S, RETRY_FIRST_S * 2.0 ** min(resent, 32)) * waits.jitter()
     if response is not None and (after := _retry_after(response)) is not None:
         wait_s = max(wait_s, after)
-    return wait_s if time.monotonic() + wait_s < ends_at else None
+    return wait_s if waits.monotonic() + wait_s < ends_at else None
 
 
 def _retry_after(response: httpx2.Response) -> float | None:

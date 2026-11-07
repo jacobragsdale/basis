@@ -10,16 +10,26 @@ as narrowly as its driver allows (`mssql.kind_of`, `oracle.kind_of`):
 | `Rejected` | Any other constraint violated |
 | `Failed` | Anything else |
 
-A statement is never made again. Each kind's detail says what happened in basis's words, and its reason is the
-driver's own message, which can hold the server's name, a constraint's or the values refused, so only the log and a
-run's record hold it, never an API's problem. A driver's error raised while a block's failure is being handled, as a
-rollback on the connection a call timeout broke, is logged, and the block's failure is the one raised."""
+The kinds are converted once, where basis calls the driver (`Boundary`): each driver's module wraps the driver's
+connection and its cursors, so every call through them raises its kind as it fails, whichever reader, writer or
+statement makes it, and code inside a transaction's block may catch one, as `except Conflict`. A statement is never
+made again. Each kind's detail says what happened in basis's words, and its reason is the driver's own message, which
+can hold the server's name, a constraint's or the values refused, so only the log and a run's record hold it, never an
+API's problem.
+
+What ends a block, its rollback and its connection's close, is marked as its cleanup (`ending`, `quietly`): after a
+block that failed, a cleanup that fails too, as a rollback on the connection a call timeout broke, is logged, and the
+block's own failure is the one raised. A failure raised while code handles an earlier one, as an `UPDATE` in an
+`except Conflict`, is a failure of its own, and is raised."""
 
 import logging
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 
-from basis.core.errors import Conflict, Denied, Failed, Rejected, ServiceError, Timeout, Unavailable
+from basis.core.errors import DATABASE_KINDS, Conflict, Denied, Failed, Rejected, ServiceError, Timeout, Unavailable
+
+__all__ = ["DATABASE_KINDS", "Boundary", "ending", "failure", "failures", "quietly"]
 
 log = logging.getLogger(__name__)
 _DETAILS: dict[type[ServiceError], str] = {
@@ -44,15 +54,55 @@ def failure(database: str, kind: type[ServiceError], error: BaseException) -> Se
 @contextmanager
 def failures(database: str, driver: tuple[type[BaseException], ...], kind_of: Callable[[BaseException], type[ServiceError]]) -> Generator[None]:
     """Within the block, an error of `driver` raised again as the kind of failure of `database` that `kind_of` says it
-    is. A `ServiceError` passes as it is, so blocks may nest; and one that a driver's error raised while ending the
-    block, such as its rollback's, interrupted is raised again in its place, with its own cause and context."""
-    first: ServiceError | None = None
+    is, with the driver's error as its cause."""
     try:
         yield
     except driver as error:
-        if not isinstance(error.__context__, ServiceError):
-            raise failure(database, kind_of(error), error) from error
-        first = error.__context__
-        log.warning("database %s failed again while ending what its failure stopped; the first failure is the one raised", database, exc_info=error, extra={"database": database})
-    if first is not None:
-        raise first  # outside the handler, so it keeps the cause and the context it had
+        raise failure(database, kind_of(error), error) from error
+
+
+@dataclass(frozen=True)
+class Boundary:
+    """Where basis calls one database's driver: each call made through it raises the driver's errors as their kinds."""
+
+    database: str
+    driver: tuple[type[BaseException], ...]
+    kind_of: Callable[[BaseException], type[ServiceError]]
+
+    def call[**P, T](self, made: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> T:
+        with failures(self.database, self.driver, self.kind_of):
+            return made(*args, **kwargs)
+
+    def each[T](self, items: Iterable[T]) -> Iterator[T]:
+        """Each of `items`, a driver's iterator, which fetches as it goes, each fetch a call through the boundary."""
+        with failures(self.database, self.driver, self.kind_of):
+            found = iter(items)
+        while True:
+            with failures(self.database, self.driver, self.kind_of):
+                try:
+                    item = next(found)
+                except StopIteration:
+                    return
+            yield item
+
+
+@contextmanager
+def ending(database: str, end: Callable[[], object], what: str) -> Generator[None]:
+    """Run `end`, the cleanup of the block, such as its transaction's rollback, once the block is done. After a block
+    that raised, an `end` that fails too is logged, and the block's error is the one raised; after one that did not,
+    `end`'s failure is raised."""
+    try:
+        yield
+    except BaseException:
+        quietly(database, end, what)
+        raise
+    end()
+
+
+def quietly(database: str, end: Callable[[], object], what: str) -> None:
+    """Run `end`, a cleanup whose failure changes nothing, as closing a connection does, or one after a failure that is
+    the one to raise: its failure is logged, and never raised."""
+    try:
+        end()
+    except Exception:  # logged: the failure that ended the block, if any, is the one to raise
+        log.warning("database %s could not %s; the failure that ended its work, if any, is the one raised", database, what, exc_info=True, extra={"database": database})

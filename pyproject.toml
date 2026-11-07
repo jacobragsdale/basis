@@ -61,6 +61,7 @@ ignore = [
 "packages/job/tests/integration/**" = ["S101", "PLR2004", "INP001", "DTZ001", "S608"]
 # basis-api's integration tier builds SQL around the scratch tables each test makes and names.
 "packages/api/tests/integration/**" = ["S101", "PLR2004", "INP001", "S608"]
+"packages/core/tests/integration/**" = ["S101", "PLR2004", "INP001", "S608"]
 "**/test_*.py" = ["S101", "PLR2004"]
 "**/conftest.py" = ["S101", "PLR2004"]
 # A job's hooks share their signatures, so a hook may leave an argument unused.

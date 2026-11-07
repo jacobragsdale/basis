@@ -12,11 +12,14 @@ Each statement a reader or a writer runs has a span, and so does each commit and
 runs a caller's own SQL, binding `%(name)s` by name: each statement's deadline is the driver's query timeout, in whole
 seconds, which SQL Server enforces by cancelling the statement on the server too.
 
-A failure of the driver's is the kind of `basis.core.errors.ServiceError` its SQLSTATE says (`kind_of`). The driver
-keeps no SQLSTATE and no SQL Server error number on its errors, only the phrase it gives each SQLSTATE, so the phrase
-names it; and two SQLSTATEs hold more than one kind, which only SQL Server's message, in English, tells apart: a
-`23000` is a `Conflict` where it is a duplicate key and `Rejected` otherwise, and a `42000` is `Denied` where a
-permission was denied and `Failed` otherwise."""
+A failure of the driver's is the kind of `basis.core.errors.ServiceError` its SQLSTATE says (`kind_of`), as each call
+through the connection or a cursor of it raises it (`Connection`, `Cursor`). The driver keeps no SQLSTATE and no SQL
+Server error number on its errors, only the phrase it gives each SQLSTATE, so the phrase names it; and two SQLSTATEs
+hold more than one kind, which only SQL Server's message tells apart: a `23000` is a `Conflict` where it is a duplicate
+key and `Rejected` otherwise, and a `42000` is `Denied` where a permission was denied or the login failed, as SQL
+Server's error 4060 says of a database the login cannot open, and `Failed` otherwise. Each connection sets its
+session's language to English (`SET LANGUAGE us_english`), so the messages are English whatever language a login
+defaults to."""
 
 import locale
 import logging
@@ -24,7 +27,7 @@ import math
 import re
 import sys
 import time
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 
@@ -51,7 +54,7 @@ from basis.core.databases.base import (
     span,
     statement,
 )
-from basis.core.databases.failures import failures
+from basis.core.databases.failures import Boundary, ending, quietly
 from basis.core.destination import DestColumn, TableSpec
 from basis.core.errors import Conflict, Denied, Failed, Rejected, ServiceError, Timeout, Unavailable
 from basis.core.interval import Interval
@@ -67,17 +70,109 @@ _STAGE = "#etl_stage"
 _MATCH = "#etl_match"
 
 
-def connect_to(connection_string: str, timeout_s: int, *, autocommit: bool) -> mssql_python.Connection:
-    """A connection with a deadline on its login, and one on every statement."""
+def connect_to(database: str, connection_string: str, timeout_s: int, *, autocommit: bool) -> Connection:
+    """A connection to `database` with a deadline on its login, and one on every statement, whose session's language
+    is English, so `kind_of` reads its messages whatever the login's default language is."""
+    boundary = Boundary(database, _DRIVER, kind_of)
     try:
-        connection = mssql_python.connect(connection_string, timeout=min(LOGIN_TIMEOUT_S, timeout_s), autocommit=autocommit)
-    except mssql_python.Error as error:
+        raw = boundary.call(mssql_python.connect, connection_string, timeout=min(LOGIN_TIMEOUT_S, timeout_s), autocommit=autocommit)
+    except ServiceError as error:
         error.add_note(f"while connecting to SQL Server {target_of(connection_string)}")
         raise
-    connection.timeout = timeout_s
-    if fetches_char_as_utf8(sys.platform, locale.getencoding()):
-        connection.setdecoding(mssql_python.SQL_CHAR, encoding="utf-8", ctype=mssql_python.SQL_CHAR)
+    connection = Connection(raw, boundary)
+    try:
+        connection.timeout = timeout_s
+        if fetches_char_as_utf8(sys.platform, locale.getencoding()):
+            boundary.call(raw.setdecoding, mssql_python.SQL_CHAR, encoding="utf-8", ctype=mssql_python.SQL_CHAR)
+        with closing(connection.cursor()) as cursor, statement(database, _KIND, _ENGLISH):
+            cursor.execute(_ENGLISH)  # a SET, which begins no transaction, with autocommit on or off
+    except BaseException:
+        connection.close()
+        raise
     return connection
+
+
+_ENGLISH = "SET LANGUAGE us_english"
+
+
+@dataclass(frozen=True)
+class Cursor:
+    """A cursor of the driver's, each of whose calls raises the driver's errors as their kinds (`kind_of`). Closing
+    it never raises: a cursor that cannot close, as on a connection already lost, is logged, and the error of what it
+    ran, if any, is the one raised."""
+
+    raw: mssql_python.Cursor
+    boundary: Boundary
+
+    @property
+    def rowcount(self) -> int:
+        return self.raw.rowcount
+
+    def execute(self, sql: str, *binds: object) -> None:
+        self.boundary.call(self.raw.execute, sql, *binds)
+
+    def executemany(self, sql: str, rows: Sequence[Sequence[object]]) -> None:
+        self.boundary.call(self.raw.executemany, sql, rows)
+
+    def fetchone(self) -> mssql_python.Row | None:
+        return self.boundary.call(self.raw.fetchone)
+
+    def fetchall(self) -> list[mssql_python.Row]:
+        return self.boundary.call(self.raw.fetchall)
+
+    def arrow_reader(self, *, batch_size: int) -> Batches:
+        return Batches(self.boundary.call(self.raw.arrow_reader, batch_size=batch_size), self.boundary)
+
+    def close(self) -> None:
+        quietly(self.boundary.database, self.raw.close, "close a cursor")
+
+
+@dataclass(frozen=True)
+class Batches:
+    """The record batches a query's cursor reads as Arrow, each fetched through the boundary."""
+
+    raw: Iterable[pa.RecordBatch]
+    """The driver's reader, which `pyarrow.RecordBatchReader`'s schema and close are read from, as a test's is."""
+    boundary: Boundary
+
+    @property
+    def schema(self) -> pa.Schema:
+        return getattr(self.raw, "schema")  # noqa: B009 -- a reader's, which `raw`'s type, all a reader and a test's share, leaves out
+
+    def __iter__(self) -> Iterator[pa.RecordBatch]:
+        return self.boundary.each(self.raw)
+
+    def close(self) -> None:
+        quietly(self.boundary.database, getattr(self.raw, "close"), "close a query's reader")  # noqa: B009 -- as `schema` is
+
+
+@dataclass
+class Connection:
+    """A connection of the driver's, each of whose calls raises the driver's errors as their kinds, as its cursors'
+    do. Closing it never raises, as a cursor's does not."""
+
+    raw: mssql_python.Connection
+    boundary: Boundary
+
+    @property
+    def timeout(self) -> int:
+        return self.raw.timeout
+
+    @timeout.setter
+    def timeout(self, seconds: int) -> None:
+        self.boundary.call(setattr, self.raw, "timeout", seconds)
+
+    def cursor(self) -> Cursor:
+        return Cursor(self.boundary.call(self.raw.cursor), self.boundary)
+
+    def commit(self) -> None:
+        self.boundary.call(self.raw.commit)
+
+    def rollback(self) -> None:
+        self.boundary.call(self.raw.rollback)
+
+    def close(self) -> None:
+        quietly(self.boundary.database, self.raw.close, "close its connection")
 
 
 def fetches_char_as_utf8(platform: str, encoding: str) -> bool:
@@ -114,7 +209,9 @@ _KINDS: dict[str, type[ServiceError]] = {
 _PHRASES: dict[str, str] = {found.driver_error: state for state in _KINDS if (found := sqlstate_to_exception(state, "")) is not None}
 """Each SQLSTATE by the phrase the driver gives it, which is all its errors keep of it."""
 _DUPLICATE = re.compile(r"duplicate key", re.IGNORECASE)
-_PERMISSION = re.compile(r"permission (?:was )?denied", re.IGNORECASE)
+_DENIED = re.compile(r"permission (?:was )?denied|login failed", re.IGNORECASE)
+"""A `42000` that is `Denied`: a permission denied, or error 4060's `Cannot open database "D" requested by the login.
+The login failed.`"""
 
 
 def kind_of(error: BaseException) -> type[ServiceError]:
@@ -124,7 +221,7 @@ def kind_of(error: BaseException) -> type[ServiceError]:
     state, message = _PHRASES.get(error.driver_error), error.ddbc_error
     if state == "23000" and _DUPLICATE.search(message):
         return Conflict
-    if state == "42000" and _PERMISSION.search(message):
+    if state == "42000" and _DENIED.search(message):
         return Denied
     return _KINDS.get(state, Failed) if state is not None else Failed
 
@@ -149,7 +246,7 @@ class MssqlDatabase:
 
     @contextmanager
     def reading(self) -> Generator[MssqlReader]:
-        with failures(self.name, _DRIVER, kind_of), self._read_transaction(level=logging.INFO) as connection:
+        with self._read_transaction(level=logging.INFO) as connection:
             yield MssqlReader(self.name, connection, self.settings.max_rows)
 
     @contextmanager
@@ -160,43 +257,36 @@ class MssqlDatabase:
             msg = f"database {self.name!r} {reason}: {fix}"
             raise LookupError(msg)
         start = time.perf_counter()
-        with failures(self.name, _DRIVER, kind_of), closing(connect_to(write.connection_string.get_secret_value(), self.settings.timeout_s, autocommit=False)) as connection:
+        with closing(connect_to(self.name, write.connection_string.get_secret_value(), self.settings.timeout_s, autocommit=False)) as connection:
             log.info("connected", extra={"database": self.name, "access": "write", "connect_ms": ms_since(start)})
             writer = MssqlWriter(self.name, connection, self.settings.max_rows, write.ledger)
-            try:
+            with ending(self.name, lambda: writer.committed or _rolled_back(self.name, connection), "roll back"):
                 yield writer
-            finally:
-                if not writer.committed:
-                    with span(self.name, _KIND, "rollback"):
-                        connection.rollback()
 
     @contextmanager
     def statements(self, *, writes: bool) -> Generator[MssqlStatements]:
         if not writes:
-            with failures(self.name, _DRIVER, kind_of), self._read_transaction(level=logging.DEBUG) as connection:
+            with self._read_transaction(level=logging.DEBUG) as connection:
                 yield MssqlStatements(self.name, connection, self.settings.timeout_s, self.settings.max_rows, writes=False)
             return
         if (write := self.settings.write) is None:
             msg = f"database {self.name!r} has no write settings: set BASIS_DATABASES__{self.name.upper()}__WRITE__CONNECTION_STRING"
             raise LookupError(msg)
         start = time.perf_counter()
-        with failures(self.name, _DRIVER, kind_of), closing(connect_to(write.connection_string.get_secret_value(), self.settings.timeout_s, autocommit=False)) as connection:
+        with closing(connect_to(self.name, write.connection_string.get_secret_value(), self.settings.timeout_s, autocommit=False)) as connection:
             log.debug("connected", extra={"database": self.name, "access": "write", "connect_ms": ms_since(start)})
             statements = MssqlStatements(self.name, connection, self.settings.timeout_s, self.settings.max_rows, writes=True)
-            try:
+            with ending(self.name, lambda: statements.committed or connection.rollback(), "roll back"):
                 yield statements
-            finally:
-                if not statements.committed:
-                    connection.rollback()
 
     @contextmanager
-    def _read_transaction(self, *, level: int) -> Generator[mssql_python.Connection]:
+    def _read_transaction(self, *, level: int) -> Generator[Connection]:
         """A connection through the read login, in a transaction at the settings' isolation, rolled back at the end."""
         start = time.perf_counter()
         # With autocommit off, the driver's implicit transaction would begin at the SET itself, under the default
         # level, and SQL Server refuses to switch a begun transaction to snapshot: so autocommit stays on, and the
         # transaction begins explicitly, after the level is set.
-        with closing(connect_to(self.settings.connection_string.get_secret_value(), self.settings.timeout_s, autocommit=True)) as connection:
+        with closing(connect_to(self.name, self.settings.connection_string.get_secret_value(), self.settings.timeout_s, autocommit=True)) as connection:
             log.log(level, "connected", extra={"database": self.name, "access": "read", "connect_ms": ms_since(start)})
             with closing(connection.cursor()) as cursor:
                 isolation = "SNAPSHOT" if self.settings.isolation == "snapshot" else "READ COMMITTED"
@@ -209,9 +299,14 @@ class MssqlDatabase:
                 end_reading(self.name, lambda: _roll_back(self.name, connection))
 
 
-def _roll_back(database: str, connection: mssql_python.Connection) -> None:
+def _roll_back(database: str, connection: Connection) -> None:
     with closing(connection.cursor()) as cursor, span(database, _KIND, "rollback", _ROLL_BACK):
         cursor.execute(_ROLL_BACK)
+
+
+def _rolled_back(database: str, connection: Connection) -> None:
+    with span(database, _KIND, "rollback"):
+        connection.rollback()
 
 
 _KIND = "mssql"
@@ -221,7 +316,7 @@ _ROLL_BACK = "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION"
 @dataclass
 class MssqlReader:
     database: str
-    connection: mssql_python.Connection
+    connection: Connection
     max_rows: int
 
     def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pl.DataFrame:
@@ -399,7 +494,7 @@ class MssqlWriter(MssqlReader):
 @dataclass
 class MssqlStatements:
     database: str
-    connection: mssql_python.Connection
+    connection: Connection
     limit_s: int
     """The settings' `timeout_s`, which bounds every statement's own."""
     max_rows: int
@@ -407,7 +502,7 @@ class MssqlStatements:
     committed: bool = False
 
     def query(self, sql: str, binds: Mapping[str, Bind], *, timeout_s: float) -> pa.Table:
-        with failures(self.database, _DRIVER, kind_of), closing(self._cursor(timeout_s)) as cursor:
+        with closing(self._cursor(timeout_s)) as cursor:
             _execute(cursor, sql, binds)
             reader = cursor.arrow_reader(batch_size=FETCH_ROWS)
             batches: list[pa.RecordBatch] = []
@@ -423,17 +518,16 @@ class MssqlStatements:
 
     def execute(self, sql: str, binds: Mapping[str, Bind], *, timeout_s: float) -> int:
         self._refuse_reads("change rows")
-        with failures(self.database, _DRIVER, kind_of), closing(self._cursor(timeout_s)) as cursor:
+        with closing(self._cursor(timeout_s)) as cursor:
             _execute(cursor, sql, binds)
             return max(cursor.rowcount, 0)
 
     def commit(self) -> None:
         self._refuse_reads("commit")
-        with failures(self.database, _DRIVER, kind_of):
-            self.connection.commit()
+        self.connection.commit()
         self.committed = True
 
-    def _cursor(self, timeout_s: float) -> mssql_python.Cursor:
+    def _cursor(self, timeout_s: float) -> Cursor:
         self.connection.timeout = max(1, math.ceil(min(timeout_s, self.limit_s)))  # whole seconds, for the next cursor's statements
         return self.connection.cursor()
 
@@ -443,7 +537,7 @@ class MssqlStatements:
             raise RuntimeError(msg)
 
 
-def _execute(cursor: mssql_python.Cursor, sql: str, binds: Mapping[str, Bind]) -> None:
+def _execute(cursor: Cursor, sql: str, binds: Mapping[str, Bind]) -> None:
     if binds:
         cursor.execute(sql, dict(binds))
     else:

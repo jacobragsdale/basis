@@ -105,7 +105,7 @@ def outcome(transport: Transport, service: Service, served: Served, call: Callab
 
     async def main() -> object:
         async with reaching(transport, service, served) as opened:
-            return await call(HttpClient(PRICING, opened, TracerProvider().get_tracer("test")))
+            return await call(HttpClient(PRICING, opened, TracerProvider().get_tracer("test"), waits=service.fake.waits))  # the same waits through either
 
     try:
         found: object = asyncio.run(main())
@@ -157,10 +157,12 @@ def test_a_server_nothing_listens_for_is_unavailable(service: Service) -> None:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]  # closed again, so nothing listens on it
 
+    waits = fakes.Waits()
+
     async def main() -> None:
         async with client(PRICING.name, HttpService.model_validate({"url": f"http://127.0.0.1:{port}/"})) as opened:
-            await HttpClient(PRICING, opened, TracerProvider().get_tracer("test")).get("/prices/S1", Price)
+            await HttpClient(PRICING, opened, TracerProvider().get_tracer("test"), waits=waits).get("/prices/S1", Price)
 
     with pytest.raises(Unavailable, match=r"^pricing could not be reached for GET /prices/S1: ConnectError$") as raised:
         asyncio.run(main())
-    assert (raised.value.status, service.seen) == (None, [])
+    assert (raised.value.status, service.seen, waits.waited) == (None, [], [0.05, 0.1, 0.2])  # each attempt refused, until no backoff fits 0.5s

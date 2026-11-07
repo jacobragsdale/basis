@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 from basis.core import deadlines, errors, fakes, resources
 from basis.core.errors import KINDS, BadReply, Conflict, Denied, Failed, NotFound, Rejected, ServiceError, Timeout, Unavailable
-from basis.core.opened import HttpClient, NewIds, SystemClock, client
+from basis.core.opened import SYSTEM_WAITS, HttpClient, NewIds, SystemClock, client
 from basis.core.resources import ResourceError
 from basis.core.settings import HttpService
 
@@ -59,7 +59,7 @@ def spanned() -> tuple[Tracer, InMemorySpanExporter]:
 def get(fake: fakes.Http, tracer: Tracer, *, around_s: float | None = None, resource: resources.HttpResource = PRICING) -> Price:
     async def main() -> Price:
         async with fake.client(resource.name) as opened:
-            calling = HttpClient(resource, opened, tracer)
+            calling = HttpClient(resource, opened, tracer, waits=fake.waits)
             if around_s is None:
                 return await calling.get("/prices/S1", Price, query={"on": AT.date(), "live": True})
             with deadlines.within("route", "quote", around_s):
@@ -71,7 +71,7 @@ def get(fake: fakes.Http, tracer: Tracer, *, around_s: float | None = None, reso
 def post(fake: fakes.Http, tracer: Tracer) -> Price:
     async def main() -> Price:
         async with fake.client(PRICING.name) as opened:
-            return await HttpClient(PRICING, opened, tracer).post("/prices/S1", Price, body={"security": "S1"})
+            return await HttpClient(PRICING, opened, tracer, waits=fake.waits).post("/prices/S1", Price, body={"security": "S1"})
 
     return asyncio.run(main())
 
@@ -175,11 +175,19 @@ def test_an_unavailable_get_is_made_again_after_a_backoff_and_its_span_counts_th
 
 
 def test_an_unavailable_get_is_made_again_until_no_backoff_fits_before_its_deadline() -> None:
+    """A fake's waits take no time, and each waits all of its backoff: 50ms, doubling to 1s, which 5s fits eight of."""
     seen: list[Message] = []
+    fake = pricing(status=503, seen=seen)
     started = time.monotonic()
     with pytest.raises(Unavailable, match="pricing answered 503 to GET /prices/S1"):
-        get(pricing(status=503, seen=seen), spanned()[0], resource=resources.http("pricing", deadline_s=0.3))
-    assert (len(seen) >= 2, time.monotonic() - started < 0.3) == (True, True)  # its waits, 25 to 50ms, then twice as long each time, fit 0.3s at least twice
+        get(fake, spanned()[0], resource=resources.http("pricing", deadline_s=5))
+    assert (len(seen), fake.waits.waited) == (9, [0.05, 0.1, 0.2, 0.4, 0.8, 1, 1, 1])
+    assert time.monotonic() - started < 1
+
+
+def test_the_systems_waits_jitter_each_backoff_between_half_and_all_of_it() -> None:
+    jitters = [SYSTEM_WAITS.jitter() for _ in range(200)]
+    assert (min(jitters) >= 0.5, max(jitters) <= 1, len(set(jitters)) > 1) == (True, True, True)
 
 
 @pytest.mark.parametrize("kind", [kind for kind in KINDS if kind is not Unavailable])
@@ -204,6 +212,14 @@ def test_a_retry_after_longer_than_what_is_left_of_the_deadline_is_not_waited_fo
     assert len(seen) == 1
 
 
+def test_a_retry_after_is_waited_for_where_it_is_longer_than_the_backoff() -> None:
+    seen: list[Message] = []
+    fake = pricing(status=429, seen=seen, headers=((b"retry-after", b"2"),))
+    with pytest.raises(Unavailable):
+        get(fake, spanned()[0], resource=resources.http("pricing", deadline_s=5))
+    assert (len(seen), fake.waits.waited) == (3, [2, 2])
+
+
 def test_a_service_error_is_one_of_its_kinds_with_its_detail_and_reason() -> None:
     with pytest.raises(TypeError, match="ServiceError is the base of the kinds of a resource's failure, and is never raised itself"):
         ServiceError("pricing failed", resource="pricing")
@@ -215,10 +231,13 @@ def test_a_service_error_is_one_of_its_kinds_with_its_detail_and_reason() -> Non
 @pytest.mark.parametrize(
     ("fails", "message"),
     [
-        (lambda fake: fake.fails("/prices/S1", ServiceError), "fails with one of the kinds of ServiceError"),
-        (lambda fake: fake.fails("/prices/S1", ValueError), "fails with one of the kinds of ServiceError"),
+        (
+            lambda fake: fake.fails("/prices/S1", ServiceError),
+            "a fake service fails with one of Timeout, Unavailable, NotFound, Conflict, Rejected, Denied, BadReply, Failed, the kinds of ServiceError it can raise, not 'ServiceError'",
+        ),
+        (lambda fake: fake.fails("/prices/S1", ValueError), "not 'ValueError'"),
         (lambda fake: fake.fails("prices/S1", Unavailable), "fails a path of its own, after its base URL"),
-        (lambda fake: fake.fails("/prices/S1", Unavailable, times=0), "a whole number of times, 1 or more"),
+        (lambda fake: fake.fails("/prices/S1", Unavailable, times=0), "a fake service fails a whole number of times, 1 or more"),
     ],
     ids=["the-base", "not-a-kind", "no-slash", "no-times"],
 )

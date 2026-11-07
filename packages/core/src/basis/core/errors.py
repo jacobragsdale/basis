@@ -101,6 +101,9 @@ class Failed(ServiceError):  # noqa: N818 -- the kind's name, as the design give
 
 KINDS: tuple[type[ServiceError], ...] = (Timeout, Unavailable, NotFound, Conflict, Rejected, Denied, BadReply, Failed)
 """Every kind of a resource's failure."""
+DATABASE_KINDS: tuple[type[ServiceError], ...] = (Timeout, Unavailable, Conflict, Rejected, Denied, Failed)
+"""The kinds a database's statements raise, real or fake (`basis.core.databases.failures`); it never raises a
+`NotFound` or a `BadReply`."""
 
 _ANSWERED: dict[int, type[ServiceError]] = {
     HTTPStatus.GATEWAY_TIMEOUT: Timeout,
