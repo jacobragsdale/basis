@@ -51,7 +51,7 @@ class MssqlWrite(Model):
     """A login that may insert, update and delete in the job's tables and in the ledger, and nothing else needs."""
     ledger: Annotated[str, Field(pattern=LEDGER)] | None = None
     """The ledger table, as `basis ddl --ledger TABLE --dialect mssql` creates it, such as `etl.publishes`: where a
-    job or a model publishes, which writes it in the same transaction. An API's requests write no ledger."""
+    part publishes, such as a job, which writes it in the same transaction. An API's requests write no ledger."""
 
 
 class MssqlSettings(Limits):
@@ -70,7 +70,7 @@ class OracleWrite(Model):
     password: SecretStr
     ledger: Annotated[str, Field(pattern=LEDGER)] | None = None
     """The ledger table, as `basis ddl --ledger TABLE --dialect oracle` creates it, such as `ETL.PUBLISHES`: where a
-    job or a model publishes. An API's requests write no ledger."""
+    part publishes, such as a job. An API's requests write no ledger."""
 
 
 class OracleSettings(Limits):

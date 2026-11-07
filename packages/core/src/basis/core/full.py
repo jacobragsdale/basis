@@ -27,7 +27,8 @@ from basis.core.sync import AgentFiles
 from basis.core.verbs import Part, Regress, fail
 
 LAST = 10
-"""How many published runs of each job or model `regress` replays, newest first, as `basis regress` does."""
+"""How many of the newest published runs `regress` replays of each job, or of whatever else a part runs by name, as
+`basis regress` does."""
 
 type Report = Callable[[Exception], str]
 """Prints a failure as its one line, with its traceback first if it is a defect, and returns the line."""

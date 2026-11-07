@@ -3,8 +3,13 @@ import importlib.util
 import io
 import json
 import logging
+import os
+import subprocess
+import sys
 from pathlib import Path
+from typing import override
 
+import polars as pl
 import pytest
 
 from basis.core import logs
@@ -77,3 +82,69 @@ def test_a_worker_binds_the_fields_a_record_logged_where_it_starts_carries(monke
     with logs.fields(request_id="q1"):
         assert logs.bound() == {"run_id": "r1", "request_id": "q1"}
     assert logs.bound() == {"run_id": "r1"}
+
+
+def test_an_error_in_a_part_outside_the_namespace_is_located_in_its_code_whatever_the_part_is_named(tmp_path: Path) -> None:
+    """A part is any installed package with an entry point in the `basis.verbs` group: here `quant`, a package of its
+    own outside the namespace, in a process of its own, since the folders of basis's packages are found once."""
+    (tmp_path / "quant").mkdir()
+    (tmp_path / "quant" / "__init__.py").write_text("def fail() -> None:\n    raise RuntimeError('quant')\n", encoding="utf-8")
+    (tmp_path / "quant-0.1.0.dist-info").mkdir()
+    (tmp_path / "quant-0.1.0.dist-info" / "METADATA").write_text("Metadata-Version: 2.1\nName: quant\nVersion: 0.1.0\n", encoding="utf-8")
+    (tmp_path / "quant-0.1.0.dist-info" / "entry_points.txt").write_text("[basis.verbs]\nquant = quant.cli:part\n", encoding="utf-8")
+    script = "import quant\nfrom basis.core.logs import describe\ntry:\n    quant.fail()\nexcept RuntimeError as error:\n    print(describe(error)['where'])\n"
+    environment = os.environ | {"PYTHONPATH": os.pathsep.join([str(tmp_path), *filter(None, [os.environ.get("PYTHONPATH")])])}
+    ran = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=environment, check=True)
+    assert ran.stdout == "quant/__init__.py:2 in fail\n"
+
+
+class _Frame:
+    """What a pandas frame offers the log: its shape and its columns, whatever they are named by."""
+
+    shape = (3, 2)
+    columns = ("price", 2026)
+
+
+class _Series:
+    """What a pandas series offers: its values by its index."""
+
+    index = ("A", "B")
+
+    def to_dict(self) -> dict[str, float]:
+        return {"A": 1.5, "B": 2.0}
+
+
+class _Scalar:
+    """What a numpy value or an index offers: its `tolist()`."""
+
+    def tolist(self) -> list[int]:
+        return [1, 2]
+
+
+class _Other:
+    @override
+    def __str__(self) -> str:
+        return "other"
+
+
+@pytest.mark.parametrize(
+    ("value", "logged"),
+    [
+        (pl.DataFrame({"price": [1.5, 2.0]}), {"rows": 2, "columns": ["price"]}),
+        (pl.Series([1, 2]), [1, 2]),
+        (_Frame(), {"rows": 3, "columns": ["price", "2026"]}),
+        (_Series(), {"A": 1.5, "B": 2.0}),
+        (_Scalar(), [1, 2]),
+        (_Other(), "other"),
+    ],
+    ids=["polars-frame", "polars-series", "a-pandas-frame", "a-pandas-series", "a-numpy-value", "anything-else"],
+)
+def test_a_value_json_has_no_type_for_logs_by_its_shape_since_basis_core_imports_no_pandas_or_numpy(value: object, logged: object) -> None:
+    assert json.loads(logs.to_json({"value": value})) == {"value": logged}
+
+
+def test_a_record_for_a_person_is_the_message_then_its_fields_as_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(logs, "_bound", {})  # what other tests bound, process-wide
+    record = logging.makeLogRecord({"name": "basis.job", "levelname": "INFO", "msg": "loaded %s", "args": ("prices",), "rows": 3})
+    line = logs.TextFormatter().format(record)
+    assert line.endswith(' INFO basis.job: loaded prices {"rows":3}')

@@ -16,9 +16,9 @@ line that starts with `ERROR`, gives the reason and ends with the fix.
   `uv run basis review` as its description, which summarizes what the push's check found on the commit.
 - `uv run basis doctor` checks this desktop's uv, git, hooks, feed and settings, and `uv run basis upgrade` takes a
   basis release: it relocks, syncs, checks in full and says what changed, for a commit of its own.
-- basis writes, and owns: each file whose first lines say basis manages it, `CLAUDE.md`, the skills in
-  `.agents/skills/` and their copies in `.claude/skills/` whose names start with a part's, the deny rules in
-  `.claude/settings.json`, and the blocks of this file between `basis sync`'s markers. Never edit them: `basis check`
+- basis writes, and owns: each file whose first lines say basis manages it, skills in `.agents/skills/` and their
+  copies in `.claude/skills/` among them, `CLAUDE.md`, the deny rules in `.claude/settings.json`, and the blocks of
+  this file between `basis sync`'s markers. Never edit them: `basis check`
   fails when one differs from what the installed version writes, and `uv run basis sync` rewrites it, so a change to
   one is a change to basis. Everything else, in this file too, is the repo's own. A Debian package the image needs
   goes in `pyproject.toml`'s `[tool.basis] apt-packages`, such as `["libpq5"]`, never in the Dockerfile.

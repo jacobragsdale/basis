@@ -8,7 +8,7 @@ from basis.core import upgrade
 type Git = Callable[..., str]
 """conftest's `git` fixture."""
 
-PACKAGES = {"basis-core", "basis-job", "basis-api", "optim"}
+PACKAGES = {"basis-core", "basis-job", "basis-api", "basis-report"}  # the packages of basis-core and the installed parts
 LOCK = """version = 1
 
 [[package]]

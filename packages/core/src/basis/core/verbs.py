@@ -27,10 +27,10 @@ that one of them gives something to do:
 | `doctor`, `upgrade` | always | check the desktop's setup; relock basis, `sync` and `check --full` |
 
 No two declared parts may add the same verb, nor a verb core has, nor the same kind to `new`. A verb that several
-kinds of part share is core's, and reaches each part through a field of `Part`, as `runs` does for the verbs a job
-and a model both have.
+kinds of part share is core's, and reaches each part through a field of `Part`, as `runs` does for the verbs of every
+part that runs things by name, such as jobs.
 
-A shared verb reaches the only declared part that has it, whatever NAME is, so a module path names a job or a model
+A shared verb reaches the only declared part that has it, whatever NAME is, so a module path names what it runs
 there too. Where several do, NAME comes first, and is a name one of them lists in `Runs.names`; two of them listing the
 same name is refused, with the fix. Without NAME, there, `describe` prints what every part runs; `regress` replays
 every part's runs, taking only the options every part's takes, and prints one JSON object of what each part printed,
@@ -114,7 +114,7 @@ class Regressed:
     """One published run that `regress` replayed with today's code."""
 
     name: str
-    """The job or model whose run it is."""
+    """What the part runs, by name, such as a job, whose run it is."""
     run_id: str
     reasons: tuple[str, ...]
     """Every reason the replay would not write."""
@@ -139,7 +139,7 @@ class Regress:
     """Which published runs `Runs.regressions` replays, as `basis check --full` asks for them."""
 
     name: str | None
-    """The job or model whose runs to replay, or None for every one the part has."""
+    """What the part runs whose runs to replay, by name, or None for every one the part has."""
     last: int
     """How many published runs of each, newest first."""
     labels: dict[str, str]
@@ -150,8 +150,8 @@ class Regress:
 
 @dataclass(frozen=True)
 class Runs:
-    """What a part runs by name, such as a repo's jobs or models, and its side of each verb core shares among such
-    parts; a verb left None is one the part does not have."""
+    """What a part runs by name, such as a repo's jobs, and its side of each verb core shares among the parts that run
+    things by name; a verb left None is one the part does not have."""
 
     noun: str
     """What the part runs, in the singular, such as `job`, as `basis --help` and its errors name one."""
@@ -208,7 +208,7 @@ class QaRun:
     """One run the QA tier made."""
 
     name: str
-    """The job or model it ran."""
+    """What it ran, by name, such as a job."""
     run_id: str | None
     """The run's id, or None for one that never started."""
     summary: str

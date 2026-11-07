@@ -13,7 +13,7 @@ from basis.core import command, sync
 from basis.core.ddl import ledger
 from basis.core.errors import BasisError, deliberate
 from basis.core.settings import Settings
-from basis.core.sync import AgentFiles
+from basis.core.sync import AgentFiles, stamped
 from basis.core.verbs import Part, Runs, Shared, Verb, fail
 
 ALPHA = '[project]\nname = "repo"\n\n[tool.basis]\nparts = ["alpha"]\n'
@@ -82,13 +82,13 @@ def runs(prefix: str, *names: str, noun: str = "job", option: str = "--interval"
     )
 
 
-INSTALLED: dict[str, Callable[[], Part]] = {"alpha": lambda: Part(verbs=(verb("serve"),)), "beta": lambda: Part(verbs=(verb("sweep"),), runs=runs("beta"))}
+INSTALLED: dict[str, Callable[[], Part]] = {"alpha": lambda: Part(verbs=(verb("serve"),)), "beta": lambda: Part(verbs=(verb("render"),), runs=runs("beta"))}
 BOTH = '[tool.basis]\nparts = ["alpha", "beta"]\n'
-JOBS_AND_MODELS: dict[str, Callable[[], Part]] = {
+JOBS_AND_REPORTS: dict[str, Callable[[], Part]] = {
     "alpha": lambda: Part(runs=runs("alpha", "prices", "shared")),
-    "beta": lambda: Part(verbs=(verb("sweep"),), runs=runs("beta", "income", "shared", noun="model", option="--portfolios")),
+    "beta": lambda: Part(verbs=(verb("render"),), runs=runs("beta", "summary", "shared", noun="report", option="--regions")),
 }
-"""A part that runs jobs and one that runs models, which both run something named `shared`."""
+"""A part that runs jobs and one that runs reports, which both run something named `shared`."""
 
 
 @pytest.fixture(autouse=True)
@@ -263,43 +263,43 @@ def test_a_shared_verb_goes_to_the_only_part_that_has_it_whatever_its_name(tmp_p
 
 def test_a_shared_verb_goes_to_the_part_that_runs_the_name_and_its_parser_reads_the_rest(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     folder = repo(tmp_path, BOTH)
-    assert basis(folder, "run", "income", "--portfolios", "P1", installed=JOBS_AND_MODELS) == 0
-    assert basis(folder, "run", "prices", "--interval", "2026-11-05..2026-11-06", installed=JOBS_AND_MODELS) == 0
-    assert basis(folder, "replay", "income", "R1", installed=JOBS_AND_MODELS) == 0
-    assert basis(folder, "regress", "prices", installed=JOBS_AND_MODELS) == 0
+    assert basis(folder, "run", "summary", "--regions", "EU", installed=JOBS_AND_REPORTS) == 0
+    assert basis(folder, "run", "prices", "--interval", "2026-11-05..2026-11-06", installed=JOBS_AND_REPORTS) == 0
+    assert basis(folder, "replay", "summary", "R1", installed=JOBS_AND_REPORTS) == 0
+    assert basis(folder, "regress", "prices", installed=JOBS_AND_REPORTS) == 0
     assert capsys.readouterr().out.splitlines() == [
-        "beta runs name=income portfolios=P1",
+        "beta runs name=summary regions=EU",
         "alpha runs name=prices interval=2026-11-05..2026-11-06",
-        "beta replays name=income run_id=R1",
+        "beta replays name=summary run_id=R1",
         '{"name": "prices"}',
     ]
-    assert basis(folder, "run", "prices", "--portfolios", "P1", installed=JOBS_AND_MODELS) == 2
-    assert error_line(capsys) == "ERROR: basis run: unrecognized arguments: --portfolios P1: `basis run --help` says what it takes"
+    assert basis(folder, "run", "prices", "--regions", "EU", installed=JOBS_AND_REPORTS) == 2
+    assert error_line(capsys) == "ERROR: basis run: unrecognized arguments: --regions EU: `basis run --help` says what it takes"
 
 
 @pytest.mark.parametrize(
     ("argv", "problem", "code"),
     [
-        (["run", "rates"], "nothing in this repo is named 'rates': give one of income, prices, shared", 1),
-        (["replay", "rates", "R1"], "nothing in this repo is named 'rates': give one of income, prices, shared", 1),
+        (["run", "rates"], "nothing in this repo is named 'rates': give one of prices, shared, summary", 1),
+        (["replay", "rates", "R1"], "nothing in this repo is named 'rates': give one of prices, shared, summary", 1),
         (["run", "shared"], "the alpha and beta parts both run something named 'shared': rename one of them", 1),
         (["describe"], "the alpha and beta parts both run something named 'shared': rename one of them", 1),
-        (["replay", "R1"], "more than one part of this repo has `basis replay` (alpha, beta): give the job's or model's name before the run's id", 1),
-        (["run", "--interval", "2026-11-05..2026-11-06"], "more than one part of this repo has `basis run` (alpha, beta): give the job's or model's name first", 1),
-        (["replay", "income"], "basis replay income takes the id of one of its runs after the name: give it, as `basis replay income RUN_ID`", 2),
+        (["replay", "R1"], "more than one part of this repo has `basis replay` (alpha, beta): give the job's or report's name before the run's id", 1),
+        (["run", "--interval", "2026-11-05..2026-11-06"], "more than one part of this repo has `basis run` (alpha, beta): give the job's or report's name first", 1),
+        (["replay", "summary"], "basis replay summary takes the id of one of its runs after the name: give it, as `basis replay summary RUN_ID`", 2),
     ],
     ids=["no-such-name", "no-such-name-before-a-run-id", "a-name-two-parts-run", "a-listing-with-a-name-two-parts-run", "a-run-id-alone", "options-alone", "a-name-alone"],
 )
 def test_where_several_parts_share_a_verb_its_name_must_be_one_of_theirs(tmp_path: Path, capsys: pytest.CaptureFixture[str], argv: list[str], problem: str, code: int) -> None:
-    assert basis(repo(tmp_path, BOTH), *argv, installed=JOBS_AND_MODELS) == code
+    assert basis(repo(tmp_path, BOTH), *argv, installed=JOBS_AND_REPORTS) == code
     assert error_line(capsys) == f"ERROR: {problem}"
 
 
 def test_without_a_name_describe_lists_every_part_and_regress_replays_every_part_and_ddl_prints_the_ledger(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    installed = {"alpha": lambda: Part(runs=runs("alpha", "prices")), "beta": lambda: Part(runs=runs("beta", "income", noun="model"))}
+    installed = {"alpha": lambda: Part(runs=runs("alpha", "prices")), "beta": lambda: Part(runs=runs("beta", "summary", noun="report"))}
     folder = repo(tmp_path, BOTH)
     assert basis(folder, "describe", installed=installed) == 0
-    assert json.loads(capsys.readouterr().out) == {"prices": "alpha.prices", "income": "beta.income"}
+    assert json.loads(capsys.readouterr().out) == {"prices": "alpha.prices", "summary": "beta.summary"}
     assert basis(folder, "regress", "--last", "5", installed=installed) == 0
     assert json.loads(capsys.readouterr().out) == {"alpha": {"last": "5"}, "beta": {"last": "5"}}  # one JSON document, by part
     assert basis(folder, "ddl", "--ledger", "etl.publishes", "--dialect", "oracle", installed=installed) == 0
@@ -309,55 +309,55 @@ def test_without_a_name_describe_lists_every_part_and_regress_replays_every_part
 
 
 def test_without_a_name_regress_takes_only_the_options_every_part_takes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    assert basis(repo(tmp_path, BOTH), "regress", "--portfolios", "P1", installed=JOBS_AND_MODELS) == 2
-    assert error_line(capsys) == ("ERROR: basis regress: --portfolios is not an option of the alpha part's `basis regress`: name the job or model it is for, as `basis regress NAME --portfolios ...`")
+    assert basis(repo(tmp_path, BOTH), "regress", "--regions", "EU", installed=JOBS_AND_REPORTS) == 2
+    assert error_line(capsys) == ("ERROR: basis regress: --regions is not an option of the alpha part's `basis regress`: name the job or report it is for, as `basis regress NAME --regions ...`")
     assert capsys.readouterr().out == ""  # no part ran
 
 
 def test_a_shared_verbs_help_after_a_name_gives_that_parts_options_before_its_run_id(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     folder = repo(tmp_path, BOTH)
     for verb in ("replay", "resume"):
-        assert basis(folder, verb, "income", "--help", installed=JOBS_AND_MODELS) == 0
-        assert f"usage: basis {verb} [-h] [--portfolios PORTFOLIOS] [NAME] RUN_ID" in capsys.readouterr().out
+        assert basis(folder, verb, "summary", "--help", installed=JOBS_AND_REPORTS) == 0
+        assert f"usage: basis {verb} [-h] [--regions REGIONS] [NAME] RUN_ID" in capsys.readouterr().out
 
 
 def test_a_shared_verb_reads_what_the_parts_run_once(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     LISTINGS.clear()
-    assert basis(repo(tmp_path, BOTH), "replay", "income", "R1", installed=JOBS_AND_MODELS) == 0
+    assert basis(repo(tmp_path, BOTH), "replay", "summary", "R1", installed=JOBS_AND_REPORTS) == 0
     assert sorted(LISTINGS) == ["alpha", "beta"]
-    assert capsys.readouterr().out == "beta replays name=income run_id=R1\n"
+    assert capsys.readouterr().out == "beta replays name=summary run_id=R1\n"
 
 
 def test_a_shared_verb_that_argparse_reaches_runs_with_nothing_after_it(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """As after `--`, which ends basis's own options."""
-    assert basis(repo(tmp_path, '[tool.basis]\nparts = ["beta"]\n'), "--", "describe", installed={"beta": lambda: Part(runs=runs("beta", "income"))}) == 0
-    assert json.loads(capsys.readouterr().out) == {"income": "beta.income"}
+    assert basis(repo(tmp_path, '[tool.basis]\nparts = ["beta"]\n'), "--", "describe", installed={"beta": lambda: Part(runs=runs("beta", "summary"))}) == 0
+    assert json.loads(capsys.readouterr().out) == {"summary": "beta.summary"}
 
 
 def test_describe_without_a_name_lists_what_the_only_part_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    assert basis(repo(tmp_path, '[tool.basis]\nparts = ["beta"]\n'), "describe", installed={"beta": lambda: Part(runs=runs("beta", "income"))}) == 0
-    assert json.loads(capsys.readouterr().out) == {"income": "beta.income"}
+    assert basis(repo(tmp_path, '[tool.basis]\nparts = ["beta"]\n'), "describe", installed={"beta": lambda: Part(runs=runs("beta", "summary"))}) == 0
+    assert json.loads(capsys.readouterr().out) == {"summary": "beta.summary"}
 
 
 def test_help_lists_the_shared_verbs_for_what_the_parts_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    assert basis(repo(tmp_path, BOTH), "--help", installed=JOBS_AND_MODELS) == 0
+    assert basis(repo(tmp_path, BOTH), "--help", installed=JOBS_AND_REPORTS) == 0
     out = capsys.readouterr().out
-    assert "\nFor its jobs and models:\n  run       jobs: run a job | models: run a model\n  describe  jobs: describe a job | models: describe a model\n" in out
+    assert "\nFor its jobs and reports:\n  run       jobs: run a job | reports: run a report\n  describe  jobs: describe a job | reports: describe a report\n" in out
     assert "From the alpha part" not in out  # it adds no verb of its own
-    assert "\nFrom the beta part:\n  sweep     the sweep verb\n" in out
+    assert "\nFrom the beta part:\n  render    the render verb\n" in out
 
 
 def test_a_shared_verbs_help_gives_the_arguments_of_the_part_its_name_names(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     folder = repo(tmp_path, BOTH)
-    assert basis(folder, "run", "--help", installed=JOBS_AND_MODELS) == 0
+    assert basis(folder, "run", "--help", installed=JOBS_AND_REPORTS) == 0
     assert capsys.readouterr().out == (
         "usage: basis run [-h] NAME ...\n\n"
         "With a job's NAME, it does as the alpha part says: run a job.\n"
-        "With a model's NAME, it does as the beta part says: run a model.\n"
+        "With a report's NAME, it does as the beta part says: run a report.\n"
         "`basis run NAME --help` gives the arguments of NAME's part.\n"
     )
-    assert basis(folder, "run", "income", "--help", installed=JOBS_AND_MODELS) == 0
-    assert "usage: basis run [-h] [--portfolios PORTFOLIOS] NAME" in capsys.readouterr().out
+    assert basis(folder, "run", "summary", "--help", installed=JOBS_AND_REPORTS) == 0
+    assert "usage: basis run [-h] [--regions REGIONS] NAME" in capsys.readouterr().out
 
 
 def test_where_one_part_has_a_shared_verb_its_help_names_what_the_part_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -389,6 +389,17 @@ def test_a_count_a_verb_takes_is_a_whole_number_of_one_or_more(count: str) -> No
         command.positive(count)
 
 
+@pytest.mark.parametrize(("text", "label"), [("desk=rates", ("desk", "rates")), ("desk=", ("desk", "")), ("note=a=b", ("note", "a=b"))])
+def test_a_label_is_a_key_and_the_value_after_its_first_equals_sign(text: str, label: tuple[str, str]) -> None:
+    assert command.label(text) == label
+
+
+@pytest.mark.parametrize("text", ["desk", "=rates"])
+def test_a_label_without_a_key_and_an_equals_sign_is_refused(text: str) -> None:
+    with pytest.raises(argparse.ArgumentTypeError, match=f"a label is KEY=VALUE, not {text!r}"):
+        command.label(text)
+
+
 def test_new_adds_what_a_declared_part_makes(tmp_path: Path) -> None:
     def make(root: Path, name: str) -> Path:
         (root / "jobs" / name).mkdir()
@@ -416,11 +427,12 @@ def test_docs_lists_each_parts_pages_and_prints_one_by_its_name_where_one_part_h
 
 
 def test_sync_writes_each_declared_parts_agent_files(tmp_path: Path) -> None:
-    files = AgentFiles("basis-alpha", "the alpha block\n", {"alpha-new": "# Make one\n"})
+    skill = "---\nname: alpha-new\ndescription: Make one.\n---\n"
+    files = AgentFiles("basis-alpha", "the alpha block\n", {"alpha-new": skill})
     folder = repo(tmp_path)
     assert basis(folder, "sync", installed={"alpha": lambda: Part(files=lambda: files)}) == 0
     assert "the alpha block" in (folder / "AGENTS.md").read_text(encoding="utf-8")
-    assert (folder / ".agents/skills/alpha-new/SKILL.md").read_text(encoding="utf-8") == "# Make one\n"
+    assert (folder / ".agents/skills/alpha-new/SKILL.md").read_text(encoding="utf-8") == stamped(skill)
 
 
 @pytest.mark.parametrize("argv", [["--help"], ["serve"], ["sync", "--help"]], ids=["help", "a-parts-verb", "a-verbs-help"])
@@ -494,8 +506,8 @@ def test_every_command_ends_with_a_record_of_its_exit_code_before_any_error_line
 
 
 def test_a_verb_of_more_than_one_installed_part_the_repo_does_not_declare_names_them_all(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    installed = {**JOBS_AND_MODELS, "gamma": lambda: Part(verbs=(verb("serve"),))}
-    assert basis(repo(tmp_path, '[tool.basis]\nparts = ["gamma"]\n'), "replay", "income", "R1", installed=installed) == 1
+    installed = {**JOBS_AND_REPORTS, "gamma": lambda: Part(verbs=(verb("serve"),))}
+    assert basis(repo(tmp_path, '[tool.basis]\nparts = ["gamma"]\n'), "replay", "summary", "R1", installed=installed) == 1
     assert error_line(capsys).endswith(
         f"`basis replay` comes with the alpha and beta parts, which {tmp_path / 'pyproject.toml'} does not declare: add the one the repo has, 'alpha' or 'beta', to its [tool.basis] parts"
     )

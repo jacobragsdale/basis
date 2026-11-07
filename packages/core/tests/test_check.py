@@ -5,7 +5,7 @@ import pytest
 
 from basis.core import hooks, sync
 from basis.core.check import Runner, check
-from basis.core.sync import AgentFiles
+from basis.core.sync import AgentFiles, stamped
 
 type Git = Callable[..., str]
 """conftest's `git` fixture."""
@@ -65,10 +65,11 @@ def test_a_stale_lockfile_stops_the_check_before_the_tools_run(repo: Path, capsy
 
 def test_agent_files_that_differ_from_what_the_parts_write_fail_and_say_to_sync(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (repo / "AGENTS.md").write_text("# Agent guide\n", encoding="utf-8")
-    (repo / ".agents/skills/job-gone").mkdir(parents=True)
+    (repo / ".agents/skills/report-gone").mkdir(parents=True)
+    (repo / ".agents/skills/report-gone/SKILL.md").write_text(stamped("---\nname: report-gone\ndescription: Gone.\n---\n"), encoding="utf-8")
     _, run = runner()
     assert check(repo, [FILES], run=run) == 1
-    assert errors(capsys) == ["ERROR: AGENTS.md, .agents/skills/job-gone do not match what the installed basis writes: run `uv run basis sync`, which rewrites or removes each"]
+    assert errors(capsys) == ["ERROR: AGENTS.md, .agents/skills/report-gone do not match what the installed basis writes: run `uv run basis sync`, which rewrites or removes each"]
 
 
 def test_claude_settings_basis_cannot_read_fail_and_every_other_step_still_runs(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:

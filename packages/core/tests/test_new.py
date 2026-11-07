@@ -1,9 +1,10 @@
+import re
 import tomllib
 from pathlib import Path
 
 import pytest
 
-from basis.core.new import GIT, UNRELEASED, Commit, NewError, NoReleaseError, commit_of, sources
+from basis.core.new import GIT, UNRELEASED, Commit, NewError, NoReleaseError, commit_of, repo, sources
 
 PART = {"basis-job": "packages/job"}
 CHECKOUT = Path(__file__).parents[3]
@@ -83,3 +84,10 @@ def test_an_index_replaces_pypi_so_a_name_it_lacks_never_comes_from_pypi() -> No
 def test_a_folder_that_is_not_a_checkout_of_basis_is_refused(tmp_path: Path) -> None:
     with pytest.raises(NewError, match="is not a checkout of basis: it has no packages/job, packages/core"):
         sources(PART, version="0.7.0", index=None, checkout=tmp_path, installed=unread)
+
+
+@pytest.mark.parametrize("name", ["Pricing", "pricing etl", "pricing!", "-pricing"])
+def test_a_folder_that_is_no_repos_name_is_refused_before_anything_is_made(tmp_path: Path, name: str) -> None:
+    with pytest.raises(NewError, match=re.escape(f"{name!r} is no repo's name")):
+        repo(tmp_path / name, templates=tmp_path, values={}, distributions=PART, version=UNRELEASED, index=None, checkout=CHECKOUT)
+    assert list(tmp_path.iterdir()) == []

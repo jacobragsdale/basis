@@ -2,9 +2,9 @@
 
 It finds its repo, the nearest folder at or above the working directory with a `pyproject.toml`, reads the parts that
 file declares as `[tool.basis] parts = ["job"]`, loads each one's entry point in the `basis.verbs` group, and runs
-one verb: a part's own, or one of core's, which reach the parts through their `Part`. A verb that jobs and models
-both have, such as `run`, is core's too (`SHARED`): it parses NAME, and RUN_ID where the verb takes one, and the part
-that runs NAME parses the rest. A verb of a part the repo does not declare is refused, never offered. The verbs a
+one verb: a part's own, or one of core's, which reach the parts through their `Part`. A verb that every part that runs
+things by name has, such as `run`, is core's too (`SHARED`): it parses NAME, and RUN_ID where the verb takes one, and
+the part that runs NAME parses the rest. A verb of a part the repo does not declare is refused, never offered. The verbs a
 developer runs on a clone, `check`, `sync` and `new`, point a clone that names no hooks folder at the repo's hooks
 (`basis.core.hooks.ensure`); `run` and the rest, which a container or a scheduler runs, leave git alone.
 
@@ -41,8 +41,9 @@ from basis.core.errors import BasisError
 from basis.core.logs import utc_now
 from basis.core.verbs import GROUP, Part, Runs, Shared, Verb, error_line, fail, holding
 
-PACKAGES = {"job": "basis-job", "api": "basis-api", "optim": "optim"}
-"""The package each part comes in, for the fix when a repo declares a part that is not installed."""
+PACKAGES = {"job": "basis-job", "api": "basis-api"}
+"""The package each of basis's own released parts comes in, for the fix when a repo declares one that is not installed;
+another part's own docs name its package."""
 CORE = ("check", "review", "new", "sync", "upgrade", "doctor", "docs")
 """Core's verbs, which no part may add: in the order `basis --help` lists them. `check`, `review`, `sync`, `upgrade`
 and `doctor` are always listed, since every repo has basis's own files and gates, and each of the others when a
@@ -75,8 +76,8 @@ SHARED = {
     "regress": Spec("the {noun} whose runs to replay; without it, every one", alone="each"),
     "ddl": Spec("the {noun} whose tables to print{path}", alone="ledger"),
 }
-"""The verbs that jobs and models both have, which are core's, in the order `basis --help` lists them; each is listed
-when a declared part's `Runs` has it."""
+"""The verbs of the parts that run things by name, such as jobs, which are core's, in the order `basis --help` lists
+them; each is listed when a declared part's `Runs` has it."""
 
 log = logging.getLogger(__name__)
 
@@ -205,7 +206,7 @@ def declared(pyproject: Path) -> list[str]:
     except tomllib.TOMLDecodeError as error:
         msg = f"{pyproject} is not TOML: {error}: fix it"
         raise CommandError(msg) from error
-    example = '[tool.basis] parts = ["job"], naming each part the repo has: job, api or optim'
+    example = '[tool.basis] parts = ["job"], naming each part the repo has, such as job or api'
     table = _table(_table(data, "tool"), "basis")
     if table is None:
         msg = f"{pyproject} declares no basis parts: add {example}"
@@ -530,7 +531,7 @@ class _Sharing:
         return found
 
     def _nouns(self, suffix: str = "") -> str:
-        """What the parts run, as `job or model`, each with `suffix`."""
+        """What the parts run, such as `job`, joined by `or`, each with `suffix`."""
         return " or ".join(f"{runs.noun}{suffix}" for runs, _ in self.sides.values())
 
 
@@ -540,7 +541,7 @@ def _print(value: object) -> int:
 
 
 def _upgrade(repo: Repo) -> int:
-    packages = {"basis-core", *PACKAGES.values()}
+    packages = set(review.versions())  # basis-core and the package of each installed part, whatever its name
 
     def write(line: str) -> None:
         sys.stdout.write(f"{line}\n")
@@ -715,7 +716,7 @@ class LedgerArgs:
 def _ledger(argv: Sequence[str]) -> int:
     """`basis ddl --ledger TABLE --dialect DIALECT` without NAME, in a repo where several parts publish: the ledger's
     CREATE TABLE, which is the same for every part."""
-    parser = _Parser(prog="basis ddl", description="print the ledger's CREATE TABLE, or name a job or model to print its tables")
+    parser = _Parser(prog="basis ddl", description="print the ledger's CREATE TABLE, or name what a part runs, such as a job, to print its tables")
     parser.add_argument("--ledger", metavar="TABLE", required=True, help="the ledger, as BASIS_DATABASES__NAME__WRITE__LEDGER names it")
     parser.add_argument("--dialect", choices=["mssql", "oracle"], required=True)
     try:

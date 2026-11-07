@@ -1,6 +1,6 @@
 """The QA tier, which `basis check --full` runs: each part's runs against the QA databases, from the desktop, the one
-place without Docker where a repo's code meets a real database before production. It keeps optim's end-to-end
-safeguards: it refuses to run unless every place its settings point carries the QA marker, and it writes only to the
+place without Docker where a repo's code meets a real database before production. It keeps the safeguards of an
+end-to-end suite: it refuses to run unless every place its settings point carries the QA marker, and it writes only to the
 tables and the store the repo allows. All of it is declared in the repo's `pyproject.toml`, and nothing is inferred:
 
     [tool.basis.qa]
