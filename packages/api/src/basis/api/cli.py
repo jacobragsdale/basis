@@ -32,6 +32,13 @@ class ServeArgs:
 
 
 @dataclass(frozen=True)
+class DevArgs:
+    service: str | None
+    repo: Path
+    """The repo's root, as `basis` found it."""
+
+
+@dataclass(frozen=True)
 class CallArgs:
     route: str
     request: str
@@ -46,7 +53,7 @@ def part() -> Part:
     return Part(
         verbs=(
             Verb("serve", "serve the API with uvicorn until SIGTERM, which drains it first", _service_argument, lambda n: _serve(ServeArgs(n.service))),
-            Verb("dev", "serve the API on its declared fakes, on this machine alone, until Ctrl+C", _service_argument, lambda n: _dev(ServeArgs(n.service))),
+            Verb("dev", "serve the API on its declared fakes, on this machine alone, until Ctrl+C", _service_argument, lambda n: _dev(DevArgs(n.service, Path(n.repo_root)))),
             Verb("call", "run one route in this process, on the API's fakes or its real resources, and print its response as JSON", _call_arguments, lambda n: _call(_call_args(n))),
         ),
         files=sync.agent_files,
@@ -79,13 +86,11 @@ def _serve(args: ServeArgs) -> int:
     return 0
 
 
-def _dev(args: ServeArgs) -> int:
+def _dev(args: DevArgs) -> int:
     from basis.api import dev  # noqa: PLC0415 -- the fakes and the server load when the verb runs
     from basis.api.server import serve  # noqa: PLC0415
 
-    cwd = Path.cwd()
-    if (root := next((folder for folder in (cwd, *cwd.parents) if (folder / "pyproject.toml").is_file()), None)) is not None:
-        hooks.ensure(root)
+    hooks.ensure(args.repo)
     found = load(args.service)
     serve(found, fakes=dev.fakes(found), host=LOCAL)
     return 0

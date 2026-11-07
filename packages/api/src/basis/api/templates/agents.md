@@ -15,7 +15,8 @@ Rules to keep:
 - A route reads its request strictly: a key it does not declare is refused, a JSON body's values have their own JSON
   types, a decimal is a string (`"0.045"`, never `0.045`), a time has its offset, and query and path text reads by its
   type's grammar (`10`, `0.045`, `true`, `2026-11-06`). Declare query parameters one by one, or as one model with
-  `Query()`.
+  `Query()`. A request model reads each field by one key, a plain `alias` or its name, and a body holds tuples or lists
+  of models, never sets of them. A route takes no `BackgroundTasks`: its work ends with its response.
 - A handler takes the service's settings as `Annotated[Settings, api.given(Settings)]`, never from the environment.
 - A handler reaches the outside only through a resource the service declares, each by name with its deadline:
   `api.database` (a handler asks for an `api.Reader`, or an `api.Writer` where its route writes; its `max_concurrent`

@@ -138,7 +138,9 @@ def _run(argv: Sequence[str], *, cwd: Path, installed: Installed) -> int:
         groups = _groups(repo)
         verbs = {verb.name: verb for _, group in groups for verb in group}
         _refuse_undeclared(argv, repo, verbs, installed)
-        return _execute(_parser("basis", _describe(repo, groups), verbs.values()), verbs, argv)
+        parser = _parser("basis", _describe(repo, groups), verbs.values())
+        parser.set_defaults(repo_root=repo.root)  # for a handler that needs the repo, as `basis.core.verbs` says, so it never looks for it again
+        return _execute(parser, verbs, argv)
     except Exception as error:  # noqa: BLE001 -- the boundary where every failure becomes its one line
         return report(error)
 

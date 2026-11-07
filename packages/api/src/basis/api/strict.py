@@ -12,7 +12,15 @@ as `"019a5c3e-..."`. Two rules go further than pydantic's strict mode:
 - A `datetime` carries its offset, as `"2026-11-06T14:30:00Z"`: a time without one could be any zone's.
 
 A key no model declares is refused at every depth, whatever a model's own config says. The body is JSON only when the
-request says so, as `Content-Type: application/json`, and a route takes at most one body, its whole JSON.
+request says so, as `Content-Type: application/json`; a route takes at most one body, its whole JSON, declared in its
+handler's own parameters, and a route that declares none refuses one. The body is validated once, by basis: FastAPI
+gets the value it made, which it does not validate again, so a validator never runs twice.
+
+To check decimals and times against the JSON, basis matches each model's field to the JSON by one key, its plain
+`alias` or else its name, so a request model gives none other: no `validation_alias` of its own, `AliasChoices` or
+`AliasPath`, and no `populate_by_name`, `validate_by_name` or `validate_by_alias=False`. A set's items have no order to
+match to the JSON's, so a set in a body holds scalars, a set of decimals included, never models or tuples of decimals or
+times. Where a body's type holds no decimal and no time, that check, and the second parse it needs, are skipped.
 
 **Query and path parameters** arrive as text, so basis reads each by its type's grammar before FastAPI converts it,
 and FastAPI's conversion of what the grammar accepts is exact:
@@ -34,12 +42,14 @@ the key given once each: `?security=A&security=B`. A key the route does not decl
 twice for one value. A route declares its query parameters one by one, or as one model with `Query()`; a path
 parameter's type is the handler's, so a path never names a converter, as `{n:int}` would."""
 
+import dataclasses
 import math
 import re
 import types
 import typing
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, MutableSet, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -51,6 +61,7 @@ from fastapi import params
 from fastapi.dependencies.models import Dependant
 from fastapi.dependencies.utils import get_dependant
 from pydantic import BaseModel, JsonValue, RootModel, TypeAdapter, ValidationError
+from pydantic.fields import FieldInfo
 
 from basis.api.errors import ServiceError
 
@@ -105,18 +116,32 @@ class Parameter:
 
 
 @dataclass(frozen=True)
+class Body:
+    adapter: TypeAdapter[object]
+    """The body's type, read in strict mode from JSON."""
+    precise: bool
+    """Whether it can hold a decimal or a time, which `body` then checks against the JSON."""
+
+
+@dataclass(frozen=True)
 class Shape:
     """What a route reads from a request, as its handler's parameters, and its dependencies', declare it."""
 
     path: tuple[Parameter, ...]
     query: tuple[Parameter, ...]
-    body: TypeAdapter[object] | None
-    """The body's type, read in strict mode from JSON, or None for a route that takes no body."""
+    body: Body | None
+    """None for a route that takes no body."""
 
 
 def shape(path: str, handler: Callable[..., object], name: str) -> Shape:
     """What the route `name` reads, after checking that basis can read each of its parameters strictly."""
     found = list(_flat(get_dependant(path=path, call=handler)))
+    if any(dependant.background_tasks_param_name is not None for dependant in found):
+        msg = (
+            f"{name} takes BackgroundTasks, whose work runs after the response, outside the route's deadline and transaction, where a failure reaches nobody:"
+            " do the work in the handler; a call to another service that changes its state waits for the outbox basis is to have"
+        )
+        raise ServiceError(msg)
     readable_path = tuple(_parameter(name, "path", field.alias, field.field_info.annotation) for dependant in found for field in dependant.path_params)
     query: list[Parameter] = []
     for dependant in found:
@@ -130,7 +155,10 @@ def shape(path: str, handler: Callable[..., object], name: str) -> Shape:
     if len(bodies) > 1:
         msg = f"{name} takes {len(bodies)} bodies, {', '.join(field.name for field in bodies)}: a route takes one JSON body, so declare one model that holds them all"
         raise ServiceError(msg)
-    body: TypeAdapter[object] | None = None
+    if bodies and not found[0].body_params:
+        msg = f"a dependency of {name}'s takes the body {bodies[0].name}: take it in {name}'s own parameters, and pass it on"
+        raise ServiceError(msg)
+    body: Body | None = None
     if bodies:
         info = bodies[0].field_info
         if isinstance(info, params.Body) and info.embed:
@@ -142,8 +170,63 @@ def shape(path: str, handler: Callable[..., object], name: str) -> Shape:
         if info.annotation is None:
             msg = f"{name}'s body {bodies[0].name} has no type: annotate it with the model it reads"
             raise ServiceError(msg)
-        body = TypeAdapter(info.annotation)
+        body = Body(TypeAdapter(info.annotation), _precise(name, info.annotation, frozenset()))
     return Shape(readable_path, tuple(query), body)
+
+
+def _precise(route: str, kind: object, within: frozenset[type]) -> bool:
+    """Whether a body of `kind` can hold a decimal or a time, after refusing what basis cannot match to the JSON to
+    check them: a model's field read by any key but one, and a set of anything but scalars that holds one. `within`
+    holds the models being walked, for one that refers to itself."""
+    kind = bare(kind)
+    if (origin := get_origin(kind)) is not None:
+        return _precise_of(route, kind, origin, within)
+    if not isinstance(kind, type) or kind in within:
+        return False
+    if issubclass(kind, Decimal | datetime):
+        return True
+    if issubclass(kind, BaseModel):
+        _one_key(route, kind, kind.model_config, kind.model_fields)
+        held = [_precise(route, field.annotation, within | {kind}) for field in kind.model_fields.values()]  # every field's, so each model's keys are checked
+        return any(held)
+    if dataclasses.is_dataclass(kind):
+        fields: object = getattr(kind, "__pydantic_fields__", None)
+        if isinstance(fields, dict):
+            config: object = getattr(kind, "__pydantic_config__", None)
+            settled = {str(key): item for key, item in config.items()} if isinstance(config, Mapping) else {}
+            _one_key(route, kind, settled, {str(name): info for name, info in fields.items() if isinstance(info, FieldInfo)})
+        hints = typing.get_type_hints(kind, include_extras=True)
+        held = [_precise(route, hints[found.name], within | {kind}) for found in dataclasses.fields(kind)]
+        return any(held)
+    return False
+
+
+def _precise_of(route: str, kind: object, origin: object, within: frozenset[type]) -> bool:
+    """`_precise` for a generic type: a union, a list, a tuple, a mapping or a set, by each of its types; a `Literal`
+    holds values, which are neither."""
+    if origin is Literal:
+        return False
+    arguments = [argument for argument in get_args(kind) if argument is not Ellipsis]
+    if origin in {set, frozenset, AbstractSet, MutableSet}:
+        items = bare(arguments[0]) if arguments else object
+        holds = _precise(route, items, within)
+        if holds and not (isinstance(items, type) and issubclass(items, Decimal | datetime)):
+            msg = f"{route}'s body holds a {named(kind)}, whose items basis cannot match to the JSON's to check their decimals and times: hold a tuple or a list instead"
+            raise ServiceError(msg)
+        return holds
+    held = [_precise(route, argument, within) for argument in arguments]
+    return any(held)
+
+
+def _one_key(route: str, model: type, config: Mapping[str, object], fields: Mapping[str, FieldInfo]) -> None:
+    """That each of `model`'s fields reads from one key of the JSON: its plain alias, or else its name."""
+    if config.get("populate_by_name") or config.get("validate_by_name") or config.get("validate_by_alias") is False:
+        msg = f"{route}'s body {model.__qualname__} reads its fields by their names and their aliases: drop populate_by_name, validate_by_name and validate_by_alias, so each reads by one key"
+        raise ServiceError(msg)
+    for name, field in fields.items():
+        if field.validation_alias is not None and field.validation_alias != field.alias:
+            msg = f"{route}'s body {model.__qualname__} reads {name} by {field.validation_alias!r}: give it a plain alias=, the one key it reads by, or none"
+            raise ServiceError(msg)
 
 
 def _flat(dependant: Dependant) -> Iterator[Dependant]:
@@ -154,15 +237,15 @@ def _flat(dependant: Dependant) -> Iterator[Dependant]:
 
 def _parameter(route: str, where: Literal["path", "query"], key: str, annotation: object) -> Parameter:
     """`key`'s parameter: one of its type's values, or, in a query, a list or a tuple of them."""
-    kind = _bare(annotation)
+    kind = _given(annotation)
     is_many = where == "query" and get_origin(kind) in {list, tuple}
     if is_many:
         arguments = [argument for argument in get_args(kind) if argument is not Ellipsis]
-        kind = _bare(arguments[0]) if len(set(arguments)) == 1 else None
+        kind = _given(arguments[0]) if len(set(arguments)) == 1 else None
     found = text(kind) if kind is not None else None
     if found is None:
         listing = "str, int, Decimal, float, bool, date, datetime, UUID, a Literal or an Enum" + (", or a list or tuple of one" if where == "query" else "")
-        msg = f"{route}'s {where} parameter {key} is {_named(annotation)}, which basis cannot read strictly from text: give it {listing}"
+        msg = f"{route}'s {where} parameter {key} is {named(bare(annotation))}, which basis cannot read strictly from text: give it {listing}"
         raise ServiceError(msg)
     return Parameter(key, found, is_many)
 
@@ -192,26 +275,33 @@ def _choices(values: Sequence[object]) -> Text | None:
     return Text(f"one of {', '.join(texts)}", allowed.__contains__)
 
 
-def _bare(annotation: object) -> object:
-    """`annotation` without what does not change how its text reads: `Annotated`'s metadata, a `type` alias, and
-    `| None`, since a parameter that is absent is the one way to give none."""
+def bare(annotation: object) -> object:
+    """The type `annotation` names: without `Annotated`'s metadata, and through `type` aliases."""
     while True:
         if isinstance(annotation, TypeAliasType):
             annotation = annotation.__value__
         elif get_origin(annotation) is Annotated:
             annotation = get_args(annotation)[0]
-        elif get_origin(annotation) in {typing.Union, types.UnionType} and types.NoneType in get_args(annotation):
-            rest = [argument for argument in get_args(annotation) if argument is not types.NoneType]
-            if len(rest) != 1:
-                return annotation
-            annotation = rest[0]
         else:
             return annotation
 
 
-def _named(annotation: object) -> str:
-    found: object = getattr(annotation, "__qualname__", None)
-    return found if isinstance(found, str) else repr(annotation)
+def named(annotation: object) -> str:
+    """`annotation` as a message names it: a class by its name, and any other type as Python writes it."""
+    if annotation is None:
+        return "None"
+    return annotation.__qualname__ if isinstance(annotation, type) else repr(annotation)
+
+
+def _given(annotation: object) -> object:
+    """The type a parameter's text reads as: `bare`, and without `| None`, since a parameter that is absent is the one way
+    to give none."""
+    annotation = bare(annotation)
+    if get_origin(annotation) in {typing.Union, types.UnionType} and types.NoneType in get_args(annotation):
+        rest = [argument for argument in get_args(annotation) if argument is not types.NoneType]
+        if len(rest) == 1:
+            return bare(rest[0])
+    return annotation
 
 
 def path_errors(found: Shape, given: Mapping[str, object]) -> list[ErrorEntry]:
@@ -241,6 +331,10 @@ def query_errors(found: Shape, items: Iterable[tuple[str, str]]) -> list[ErrorEn
     return errors
 
 
+NO_BODY: ErrorEntry = {"type": "extra_forbidden", "loc": ("body",), "msg": "This route takes no body: send the request without one", "input": None}
+"""What a request with a body answers on a route that declares none."""
+
+
 def _refused(where: str, parameter: Parameter, value: str) -> ErrorEntry:
     return {"type": "strict_text", "loc": (where, parameter.key), "msg": f"Input should be {parameter.reads.expected}", "input": value}
 
@@ -249,15 +343,22 @@ _JSON = re.compile(r"application/(?:[\w.+-]+\+)?json", re.IGNORECASE)
 _TREE: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 
-def body(adapter: TypeAdapter[object], raw: bytes, content_type: str | None) -> tuple[object, list[ErrorEntry]]:
-    """The body `raw`, read as `adapter`'s type in strict mode, or what is wrong with it."""
-    if content_type is None or _JSON.fullmatch(content_type.partition(";")[0].strip()) is None:
+def is_json(content_type: str | None) -> bool:
+    """Whether a body of `content_type` is JSON: `application/json`, or a type of it such as `application/problem+json`."""
+    return content_type is not None and _JSON.fullmatch(content_type.partition(";")[0].strip()) is not None
+
+
+def body(declared: Body, raw: bytes, content_type: str | None) -> tuple[object, list[ErrorEntry]]:
+    """The body `raw`, read as `declared`'s type in strict mode, or what is wrong with it."""
+    if not is_json(content_type):
         message = "The body is not JSON: send it with Content-Type: application/json" if content_type is None else f"The body is {content_type}, not JSON: send it as application/json"
         return None, [{"type": "content_type", "loc": ("body",), "msg": message, "input": content_type}]
     try:
-        value = adapter.validate_json(raw, strict=True, extra="forbid")
+        value = declared.adapter.validate_json(raw, strict=True, extra="forbid")
     except ValidationError as error:
         return None, [_entry(entry) for entry in error.errors(include_url=False)]
+    if not declared.precise:
+        return value, []
     tree = _TREE.validate_json(raw)  # parsed again, to tell a decimal given as a string from one given as a number
     return value, list(_inexact(value, tree, ("body",)))
 
@@ -274,30 +375,52 @@ def _entry(entry: Mapping[str, object]) -> ErrorEntry:
 
 def _inexact(value: object, tree: JsonValue, at: tuple[str | int, ...]) -> Iterator[ErrorEntry]:
     """Each decimal in `value` that its JSON `tree` gave as a number, and each time without an offset, walking the two
-    together: a value the strict mode read is where its JSON was, by each model's field alias, list index or key."""
+    together: a value the strict mode read is where its JSON was, by each model's or dataclass's field alias, list index
+    or key. A set's items, scalars as `_precise` sees to, are each checked against every item of its JSON."""
     match value:
         case Decimal() if not isinstance(tree, str):
-            yield {
-                "type": "decimal_string",
-                "loc": at,
-                "msg": 'Input should be a string of the decimal, as "0.045": a JSON number reaches a decimal through a float, which can change it',
-                "input": tree,
-            }
+            yield _as_number(at, tree)
         case datetime() if value.tzinfo is None:
-            yield {"type": "timezone_aware", "loc": at, "msg": "Input should be a time with its offset, as 2026-11-06T14:30:00Z", "input": tree}
+            yield _without_offset(at, tree)
         case RootModel():
             yield from _inexact(value.root, tree, at)
         case BaseModel() if isinstance(tree, dict):
-            for name, field in type(value).model_fields.items():
-                key = field.alias or name
-                if key in tree:
-                    yield from _inexact(getattr(value, name), tree[key], (*at, key))
+            keys = {name: field.alias or name for name, field in type(value).model_fields.items()}
+            yield from _inexact_fields(value, keys, tree, at)
         case list() | tuple() if isinstance(tree, list):
             for index, (item, node) in enumerate(zip(value, tree, strict=False)):
                 yield from _inexact(item, node, (*at, index))
+        case set() | frozenset() if isinstance(tree, list):
+            yield from _inexact_set(value, tree, at)
         case dict() if isinstance(tree, dict):
-            for key, item in value.items():
-                if (node := tree.get(str(key))) is not None:
-                    yield from _inexact(item, node, (*at, str(key)))
+            yield from (found for key, item in value.items() if str(key) in tree for found in _inexact(item, tree[str(key)], (*at, str(key))))
+        case _ if dataclasses.is_dataclass(value) and not isinstance(value, type) and isinstance(tree, dict):
+            fields: object = getattr(type(value), "__pydantic_fields__", None)
+            infos = {str(name): info for name, info in fields.items() if isinstance(info, FieldInfo)} if isinstance(fields, dict) else {}
+            keys = {found.name: alias if (info := infos.get(found.name)) is not None and (alias := info.alias) is not None else found.name for found in dataclasses.fields(value)}
+            yield from _inexact_fields(value, keys, tree, at)
         case _:
             return
+
+
+def _inexact_set(value: AbstractSet[object], tree: list[JsonValue], at: tuple[str | int, ...]) -> Iterator[ErrorEntry]:
+    if any(isinstance(item, Decimal) for item in value):  # a set of decimals: every item of its JSON is one
+        yield from (_as_number((*at, index), node) for index, node in enumerate(tree) if not isinstance(node, str))
+    if any(isinstance(item, datetime) and item.tzinfo is None for item in value):
+        yield _without_offset(at, tree)
+
+
+def _inexact_fields(value: object, keys: Mapping[str, str], tree: dict[str, JsonValue], at: tuple[str | int, ...]) -> Iterator[ErrorEntry]:
+    """A model's or a dataclass's fields, each the attribute named and the JSON at its key."""
+    for name, key in keys.items():
+        if key in tree:
+            yield from _inexact(getattr(value, name), tree[key], (*at, key))
+
+
+def _as_number(at: tuple[str | int, ...], given: JsonValue) -> ErrorEntry:
+    message = 'Input should be a string of the decimal, as "0.045": a JSON number reaches a decimal through a float, which can change it'
+    return {"type": "decimal_string", "loc": at, "msg": message, "input": given}
+
+
+def _without_offset(at: tuple[str | int, ...], given: JsonValue) -> ErrorEntry:
+    return {"type": "timezone_aware", "loc": at, "msg": "Input should be a time with its offset, as 2026-11-06T14:30:00Z", "input": given}

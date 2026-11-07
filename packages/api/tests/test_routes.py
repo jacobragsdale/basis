@@ -3,6 +3,7 @@ the errors it declares, each listed in the OpenAPI document."""
 
 import asyncio
 from collections.abc import Callable, Iterator, Mapping
+from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
 from enum import StrEnum
@@ -12,9 +13,9 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 import pytest
-from fastapi import Body, FastAPI, Query
+from fastapi import BackgroundTasks, Body, FastAPI, Query
 from fastapi.testclient import TestClient
-from pydantic import BaseModel, ConfigDict, JsonValue, RootModel, TypeAdapter
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, RootModel, TypeAdapter, field_validator
 
 from basis import api
 from basis.api import fakes, strict
@@ -211,7 +212,7 @@ def embedded(security: str, order: Annotated[Order, Body(embed=True)]) -> Quote:
         (_ok(stale, errors=[Stale, Stale]), "declares Stale twice"),
         (lambda: api.get("/lots/{number:int}", lot, deadline_s=1, response=Quote, errors=[]), r"converts \{number:int\} in its path: name the parameter alone, as \{number\}"),
         (_ok(by_time), "query parameter at is time, which basis cannot read strictly from text"),
-        (_ok(by_mixed), "query parameter pair is tuple"),
+        (_ok(by_mixed), r"query parameter pair is tuple\[int, str\]"),
         (lambda: api.post("/q/{security}", two_bodies, deadline_s=1, response=Quote, errors=[]), "takes 2 bodies, order, other"),
         (lambda: api.post("/q/{security}", embedded, deadline_s=1, response=Quote, errors=[]), "drop embed=True"),
     ],
@@ -375,6 +376,120 @@ def _at(document: JsonValue, *keys: str) -> JsonValue:
     return document
 
 
+class Booked(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, validate_default=True, revalidate_instances="always")
+
+    price: Decimal
+
+    @field_validator("price")
+    @classmethod
+    def in_cents(cls, price: Decimal) -> Decimal:
+        """Not idempotent: run twice, it would make 1.5 into 15000."""
+        return price * 100
+
+
+def book(booking: Booked) -> Quote:
+    """Answers another model, so that only the body's validation runs `in_cents`."""
+    return Quote(security="X", price=booking.price)
+
+
+def test_a_body_is_validated_once() -> None:
+    service = _service(api.post("/bookings", book, deadline_s=1, response=Quote, errors=[]))
+    with TestClient(api.build(service, settings=api.Settings.given(), fakes={WAREHOUSE: fakes.Database(), PRICING: fakes.Http(_pricing())}).asgi) as client:
+        assert client.post("/bookings", json={"price": "1.5"}).json() == {"security": "X", "price": "150.0"}  # not 15000.0
+
+
+def test_a_body_sent_to_a_route_that_takes_none_is_refused(client: TestClient) -> None:
+    response = client.request("GET", "/stale/X", content=b'{"price": "1"}', headers={"content-type": "application/json"})
+    assert [(error["location"], error["detail"]) for error in response.json()["errors"]] == [("body", "This route takes no body: send the request without one")]
+
+
+@dataclass(frozen=True)
+class Fill:
+    price: Decimal
+
+
+class Aliased(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    unit_price: Decimal = Field(alias="unitPrice")
+    sizes: frozenset[Decimal] = frozenset()
+    fills: tuple[Fill, ...] = ()
+    at: frozenset[datetime] = frozenset()
+
+
+@pytest.mark.parametrize(
+    ("raw", "errors"),
+    [
+        (b'{"unitPrice": 1.5}', [(("body", "unitPrice"), "decimal_string")]),
+        (b'{"unitPrice": "1.5", "sizes": ["1", 2]}', [(("body", "sizes", 1), "decimal_string")]),
+        (b'{"unitPrice": "1.5", "fills": [{"price": 1.5}]}', [(("body", "fills", 0, "price"), "decimal_string")]),
+        (b'{"unitPrice": "1.5", "at": ["2026-11-06T14:30:00"]}', [(("body", "at"), "timezone_aware")]),
+        (b'{"unitPrice": "1.5", "sizes": ["1"], "fills": [{"price": "1"}], "at": ["2026-11-06T14:30:00Z"]}', []),
+    ],
+    ids=["aliased", "in-a-set", "in-a-dataclass", "naive-time-in-a-set", "all-exact"],
+)
+def test_a_decimal_is_a_string_and_a_time_has_its_offset_wherever_the_body_holds_them(raw: bytes, errors: list[tuple[tuple[object, ...], str]]) -> None:
+    declared = strict.shape("/a", _taking(Aliased), "aliased").body
+    assert declared is not None
+    _, found = strict.body(declared, raw, "application/json")
+    assert [(error["loc"], error["type"]) for error in found] == errors
+
+
 def test_a_decimal_is_a_string_in_a_root_models_list_too() -> None:
-    _, errors = strict.body(TypeAdapter(RootModel[list[Decimal]]), b'["1.10", 2.5]', "application/json")
+    _, errors = strict.body(strict.Body(TypeAdapter(RootModel[list[Decimal]]), precise=True), b'["1.10", 2.5]', "application/json")
     assert [(error["loc"], error["type"]) for error in errors] == [(("body", 1), "decimal_string")]
+
+
+def _taking(kind: type) -> Callable[..., object]:
+    def handler(body: kind) -> dict[str, str]:  # ty: ignore[invalid-type-form] -- the body's type, as each case gives it
+        del body
+        return {}
+
+    return handler
+
+
+class Chosen(BaseModel):
+    price: Decimal = Field(validation_alias=AliasChoices("price", "px"))
+
+
+class ByName(BaseModel):
+    model_config = ConfigDict(validate_by_name=True)
+
+    unit_price: Decimal = Field(alias="unitPrice")
+
+
+class Sets(BaseModel):
+    fills: frozenset[Fill]
+
+
+@pytest.mark.parametrize(
+    ("kind", "message"),
+    [(Chosen, "Chosen reads price by AliasChoices"), (ByName, "ByName reads its fields by their names and their aliases"), (Sets, "holds a frozenset")],
+    ids=["alias-choices", "by-name", "a-set-of-dataclasses"],
+)
+def test_a_body_reads_each_field_by_one_key_and_holds_no_set_of_what_basis_checks(kind: type, message: str) -> None:
+    with pytest.raises(api.ServiceError, match=message):
+        strict.shape("/a", _taking(kind), "taking")
+
+
+class Plain(BaseModel):
+    security: str
+    quantity: int
+
+
+@pytest.mark.parametrize(("kind", "precise"), [(Plain, False), (Order, True), (Aliased, True), (RootModel[list[int]], False)], ids=["no-decimal", "a-decimal", "nested", "a-list-of-ints"])
+def test_a_body_is_parsed_again_only_where_it_can_hold_a_decimal_or_a_time(kind: type, precise: bool) -> None:  # noqa: FBT001 -- a table's column
+    declared = strict.shape("/a", _taking(kind), "taking").body
+    assert declared is not None
+    assert declared.precise is precise
+
+
+def later(tasks: BackgroundTasks) -> dict[str, str]:
+    del tasks
+    return {}
+
+
+def test_a_route_runs_no_background_tasks() -> None:
+    with pytest.raises(api.ServiceError, match="takes BackgroundTasks, whose work runs after the response, outside the route's deadline"):
+        api.get("/later", later, deadline_s=1, response=dict[str, str], errors=[])

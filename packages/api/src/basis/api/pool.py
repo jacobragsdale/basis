@@ -7,8 +7,10 @@ fields cross with it, so what the function logs carries the request's id.
 
 A call has what is left of its route's deadline, its wait for a free process included. One that misses it answers 504:
 a call still waiting is taken off the queue, and one that has started runs on in its process until it returns, its
-result dropped and its end logged; shutdown stops any still running. A process that dies, as when the system stops one
-that runs out of memory, fails the calls it had with a 500, and the next call starts the pool again."""
+result dropped and its end logged; shutdown terminates the processes while one still runs. A process that dies, as
+when the system stops one that runs out of memory, fails the calls it had with a 500. The pool then starts again for
+the next call, and a call made while it is broken, before it knew, starts it again and runs on the new one, since it
+had not begun."""
 
 import asyncio
 import logging
@@ -30,6 +32,8 @@ from basis.core import logs
 log = logging.getLogger(__name__)
 _SPAWN = multiprocessing.get_context("spawn")
 """On every platform: Windows has no other start method, and one method means a desktop behaves as production does."""
+_SETTLE_S = 5
+"""Seconds shutdown waits, once it has terminated the processes, for the calls they ran to fail and be logged."""
 
 
 class Runs(Protocol):
@@ -81,9 +85,14 @@ class Pool:
         return ProcessPoolExecutor(self._workers, mp_context=_SPAWN, initializer=_start, initargs=(logs.included(), self._functions))
 
     async def run(self, declared: ComputeFunction[..., object], args: tuple[object, ...], kwargs: Mapping[str, object], limit: deadlines.Limit) -> object:
-        executor = self._executor
         started = time.monotonic()
-        future: Future[object] = executor.submit(_call, declared.function, logs.bound(), args, kwargs)
+        executor = self._executor
+        try:
+            future: Future[object] = executor.submit(_call, declared.function, logs.bound(), args, kwargs)
+        except BrokenProcessPool:  # broken before this call, which has not begun: start the pool again, and run it there
+            self._restart(executor)
+            executor = self._executor
+            future = executor.submit(_call, declared.function, logs.bound(), args, kwargs)
         waiting = asyncio.wrap_future(future)
         deadline = asyncio.timeout(limit.seconds)
         try:
@@ -98,11 +107,16 @@ class Pool:
             self._abandon(future, waiting, declared.name, started)
             raise
         except BrokenProcessPool as error:
-            if executor is self._executor:
-                executor.shutdown(wait=False, cancel_futures=True)
-                self._executor = self._start()
+            self._restart(executor)
             msg = f"a process of the compute pool stopped while it ran {declared.name}, as when the system stops one that runs out of memory: the next calls start new ones"
             raise RuntimeError(msg) from error
+
+    def _restart(self, broken: ProcessPoolExecutor) -> None:
+        """Start a new pool in place of `broken`, unless another call has already."""
+        if broken is self._executor:
+            log.error("a process of the compute pool stopped, so the pool starts again", extra={"workers": self._workers})
+            broken.shutdown(wait=False, cancel_futures=True)
+            self._executor = self._start()
 
     def _abandon(self, future: Future[object], waiting: asyncio.Future[object], name: str, started: float) -> None:
         """Take a call nobody waits for now off the queue, or, where it has started, log how it ends."""
@@ -121,13 +135,14 @@ class Pool:
         task.add_done_callback(self._outliving.discard)
 
     async def close(self) -> None:
-        """Stop the processes: at once where a call that missed its deadline still runs, since nobody waits for it."""
+        """Stop the processes: at once where a call that missed its deadline still runs, since nobody waits for it, and
+        otherwise once each has finished what it was given."""
         executor = self._executor
-        executor.shutdown(wait=False, cancel_futures=True)
         if self._outliving:
             log.warning("stopping the compute pool's processes, which still run %s calls past their deadlines", len(self._outliving), extra={"calls": len(self._outliving)})
-            executor.terminate_workers()
-        await asyncio.to_thread(executor.shutdown, wait=True)
+            executor.terminate_workers()  # before any shutdown, which forgets the processes this would stop
+            await asyncio.wait(self._outliving, timeout=_SETTLE_S)  # each call's end, which the terminated processes fail, is logged
+        await asyncio.to_thread(executor.shutdown, wait=True, cancel_futures=True)
 
 
 class InProcess:

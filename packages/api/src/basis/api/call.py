@@ -12,7 +12,8 @@ ROUTE is the route's name, its handler's. REQUEST is one JSON object, or `-` to 
 A path or query value is the text the URL carries; a number or `true`/`false` is sent as JSON writes it, and a list
 gives a query key once for each value. The body is sent as JSON. The route reads all of it as strictly as it reads
 any request. A response that succeeds prints its JSON on stdout. One that fails prints its problem on stdout too, and
-the one `ERROR` line on stderr, and exits 1."""
+the one `ERROR` line on stderr, and exits 1. A response that is not JSON, of either kind, prints the one `ERROR` line
+alone, with its status and its content type."""
 
 import json
 import sys
@@ -23,7 +24,7 @@ from urllib.parse import quote
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
-from basis.api import dev, errors
+from basis.api import dev, errors, strict
 from basis.api.app import build
 from basis.api.compute import ComputeFunction
 from basis.api.fakes import Compute, Fake, Faked
@@ -75,6 +76,12 @@ def call(service: Service, name: str, request: str, *, resources: Literal["real"
             params=[(key, _text(value)) for key, values in given.query.items() for value in (values if isinstance(values, list) else [values])],
             headers=given.headers | ({"content-type": "application/json"} if "body" in given.model_fields_set else {}),
             content=json.dumps(given.body).encode() if "body" in given.model_fields_set else None,
+        )
+    kind = response.headers.get("content-type")
+    if response.content and not strict.is_json(kind):
+        return fail(
+            f"{route.name} answered {response.status_code} with {kind or 'a body of no content type'}, not JSON",
+            "basis call prints JSON alone: serve the API with basis dev, and request the route there",
         )
     called = Called(response.status_code, response.json() if response.content else None)
     if called.body is not None:

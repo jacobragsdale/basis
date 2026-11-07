@@ -212,14 +212,14 @@ def _check_response(route: Route) -> None:
     returns = inspect.signature(route.handler, eval_str=True).return_annotation
     declared = route.response
     if returns is inspect.Signature.empty:
-        msg = f"{route.name} has no return annotation: annotate it `-> {_named(declared)}`, the response its route declares"
+        msg = f"{route.name} has no return annotation: annotate it `-> {strict.named(declared)}`, the response its route declares"
         raise ServiceError(msg)
     if returns != declared:
-        msg = f"{route.name} returns {_named(returns)}, and its route declares response={_named(declared)}: declare the one it returns"
+        msg = f"{route.name} returns {strict.named(returns)}, and its route declares response={strict.named(declared)}: declare the one it returns"
         raise ServiceError(msg)
     if (declared is None) != (route.status == HTTPStatus.NO_CONTENT):
         fix = "give it status=HTTPStatus.NO_CONTENT" if declared is None else "declare the response it has, or response=None with no content"
-        msg = f"{route.name} answers {route.status} with response={_named(declared)}: a route answers no body exactly when its status is 204, so {fix}"
+        msg = f"{route.name} answers {route.status} with response={strict.named(declared)}: a route answers no body exactly when its status is 204, so {fix}"
         raise ServiceError(msg)
 
 
@@ -252,12 +252,6 @@ def _met(asks: Sequence[Ask]) -> Iterator[type[Error]]:
         yield DeadlineExceededError
     if any(isinstance(found, HttpResource) for found in given):
         yield CallFailedError
-
-
-def _named(annotation: object) -> str:
-    if annotation is None:
-        return "None"
-    return annotation.__qualname__ if isinstance(annotation, type) else repr(annotation)
 
 
 get, post, put, patch, delete = _route("GET"), _route("POST"), _route("PUT"), _route("PATCH"), _route("DELETE")
@@ -504,25 +498,21 @@ def _check_compute(route: Route, ask: Ask, declared: ComputeFunction[..., object
     """That `route` asks for the compute function `declared` as an `api.Compute` of its parameters and its result,
     from an `async def`, and that the function takes no resource."""
     for parameter in declared.parameters:
-        kind = get_args(parameter)[0] if get_origin(parameter) is Annotated else parameter
+        kind = strict.bare(parameter)
         if kind in _HANDLES or get_origin(kind) is Cache or (isinstance(kind, type) and issubclass(kind, Settings)):
-            msg = f"compute function {declared.name} takes {_named(kind)}, and a compute function reaches no resource or setting: give it the values it computes from"
+            msg = f"compute function {declared.name} takes {strict.named(kind)}, and a compute function reaches no resource or setting: give it the values it computes from"
             raise ServiceError(msg)
-    expected = f"api.Compute[[{', '.join(_named(parameter) for parameter in declared.parameters)}], {_named(declared.result)}]"
+    expected = f"api.Compute[[{', '.join(strict.named(parameter) for parameter in declared.parameters)}], {strict.named(declared.result)}]"
     if (
         get_origin(ask.annotation) is not Compute
-        or [_bare(found) for found in get_args(ask.annotation)[0]] != [_bare(found) for found in declared.parameters]
-        or _bare(get_args(ask.annotation)[1]) != _bare(declared.result)
+        or [strict.bare(found) for found in get_args(ask.annotation)[0]] != [strict.bare(found) for found in declared.parameters]
+        or strict.bare(get_args(ask.annotation)[1]) != strict.bare(declared.result)
     ):
         msg = f"{route.name}'s parameter {ask.parameter} asks for the compute function {declared.name}: annotate it Annotated[{expected}, api.given(...)], its parameters and its result"
         raise ServiceError(msg)
     if not inspect.iscoroutinefunction(route.handler):
         msg = f"{route.name} asks for the compute function {declared.name}, whose calls are awaited: declare it `async def {route.name}`"
         raise ServiceError(msg)
-
-
-def _bare(annotation: object) -> object:
-    return get_args(annotation)[0] if get_origin(annotation) is Annotated else annotation
 
 
 def _annotated_as_given(resource: Resource, annotation: object) -> bool:

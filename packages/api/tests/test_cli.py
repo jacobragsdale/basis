@@ -11,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+from fastapi.responses import PlainTextResponse
 from pydantic import JsonValue, TypeAdapter
 
 from basis import api
@@ -194,3 +195,18 @@ def without_pricing() -> dict[fakes.Faked, fakes.Fake]:
 def test_dev_and_call_run_on_the_fakes_a_service_declares_and_no_others(reference: str | None, message: str) -> None:
     with pytest.raises(api.ServiceError, match=re.escape(message)):
         dev.fakes(_with_fakes(reference))
+
+
+def plain() -> dict[str, str]:
+    return PlainTextResponse("a price of 98.50")  # ty: ignore[invalid-return-type] -- a reply that is not JSON, on purpose
+
+
+PLAIN = api.Service(name="plain", settings=api.Settings, routes=[api.get("/plain", plain, deadline_s=1, response=dict[str, str], errors=[])])
+
+
+@pytest.mark.usefixtures("clean")
+def test_a_reply_that_is_not_json_is_one_error_line_with_its_status_and_type(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert basis(repo, "call", "plain", "{}", "--real", "--service", f"{__name__}:PLAIN") == 1
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert err.splitlines()[-1] == "ERROR: plain answered 200 with text/plain; charset=utf-8, not JSON: basis call prints JSON alone: serve the API with basis dev, and request the route there"

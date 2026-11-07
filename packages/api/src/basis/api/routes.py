@@ -3,16 +3,19 @@
 - its deadline starts when it begins to serve the request, and caps every call the request makes through a resource or
   a compute function, the commit of its writes included (`deadlines.py`);
 - it reads the request strictly first (`strict.py`): the path and the query by their types' grammars, and a JSON body
-  in pydantic's strict mode, which FastAPI then gets as the value it is;
+  in pydantic's strict mode, which FastAPI's handler then gets as the value basis made, and never validates again, so a
+  validator runs once; a body sent to a route that declares none is refused;
 - an `api.Error` the route does not declare, or an `HTTPException` raised inside it, answers 500 as a defect, logged
   once by the request boundary with what the route should have declared;
 - the OpenAPI document lists each error the route answers with under its status, as `application/problem+json`."""
 
 from collections.abc import Callable, Coroutine, Iterator
+from dataclasses import dataclass
 from http import HTTPStatus
 from typing import ClassVar, override
 
 from fastapi import FastAPI
+from fastapi._compat import ModelField  # the field of a parameter, whose `validate` is where FastAPI's handler validates a body
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from pydantic import JsonValue, TypeAdapter
@@ -32,13 +35,20 @@ class UndeclaredError(RuntimeError):
     """A route that raised an error it does not declare: a defect, whose 500 says nothing of it to the caller."""
 
 
+@dataclass(frozen=True)
+class _Validated:
+    """A body basis has read and validated, as FastAPI's handler gets it for its JSON."""
+
+    value: object
+
+
 class _Read(Request):
     """The request as FastAPI's handler gets it, once basis has read its body: the value it validated, as its JSON."""
 
     def __init__(self, request: Request, raw: bytes, value: object) -> None:
         super().__init__(request.scope, request.receive)
         self._raw = raw
-        self._value = value
+        self._value = _Validated(value)
 
     @override
     async def body(self) -> bytes:
@@ -47,6 +57,20 @@ class _Read(Request):
     @override
     async def json(self) -> object:
         return self._value
+
+
+class _ValidatedOnce(ModelField):
+    """A route's body field, as FastAPI's handler validates it: the value basis validated passes as it is, so no
+    validator of the body's runs twice. The OpenAPI document reads the field as FastAPI made it."""
+
+    @override
+    def validate(self, value: object, values: dict[str, object] | None = None, *, loc: tuple[int | str, ...] = ()) -> tuple[object, list[dict[str, object]]]:
+        if isinstance(value, _Validated):
+            return value.value, []
+        validated, wrong = super().validate(value, values if values is not None else {}, loc=loc)
+        found: object = validated
+        errors: list[dict[str, object]] = [dict(entry) for entry in wrong]
+        return found, errors
 
 
 class Served(APIRoute):
@@ -62,6 +86,10 @@ class Served(APIRoute):
 
     @override
     def get_route_handler(self) -> Callable[[Request], Coroutine[object, object, Response]]:
+        dependant = self.dependant
+        if dependant.body_params and not isinstance(field := dependant.body_params[0], _ValidatedOnce):  # the handler's own, as strict.shape sees to
+            once = _ValidatedOnce(field_info=field.field_info, name=field.name, mode=field.mode, config=field.config)
+            dependant.body_params[0] = once
         handle = super().get_route_handler()
         declared = self.declared
 
@@ -73,6 +101,8 @@ class Served(APIRoute):
                 value, wrong = strict.body(reads.body, raw, request.headers.get("content-type"))
                 errors.extend(wrong)
                 given = _Read(request, raw, value)
+            elif reads.body is None and await _sent_a_body(request):
+                errors.append(strict.NO_BODY)
             if errors:
                 raise RequestValidationError(errors)
             try:
@@ -87,6 +117,14 @@ class Served(APIRoute):
                 raise UndeclaredError(msg) from error
 
         return strictly
+
+
+async def _sent_a_body(request: Request) -> bool:
+    """Whether the request has a body, read only as far as its first byte."""
+    async for chunk in request.stream():
+        if chunk:
+            return True
+    return False
 
 
 def route_class(declared: Route) -> type[APIRoute]:
