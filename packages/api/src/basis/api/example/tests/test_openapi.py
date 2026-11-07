@@ -4,6 +4,7 @@ against: it is the document the example's app serves, and it keeps its contract 
 import json
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -38,4 +39,7 @@ def test_the_sample_keeps_its_contract_with_the_last_release(monkeypatch: pytest
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    shallow = subprocess.run(["git", "rev-parse", "--is-shallow-repository"], cwd=ROOT, capture_output=True, text=True, check=False)  # noqa: S607 -- git from the PATH
+    if shallow.stdout.strip() == "true":
+        pytest.skip("this clone is shallow, so the last release may be missing from it: the checks job, which fetches every commit and tag, runs this")
     contract.check(ROOT, SAMPLE.relative_to(ROOT).as_posix(), "v*")  # raises when the sample breaks a UI built against that release
