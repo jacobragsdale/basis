@@ -31,3 +31,17 @@ def _record(line: str) -> dict[str, object]:
     record: object = json.loads(line)
     assert isinstance(record, dict)
     return {str(key): value for key, value in record.items()}
+
+
+@pytest.fixture
+def logging_restored() -> Iterator[None]:
+    """The process's logging as it was, once the test ends: `basis` run in the test's process configures logging to
+    write to the test's captured stderr, which closes with the test."""
+    root, framework = logging.getLogger(), logging.getLogger("basis")
+    handlers, level, framework_level = root.handlers[:], root.level, framework.level
+    try:
+        yield
+    finally:
+        root.handlers[:] = handlers
+        root.setLevel(level)
+        framework.setLevel(framework_level)

@@ -363,9 +363,10 @@ service = api.Service(name="prices", settings=api.Settings, resources=[WAREHOUSE
 
 
 @pytest.fixture
-def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, logging_restored: None) -> Path:
     """An API repo whose service keeps an outbox, as the module `outboxed_service`, and no BASIS_ variable of the
-    developer's."""
+    developer's; the logging `basis` configures is undone after."""
+    del logging_restored
     for name in [name for name in os.environ if name.startswith("BASIS_")]:
         monkeypatch.delenv(name)
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "prices-api"\nversion = "0.1.0"\n\n[tool.basis]\nparts = ["api"]\n', encoding="utf-8")

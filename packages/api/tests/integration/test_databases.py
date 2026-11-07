@@ -563,11 +563,12 @@ def test_an_app_whose_outbox_table_is_missing_does_not_start(scratch: Scratch) -
         pass
 
 
+@pytest.mark.usefixtures("logging_restored")
 def test_relay_fails_with_one_error_line_naming_a_call_that_aged_out(outboxed: Outboxed, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """`basis relay` as the scheduler runs it: from the repo, with the API's settings in the environment."""
     with TestClient(outboxed.app(Ledger(status=HTTPStatus.SERVICE_UNAVAILABLE)).asgi) as client:
         assert client.post("/book", json=PRICE).status_code == HTTPStatus.OK
-    outboxed.scratch.execute(f"UPDATE {outboxed.table} SET expires_at = created_at")  # aged out, as an hour on would leave it
+    outboxed.scratch.execute(f"UPDATE {outboxed.table} SET expires_at = created_at, next_at = created_at")  # aged out and due, as an hour on would leave it
     module = f"booking_{uuid.uuid4().hex[:8]}"
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "booking-api"\nversion = "0.1.0"\n\n[tool.basis]\nparts = ["api"]\n', encoding="utf-8")
     (tmp_path / f"{module}.py").write_text(
