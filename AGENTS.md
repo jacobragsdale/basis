@@ -28,7 +28,8 @@ its docs.
 uv sync
 uv run pre-commit install           # once per clone: the commit hook runs the checks below
 uv run pre-commit run --all-files   # ruff, ty with every rule an error, the lockfile, file hygiene
-uv run pytest
+uv run pytest packages/core
+(cd packages/job && uv run pytest)   # until step 1.3, packages/job runs with its own pytest settings
 ```
 
 CI runs the same on every pull request that changes more than docs.

@@ -5,7 +5,7 @@
 name = "basis-workspace"
 version = "0.0.0"
 requires-python = ">=3.14"
-dependencies = ["basis-core"]
+dependencies = ["basis-core", "etl-framework"]
 
 [tool.uv]
 package = false
@@ -16,9 +16,11 @@ members = ["packages/*"]
 
 [tool.uv.sources]
 basis-core = { workspace = true }
+etl-framework = { workspace = true }
 
 [dependency-groups]
 dev = [
+    "import-linter>=2.16",
     "pre-commit>=4.7.0",
     "pytest>=9.2.0",
     "pytest-cov>=7.1.0",
@@ -67,6 +69,9 @@ skip-magic-trailing-comma = true  # Collapse comma-forced multiline constructs w
 [tool.ty.rules]
 all = "error"  # Every rule is an error, including those ty leaves off by default. Opt out one rule at a time, with a reason.
 
+[tool.ty.environment]
+extra-paths = ["packages/job/tests"]  # as packages/job's pytest `pythonpath`, so its tests can import `builders`
+
 [tool.ty.analysis]
 respect-type-ignore-comments = false  # Require a specific `# ty: ignore[rule]` suppression.
 strict-generic-narrowing = true  # isinstance on a generic narrows to its top materialization, e.g. list[object].
@@ -78,7 +83,7 @@ error-on-warning = true
 [tool.pytest.ini_options]
 # importlib mode: members' tests share file names (spike 0.2), which pytest's default mode cannot collect.
 addopts = "-ra --strict-markers --strict-config --import-mode=importlib"
-testpaths = ["packages"]
+testpaths = ["packages/core"]  # packages/job runs with its own pytest settings: `uv run pytest packages/job`
 xfail_strict = true  # An xfail that starts passing is a failure, not a silent pass.
 filterwarnings = [
     "error",  # A warning is a defect until someone decides otherwise.
@@ -93,3 +98,26 @@ show_missing = true
 skip_covered = true
 exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "@overload"]
 # Deliberately no fail_under: coverage is a diagnostic here, not a CI gate.
+
+# The import contracts, for every member. etl-framework's moved here with it, unchanged (roadmap step 1.2).
+[tool.importlinter]
+root_package = "etl_framework"
+include_external_packages = true  # so a contract can forbid a database driver
+exclude_type_checking_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Job code and the checks it runs through do no I/O: the run loop loads, saves and publishes"
+type = "forbidden"
+source_modules = [
+    "etl_framework.rows", "etl_framework.params", "etl_framework.inputs", "etl_framework.outputs", "etl_framework.interval",
+    "etl_framework.changes", "etl_framework.destination", "etl_framework.diff", "etl_framework.ddl", "etl_framework.job",
+    "etl_framework.example.job", "etl_framework.example.rows",
+]
+forbidden_modules = [
+    "etl_framework.loader", "etl_framework.publish", "etl_framework.runs", "etl_framework.snapshots", "etl_framework.storage",
+    "etl_framework.settings", "etl_framework.api", "etl_framework.cli", "etl_framework.new", "etl_framework.sync",
+    "etl_framework.testing", "mssql_python", "oracledb",
+]
+ignore_imports = [
+    "etl_framework -> etl_framework.api",  # `etl.run` and `etl.replay` load on first use, which job code never makes
+]

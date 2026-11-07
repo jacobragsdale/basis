@@ -26,3 +26,12 @@ repos:
     rev: v0.0.99   # keep in sync with the pinned ty dev dependency
     hooks:
       - id: ty
+
+  - repo: local
+    hooks:
+      - id: lint-imports   # the import contracts in pyproject.toml
+        name: lint-imports
+        entry: uv run lint-imports
+        language: system
+        types: [python]
+        pass_filenames: false

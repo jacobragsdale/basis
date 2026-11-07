@@ -1,0 +1,4 @@
+account_id,name,closed
+A1,Alpha Fund,false
+A2,Beta Fund,false
+A3,Closed Fund,true
