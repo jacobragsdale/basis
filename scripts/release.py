@@ -75,6 +75,8 @@ class Member:
 class Workspace:
     version: str
     """The root pyproject.toml's `[project] version`: the one place it is set."""
+    dependencies: tuple[str, ...]
+    """The root pyproject.toml's `[project] dependencies`: what a plain `uv sync` installs, which is what basis releases."""
     members: tuple[Member, ...]
     locked: Mapping[str, str]
     """Each package uv.lock locks, by name, with its version."""
@@ -85,29 +87,46 @@ class Workspace:
 
 def problems(workspace: Workspace, *, tag: str | None = None) -> list[Problem]:
     """Each way the workspace is not one version, each member depending on basis-core at exactly it, every member
-    saying whether a release publishes it, and a published one needing only published ones; and `tag`, when given,
-    naming another version."""
+    saying whether a release publishes it, a published one needing only published ones, and the root's dependencies
+    naming exactly the published ones; and `tag`, when given, naming another version."""
     version = workspace.version
     if not _VERSION.match(version):
         return [Problem(f"the root pyproject.toml's version, {version!r}, is not MAJOR.MINOR.PATCH", "set one with `uv run scripts/release.py version X.Y.Z`")]
-    setting = f"run `uv run scripts/release.py version {version}`, which sets every member's version and pin, and relocks"
     found = [problem] if (problem := _past_zero(version)) is not None else []
-    names = {member.name for member in workspace.members}
-    if CORE not in names:
+    if CORE not in {member.name for member in workspace.members}:
         found.append(Problem(f"no member of the workspace is {CORE}, which every other member depends on", "run this in a checkout of basis"))
     for member in workspace.members:
-        where = f"{member.folder}/pyproject.toml"
-        if member.version != version:
-            found.append(Problem(f"{where} gives {member.name} version {member.version}, and the root pyproject.toml gives {version}", setting))
-        pins = [dependency for dependency in member.dependencies if name_of(dependency) == CORE]
-        if member.name != CORE and pins != [f"{CORE}=={version}"]:
-            said = ", ".join(f"`{pin}`" for pin in pins) if pins else "nothing"
-            found.append(Problem(f"{where} pins {CORE} as {said}, and every member depends on it at exactly the workspace's version, `{CORE}=={version}`", setting))
-        if member.publish is None:
-            found.append(Problem(f"{where} does not say whether a release publishes {member.name}", f"declare `[tool.{TOOL}] publish = true`, or false"))
-        if (locked := workspace.locked.get(member.name)) != version:
-            found.append(Problem(f"uv.lock holds {member.name} at {locked or 'no version'}, and the workspace is at {version}", "run `uv lock`, and commit uv.lock"))
+        found.extend(_member_problems(member, version, workspace.locked.get(member.name)))
+    found.extend(_publishing_problems(workspace))
+    if tag is not None and tag != f"v{version}":
+        fix = f"tag the commit whose version it names, or set the version to the tag's, as `uv run scripts/release.py version {tag.removeprefix('v')}` does, in a commit of its own"
+        found.append(Problem(f"the tag {tag} does not name the workspace's version, {version}", fix))
+    return found
+
+
+def _member_problems(member: Member, version: str, locked: str | None) -> list[Problem]:
+    where = f"{member.folder}/pyproject.toml"
+    setting = f"run `uv run scripts/release.py version {version}`, which sets every member's version and pin, and relocks"
+    found: list[Problem] = []
+    if member.version != version:
+        found.append(Problem(f"{where} gives {member.name} version {member.version}, and the root pyproject.toml gives {version}", setting))
+    pins = [dependency for dependency in member.dependencies if name_of(dependency) == CORE]
+    if member.name != CORE and pins != [f"{CORE}=={version}"]:
+        said = ", ".join(f"`{pin}`" for pin in pins) if pins else "nothing"
+        found.append(Problem(f"{where} pins {CORE} as {said}, and every member depends on it at exactly the workspace's version, `{CORE}=={version}`", setting))
+    if member.publish is None:
+        found.append(Problem(f"{where} does not say whether a release publishes {member.name}", f"declare `[tool.{TOOL}] publish = true`, or false"))
+    if locked != version:
+        found.append(Problem(f"uv.lock holds {member.name} at {locked or 'no version'}, and the workspace is at {version}", "run `uv lock`, and commit uv.lock"))
+    return found
+
+
+def _publishing_problems(workspace: Workspace) -> list[Problem]:
+    """A release that publishes nothing, a published member that needs one no release publishes, and root
+    dependencies, which a plain `uv sync` installs, that are not exactly the published members."""
+    names = {member.name for member in workspace.members}
     published = {member.name for member in workspace.published()}
+    found: list[Problem] = []
     if not published:
         found.append(Problem("no member says that a release publishes it", f"declare `[tool.{TOOL}] publish = true` in each member a release publishes"))
     for member in workspace.published():
@@ -115,9 +134,14 @@ def problems(workspace: Workspace, *, tag: str | None = None) -> list[Problem]:
             listed = ", ".join(needed)
             reason = f"a release publishes {member.name}, which depends on {listed}, which it does not publish, so an index holding {member.name} could not install it"
             found.append(Problem(reason, f"publish {listed} too, or not {member.name}"))
-    if tag is not None and tag != f"v{version}":
-        fix = f"tag the commit whose version it names, or set the version to the tag's, as `uv run scripts/release.py version {tag.removeprefix('v')}` does, in a commit of its own"
-        found.append(Problem(f"the tag {tag} does not name the workspace's version, {version}", fix))
+    released = {name_of(dependency) for dependency in workspace.dependencies} & names
+    for member in workspace.members:
+        if member.publish is False and member.name in released:
+            reason = f"the root pyproject.toml's dependencies, which are what basis releases, list {member.name}, which says a release does not publish it"
+            found.append(Problem(reason, f"take it out of them, or make its `[tool.{TOOL}] publish` true"))
+        if member.publish is True and member.name not in released:
+            reason = f"{member.name} says a release publishes it, and the root pyproject.toml's dependencies, which are what basis releases, do not list it"
+            found.append(Problem(reason, f"add {member.name} to them, or make its `[tool.{TOOL}] publish` false"))
     return found
 
 
@@ -174,7 +198,8 @@ def with_version(text: str, version: str, *, pin: bool) -> str:
 def read(root: Path) -> Workspace:
     """The workspace at `root`: its version, each member its `members` globs find, and what uv.lock locks."""
     pyproject = _toml(root / "pyproject.toml")
-    version = _string(_table(pyproject, "project"), "version", root / "pyproject.toml")
+    project = _table(pyproject, "project")
+    version = _string(project, "version", root / "pyproject.toml")
     workspace = _table(_table(_table(pyproject, "tool"), "uv"), "workspace")
     excluded = {path for pattern in _strings(workspace, "exclude") for path in root.glob(pattern)}
     folders = sorted({path.parent for pattern in _strings(workspace, "members") for path in root.glob(f"{pattern}/pyproject.toml")} - excluded)
@@ -186,7 +211,7 @@ def read(root: Path) -> Workspace:
         for entry in (entries if isinstance(entries, list) else [])
         if isinstance(entry, dict) and isinstance(name := entry.get("name"), str) and isinstance(number := entry.get("version"), str)
     }
-    return Workspace(version, members, locked)
+    return Workspace(version, _strings(project, "dependencies"), members, locked)
 
 
 def set_version(root: Path, asked: str, *, lock: Callable[[Path], int]) -> list[Problem]:

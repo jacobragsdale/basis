@@ -11,8 +11,9 @@ out until its design settles.
 basis has one version, the root `pyproject.toml`'s `[project] version`. Every member carries it, and each depends on
 basis-core at exactly that version, so a repo's lock can only hold basis packages from one release. Each member's own
 `pyproject.toml` says whether a release publishes it, as `[tool.basis-release] publish = true` or `false`; optim's says
-`false`, so making it true is a reviewed change to `packages/optim/pyproject.toml`. `scripts/release.py` sets the
-version and checks all of this. The commit hook runs its check whenever a `pyproject.toml`, `uv.lock` or the script
+`false`, so making it true is a reviewed change to `packages/optim/pyproject.toml`. The root's `dependencies`, which a
+plain `uv sync` installs, list exactly the published members. `scripts/release.py` sets the version and checks all of
+this. The commit hook runs its check whenever a `pyproject.toml`, `uv.lock` or the script
 changes, and refuses a member, a pin or the lock at another version with one `ERROR` line and its fix.
 
 ```sh

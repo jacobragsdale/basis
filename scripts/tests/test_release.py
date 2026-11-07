@@ -15,8 +15,10 @@ KEPT = Member("other-part", "packages/other", VERSION, (f"{CORE}=={VERSION}",), 
 """A member that every release builds and checks at the one version, and none publishes."""
 
 
-def workspace(*members: Member, version: str = VERSION, locked: dict[str, str] | None = None) -> Workspace:
-    return Workspace(version, members, {member.name: member.version for member in members} if locked is None else locked)
+def workspace(*members: Member, version: str = VERSION, locked: dict[str, str] | None = None, releases: tuple[str, ...] | None = None) -> Workspace:
+    """The workspace of `members`, whose root's dependencies are `releases`, by default the published ones, as a plain `uv sync` installs them."""
+    dependencies = tuple(member.name for member in members if member.publish is True) if releases is None else releases
+    return Workspace(version, dependencies, members, {member.name: member.version for member in members} if locked is None else locked)
 
 
 def with_(member: Member, *, version: str | None = None, dependencies: tuple[str, ...] | None = None, publish: bool | None = True) -> Member:
@@ -35,7 +37,12 @@ def with_(member: Member, *, version: str | None = None, dependencies: tuple[str
         (workspace(BASE, JOB, locked={CORE: VERSION, "basis-job": "0.3.0"}), ["uv.lock holds basis-job at 0.3.0"]),
         (workspace(BASE, JOB, locked={CORE: VERSION}), ["uv.lock holds basis-job at no version"]),
         (workspace(with_(BASE, publish=False), with_(JOB, publish=False)), ["no member says that a release publishes it"]),
-        (workspace(with_(BASE, publish=False), JOB), ["a release publishes basis-job, which depends on basis-core, which it does not publish"]),
+        (
+            workspace(with_(BASE, publish=False), JOB, releases=(CORE, "basis-job")),
+            ["a release publishes basis-job, which depends on basis-core, which it does not publish", "list basis-core, which says a release does not publish it"],
+        ),
+        (workspace(BASE, JOB, KEPT, releases=(CORE, "basis-job", "other-part", "polars>=2.1.0")), ["dependencies, which are what basis releases, list other-part, which says"]),
+        (workspace(BASE, JOB, KEPT, releases=(CORE,)), ["basis-job says a release publishes it, and the root pyproject.toml's dependencies, which are what basis releases, do not list it"]),
         (workspace(JOB), ["no member of the workspace is basis-core"]),
         (workspace(BASE, JOB, version="0.4"), ["the root pyproject.toml's version, '0.4', is not MAJOR.MINOR.PATCH"]),
         (workspace(with_(BASE, version="1.0.0"), with_(JOB, version="1.0.0", dependencies=("basis-core==1.0.0",)), version="1.0.0"), ["the version is 1.0.0, and basis stays at 0.x"]),
@@ -51,6 +58,8 @@ def with_(member: Member, *, version: str | None = None, dependencies: tuple[str
         "unlocked",
         "nothing-published",
         "a-published-part-needs-an-unpublished-one",
+        "the-root-releases-an-unpublished-one",
+        "the-root-leaves-out-a-published-one",
         "no-core",
         "not-semver",
         "past-0x",
@@ -126,7 +135,8 @@ def test_a_pyproject_without_a_project_version_is_refused(text: str, missing: st
 
 def repo(root: Path, *, version: str = "0.3.0") -> Path:
     """A workspace of basis-core and basis-job at `version`, locked, each published."""
-    (root / "pyproject.toml").write_text(f'[project]\nname = "workspace"\nversion = "{version}"\n\n[tool.uv.workspace]\nmembers = ["packages/*"]\n', encoding="utf-8")
+    root_project = f'[project]\nname = "workspace"\nversion = "{version}"\ndependencies = ["{CORE}", "basis-job"]\n\n[tool.uv.workspace]\nmembers = ["packages/*"]\n'
+    (root / "pyproject.toml").write_text(root_project, encoding="utf-8")
     for name, dependencies in [(CORE, ""), ("basis-job", f'"{CORE}=={version}"')]:
         folder = root / "packages" / name.removeprefix("basis-")
         folder.mkdir(parents=True)
