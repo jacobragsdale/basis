@@ -5,6 +5,8 @@
 - it reads the request strictly first (`strict.py`): the path and the query by their types' grammars, and a JSON body
   in pydantic's strict mode, which FastAPI's handler then gets as the value basis made, and never validates again, so a
   validator runs once; a body sent to a route that declares none is refused;
+- a domain's exception that the route declares the meaning of, with `api.error`, answers as that meaning, the
+  most specific one the route declares for its class; any other is a defect, a 500;
 - an `api.Error` the route does not declare, a kind of `api.ServiceError` that nothing it asks for raises, or an
   `HTTPException` raised inside it, answers 500 as a defect, logged once by the request boundary with what the route
   should have declared;
@@ -33,7 +35,7 @@ from starlette.types import Receive, Scope, Send
 
 from basis.api import arrow, deadlines, strict
 from basis.api.dataset import Rows
-from basis.api.errors import Error, Problem, ValidationProblem, described
+from basis.api.errors import DomainError, Error, Problem, ValidationProblem, described
 from basis.api.identity import SignInRequiredError
 from basis.api.service import Route, Service
 from basis.core.errors import ServiceError
@@ -106,6 +108,7 @@ class Served(APIRoute):
         if declared.rows is not None and dependant.call is declared.handler:  # the endpoint stays the handler, which `given` finds the route's writes by
             dependant.call = _answering_arrow(declared, declared.rows)
         handle = super().get_route_handler()
+        meanings: dict[type, type[DomainError]] = {error.exception: error for error in declared.errors if issubclass(error, DomainError)}
 
         async def strictly(request: Request) -> Response:
             reads = declared.reads
@@ -146,6 +149,11 @@ class Served(APIRoute):
             except HTTPException as error:
                 msg = f"{declared.name} raised an HTTPException {error.status_code}, which no route declares: raise an api.Error subclass, and declare it in the route's errors=[...]"
                 raise UndeclaredError(msg) from error
+            except Exception as error:
+                meant = next((meanings[kind] for kind in type(error).__mro__ if kind in meanings), None)
+                if meant is None:
+                    raise  # a defect, which the request boundary answers 500
+                raise meant(str(error) or meant.title) from error
             finally:
                 _ARROW.reset(token)
 
