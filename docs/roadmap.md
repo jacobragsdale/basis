@@ -21,9 +21,9 @@ Actions.
 
 The critical path runs through lanes A and B: the namespace spike, the workspace, etl-framework's move, `basis-core`'s
 extraction, the `basis` command, the repo files, the desktop gates, then the API, its resources' move into `basis-core`
-(step 5.1, which waits for the Datadog spike), and the pilot. Steps 5.2 to 5.7 are off it, and run at once after 5.1.
-Optim is off the critical path, and runs alongside phase 2. Its design is provisional until the maintainer meets the
-firm's quant team, and nothing in lanes A and B may depend on it (see [the design](design.md#the-packages)).
+(step 5.1), and the pilot, which also waits for the Datadog spike. Steps 5.2 to 5.7 are off it, and run at once after
+5.1. Optim is off the critical path, and runs alongside phase 2. Its design is provisional until the maintainer meets
+the firm's quant team, and nothing in lanes A and B may depend on it (see [the design](design.md#the-packages)).
 
 ```mermaid
 flowchart TD
@@ -31,7 +31,7 @@ flowchart TD
   s02[0.2 namespaces] --> r1[1.1 workspace]
   s03[0.3 eval] --> a8[2.8 pilot]
   s04[0.4 ingress, work] --> a5[2.5 UI contract]
-  s05[0.5 Datadog, work] --> c1[5.1 resources in core]
+  s05[0.5 Datadog, work] --> a8
   s06[0.6 SQL Server JSON, work] --> c5[5.5 Mongo and SQL Server JSON]
   s07[0.7 Kerberos, work] --> c6[5.6 environments]
   s08[0.8 Data Lake, work] --> c7[5.7 Data Lake]
@@ -40,7 +40,7 @@ flowchart TD
   r3 --> r5[1.5 basis command] --> r6[1.6 repo files and sync] --> r7[1.7 desktop gates]
   r4 --> r7
   r7 --> r8
-  r3 --> a1[2.1 API app] --> a2[2.2 resources] --> a3[2.3 routes] --> a5 --> c1 --> a6[2.6 API contract tests] --> a7[2.7 new app] --> a8
+  r3 --> a1[2.1 API app] --> a2[2.2 resources] --> a3[2.3 routes] --> a5 --> c1[5.1 resources in core] --> a6[2.6 API contract tests] --> a7[2.7 new app] --> a8
   a2 --> a4[2.4 identity]
   a3 --> a9[2.9 after-commit calls]
   r7 --> a7
@@ -91,7 +91,7 @@ and the fallback for each no.
    declared.
 5. **0.5 Datadog (work).** On the AKS cluster: does the Datadog Agent accept OTLP, and on which host and port? Does it
    collect containers' logs? Which format of trace id links a log record to its trace? Done when the result gives the
-   endpoint step 5.1 sends traces to, and the field its log records name their trace by.
+   Agent's address, and says whether Datadog needs a trace-id field of its own in the logs, for the pilot (2.8).
 6. **0.6 SQL Server JSON (work).** Does mssql-python handle SQL Server's native `json` type, in reads, writes and
    `CREATE TABLE`? Done when the result says so, for step 5.5.
 7. **0.7 Kerberos (work).** Do Kerberos logins work with mssql-python, in WSL and in a pod, and with oracledb, whose
@@ -199,9 +199,9 @@ Lane B. Needs step 1.3. Steps 2.3 and 2.4 run at once, and so do 2.5 and 2.9.
    check --full`, and its image serves the API and runs the job.
 8. **2.8 Pilot (work).** Create a pilot API repo with `uvx basis-api new app pilot`, beside basis-ui's pilot UI repo,
    from the internal feed. Deploy both to QA through their generated pipelines, behind one host if spike 0.4 allows it.
-   Lane D adds API tasks to the eval and runs them against the pilot. Needs 2.7, 1.8, 5.1 and spike 0.3, so it reports
-   to Datadog from its first day. Done when `new app` reaches QA in one pipeline run and the loop time is recorded
-   against the hook's one-minute budget.
+   Lane D adds API tasks to the eval and runs them against the pilot. Needs 2.7, 1.8, 5.1 and spikes 0.3 and 0.5, so it
+   reports to Datadog from its first day. Done when `new app` reaches QA in one pipeline run and the loop time is
+   recorded against the hook's one-minute budget.
 9. **2.9 After-commit calls.** Add the outbox, as the design has it: a state-changing call an `api.Client` sends with
    an idempotency key, written as a row of the outbox table in the route's transaction and made once after the commit,
    within the route's deadline, with `Idempotency-Key`; the relay, a scheduled basis job, which retries each row with
@@ -266,8 +266,11 @@ reasons are in [the design](design.md#what-jobs-and-apis-share).
    - logs stay JSON on stderr, never files on NFS, and each record carries its trace's and span's ids;
    - there are no custom metrics, since Datadog's APM derives request counts, errors and latency from the traces.
 
-   Needs 2.5 merged, and spike 0.5. Steps 2.6 and 2.7 build on it. Done when a job's run and an API's request each make
-   one trace, with a span for each SQL statement and HTTP call, and each of their log records names its trace and span.
+   Needs 2.5 merged, and no spike: it exports to the OTLP endpoint its settings name, and its tests run against an
+   OpenTelemetry collector container or an in-process exporter. Steps 2.6 and 2.7 build on it. Done when a job's run and
+   an API's request each make one trace, with a span for each SQL statement and HTTP call, and each of their log records
+   carries OpenTelemetry's trace and span ids. Spike 0.5 confirms the format Datadog links them by; a trace-id field of
+   Datadog's own, if it needs one, is a small follow-up.
 2. **5.2 Calendars.** Ship `sifma-us`, with its full and early closes, and `target2` in `basis.core`, as data built from
    SIFMA's and the ECB's published schedules, with no pandas. Each states the last date it covers. A job names its
    calendar, which says whether a date is a business day, adds business days, and gives the previous business day and a
@@ -305,10 +308,11 @@ reasons are in [the design](design.md#what-jobs-and-apis-share).
    partitioned by its run's interval, such as `CONTAINER/TABLE/date=2026-11-07/`, through `pyarrow.fs`. The
    environment's settings declare how it signs in: an account key or a SAS token, as a secret, or Entra ID, through
    workload identity in a pod and `az login` on a desktop. Each partition goes to a temporary path and is renamed into
-   place, and the archive is done only when its files read back with the row count written. The job's database ledger records it
-   like any publish, with the interval, the path, the row count and the files' hashes. Needs 5.1, 5.6 and spike 0.8,
-   and runs alongside the other steps. Done when an interval's archive is in the lake with its row count checked and its
-   ledger row written, a retry archives nothing, and `resume` and `--again` work on it as they do on a table.
+   place, and the archive is done only when its files read back with the row count written. The job's database ledger
+   records it like any publish, with the interval, the path, the row count and the files' hashes. Needs 5.1, 5.6 and
+   spike 0.8, and runs alongside the other steps. Done when an interval's archive is in the lake with its row count
+   checked and its ledger row written, a retry archives nothing, and `resume` and `--again` work on it as they do on a
+   table.
 
 Later, and not yet stepped:
 
