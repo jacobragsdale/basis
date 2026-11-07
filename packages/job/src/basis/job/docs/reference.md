@@ -19,7 +19,9 @@ not listed is named by its module path. The module exports:
 The module, and everything it imports, must not reach a database driver, an HTTP client, storage, pyarrow, or the run
 loop's modules; the contract tests list the import chain if it does. `main.py` and tests are not job code.
 
-Every frame a job gets and returns is a pandas `DataFrame`, its columns of the types the next section gives.
+Every frame a job gets and returns is a pandas `DataFrame`, its columns of the types the next section gives. The
+transform and the check are each given frames of their own of the inputs, made afresh from the Arrow tables the run
+loaded and saves, so a frame either changes in place changes neither what the other sees nor the snapshot.
 
 ## Rows
 
@@ -98,7 +100,8 @@ are saved in the snapshot like any input's, so a replay never calls the service.
 
 A `.csv` or `.parquet` file, by a path relative to the declaring file, or a URL that `pyarrow.fs` reads. `{start}` and
 `{end}` in `path` format the interval's ends, as `rates/{start:%Y-%m-%d}.csv`. A CSV's values are read as text and
-converted by the row; an empty field is null.
+converted by the row; an empty field is null, and so is a blank line in a CSV of one column. A header that names a
+column twice is refused.
 
 ### A run on files
 
@@ -205,7 +208,7 @@ basis's.
 | `basis run JOB --params FILE [--interval START..END] [--data DIR] [--label KEY=VALUE]... [--publish] [--again]` | Runs a job, saves its snapshot, and with `--publish` writes its changes. `--again` publishes an `Append()` table for an interval the ledger already has. |
 | `basis replay [JOB] RUN_ID [--params FILE]` | Runs a saved run's transform again on its inputs; prints the replay's status, reasons and differences as JSON. Without `JOB`, the run is found by its id alone. |
 | `basis resume [JOB] RUN_ID [--again]` | Writes a partly published run's changes to each database whose ledger lacks the run, told `--again` if the run was, or if given now. Without `JOB`, the run is found by its id alone. |
-| `basis regress [JOB] [--last N] [--label KEY=VALUE]... [--snapshots ROOT]` | Replays the last `N` (default 10) published runs of `JOB`, or of every job the repo lists, whose labels include every `--label`; prints each run's job, reasons and differences as JSON. |
+| `basis regress [JOB] [--last N] [--label KEY=VALUE]... [--snapshots ROOT]` | Replays the last `N` (default 10) published runs of `JOB`, or of every job the repo lists, whose labels include every `--label`; prints each run's job, reasons and differences as JSON: rows added, removed and changed, by column, and each column added, removed or retyped, the rows comparing by the columns both runs hold alike. |
 | `basis describe [JOB]` | Prints the job's params schema, inputs and outputs as JSON; without `JOB`, every job the repo lists, with its module. |
 | `basis ddl JOB --dialect mssql\|oracle` | Prints `CREATE TABLE` for each of the job's tables. |
 | `basis ddl --ledger TABLE --dialect mssql\|oracle` | Prints `CREATE TABLE` and `CREATE INDEX` for the ledger. |
@@ -261,9 +264,10 @@ query, which no setting shows: give QA's logins access to QA alone.
 ## Python API
 
 `etl.run(job, *, params, interval=None, env=".env", data=None, labels=None, snapshot_root=None)` runs a job module
-without publishing and returns its result: `result.record` is its `RunRecord`, `result.inputs` its frames, and
-`result.changes(NAME)` a table's `Changes`. `etl.replay(job, run_id, *, params=None, env=None, snapshot_root=None)`
-returns the replay's result and its differences.
+without publishing and returns its result: `result.record` is its `RunRecord`, `result.inputs` frames of its inputs,
+made afresh on each access from `result.tables`, as the run loaded them, and `result.changes(NAME)` a table's
+`Changes`. `etl.replay(job, run_id, *, params=None, env=None, snapshot_root=None)` returns the replay's result and its
+differences.
 
 Paths are relative to the job's folder. `env` names a settings file, looked for in the job's folder and each folder
 above it up to the repo's root; its variables are set for the call alone, and the process's environment overrides them. Snapshots are saved in the repo's

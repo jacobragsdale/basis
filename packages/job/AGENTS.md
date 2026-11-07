@@ -80,6 +80,8 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
   that would round or truncate, and checks what they allow, a time of day dropped from a date and an integer other
   than 0 or 1 made a boolean.
 - Job code never imports pyarrow, which the contract tests catch; it names a dtype through its row, `Row.dtypes()`.
+- A pandas frame changes in place, so a run keeps each input as the Arrow table it loaded, which the snapshot saves,
+  and gives the transform and the check each frames of their own, made from those tables (`runs.fresh`).
 - A field added to `RunRecord` gets a default, so snapshots from older versions still load.
 - After changing the example, the templates or the skills, generate a repo and run its checks (see Checks).
 
