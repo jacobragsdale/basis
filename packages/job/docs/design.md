@@ -8,7 +8,8 @@ in `src/basis/job/docs/`, describe the result; this page records the decisions a
 Since basis's step 1.3, etl-framework is basis-job, which imports as `basis.job`, and its plumbing is basis-core's:
 the databases, settings, logs, storage, snapshots, publishing with the ledger, the shared halves of `replay`, `resume`
 and `regress`, and the machinery of `new`, `sync` and the contract tests. [basis's design](../../../docs/design.md)
-supersedes the decisions below about sharing a core with portfolio-optim; the rest stand.
+supersedes the decisions below about sharing a core with portfolio-optim, and about polars, whose frames become pandas
+in basis's step 5.0b; the rest stand.
 
 ## The problem
 
