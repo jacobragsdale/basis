@@ -4,8 +4,8 @@
 # ///
 """Records a run of optim's example model as plain JSON, and compares a run with this oracle's record.
 
-    uv run oracles/optim-0.2.0/record.py record SNAPSHOT OUT
-    uv run oracles/optim-0.2.0/record.py compare SNAPSHOT
+    uv run packages/optim/oracles/0.2.0/record.py record SNAPSHOT OUT
+    uv run packages/optim/oracles/0.2.0/record.py compare SNAPSHOT
 
 SNAPSHOT is a run's folder as optim 0.2.0 saves it: `run.json` beside `decisions.parquet`, `trades.parquet`,
 `reasons.parquet` and `metrics.parquet`; or a run of the ported optim, by its manifest in the run store,

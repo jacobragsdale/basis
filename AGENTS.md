@@ -14,6 +14,10 @@ its docs.
 - Work one roadmap step per branch and git worktree, named after the step's id, such as `1.3-extract-core`, and follow
   the roadmap's rules for working in parallel.
 - Changes to `basis-core` land one pull request at a time.
+- Nothing outside `packages/optim` may need optim, whose design is provisional until the maintainer meets the firm's
+  quant team: basis-core, basis-job and basis-api, their release, and the contract a UI relies on stay as they are if
+  optim changes or goes. A mechanism in core that only one part uses must be one a job could use as it stands.
+  `scripts/without_optim.py` checks the rest, and CI runs it on every pull request.
 - A change to the contract a UI relies on is a change to basis-ui's too: say so in the pull request, and update
   basis-ui's pinned sample.
 - A spike writes its result to `docs/spikes/NAME.md`: the versions it used, a yes or no for each question, and the
@@ -27,11 +31,12 @@ its docs.
 ## Checks
 
 ```sh
-uv sync
+uv sync --all-packages              # every member; a plain `uv sync` installs only what basis releases, and removes optim
 uv run pre-commit install           # once per clone: the commit hook runs the checks below
 uv run pre-commit run --all-files   # ruff, ty with every rule an error, the lockfile, the import contracts, file hygiene
 uv run pytest                       # every package's unit tests, optim's among them, from the root
 uv run pytest -m integration        # real SQL Server and Oracle, every package's: packages/job/tests/integration/README.md
+uv run scripts/without_optim.py     # the name check, then the hooks and unit tests with packages/optim removed
 ```
 
 To check what `basis-job new repo` generates, from the root:

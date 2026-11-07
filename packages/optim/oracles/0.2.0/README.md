@@ -60,7 +60,7 @@ You need uv, git and a clean checkout of portfolio-optim.
 
    ```sh
    cd SCRATCH/sma-optimizer
-   cp BASIS/oracles/optim-0.2.0/scratch-repo.uv.lock uv.lock
+   cp BASIS/packages/optim/oracles/0.2.0/scratch-repo.uv.lock uv.lock
    uv sync --locked
    ```
 
@@ -92,13 +92,13 @@ You need uv, git and a clean checkout of portfolio-optim.
 4. From this repo's root, compare the run's snapshot with the oracle, where `RUN_ID` is the id the run printed:
 
    ```sh
-   uv run oracles/optim-0.2.0/record.py compare SCRATCH/sma-optimizer/snapshots/RUN_ID
+   uv run packages/optim/oracles/0.2.0/record.py compare SCRATCH/sma-optimizer/snapshots/RUN_ID
    ```
 
    It prints `matches the oracle` and exits 0, or prints each difference and exits 1.
 
-`uv run oracles/optim-0.2.0/record.py record SNAPSHOT oracles/optim-0.2.0` writes the two JSON files again from
-a snapshot.
+`uv run packages/optim/oracles/0.2.0/record.py record SNAPSHOT packages/optim/oracles/0.2.0` writes the two JSON files
+again from a snapshot.
 
 ## The oracle is deterministic
 
@@ -107,7 +107,7 @@ Two runs, each in a freshly generated repo with the same lockfile and in a proce
 and `decisions.parquet` differed only in the timing columns `seconds` and `solve_seconds`. Their `run.json` files
 differed only in the run id, the times and the scratch folder. A third run, made by following
 [Reproduce the run](#reproduce-the-run) from a fresh clone of portfolio-optim in another folder, matched too. optim 0.2.0's own regress over this snapshot,
-`optim regress income --snapshots BASIS/oracles/optim-0.2.0/snapshot` from the generated repo, replayed both
+`optim regress income --snapshots BASIS/packages/optim/oracles/0.2.0/snapshot` from the generated repo, replayed both
 portfolios and listed no change.
 
 ## Compare the ported optim
