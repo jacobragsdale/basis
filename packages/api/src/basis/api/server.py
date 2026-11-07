@@ -1,4 +1,5 @@
-"""`basis serve`: run a service's app with uvicorn, logging JSON lines through basis-core, until it is told to stop.
+"""`basis serve` and `basis dev`: run a service's app with uvicorn, logging JSON lines through basis-core, until it is
+told to stop. `basis dev` runs it on the service's declared fakes (`dev.py`), and only for this machine, on 127.0.0.1.
 
 A graceful shutdown, on SIGTERM as Kubernetes sends it, goes in three steps. First the app drains: readiness reports
 503 while the server keeps serving, for `serve.drain_s` seconds, so that the cluster takes the pod out of its
@@ -18,6 +19,7 @@ from typing import override
 import uvicorn
 
 from basis.api.app import Lifecycle, build
+from basis.api.fakes import Fakes
 from basis.api.service import Service, load
 from basis.api.settings import Settings
 from basis.core import logs
@@ -25,19 +27,19 @@ from basis.core import logs
 log = logging.getLogger(__name__)
 
 
-def serve(service: Service | str | None = None, *, settings: Settings | None = None) -> None:
+def serve(service: Service | str | None = None, *, settings: Settings | None = None, fakes: Fakes | None = None, host: str | None = None) -> None:
     """Serve `service`, or the service a reference names (see `api.load`), or the one the installed packages list,
-    with `settings`, or its settings read from the environment."""
+    with `settings`, or its settings read from the environment, on `fakes` where given, and on `host`, or the one the
+    settings name."""
     logs.setup()
     found = service if isinstance(service, Service) else load(service)
-    for package in {route.handler.__module__.partition(".")[0] for route in found.routes}:
-        logs.include(package)  # the service's own loggers log at the configured level, as basis's do
-    logs.bind(service=found.name)
-    app = build(found, settings=settings)
+    logged(found)
+    app = build(found, settings=settings, fakes=fakes)
     serving = app.settings.serve
+    host = host if host is not None else serving.host
     config = uvicorn.Config(
         app.asgi,
-        host=serving.host,
+        host=host,
         port=serving.port,
         lifespan="on",  # a lifespan that fails stops the server before it takes a request
         log_config=None,  # uvicorn's records go through basis-core's handler, as JSON, and only its warnings and up
@@ -45,8 +47,19 @@ def serve(service: Service | str | None = None, *, settings: Settings | None = N
         timeout_graceful_shutdown=serving.shutdown_s,
         server_header=False,
     )
-    log.info("serving %s on %s:%s", found.name, serving.host, serving.port, extra={"host": serving.host, "port": serving.port})
-    _Server(config, app.lifecycle, drain_s=serving.drain_s).run()
+    on = " on its fakes" if fakes is not None else ""
+    log.info("serving %s on %s:%s%s", found.name, host, serving.port, on, extra={"host": host, "port": serving.port, "fakes": fakes is not None})
+    try:
+        _Server(config, app.lifecycle, drain_s=serving.drain_s).run()
+    except KeyboardInterrupt:  # Ctrl+C, which uvicorn raises again once it has shut down: the stop that was asked for
+        return
+
+
+def logged(service: Service) -> None:
+    """Log as `service`: its own loggers at the configured level, as basis's are, and its name on every record."""
+    for package in {route.handler.__module__.partition(".")[0] for route in service.routes}:
+        logs.include(package)
+    logs.bind(service=service.name)
 
 
 class _Server(uvicorn.Server):

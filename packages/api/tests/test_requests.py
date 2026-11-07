@@ -54,7 +54,16 @@ def broken() -> dict[str, str]:
     raise RuntimeError(msg)
 
 
-SERVICE = api.Service(name="prices", settings=api.Settings, routes=[api.get("/prices/{security}", price), api.post("/orders", order), api.get("/conflict", conflict), api.get("/broken", broken)])
+SERVICE = api.Service(
+    name="prices",
+    settings=api.Settings,
+    routes=[
+        api.get("/prices/{security}", price, deadline_s=1, response=dict[str, str], errors=[Unpriced]),
+        api.post("/orders", order, deadline_s=1, response=Order, errors=[]),
+        api.get("/conflict", conflict, deadline_s=1, response=dict[str, str], errors=[]),
+        api.get("/broken", broken, deadline_s=1, response=dict[str, str], errors=[]),
+    ],
+)
 
 
 def _app(**settings: object) -> api.App:
@@ -93,7 +102,8 @@ def test_two_requests_served_at_once_log_their_own_ids(logged: Records) -> None:
             await logged_after[other].wait()
             return {"name": name}
 
-        app = api.build(api.Service(name="overlap", settings=api.Settings, routes=[api.get("/overlap/{name}", overlap)]), settings=api.Settings.given())
+        route = api.get("/overlap/{name}", overlap, deadline_s=5, response=dict[str, str], errors=[])
+        app = api.build(api.Service(name="overlap", settings=api.Settings, routes=[route]), settings=api.Settings.given())
         async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app.asgi), base_url="http://test") as client:
             return list(await asyncio.gather(client.get("/overlap/a"), client.get("/overlap/b")))
 
@@ -163,14 +173,15 @@ def test_a_body_that_is_not_json_is_a_problem_with_the_whole_body() -> None:
     assert (response.status_code, response.json()["type"]) == (HTTPStatus.UNPROCESSABLE_CONTENT, "invalid-request")
     [error] = response.json()["errors"]
     assert (error["location"], error["pointer"]) == ("body", "")
-    assert error["detail"].startswith("JSON decode error at character 18: ")
+    assert error["detail"].startswith("The body is not JSON: EOF while parsing a value at line 1 column 18")
 
 
-def test_an_http_exception_keeps_its_status_and_its_structured_detail() -> None:
+def test_an_http_exception_in_a_route_is_a_500_whose_log_says_to_raise_a_declared_error(logged: Records) -> None:
     with TestClient(_app().asgi) as client:
         response = client.get("/conflict")
-    assert response.status_code == HTTPStatus.CONFLICT
-    assert response.json() == {"type": "about:blank", "title": "Conflict", "status": 409, "instance": f"urn:uuid:{response.headers['x-request-id']}", "data": {"conflicts": ["T1", "T2"]}}
+    assert response.json() == {"type": "about:blank", "title": "Internal Server Error", "status": 500, "instance": f"urn:uuid:{response.headers['x-request-id']}"}
+    [failure] = [record for record in _of(logged(), response.headers["x-request-id"]) if "traceback" in record]
+    assert str(failure["error"]).startswith("basis.api.routes.UndeclaredError: conflict raised an HTTPException 409, which no route declares: raise an api.Error subclass")
 
 
 @pytest.mark.parametrize(

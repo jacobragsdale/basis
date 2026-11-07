@@ -2,20 +2,22 @@
 and the system's clock, or through the fakes a test gives; and what every call through one gets, real or fake: a span
 of its own on the app's tracer, and, for every call that can wait, a deadline.
 
-A deadline is the declared `deadline_s`, from when the call is made: a call that has not finished by then raises
-`DeadlineExceededError`, a 504 problem. The database drivers block, so a database's statements run on a thread pool of
-the database's own, `max_concurrent` threads, one statement at a time on the request's one connection; waiting for a
-thread counts against the statement's deadline, and the driver's own timeout, set to what is left of it, stops the
-statement on the server too. The commit or rollback that ends the request's transaction has the same deadline.
+A deadline is the declared `deadline_s`, from when the call is made, or what is left of the route's deadline where that
+is shorter (`deadlines.py`): a call that has not finished by then raises `DeadlineExceededError`, a 504 problem. The
+database drivers block, so a database's statements run on a thread pool of the database's own, `max_concurrent`
+threads, one statement at a time on the request's one connection; waiting for a thread counts against the statement's
+deadline, and the driver's own timeout, set to what is left of it, stops the statement on the server too. The commit that ends the request's transaction has the same deadline, and the route's caps
+it too; a rollback has the database's alone, so that the connection always goes back.
 
 A statement that fails, misses its deadline or is cancelled leaves the transaction unfit to commit: it rolls back,
 once the statement has ended if it still runs, and a request that would have committed answers an error instead of a
 2xx, even when the handler caught the statement's error and carried on. A commit that misses its deadline is a 504,
 and whether it committed in the end is logged when it ends.
 
-`plan` checks, when the app is built, that the settings configure every resource that has no fake, so that a missing
-setting stops the app before it serves; `Resources.open`, in the app's lifespan, opens them, after the keys its users'
-tokens verify with, checking that each database answers, through each login the routes use, within its deadline."""
+`plan` checks, when the app is built, that the settings configure every resource that has no fake, and the process pool
+where a compute function has none, so that a missing setting stops the app before it serves; `Resources.open`, in the
+app's lifespan, opens them, after the keys its users' tokens verify with, checking that each database answers, through
+each login the routes use, within its deadline, and starts the pool's processes."""
 
 import asyncio
 import contextvars
@@ -39,7 +41,9 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from pydantic_core import to_json
 
-from basis.api import fakes
+from basis.api import deadlines, fakes
+from basis.api.compute import ComputeFunction
+from basis.api.pool import Call, InProcess, Pool, Runs
 from basis.api.resources import Bind, Body, CacheResource, CallFailedError, ClockResource, DatabaseResource, DeadlineExceededError, HttpMethod, HttpResource, IdsResource, QueryValue, Resource
 from basis.api.service import Service, ServiceError
 from basis.api.settings import HttpService, Settings
@@ -68,19 +72,43 @@ class DatabasePort(Protocol):
 
 @dataclass(frozen=True)
 class Plan:
-    """How an app opens its resources: each name's fake, where a test gave one, and otherwise its settings."""
+    """How an app opens its resources: each name's fake, where a test gave one, and otherwise its settings; and the
+    compute functions its routes ask for, each run in the pool unless a test fakes it."""
 
     service: Service
     settings: Settings
     fakes: Mapping[str, fakes.Fake]
+    compute: tuple[ComputeFunction[..., object], ...]
+    in_process: frozenset[ComputeFunction[..., object]]
+    """The compute functions a test fakes, which run in this process."""
+
+    @property
+    def pooled(self) -> tuple[ComputeFunction[..., object], ...]:
+        return tuple(declared for declared in self.compute if declared not in self.in_process)
 
 
-def plan(service: Service, settings: Settings, given: Mapping[Resource, fakes.Fake]) -> Plan:
-    """The resources' plan, after checking that each fake fakes a resource of the service's, of its kind, and that the
-    settings configure every resource that has none: a database, and its write login where a route writes it, and
-    another service's URL."""
+def plan(service: Service, settings: Settings, given: fakes.Fakes) -> Plan:
+    """The resources' plan, after checking that each fake fakes a resource of the service's, of its kind, or a compute
+    function its routes ask for, and that the settings configure every resource that has none: a database, and its
+    write login where a route writes it, another service's URL, and the pool for compute functions."""
+    asked: dict[ComputeFunction[..., object], None] = {}
+    for route in service.routes:
+        for ask in route.asks:
+            if isinstance(ask.given, ComputeFunction):
+                asked[ask.given] = None
+    compute = tuple(asked)
+    in_process: set[ComputeFunction[..., object]] = set()
     by_name: dict[str, fakes.Fake] = {}
     for resource, fake in given.items():
+        if isinstance(resource, ComputeFunction):
+            if resource not in compute:
+                msg = f"a fake is given for the compute function {resource.name}, which no route of service {service.name} asks for: fake the ones its routes run"
+                raise ServiceError(msg)
+            if not isinstance(fake, fakes.Compute):
+                msg = f"the compute function {resource.name} is given a fakes.{type(fake).__name__}: give it fakes.Compute()"
+                raise ServiceError(msg)
+            in_process.add(resource)
+            continue
         if resource not in service.resources:
             msg = f"a fake is given for {resource.name}, which service {service.name} does not declare: fake the service's own resources"
             raise ServiceError(msg)
@@ -90,10 +118,12 @@ def plan(service: Service, settings: Settings, given: Mapping[Resource, fakes.Fa
         by_name[resource.name] = fake
     written = {route.writes.name for route in service.routes if route.writes is not None}
     unset = [found for resource in service.resources if resource.name not in by_name and (found := _unset(resource, settings, written=resource.name in written)) is not None]
+    if settings.compute is None and (pooled := [declared.name for declared in compute if declared not in in_process]):
+        unset.append(f"{variable(('compute', 'workers'))}, the processes the compute functions {', '.join(pooled)} run in")
     if unset:
         msg = f"service {service.name}'s resources are not all configured, so the API cannot start: set {'; '.join(unset)}"
         raise SettingsError(msg)
-    return Plan(service, settings, by_name)
+    return Plan(service, settings, by_name, compute, frozenset(in_process))
 
 
 def _unset(resource: Resource, settings: Settings, *, written: bool) -> str | None:
@@ -186,6 +216,8 @@ class Resources:
         self._linger_s = linger_s
         """How long shutdown waits for work that outlived its request: a login and a statement, at the longest the
         settings allow, or, where every database is a fake, until it ends, which the fakes' answers decide."""
+        self._pool: Pool | None = None
+        self._calls: dict[ComputeFunction[..., object], Call] = {}
 
     @classmethod
     async def open(cls, planned: Plan, tracer: Tracer, first: Opens | None = None) -> Resources:
@@ -199,9 +231,15 @@ class Resources:
                 await first.open(tracer)
             for resource in planned.service.resources:
                 await opened._open(resource, planned, writes=resource.name in written)
+            if (pooled := planned.pooled) and planned.settings.compute is not None:
+                opened._pool = await Pool.open(planned.settings.compute.workers, pooled)
         except BaseException:
             await opened.close()
             raise
+        in_process = InProcess()
+        for declared in planned.compute:
+            runs: Runs = in_process if declared in planned.in_process or opened._pool is None else opened._pool
+            opened._calls[declared] = Call(declared, runs, tracer)
         return opened
 
     async def _open(self, resource: Resource, planned: Plan, *, writes: bool) -> None:
@@ -238,8 +276,14 @@ class Resources:
     def handle(self, resource: HttpResource | CacheResource[object] | ClockResource | IdsResource) -> object:
         return self._handles[resource.name]
 
+    def compute(self, declared: ComputeFunction[..., object]) -> Call:
+        return self._calls[declared]
+
     async def close(self) -> None:
-        """Close the HTTP clients, wait for the work that outlived its request, and then stop each database's threads."""
+        """Stop the compute pool, close the HTTP clients, wait for the work that outlived its request, and then stop each
+        database's threads."""
+        if self._pool is not None:
+            await self._pool.close()
         for opened in self._clients:
             await opened.aclose()
         if self._closing:
@@ -319,16 +363,17 @@ class DatabaseSession:
         with self._database.span(operation, **{"db.query.text": sql}) as span:
             async with self._turn:
                 self._check_usable()
-                deadline_at = time.monotonic() + resource.deadline_s
+                limit = deadlines.limit(resource.name, resource.deadline_s)
+                deadline_at = time.monotonic() + limit.seconds
                 running = self._database.run(lambda: self._run(work, deadline_at))
-                deadline = asyncio.timeout(resource.deadline_s)
+                deadline = asyncio.timeout(limit.seconds)
                 try:
                     async with deadline:
                         result = await asyncio.shield(running)
                 except BaseException as error:
                     raised: BaseException = error
                     if isinstance(error, TimeoutError) or (isinstance(error, Exception) and time.monotonic() >= deadline_at):  # its deadline, or the driver's timeout at it
-                        raised = DeadlineExceededError(resource.name, resource.deadline_s)
+                        raised = limit.exceeded()
                     self._fail(raised, running)
                     if raised is error:
                         raise
@@ -408,9 +453,14 @@ class DatabaseSession:
         resource, statements = self._database.resource, self._statements
         if statements is None:
             return
+        limit = deadlines.limit(resource.name, resource.deadline_s)
+        if limit.route is not None and limit.seconds <= 0:  # the route's deadline has passed, so its writes never commit
+            await self._roll_back(stack)
+            detail = f"route {limit.route.route}'s deadline of {limit.route.seconds:g}s passed before {resource.name}'s commit, so the request's writes there are rolled back, never committed"
+            raise DeadlineExceededError(resource.name, limit.route.seconds, detail=detail)
         with self._database.span("commit"):
             committing = self._database.run(lambda: _commit(statements, stack))
-            deadline = asyncio.timeout(resource.deadline_s)
+            deadline = asyncio.timeout(limit.seconds)
             try:
                 async with deadline:
                     await asyncio.shield(committing)
@@ -418,8 +468,9 @@ class DatabaseSession:
                 if not deadline.expired():
                     raise
                 self._database.outlive(_fate(committing, resource.name, "commit"))
-                detail = f"{resource.name}'s commit did not finish within its deadline of {resource.deadline_s:g}s: whether the request's writes there committed, the log says when it ends"
-                raise DeadlineExceededError(resource.name, resource.deadline_s, detail=detail) from error
+                whose = f"what was left of route {limit.route.route}'s deadline of {limit.route.seconds:g}s" if limit.route is not None else f"its deadline of {resource.deadline_s:g}s"
+                detail = f"{resource.name}'s commit did not finish within {whose}: whether the request's writes there committed, the log says when it ends"
+                raise DeadlineExceededError(resource.name, limit.route.seconds if limit.route is not None else resource.deadline_s, detail=detail) from error
             except asyncio.CancelledError:
                 self._database.outlive(_fate(committing, resource.name, "commit"))
                 raise
@@ -515,16 +566,19 @@ class HttpClient:
             if body is not None:
                 content = body.model_dump_json().encode() if isinstance(body, BaseModel) else to_json(body)
                 headers["content-type"] = "application/json"
-            deadline = asyncio.timeout(resource.deadline_s)
+            limit = deadlines.limit(resource.name, resource.deadline_s)
+            if limit.seconds <= 0:
+                raise limit.exceeded()
+            deadline = asyncio.timeout(limit.seconds)
             try:
                 async with deadline:
-                    response = await self._client.request(method, path, params=_query(query), content=content, headers=headers, timeout=resource.deadline_s)
+                    response = await self._client.request(method, path, params=_query(query), content=content, headers=headers, timeout=limit.seconds)
             except TimeoutError as error:
                 if deadline.expired():
-                    raise DeadlineExceededError(resource.name, resource.deadline_s) from error
+                    raise limit.exceeded() from error
                 raise
             except httpx2.TimeoutException as error:  # one of the client's own timeouts, each the deadline
-                raise DeadlineExceededError(resource.name, resource.deadline_s) from error
+                raise limit.exceeded() from error
             except httpx2.TransportError as error:
                 msg = f"{resource.name} could not be reached for {method} {path}: {type(error).__name__}"
                 raise CallFailedError(msg, resource=resource.name, reply=None) from error
@@ -588,13 +642,16 @@ class MemoryCache[V]:
     async def get(self, key: str, load: Callable[[], Awaitable[V]], /) -> V:
         resource = self._resource
         with self._tracer.start_as_current_span(f"{resource.name} get", attributes={"basis.resource": resource.name, "basis.deadline_s": resource.deadline_s}) as span:
-            deadline = asyncio.timeout(resource.deadline_s)
+            limit = deadlines.limit(resource.name, resource.deadline_s)
+            if limit.seconds <= 0:
+                raise limit.exceeded()
+            deadline = asyncio.timeout(limit.seconds)
             try:
                 async with deadline:
                     value, hit = await self._get(key, load)
             except TimeoutError as error:
                 if deadline.expired():
-                    raise DeadlineExceededError(resource.name, resource.deadline_s) from error
+                    raise limit.exceeded() from error
                 raise
             span.set_attribute("basis.cache.hit", hit)
             return value

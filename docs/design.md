@@ -167,7 +167,8 @@ of the `openapi.json` that this repo's example API produces.
   every model is strict. The API's breaking-change check compares the document with the one at its last release tag, and
   fails when a field is removed, renamed or changes type. Adding a response field is never breaking, because basis-ui's
   schemas drop fields they do not know. Requests are the other way round: an API refuses unknown request fields, so an
-  API that accepts a new one deploys before the UI that sends it.
+  API that accepts a new one deploys before the UI that sends it, and it takes a decimal only as a string, as it sends
+  one, and a time only with its offset.
 - **Errors.** Every error is an RFC 9457 problem details response, from one exception map.
 - **Identity.** A UI sends the user's JWT as a bearer token, and the API verifies it. A missing token is anonymous; an
   invalid or expired one gets a 401 problem of type `invalid-token`, and a route that needs a user answers an anonymous
@@ -199,11 +200,25 @@ clients and environment variables. "Pure" cannot mean "no I/O" for a handler tha
 means "I/O only through the core", which lets the core bound, observe and record every call.
 
 Request bodies and settings are strict models: an unknown key is refused and no value is coerced, so a misspelled field
-fails at the boundary instead of being silently ignored. Every route declares its deadline, its response model and its
-errors. Database writes in a request commit only after the handler returns and its response validates, and calls to
-other services that change state go after that commit. A declared pure compute function runs in a process pool, off the
-event loop, because CPU-bound quant code inside an `async def` stalls every request on that worker. An unexpected error
-is logged once, with its traceback.
+fails at the boundary instead of being silently ignored. A decimal in a request body is a JSON string, as it is in a
+response, because a JSON number reaches a decimal through a float, and a time in one carries its offset. Query and path
+parameters, which arrive as text, are read by each type's grammar. Every route declares its deadline, which caps every
+call its request makes, its response model and its errors, and an error it does not declare answers 500. Database writes
+in a request commit only after the handler returns and its response validates, and calls to other services that change
+state go after that commit. A declared pure compute function runs in a process pool, off the event loop, because
+CPU-bound quant code inside an `async def` stalls every request on that worker. An unexpected error is logged once, with
+its traceback.
+
+A call that changes another service's state cannot be rolled back if it goes before the request's writes commit, nor
+undone if it fails after, so such a call goes through an outbox. In a route that writes, the handler sends it through
+its `api.Client` with an idempotency key, and basis writes it as a row of the outbox table in the route's one
+transaction, so the call commits or rolls back with the writes. After the commit, basis makes the call once, within the
+route's deadline, with the key as `Idempotency-Key`, and marks the row done. If that attempt fails, the request still
+succeeds, since its writes committed, and its response says nothing of the call still pending. A relay, which runs as a
+scheduled basis job and not in the API's replicas, retries the row with backoff until the other service accepts it, or
+until the row ages out, which alerts. Delivery is therefore at least once, and the firm's services drop a duplicate by
+its `Idempotency-Key`. basis provides the outbox table's DDL, as it does the ledger's. A route that writes no database
+calls the other service directly, since it has nothing to undo, and a failure there answers 502.
 
 Identity is optional. A request with a token has it verified (signature, expiry, issuer and audience), and an invalid or
 expired token is refused rather than treated as anonymous, so a broken sign-in in a UI fails loudly. A handler sees the

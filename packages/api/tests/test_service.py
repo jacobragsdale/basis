@@ -2,6 +2,7 @@ import sys
 from collections.abc import Callable
 from importlib.metadata import EntryPoint
 from pathlib import Path
+from types import FunctionType
 from typing import Annotated
 
 import pytest
@@ -34,8 +35,12 @@ def priced_later(security: str, settings: "Annotated[Other, api.given(Other)]") 
     return {"security": security, "region": settings.region}
 
 
+def _get(path: str, handler: FunctionType) -> api.Route:
+    return api.get(path, handler, deadline_s=1, response=dict[str, str], errors=[])
+
+
 def _service(**changed: object) -> Callable[[], api.Service]:
-    declared: dict[str, object] = {"name": "pricing", "settings": Pricing, "routes": [api.get("/prices/{security}", price)]} | changed
+    declared: dict[str, object] = {"name": "pricing", "settings": Pricing, "routes": [_get("/prices/{security}", price)]} | changed
     return lambda: api.Service(**declared)  # ty: ignore[invalid-argument-type] -- each case declares one thing wrong on purpose
 
 
@@ -47,20 +52,21 @@ def _service(**changed: object) -> Callable[[], api.Service]:
         (_service(settings=BaseModel), "not a subclass of api.Settings"),
         (_service(routes=[]), "declares no routes"),
         (_service(routes=[APIRouter()]), "has a APIRouter among its routes"),
-        (_service(routes=[api.get("/prices/{security}", price), api.get("/prices/{security}", price)]), "declares GET /prices/{security} twice"),
-        (_service(routes=[api.get("/prices/{security}", price), api.get("/prices/{isin}", price)]), "/prices/{security} and /prices/{isin}, which match the same paths, twice"),
-        (_service(routes=[api.get("/prices/{security}", priced)]), "priced asks for Other, which service pricing does not give"),
-        (_service(routes=[api.get("/prices/{security}", priced_later)]), "priced_later asks for Other, which service pricing does not give"),
-        (lambda: api.get("prices", price), "start it with /"),
-        (lambda: api.get("/health/prices", price), "one the app answers itself"),
-        (lambda: api.get("/openapi.json", price), "one the app answers itself"),
-        (lambda: api.get("/prices/{security}", lambda security: {"security": security}), "not a named function"),
-        (lambda: api.post("/prices", price, status=404), "give a 2xx"),
+        (_service(routes=[_get("/prices/{security}", price), _get("/prices/{security}", price)]), "declares GET /prices/{security} twice"),
+        (_service(routes=[_get("/prices/{security}", price), _get("/prices/{isin}", price)]), "/prices/{security} and /prices/{isin}, which match the same paths, twice"),
+        (_service(routes=[_get("/prices/{security}", priced)]), "priced asks for Other, which service pricing does not give"),
+        (_service(routes=[_get("/prices/{security}", priced_later)]), "priced_later asks for Other, which service pricing does not give"),
+        (_service(fakes="pricing.dev"), "give fakes='module:function'"),
+        (lambda: _get("prices", price), "start it with /"),
+        (lambda: _get("/health/prices", price), "one the app answers itself"),
+        (lambda: _get("/openapi.json", price), "one the app answers itself"),
+        (lambda: _get("/prices/{security}", lambda security: {"security": security}), "not a named function"),
+        (lambda: api.post("/prices", price, deadline_s=1, response=dict[str, str], errors=[], status=404), "give a 2xx"),
         (lambda: api.given(BaseModel), "basis gives a handler its service's settings"),  # ty: ignore[invalid-argument-type] -- wrong on purpose
     ],
     ids=[
         "name", "core-settings", "not-settings", "no-routes", "a-router", "twice", "twice-by-another-name", "asks-for-other-settings", "asks-in-a-string",
-        "relative-path", "health-path", "openapi-path", "lambda", "failure-status", "given-not-settings",
+        "fakes-not-a-function", "relative-path", "health-path", "openapi-path", "lambda", "failure-status", "given-not-settings",
     ],
 )  # fmt: skip
 def test_a_service_cannot_skip_its_declarations(declare: Callable[[], object], message: str) -> None:
@@ -72,12 +78,12 @@ def test_a_handler_may_ask_for_a_base_of_its_services_settings() -> None:
     def general(settings: Annotated[api.Settings, api.given(api.Settings)]) -> dict[str, int]:
         return {"port": settings.serve.port}
 
-    assert _service(routes=[api.get("/port", general)])().routes[0].name == "general"
+    assert _service(routes=[api.get("/port", general, deadline_s=1, response=dict[str, int], errors=[])])().routes[0].name == "general"
 
 
 @pytest.mark.parametrize(("declare", "method"), [(api.get, "GET"), (api.post, "POST"), (api.put, "PUT"), (api.patch, "PATCH"), (api.delete, "DELETE")])
 def test_each_method_declares_its_own_routes(declare: Callable[..., api.Route], method: str) -> None:
-    route = declare("/prices/{security}", price)
+    route = declare("/prices/{security}", price, deadline_s=1, response=dict[str, str], errors=[])
     assert (route.method, route.name) == (method, "price")
 
 

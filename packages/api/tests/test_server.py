@@ -1,5 +1,6 @@
 """`api.serve` as a process: it serves, and on SIGTERM drains, finishes the request in flight, and stops; a second
-signal stops it at once. The only tests that open a socket, on the loopback interface, to a child process."""
+signal stops it at once. `basis dev` serves on its fakes, on this machine alone. The only tests that open a socket,
+on the loopback interface, to a child process."""
 
 import json
 import os
@@ -13,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from http import HTTPStatus
+from pathlib import Path
 
 import httpx2
 import pytest
@@ -26,7 +28,7 @@ def slow() -> dict[str, str]:
     time.sleep(float(sys.argv[1]))
     return {"slept": sys.argv[1]}
 
-api.serve(api.Service(name="slow", settings=api.Settings, routes=[api.get("/slow", slow)]))
+api.serve(api.Service(name="slow", settings=api.Settings, routes=[api.get("/slow", slow, deadline_s=60, response=dict[str, str], errors=[])]))
 """
 
 
@@ -76,12 +78,28 @@ def test_a_second_signal_stops_at_once() -> None:
     assert "slow stopped" not in _messages(records)  # a forced stop skips the lifespan's shutdown
 
 
+def test_dev_serves_on_the_services_fakes_on_this_machine_alone_until_ctrl_c(tmp_path: Path) -> None:
+    """Ctrl+C reaches every process of the command, the compute pool's too, and stops it cleanly, without a traceback."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "accruals"\nversion = "0.1.0"\n\n[tool.basis]\nparts = ["api"]\n', encoding="utf-8")
+    argv = [str(Path(sys.executable).with_name("basis")), "dev", "basis.api.example.service"]
+    with _serving(argv=argv, cwd=tmp_path, settings={"SERVE__HOST": "0.0.0.0", "COMPUTE__WORKERS": "1", "SERVE__DRAIN_S": "0"}) as server:  # noqa: S104 -- which dev ignores
+        solved = httpx2.get(f"{server.base}/bonds/US912810TM64/yield", params={"settle": "2026-11-06"}, timeout=10)
+        os.killpg(server.process.pid, signal.SIGINT)  # as a terminal sends Ctrl+C
+        records = _records(server.process)
+    assert (solved.status_code, solved.json()["annual_yield"]) == (HTTPStatus.OK, "0.0472658580")
+    assert server.process.returncode == 0
+    assert _messages(records)[0] == f"serving accruals on 127.0.0.1:{server.port} on its fakes"
+    assert _messages(records)[-2:] == ["accruals stopped", "finished dev"]  # and every command ends with its finished record
+
+
 @contextmanager
-def _serving(*, slow_s: float, drain_s: float) -> Generator[Server]:
+def _serving(*, slow_s: float = 0, drain_s: float = 0, argv: list[str] | None = None, cwd: Path | None = None, settings: dict[str, str] | None = None) -> Generator[Server]:
+    """`SERVICE` served in a process, or the command `argv` from `cwd`, with `settings` as `BASIS_` variables and none of the developer's."""
     port = _free_port()
-    settings = {"SERVE__HOST": "127.0.0.1", "SERVE__PORT": str(port), "SERVE__DRAIN_S": str(drain_s), "SERVE__SHUTDOWN_S": "10"}
-    environment = {key: value for key, value in os.environ.items() if not key.startswith("BASIS_")} | {f"BASIS_{key}": value for key, value in settings.items()}
-    process = subprocess.Popen([sys.executable, "-c", SERVICE, str(slow_s)], env=environment, stderr=subprocess.PIPE, text=True)
+    given = {"SERVE__HOST": "127.0.0.1", "SERVE__PORT": str(port), "SERVE__DRAIN_S": str(drain_s), "SERVE__SHUTDOWN_S": "10"} | (settings or {})
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("BASIS_")} | {f"BASIS_{key}": value for key, value in given.items()}
+    command = argv if argv is not None else [sys.executable, "-c", SERVICE, str(slow_s)]
+    process = subprocess.Popen(command, cwd=cwd, env=environment, stderr=subprocess.PIPE, text=True, start_new_session=True)  # a process group of its own, as a terminal's command has
     server = Server(process, f"http://127.0.0.1:{port}", port)
     try:
         _wait_until_ready(server)

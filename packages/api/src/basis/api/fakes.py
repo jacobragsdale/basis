@@ -1,6 +1,6 @@
 """A fake of each kind of resource, for tests, which `api.build` takes in place of what the settings configure:
 
-    app = api.build(service, settings=Settings.given(), fakes={WAREHOUSE: fakes.Database(answers={BOND: [row]}), CLOCK: fakes.Clock(at=...)})
+    app = api.build(service, settings=Settings.given(), fakes={WAREHOUSE: fakes.Database(answers={BOND: [row]}), CLOCK: fakes.Clock(at=...), SOLVE: fakes.Compute()})
 
 A fake stands in only for what the resource reaches: the database's connection, the other service's network, the
 system's clock. Everything around it is the app's own, as in production: each call's deadline and span, the
@@ -19,7 +19,8 @@ import httpx2
 import pyarrow as pa
 from starlette.types import ASGIApp
 
-from basis.api.resources import Bind
+from basis.api.compute import ComputeFunction
+from basis.api.resources import Bind, Resource
 from basis.core.databases.base import Statements
 
 type Rows = Sequence[Mapping[str, object]]
@@ -175,4 +176,14 @@ class Ids:
         return UUID(int=(7 << 76) | (0b10 << 62) | made)
 
 
-type Fake = Database | Http | Cache | Clock | Ids
+class Compute:
+    """A compute function run in this process, on a thread, instead of in the pool, so that a test starts no process:
+    its arguments and its result still cross by pickling, so a test catches a value the pool could not carry, and its
+    route's deadline still bounds the wait. A test of the pool itself fakes nothing."""
+
+
+type Fake = Database | Http | Cache | Clock | Ids | Compute
+type Faked = Resource | ComputeFunction[..., object]
+"""What a test may fake: a resource, or a compute function."""
+type Fakes = Mapping[Faked, Fake]
+"""What `api.build(..., fakes=...)` takes: a fake for each resource or compute function a test fakes."""

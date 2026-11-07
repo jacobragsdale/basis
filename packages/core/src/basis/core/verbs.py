@@ -47,7 +47,8 @@ it. A handler reports a failure the caller can fix as one line, with `fail`, whi
 record so that it comes last, or by raising a `basis.core.errors.BasisError` whose message gives the reason and ends with the fix, which
 `basis` prints as the line; a pydantic `ValidationError` of the caller's input prints as one line too. Any other
 exception is a defect, and `basis` logs its traceback before its line; `basis.core.errors.deliberate` marks a builtin
-error that a call raises on purpose, such as a lookup that finds no run.
+error that a call raises on purpose, such as a lookup that finds no run. A handler that needs its repo reads its root
+from the namespace, as `repo_root`, the folder of the `pyproject.toml` `basis` found, and never looks for it again.
 A result that a caller reads, such as `describe`'s, is JSON on stdout, and logs are JSON lines on stderr."""
 
 import argparse

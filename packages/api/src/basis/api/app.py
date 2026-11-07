@@ -6,8 +6,10 @@
 - one exception map (`errors.problem`) for every error a handler or FastAPI raises;
 - FastAPI's own telemetry, on the app's tracer provider (`traces.py`), which reads `traceparent` in and makes each
   request's server span;
-- a lifespan that adds the settings' span exporter, opens the service's resources (`opened.py`), marks the app ready,
-  and on shutdown closes the resources and flushes the spans;
+- a lifespan that adds the settings' span exporter, opens the service's resources (`opened.py`) and starts its
+  compute pool (`pool.py`), marks the app ready, and on shutdown closes them and flushes the spans;
+- each route as `routes.py` serves it: within its deadline, reading its request strictly, and answering only the errors
+  it declares, which its OpenAPI operation lists;
 - `/health/live`, which answers while the process does, and `/health/ready`, which answers 200 only between the
   resources being open and shutdown beginning, and a 503 problem before and after.
 
@@ -35,10 +37,9 @@ from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from basis.api import errors, opened, tokens, traces
-from basis.api.fakes import Fake
+from basis.api import errors, opened, routes, tokens, traces
+from basis.api.fakes import Fakes
 from basis.api.requests import HEALTH, REQUEST_ID, Requests
-from basis.api.resources import Resource
 from basis.api.service import STATE, Runtime, Service, ServiceError
 from basis.api.settings import Settings, read
 from basis.core.model import Model
@@ -92,9 +93,9 @@ class Health(Model):
     status: Literal["live", "ready"]
 
 
-def build(service: Service, *, settings: Settings | None = None, fakes: Mapping[Resource, Fake] | None = None) -> App:
+def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | None = None) -> App:
     """The app for `service`, with `settings`, or its settings read from the environment, and its resources opened
-    as the settings configure them, or as `fakes` gives them, by resource. An app starts once."""
+    as the settings configure them, or as `fakes` gives them, by resource or compute function. An app starts once."""
     if settings is None:
         settings = read(service.settings)
     elif not isinstance(settings, service.settings):
@@ -145,7 +146,7 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Mapping[
             lifecycle.advance(Stage.STOPPED)
             log.info("%s stopped", service.name, extra={"service": service.name})
 
-    app = FastAPI(
+    app = routes.Application(
         title=service.name,
         lifespan=lifespan,
         middleware=[Middleware(Requests), *([Middleware(tokens.Bearer, verifier=identity)] if identity is not None else [])],  # Bearer inside Requests
@@ -172,7 +173,10 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Mapping[
     app.add_api_route(f"{HEALTH}live", live, methods=["GET"], include_in_schema=False)
     app.add_api_route(f"{HEALTH}ready", ready, methods=["GET"], include_in_schema=False)
     for route in service.routes:
-        app.add_api_route(route.path, route.handler, methods=[route.method], status_code=route.status, name=route.name)
+        app.router.add_api_route(
+            route.path, route.handler, methods=[route.method], status_code=route.status, name=route.name,
+            response_model=route.response, responses=routes.responses(route), route_class_override=routes.route_class(route),
+        )  # fmt: skip
     return App(service, configured, app, lifecycle, provider)
 
 

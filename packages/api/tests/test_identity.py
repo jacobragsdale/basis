@@ -11,7 +11,7 @@ from fastapi import Depends
 from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from pydantic import AliasChoices, AliasPath, ConfigDict, Field
+from pydantic import AliasChoices, AliasPath, ConfigDict, Field, JsonValue, TypeAdapter
 from pydantic.alias_generators import to_camel
 
 from basis import api
@@ -51,7 +51,16 @@ def ping() -> dict[str, str]:
     return {"ping": "pong"}
 
 
-SERVICE = api.Service(name="positions", settings=api.Settings, user=Trader, routes=[api.get("/me", me), api.get("/greeting", greeting), api.get("/ping", ping)])
+SERVICE = api.Service(
+    name="positions",
+    settings=api.Settings,
+    user=Trader,
+    routes=[
+        api.get("/me", me, deadline_s=5, response=dict[str, object], errors=[]),
+        api.get("/greeting", greeting, deadline_s=5, response=dict[str, str], errors=[]),
+        api.get("/ping", ping, deadline_s=5, response=dict[str, str], errors=[]),
+    ],
+)
 
 
 def _app(**identity: object) -> api.App:
@@ -143,7 +152,7 @@ def test_the_user_goes_into_the_requests_server_span() -> None:
 
 
 def test_a_service_that_declares_no_user_reads_no_token() -> None:
-    service = api.Service(name="prices", settings=api.Settings, routes=[api.get("/ping", ping)])
+    service = api.Service(name="prices", settings=api.Settings, routes=[api.get("/ping", ping, deadline_s=5, response=dict[str, str], errors=[])])
     with TestClient(api.build(service, settings=api.Settings.given()).asgi) as client:
         response = client.get("/ping", headers={"authorization": "Bearer not.a.jwt"})
     assert response.status_code == HTTPStatus.OK
@@ -162,7 +171,12 @@ def anyone(user: Annotated[api.User | None, api.given(api.User)]) -> dict[str, s
 
 
 def _declared(**changed: object) -> Callable[[], object]:
-    declared: dict[str, object] = {"name": "positions", "settings": api.Settings, "user": Trader, "routes": [api.get("/greeting", greeting)]} | changed
+    declared: dict[str, object] = {
+        "name": "positions",
+        "settings": api.Settings,
+        "user": Trader,
+        "routes": [api.get("/greeting", greeting, deadline_s=5, response=dict[str, str], errors=[])],
+    } | changed
     return lambda: api.Service(**declared)  # ty: ignore[invalid-argument-type] -- each case declares one thing wrong on purpose
 
 
@@ -194,7 +208,10 @@ def _unchallenged() -> object:
         (_declared(user=dict), "service positions's user is <class 'dict'>, not a subclass of api.User"),
         (_declared(user=None), "greeting asks for Trader, which service positions does not give: it declares no user=..."),
         (_declared(user=Bare), "greeting asks for Trader, which service positions does not give: its user is Bare"),
-        (lambda: api.get("/me", unannotated), r"unannotated's parameter user asks for the user: annotate it Annotated\[Trader \| None, api.given\(Trader\)\]"),
+        (
+            lambda: api.get("/me", unannotated, deadline_s=5, response=dict[str, str], errors=[]),
+            r"unannotated's parameter user asks for the user: annotate it Annotated\[Trader \| None, api.given\(Trader\)\]",
+        ),
         (_expiring, "Expiring.expires declares the exp claim, which basis verifies itself"),
         (_renamed, "Renamed.user_id declares the sub claim, which basis verifies itself"),
         (_unchallenged, "Unauthorized is a 401, whose response carries a challenge: raise api.SignInRequiredError instead"),
@@ -241,7 +258,7 @@ def test_a_dependency_that_asks_for_the_user_is_refused_as_one_that_asks_for_a_r
     """Else the route would read the user without its parameters showing it, past the checks of its service and its
     annotation."""
     with pytest.raises(api.ServiceError, match=message):
-        api.get("/desk", handler)  # ty: ignore[invalid-argument-type] -- a named function
+        api.get("/desk", handler, deadline_s=5, response=dict[str, str], errors=[])  # ty: ignore[invalid-argument-type] -- a named function
 
 
 def _choosing() -> object:
@@ -312,8 +329,58 @@ def test_a_user_names_each_claim_by_its_field_or_a_plain_alias_alone(declare: Ca
         declare()
 
 
+_JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
+
+
+def test_a_route_whose_parameters_ask_for_the_user_answers_sign_in_required_without_declaring_it() -> None:
+    assert api.SignInRequiredError in api.get("/me", me, deadline_s=5, response=dict[str, object], errors=[]).answers
+    assert api.SignInRequiredError in api.get("/anyone", anyone, deadline_s=5, response=dict[str, str], errors=[]).answers  # a base of the user
+    assert api.SignInRequiredError not in api.get("/ping", ping, deadline_s=5, response=dict[str, str], errors=[]).answers
+
+
+def test_sign_in_required_is_in_the_openapi_document_of_each_route_that_asks_for_the_user_alone() -> None:
+    document = _JSON.validate_python(_app().asgi.openapi())
+    assert isinstance(document, dict)
+    paths = document["paths"]
+    assert isinstance(paths, dict)
+
+    def responses(path: str) -> dict[str, JsonValue]:
+        found = paths[path]
+        assert isinstance(found, dict)
+        operation = found["get"]
+        assert isinstance(operation, dict)
+        answered = operation["responses"]
+        assert isinstance(answered, dict)
+        return answered
+
+    problem = {"application/problem+json": {"schema": {"$ref": "#/components/schemas/Problem"}}}
+    assert responses("/me")["401"] == responses("/greeting")["401"] == {"description": "sign-in-required: Sign-in is required", "content": problem}
+    assert "401" not in responses("/ping")
+
+
+def test_a_route_that_declares_sign_in_required_is_refused_since_basis_adds_it() -> None:
+    with pytest.raises(api.ServiceError, match=r"me declares SignInRequiredError, which basis adds to each route whose parameters ask for the user: remove it from errors=\[\.\.\.\]"):
+        api.get("/me", me, deadline_s=5, response=dict[str, object], errors=[api.SignInRequiredError])
+
+
+def gatekeeper() -> dict[str, str]:
+    msg = "positions are shown to a signed-in user"
+    raise api.SignInRequiredError(msg)
+
+
+def test_sign_in_required_from_a_route_that_does_not_ask_for_the_user_is_a_500_whose_log_says_to_ask(logged: Records) -> None:
+    service = api.Service(name="positions", settings=api.Settings, user=Trader, routes=[api.get("/gate", gatekeeper, deadline_s=5, response=dict[str, str], errors=[])])
+    with TestClient(api.build(service, settings=api.Settings.given(identity=DEVELOPMENT)).asgi) as client:
+        assert client.get("/gate").status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+    [failure] = [record for record in logged() if "traceback" in record]
+    assert failure["error"] == (
+        "basis.api.routes.UndeclaredError: gatekeeper raised SignInRequiredError, which its route does not declare:"
+        " ask for the user in its parameters, as Annotated[User | None, api.given(User)], which adds it to the route's errors"
+    )
+
+
 def test_a_route_may_ask_for_a_base_of_the_services_user() -> None:
-    service = api.Service(name="positions", settings=api.Settings, user=Trader, routes=[api.get("/anyone", anyone)])
+    service = api.Service(name="positions", settings=api.Settings, user=Trader, routes=[api.get("/anyone", anyone, deadline_s=5, response=dict[str, str], errors=[])])
     with TestClient(api.build(service, settings=api.Settings.given(identity=DEVELOPMENT)).asgi) as client:
         assert client.get("/anyone", headers=_signed()).json() == {"user": "Trader"}
 
@@ -321,7 +388,7 @@ def test_a_route_may_ask_for_a_base_of_the_services_user() -> None:
 def test_a_user_needs_identity_configured_and_configured_identity_needs_a_user() -> None:
     with pytest.raises(api.SettingsError, match="service positions declares a user, and its identity is not configured, so the API cannot start: set BASIS_IDENTITY__ISSUER, "):
         api.build(SERVICE, settings=api.Settings.given())
-    service = api.Service(name="prices", settings=api.Settings, routes=[api.get("/ping", ping)])
+    service = api.Service(name="prices", settings=api.Settings, routes=[api.get("/ping", ping, deadline_s=5, response=dict[str, str], errors=[])])
     with pytest.raises(api.SettingsError, match="BASIS_IDENTITY__\\* is set, and service prices declares no user, so no token would be verified"):
         api.build(service, settings=api.Settings.given(identity=DEVELOPMENT))
 

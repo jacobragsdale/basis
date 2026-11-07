@@ -18,7 +18,7 @@ from uuid import UUID
 import mssql_python
 import oracledb
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -151,13 +151,18 @@ class Refused(api.Error):
     title = "The price is refused"
 
 
+class Missing(api.Error):
+    status = HTTPStatus.NOT_FOUND
+    title = "No price for the security"
+
+
 def _service(scratch: Scratch) -> api.Service:
     insert = f"INSERT INTO {scratch.table} (security, price) VALUES ({scratch.bind('security')}, {scratch.bind('price')})"
     select = f"SELECT security, price FROM {scratch.table} WHERE security = {scratch.bind('security')}"
 
     async def read(security: str, warehouse: Annotated[api.Reader, api.given(WAREHOUSE)]) -> Price:
         if (found := await warehouse.fetch_one(Price, select, security=security)) is None:
-            raise HTTPException(HTTPStatus.NOT_FOUND)
+            raise Missing(security)
         return found
 
     async def write(price: Price, warehouse: Annotated[api.Writer, api.given(WAREHOUSE)]) -> Price:
@@ -167,7 +172,7 @@ def _service(scratch: Scratch) -> api.Service:
     async def write_and_read(price: Price, warehouse: Annotated[api.Writer, api.given(WAREHOUSE)]) -> Price:
         await warehouse.execute(insert, security=price.security, price=price.price)
         if (found := await warehouse.fetch_one(Price, select, security=price.security)) is None:
-            raise HTTPException(HTTPStatus.NOT_FOUND)
+            raise Missing(price.security)
         return found
 
     async def refuse(price: Price, warehouse: Annotated[api.Writer, api.given(WAREHOUSE)]) -> Price:
@@ -195,14 +200,20 @@ def _service(scratch: Scratch) -> api.Service:
             await cached.get(price.security, load)
         return price
 
+    long = 30  # seconds: longer than any resource's deadline, which is the one these tests reach
     routes = [
-        api.get("/prices/{security}", read), api.post("/prices", write), api.post("/read-your-writes", write_and_read), api.post("/refused", refuse),
-        api.post("/misanswered", misanswer), api.post("/slowly", write_slowly), api.post("/cached-write", write_then_cache),
-    ]  # fmt: skip
+        api.get("/prices/{security}", read, deadline_s=long, response=Price, errors=[Missing]),
+        api.post("/prices", write, deadline_s=long, response=Price, errors=[]),
+        api.post("/read-your-writes", write_and_read, deadline_s=long, response=Price, errors=[Missing]),
+        api.post("/refused", refuse, deadline_s=long, response=Price, errors=[Refused]),
+        api.post("/misanswered", misanswer, deadline_s=long, response=Price, errors=[]),
+        api.post("/slowly", write_slowly, deadline_s=long, response=Price, errors=[]),
+        api.post("/cached-write", write_then_cache, deadline_s=long, response=Price, errors=[]),
+    ]
     return api.Service(name="scratch", settings=api.Settings, resources=[WAREHOUSE, QUICK, CACHED], routes=routes)
 
 
-def _app(scratch: Scratch, given: Mapping[api.Resource, fakes.Fake] | None = None) -> api.App:
+def _app(scratch: Scratch, given: fakes.Fakes | None = None) -> api.App:
     settings = api.Settings.given(databases={"warehouse": scratch.settings, "quick": scratch.settings})
     return api.build(_service(scratch), settings=settings, fakes=given)
 
@@ -372,7 +383,7 @@ def test_the_examples_reads_and_writes_run_on_sql_server(mssql: Scratch) -> None
         mssql.drop(table)
     mssql.execute(BONDS, SETTLEMENTS, "INSERT INTO bonds VALUES ('US912810TM64', 0.045, '30/360', 2, '2024-11-15', '2034-11-15')")
     at = datetime(2026, 11, 6, 14, 30, tzinfo=UTC)
-    given: dict[api.Resource, fakes.Fake] = {example.PRICING: fakes.Http(FastAPI()), example.TERMS: fakes.Cache(), example.CLOCK: fakes.Clock(at=at), example.IDS: fakes.Ids()}
+    given: fakes.Fakes = {example.SOLVE: fakes.Compute(), example.PRICING: fakes.Http(FastAPI()), example.TERMS: fakes.Cache(), example.CLOCK: fakes.Clock(at=at), example.IDS: fakes.Ids()}
     try:
         app = api.build(example.service, settings=example.Settings.given(databases={"warehouse": mssql.settings}), fakes=given)
         with TestClient(app.asgi) as client:

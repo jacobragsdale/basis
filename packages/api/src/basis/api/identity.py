@@ -112,7 +112,8 @@ class InvalidTokenError(Error):
 
 
 class SignInRequiredError(Error):
-    """For a handler to raise when its user is None and its route needs one."""
+    """For a handler to raise when its user is None and its route needs one. basis adds it to the errors of each route
+    whose parameters ask for the user, so a route never declares it."""
 
     status = HTTPStatus.UNAUTHORIZED
     title = "Sign-in is required"

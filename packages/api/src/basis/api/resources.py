@@ -47,6 +47,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, JsonValue
 
+from basis.api.compute import ComputeFunction
 from basis.api.errors import Error, ServiceError
 
 NAME = re.compile(r"[a-z][a-z0-9_]{0,62}")
@@ -280,6 +281,10 @@ class Opened(Protocol):
     def session(self, resource: DatabaseResource, *, writes: bool) -> Session: ...
 
     def handle(self, resource: HttpResource | CacheResource[object] | ClockResource | IdsResource) -> object: ...
+
+    def compute(self, declared: ComputeFunction[..., object]) -> object:
+        """What a handler awaits to run `declared`: in the pool, or in this process where a test fakes it."""
+        ...
 
 
 class Session(Writer, Protocol):

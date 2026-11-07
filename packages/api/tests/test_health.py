@@ -10,7 +10,7 @@ def quote(security: str) -> dict[str, str]:
     return {"security": security}
 
 
-SERVICE = api.Service(name="quotes", settings=api.Settings, routes=[api.get("/quotes/{security}", quote)])
+SERVICE = api.Service(name="quotes", settings=api.Settings, routes=[api.get("/quotes/{security}", quote, deadline_s=1, response=dict[str, str], errors=[])])
 
 
 def _readiness(client: TestClient) -> tuple[int, object]:
