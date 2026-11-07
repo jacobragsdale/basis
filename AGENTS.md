@@ -24,4 +24,11 @@ its docs.
 
 ## Checks
 
-None yet. Roadmap step 1.1 adds the workspace, its checks and CI.
+```sh
+uv sync
+uv run pre-commit install           # once per clone: the commit hook runs the checks below
+uv run pre-commit run --all-files   # ruff, ty with every rule an error, the lockfile, file hygiene
+uv run pytest
+```
+
+CI runs the same on every pull request that changes more than docs.

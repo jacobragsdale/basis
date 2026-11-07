@@ -1,0 +1,95 @@
+# The basis workspace: every basis package is a member under packages/, and this root is not a package itself. The tool
+# settings here apply to every member.
+
+[project]
+name = "basis-workspace"
+version = "0.0.0"
+requires-python = ">=3.14"
+dependencies = ["basis-core"]
+
+[tool.uv]
+package = false
+required-version = ">=0.13.6"
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+basis-core = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.7.0",
+    "pytest>=9.2.0",
+    "pytest-cov>=7.1.0",
+    "pytest-randomly>=5.0.0",
+    "ruff==0.17.4",
+    "ty==0.0.99",
+]
+
+[tool.ruff]
+line-length = 200
+required-version = ">=0.17.4"
+force-exclude = true
+show-fixes = true
+unsafe-fixes = false
+
+[tool.ruff.lint]
+select = ["ALL"]  # Every stable rule; preview rules stay off. Upgrades are deliberate because the version is pinned.
+ignore = [
+    # Each entry is a rule that cannot be fixed, only turned off. Fix everything else.
+    "COM812",  # Conflicts with the formatter; Ruff's docs say to disable it alongside ruff format.
+    "ISC001",  # Conflicts with the formatter; Ruff's docs say to disable it alongside ruff format.
+    "S603",  # Flags every subprocess call; there is no fix, only review. Pass argv lists, never shell=True (S602).
+    "TC001",  # Moving imports under TYPE_CHECKING breaks code that reads annotations at runtime (Pydantic, FastAPI).
+    "TC002",  # Moving imports under TYPE_CHECKING breaks code that reads annotations at runtime (Pydantic, FastAPI).
+    "TC003",  # Moving imports under TYPE_CHECKING breaks code that reads annotations at runtime (Pydantic, FastAPI).
+    "CPY001",  # A copyright header is a legal decision per repository, not a lint fix.
+    "D",  # Agents read this code. A required docstring gets written to satisfy the rule; write one only where it says what code and types cannot.
+]
+
+[tool.ruff.lint.per-file-ignores]
+# pytest's assert is its API, and a test compares against literal expected values. A package's tests/ is not a package.
+"**/tests/**" = ["S101", "PLR2004", "INP001", "DTZ001"]
+"**/test_*.py" = ["S101", "PLR2004"]
+"**/conftest.py" = ["S101", "PLR2004"]
+
+[tool.ruff.lint.isort]
+split-on-trailing-comma = false  # Do not preserve comma-forced import line breaks.
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ruff.format]
+docstring-code-format = true
+skip-magic-trailing-comma = true  # Collapse comma-forced multiline constructs when they fit.
+
+[tool.ty.rules]
+all = "error"  # Every rule is an error, including those ty leaves off by default. Opt out one rule at a time, with a reason.
+
+[tool.ty.analysis]
+respect-type-ignore-comments = false  # Require a specific `# ty: ignore[rule]` suppression.
+strict-generic-narrowing = true  # isinstance on a generic narrows to its top materialization, e.g. list[object].
+strict-equality-semantics = true  # Do not narrow from ==, in, or match value patterns; a subclass can compare equal.
+
+[tool.ty.terminal]
+error-on-warning = true
+
+[tool.pytest.ini_options]
+# importlib mode: members' tests share file names (spike 0.2), which pytest's default mode cannot collect.
+addopts = "-ra --strict-markers --strict-config --import-mode=importlib"
+testpaths = ["packages"]
+xfail_strict = true  # An xfail that starts passing is a failure, not a silent pass.
+filterwarnings = [
+    "error",  # A warning is a defect until someone decides otherwise.
+]
+
+[tool.coverage.run]
+branch = true  # Statement coverage hides the untaken half of every condition.
+source = ["packages"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "@overload"]
+# Deliberately no fail_under: coverage is a diagnostic here, not a CI gate.
