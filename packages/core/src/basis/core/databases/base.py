@@ -7,8 +7,9 @@ names and a table's name, which the part that declares them restricts to letters
 A caller that writes its own SQL, such as an API's request, runs it through `Statements` instead: one connection's
 transaction, whose statements bind their values by name, each under a deadline of its own."""
 
+import logging
 import re
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -24,6 +25,7 @@ from basis.core.destination import TableSpec
 from basis.core.interval import Interval
 from basis.core.tables import Changes, Target
 
+log = logging.getLogger(__name__)
 FETCH_ROWS = 10_000
 """Rows per round trip when reading."""
 WRITE_ROWS = 50_000
@@ -184,6 +186,16 @@ def lower_cased(table: pa.Table) -> pa.Table:
 
 def slices(frame: pl.DataFrame) -> Iterator[pl.DataFrame]:
     yield from frame.iter_slices(WRITE_ROWS)
+
+
+def end_reading(database: str, roll_back: Callable[[], object]) -> None:
+    """End a transaction that only read, freeing the snapshot the database kept for it. A rollback that fails, as on a
+    connection that a call timeout broke, is logged and not raised: closing the connection, which follows, ends the
+    transaction anyway, and the error that ended the block, if any, is the one to raise."""
+    try:
+        roll_back()
+    except Exception:  # logged; the connection is closed next, which ends the transaction
+        log.warning("could not roll back a transaction that only read; closing its connection", extra={"database": database}, exc_info=True)
 
 
 def check_count(what: str, expected: int, counted: int) -> None:

@@ -41,7 +41,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _FRAMEWORK = "basis"  # the namespace every basis package is a portion of, whose logger is each one's parent
-_PARTS = ("basis.job", "basis.api")  # the parts whose frames an error's `where` names, as basis-core's; each joins as it arrives
+_PARTS = ("basis.job", "basis.api", "optim")  # the parts whose frames an error's `where` names, as basis-core's; each joins as it arrives
 _PREFIX = "BASIS_LOG_"
 _STANDARD = {*vars(logging.makeLogRecord({})), "message", "asctime"}  # LogRecord's own attributes, not `extra` fields
 _bound: dict[str, object] = {}  # fields on every record this process logs; see `bind`
@@ -96,6 +96,17 @@ def bind(**fields: object) -> None:
     """Add `fields` to every record this process logs from now on."""
     # process-wide, as the CLI runs one job per process; concurrent work in one process adds its fields with `fields`
     _bound.update(fields)
+
+
+def bound() -> dict[str, object]:
+    """The fields a record logged here now carries, `bind`'s and those of every `fields` block it is in, for a worker
+    process to bind in its own: a spawned process starts with none."""
+    return _bound | dict(_scoped.get({}))
+
+
+def included() -> list[str]:
+    """The packages `include` added, for a worker process to include in its own."""
+    return list(_included)
 
 
 @contextmanager
@@ -191,11 +202,17 @@ def _extras(record: logging.LogRecord) -> dict[str, object]:
 
 
 def _fallback(value: object) -> object:
+    """A value JSON has no type for. A part's frames are known by their shape, since basis-core imports neither pandas
+    nor numpy: a frame logs as its size and columns, and a series, an index or a numpy value as its `tolist()`."""
     match value:
         case pl.DataFrame():
             return {"rows": value.height, "columns": value.columns}
         case pl.Series():
             return value.to_list()
+        case _ if isinstance(shape := getattr(value, "shape", None), tuple) and shape and (columns := getattr(value, "columns", None)) is not None:
+            return {"rows": shape[0], "columns": [str(column) for column in columns]}  # a pandas frame
+        case _ if callable(tolist := getattr(value, "tolist", None)):
+            return tolist()
         case _:
             return str(value)
 
@@ -211,22 +228,25 @@ def _headline(error: BaseException) -> str:
 
 
 def _where(error: BaseException) -> str | None:
-    """The deepest frame of `error` in basis, in whichever of its packages, as `basis/job/module.py:line in function`."""
+    """The deepest frame of `error` in basis, in whichever of its packages, as `basis/job/module.py:line in function`,
+    or `optim/module.py:line in function` for a part outside the namespace."""
     folders = _folders()
-    ours = [(frame, path, folder) for frame in traceback.extract_tb(error.__traceback__) for folder in folders if (path := Path(frame.filename).resolve()).is_relative_to(folder)]
+    ours = [(frame, path, base) for frame in traceback.extract_tb(error.__traceback__) for folder, base in folders if (path := Path(frame.filename).resolve()).is_relative_to(folder)]
     if not ours:
         return None
-    frame, path, folder = ours[-1]
-    return f"{path.relative_to(folder.parents[1])}:{frame.lineno} in {frame.name}"
+    frame, path, base = ours[-1]
+    return f"{path.relative_to(base)}:{frame.lineno} in {frame.name}"
 
 
 @cache
-def _folders() -> tuple[Path, ...]:
-    """The folder of each installed basis package, such as `.../basis/core`: the packages themselves, rather than
-    every `basis` folder on the path, which the namespace holds, the working directory's among them."""
-    found = [Path(__file__).resolve().parent]
+def _folders() -> tuple[tuple[Path, Path], ...]:
+    """The folder of each installed basis package, such as `.../basis/core`, with the folder its import name starts
+    in: the packages themselves, rather than every `basis` folder on the path, which the namespace holds, the working
+    directory's among them."""
+    core = Path(__file__).resolve().parent
+    found = [(core, core.parents[1])]
     for name in _PARTS:
         spec = importlib.util.find_spec(name)  # finds the package without importing it, so basis-core imports no part
         if spec is not None and spec.submodule_search_locations is not None:
-            found.extend(Path(folder).resolve() for folder in spec.submodule_search_locations)
+            found.extend((folder, folder.parents[name.count(".")]) for folder in (Path(location).resolve() for location in spec.submodule_search_locations))
     return tuple(found)

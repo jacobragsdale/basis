@@ -67,3 +67,13 @@ def test_fields_hold_in_their_own_context_alone() -> None:
         logger.removeHandler(handler)
     records = [json.loads(line) for line in stream.getvalue().splitlines()]
     assert sorted((record["message"], record.get("request_id")) for record in records) == [("a", "a"), ("b", "b"), ("outside", None)]
+
+
+def test_a_worker_binds_the_fields_a_record_logged_where_it_starts_carries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A spawned process starts with no fields, so a part that starts one binds what `bound` gives: the process's own
+    fields, and those of the `fields` block it starts in, such as a request's."""
+    monkeypatch.setattr(logs, "_bound", {})
+    logs.bind(run_id="r1")
+    with logs.fields(request_id="q1"):
+        assert logs.bound() == {"run_id": "r1", "request_id": "q1"}
+    assert logs.bound() == {"run_id": "r1"}
