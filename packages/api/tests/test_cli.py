@@ -17,6 +17,7 @@ from pydantic import JsonValue, TypeAdapter
 from basis import api
 from basis.api import dev, fakes, openapi, service
 from basis.api import sync as api_sync
+from basis.api.example import resources as declared
 from basis.api.example import service as example
 from basis.core import command
 from basis.core import sync as core_sync
@@ -196,11 +197,11 @@ def test_call_chooses_its_resources_out_loud(repo: Path) -> None:
 
 
 def _with_fakes(reference: str | None) -> api.Service:
-    return api.Service(name="accruals", settings=example.Settings, resources=example.service.resources, routes=example.service.routes, fakes=reference)
+    return api.Service(name="accruals", settings=declared.Settings, resources=example.service.resources, routes=example.service.routes, fakes=reference)
 
 
 def without_pricing() -> dict[fakes.Faked, fakes.Fake]:
-    return {example.WAREHOUSE: fakes.Database()}
+    return {declared.WAREHOUSE: fakes.Database()}
 
 
 @pytest.mark.parametrize(

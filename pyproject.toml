@@ -189,7 +189,8 @@ name = "A service's declarations, and the example's, load no server, exporter, d
 type = "forbidden"
 source_modules = [
     "basis.api.service", "basis.api.errors", "basis.api.settings", "basis.api.resources", "basis.api.identity", "basis.api.compute", "basis.api.strict",
-    "basis.api.dataset", "basis.api.origins", "basis.api.example.service",
+    "basis.api.dataset", "basis.api.origins", "basis.api.example.service", "basis.api.example.handlers", "basis.api.example.repository",
+    "basis.api.example.resources", "basis.api.example.errors", "basis.api.example.domain",
 ]
 forbidden_modules = [
     "basis.api.app", "basis.api.requests", "basis.api.server", "basis.api.cli", "basis.api.sync", "basis.api.opened",
@@ -213,6 +214,6 @@ forbidden_modules = [
     "basis.api.app", "basis.api.call", "basis.api.cli", "basis.api.compute", "basis.api.deadlines", "basis.api.dev", "basis.api.errors", "basis.api.fakes",
     "basis.api.identity", "basis.api.opened", "basis.api.outboxes", "basis.api.pool", "basis.api.relay", "basis.api.requests", "basis.api.resources", "basis.api.routes", "basis.api.server",
     "basis.api.service", "basis.api.settings", "basis.api.strict", "basis.api.sync", "basis.api.tokens", "basis.api.example.service",
-    "basis.api.example.dev", "basis.api.dataset", "basis.api.arrow", "basis.api.origins", "basis.api.openapi", "basis.api.contract", "basis.api.layers", "basis.api.fuzz", "basis.core",
+    "basis.api.example.handlers", "basis.api.example.repository", "basis.api.example.resources", "basis.api.example.errors", "basis.api.example.dev", "basis.api.dataset", "basis.api.arrow", "basis.api.origins", "basis.api.openapi", "basis.api.contract", "basis.api.layers", "basis.api.fuzz", "basis.core",
     "fastapi", "starlette", "uvicorn", "pydantic_settings", "mssql_python", "oracledb", "httpx", "httpx2", "requests", "urllib3", "aiohttp",
 ]

@@ -13,7 +13,7 @@ from basis import api
 from basis.api.fakes import Database, Fake, Http, Respond
 from fastapi import FastAPI, HTTPException
 
-from basis.api.example import service
+from basis.api.example import repository, resources
 
 BONDS: Mapping[str, Mapping[str, object]] = {
     "US912810TM64": {"coupon_rate": Decimal("0.045"), "convention": "30/360", "frequency": 2, "issued": date(2024, 11, 15), "maturity": date(2034, 11, 15)},
@@ -26,7 +26,7 @@ PRICES = {"US912810TM64": "98.50", "XS2010030836": "101.125"}
 
 
 def fakes() -> dict[api.Resource | api.ComputeFunction[..., object], Fake]:
-    return {service.WAREHOUSE: Database(answers={service.BOND: Respond(_bond), service.RECORD: 1}), service.PRICING: Http(pricing()), service.LEDGER: Http(ledger())}
+    return {resources.WAREHOUSE: Database(answers={repository.BOND: Respond(_bond), repository.RECORD: 1}), resources.PRICING: Http(pricing()), resources.LEDGER: Http(ledger())}
 
 
 def _bond(binds: Mapping[str, api.Bind]) -> list[Mapping[str, object]]:
