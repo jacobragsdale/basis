@@ -44,6 +44,10 @@ read and write SQL Server or Oracle, and they do not feed each other.
   so `conform` casts back and compares.
 - A settings file read by pydantic-settings rejects any line the settings do not declare, such as `ETL_LOG_LEVEL`. The
   Python API sets the file's variables for the call alone instead, as the command line's `uv run --env-file` does.
+- The generated image's dependencies install in a build stage with git, since `uv sync` fetches an etl-framework taken
+  from GitHub with git, which `python:3.14-slim` lacks.
+- Oracle has no range locks, so the append guard locks the ledger table for its check, as SQL Server's `HOLDLOCK` locks
+  the range.
 
 ## Decided against
 
@@ -62,8 +66,9 @@ read and write SQL Server or Oracle, and they do not feed each other.
 Verified on 2026-11-06: the unit tests, the example's tests, ruff, ty with every rule an error, the import contract,
 the integration tier against SQL Server 2022 and Oracle 23 Free (every write mode rerun, the append guard, a failure
 mid-transaction, a drifted table, a value that does not fit, a partial publish resumed, typed reads, the row cap, time
-zones), the example job published to SQL Server twice, and a generated repo with two jobs passing its own checks.
+zones), the example job published to SQL Server twice, a generated repo with two jobs passing its own checks, the
+tutorial run from the GitHub tag, and a generated repo's image built, run on its fixture, and published to SQL Server
+from inside the container.
 
-Not yet verified: a run on Windows, the generated `Dockerfile` building and running, Oracle thick mode, Azure Data
-Lake or another remote snapshot root, real production databases and their logins' rights, and a job ported from an
-existing one.
+Not yet verified: a run on Windows, Oracle thick mode, publishing to Oracle from the image, Azure Data Lake or another
+remote snapshot root, real production databases and their logins' rights, and a job ported from an existing one.
