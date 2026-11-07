@@ -2,9 +2,11 @@
 and keeps what the repo wrote around, and the `optim-*` skills, which it copies and removes once optim ships them no
 more."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import optim
+from basis.core import sync as core_sync
 from optim import sync
 
 
@@ -39,10 +41,8 @@ def test_a_stale_block_is_rewritten_and_the_notes_around_it_kept(tmp_path: Path)
 
 
 def test_a_skill_optim_no_longer_ships_is_removed_from_both_skills_folders(tmp_path: Path) -> None:
-    sync.write(tmp_path)
-    for folder in (".agents/skills", ".claude/skills"):
-        (tmp_path / folder / "optim-retired").mkdir()
-        (tmp_path / folder / "optim-retired" / "SKILL.md").write_text("# Gone\n")
+    earlier = sync.agent_files()  # an earlier optim, which shipped one skill more
+    core_sync.write(tmp_path, [replace(earlier, skills={**earlier.skills, "optim-retired": "---\nname: optim-retired\ndescription: Gone.\n---\n"})])
 
     assert sorted(path.relative_to(tmp_path).as_posix() for path in sync.write(tmp_path)) == [".agents/skills/optim-retired", ".claude/skills/optim-retired"]
     assert not (tmp_path / ".agents/skills/optim-retired").exists()

@@ -20,8 +20,7 @@ jobs:
       - run: uv run pytest
 
   without-optim:
-    # The workspace with packages/optim removed: no line outside it names optim but the few the script allows, the
-    # relock moves no version, and every hook and unit test passes, so optim can change or go without the others.
+    # scripts/without_optim.py: nothing outside packages/optim may need it, and its docstring says how this checks.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

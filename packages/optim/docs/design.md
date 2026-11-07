@@ -1,5 +1,9 @@
 # The optim framework
 
+**Provisional.** optim's design may change after basis's maintainer meets the firm's quant team, or optim may be
+replaced, so basis does not release it until then (basis's roadmap, step 3.6), and nothing outside `packages/optim`
+depends on it: `scripts/without_optim.py`, from basis's root, checks so.
+
 This repository is `optim`, a Python package that quants' model repos depend on. A model is one module that declares
 its parameters and datasets and decides each portfolio's trades in a pure function. `optim` runs everything else the
 same way for every model: loading, parallelism, rounding, acceptance, snapshots, replay, logging and saving orders. The

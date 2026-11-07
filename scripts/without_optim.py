@@ -79,6 +79,7 @@ def main(argv: Sequence[str]) -> int:
     failures = names(tools)
     if not args.names:
         failures += without_optim(tools, keep=args.keep)
+    sys.stdout.flush()  # what the checks printed, before the ERROR lines that end it
     for reason, fix in failures:
         sys.stderr.write(f"ERROR: {reason}: {fix}\n")
     return 1 if failures else 0
