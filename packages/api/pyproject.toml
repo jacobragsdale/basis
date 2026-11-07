@@ -12,6 +12,7 @@ dependencies = [
     "opentelemetry-api>=1.45.2",
     "opentelemetry-exporter-otlp-proto-http>=1.45.2",
     "opentelemetry-sdk>=1.45.2",
+    "pyarrow>=26.0.1",  # a dataset route's Arrow stream, as basis-core's snapshots already hold it: see basis.api.arrow
     "pyjwt[crypto]>=2.15.1",  # verifies bearer tokens: see basis.api.tokens
     "uvicorn>=0.54.0",
 ]

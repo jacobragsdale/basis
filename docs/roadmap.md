@@ -75,9 +75,10 @@ and the fallback for each no.
 3. **0.3 Eval.** Install Harbor and write five tasks against etl-framework 0.1.0, which exists today, graded by its own
    checks. Run one agent three times per task, and report the pass rate, the consistency across runs, the loop time and
    the tokens. Done when `evals/` holds the tasks, the runner and a first report.
-4. **0.4 Ingress (work).** On the AKS cluster, route `/api` on one host to an API's service and the rest of the host to
-   a UI's. Done when the result says whether UIs and APIs can share one origin, or whether APIs need their allowed
-   origins declared.
+4. **0.4 Ingress (work).** On the AKS cluster, route `/api` on one host to an API's service, removing the prefix, and
+   the rest of the host to a UI's. Done when the result says whether UIs and APIs can share one origin, with the API
+   seeing its paths without `/api`, as its `openapi.json` gives them, or whether APIs need their allowed origins
+   declared.
 
 ## Phase 1: the repo and basis-core
 

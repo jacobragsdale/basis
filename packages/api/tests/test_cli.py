@@ -5,9 +5,9 @@ import io
 import json
 import os
 import re
-import shutil
 import subprocess
 from collections.abc import Callable
+from importlib.metadata import EntryPoint
 from pathlib import Path
 
 import pytest
@@ -15,12 +15,14 @@ from fastapi.responses import PlainTextResponse
 from pydantic import JsonValue, TypeAdapter
 
 from basis import api
-from basis.api import dev, fakes
+from basis.api import dev, fakes, openapi, service
+from basis.api import sync as api_sync
 from basis.api.example import service as example
 from basis.core import command
+from basis.core import sync as core_sync
 
 type Git = Callable[..., str]
-"""Runs `git ARGV...` in a folder and returns what it prints; fails the test when git does."""
+"""conftest's `git` fixture."""
 
 PYPROJECT = '[project]\nname = "pricing-api"\nversion = "0.1.0"\n\n[tool.basis]\nparts = ["api"]\n'
 
@@ -29,6 +31,12 @@ PYPROJECT = '[project]\nname = "pricing-api"\nversion = "0.1.0"\n\n[tool.basis]\
 def repo(tmp_path: Path) -> Path:
     (tmp_path / "pyproject.toml").write_text(PYPROJECT, encoding="utf-8")
     return tmp_path
+
+
+@pytest.fixture
+def listed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The example, as the one service the installed packages list, as an API repo's own package lists its."""
+    monkeypatch.setattr(service, "entry_points", lambda **_: [EntryPoint(name="accruals", value="basis.api.example.service:service", group=service.GROUP)])
 
 
 def basis(repo: Path, *argv: str) -> int:
@@ -49,15 +57,46 @@ def test_basis_lists_dev_and_call_in_a_repo_with_an_api(repo: Path, capsys: pyte
     assert re.search(r"^  call +run one route in this process", out, re.MULTILINE)
 
 
-def test_sync_writes_the_apis_image_command_and_agent_block(repo: Path) -> None:
+@pytest.mark.usefixtures("listed")
+def test_sync_writes_the_apis_image_command_agent_block_and_document(repo: Path) -> None:
     assert basis(repo, "sync") == 0
     assert "#   an API: serve, and relay on a schedule where its databases declare an outbox\nENTRYPOINT" in (repo / "Dockerfile").read_text(encoding="utf-8")
     assert "## basis-api\n" in (repo / "AGENTS.md").read_text(encoding="utf-8")
+    assert (repo / "openapi.json").read_text(encoding="utf-8") == openapi.text(example.service)
+    assert core_sync.plan(repo, [api_sync.agent_files()]).stale() == []
 
 
-def test_serve_never_touches_git(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.usefixtures("listed")
+def test_a_document_that_differs_from_the_services_is_stale_until_synced(repo: Path) -> None:
+    assert basis(repo, "sync") == 0
+    document = repo / "openapi.json"
+    document.write_text(document.read_text(encoding="utf-8").replace('"operationId": "bond"', '"operationId": "get_bond"'), encoding="utf-8")
+    assert core_sync.plan(repo, [api_sync.agent_files()]).stale() == [document]
+    assert basis(repo, "sync") == 0
+    assert document.read_text(encoding="utf-8") == openapi.text(example.service)
+
+
+def test_a_repo_that_lists_no_service_has_no_document_and_every_other_file_is_written(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert basis(repo, "sync") == 1
+    assert capsys.readouterr().err.splitlines()[-1].startswith("ERROR: basis cannot make openapi.json, since the installed packages list no services in the basis.apis entry points")
+    assert (repo / "Dockerfile").exists()
+    assert not (repo / "openapi.json").exists()
+
+
+def test_a_service_that_does_not_load_is_one_error_line(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    (repo / "broken.py").write_text("import nowhere_at_all\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(repo))
+    monkeypatch.setattr(service, "entry_points", lambda **_: [EntryPoint(name="broken", value="broken:service", group=service.GROUP)])
+    assert basis(repo, "sync") == 1
+    line = capsys.readouterr().err.splitlines()[-1]
+    assert line == (
+        "ERROR: basis cannot make openapi.json, since the service does not load: ModuleNotFoundError: No module named 'nowhere_at_all': fix it, then run `uv run basis sync`, which writes openapi.json"
+    )
+
+
+@pytest.mark.usefixtures("listed")
+def test_serve_never_touches_git(repo: Path, git: Git) -> None:
     """`basis sync` points a clone at its hooks, and `basis serve`, which a container runs, leaves git alone."""
-    git = _git(monkeypatch)
     git(repo, "init", "--quiet")
     assert basis(repo, "sync") == 0
     assert git(repo, "config", "--get", "core.hooksPath") == ".githooks\n"
@@ -77,23 +116,6 @@ def test_settings_basis_cannot_read_are_one_error_line(repo: Path, monkeypatch: 
     assert basis(repo, "serve", "basis.api.example.service") == 1
     expected = "ERROR: the settings are not valid, so the API cannot start: set BASIS_SERVE__PORT: Input should be a valid integer, unable to parse string as an integer"
     assert capsys.readouterr().err.splitlines()[-1] == expected
-
-
-def _git(monkeypatch: pytest.MonkeyPatch) -> Git:
-    """git as a fresh machine has it: no clone a hook or `git rebase --exec` exports, so the test never writes the clone
-    it runs in, and no user or system settings."""
-    found = shutil.which("git")
-    if found is None:
-        pytest.skip("git is not installed")
-    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-
-    def run(folder: Path, *argv: str) -> str:
-        return subprocess.run([found, *argv], cwd=folder, check=True, capture_output=True, text=True).stdout
-
-    return run
 
 
 ISIN = "US912810TM64"
@@ -148,9 +170,9 @@ def test_call_reads_its_request_from_stdin(repo: Path, monkeypatch: pytest.Monke
         (("bond", json.dumps({"path": {"security": "US0000000000"}})), "ERROR: bond answered 404 unknown-bond, No bond has that ISIN: the warehouse has no bond US0000000000"),
         (
             ("accrued_interest", json.dumps({"query": {"settle": "2026-11-06"}})),
-            "ERROR: accrued_interest answered 422 invalid-request, The request is not valid: query /settle: Unknown query parameter: this route takes face, rate, start, end, convention",
+            "ERROR: accrued_interest answered 422 invalid-request, The request is not valid: parameter settle: Unknown query parameter: this route takes face, rate, start, end, convention",
         ),
-        (("bonds", "{}"), "ERROR: service accruals has no route named bonds: give one of accrued_interest, conventions, bond, dirty_price, bond_yield, record_settlement"),
+        (("bonds", "{}"), "ERROR: service accruals has no route named bonds: give one of accrued_interest, conventions, bond, dirty_price, bond_yield, coupons, record_settlement"),
         (("bond", "{}"), "ERROR: bond's path /bonds/{security} needs security: give each in the request's path"),
         (("bond", '{"paths": {}}'), 'ERROR: the request to bond is not valid: paths: Extra inputs are not permitted: give one JSON object of "path", "query", "headers" and "body"'),
     ],
@@ -188,7 +210,7 @@ def without_pricing() -> dict[fakes.Faked, fakes.Fake]:
         ("basis.api.example.nowhere:fakes", "no module basis.api.example.nowhere exists"),
         ("basis.api.example.dev:nothing", "basis.api.example.dev has no nothing"),
         ("basis.api.example.dev:BONDS", "a dict: name a function that takes nothing and returns them"),
-        (f"{__name__}:without_pricing", "fakes none of pricing, and service accruals runs on fakes alone here"),
+        (f"{__name__}:without_pricing", "fakes none of pricing, ledger, and service accruals runs on fakes alone here"),
     ],
     ids=["none", "no-module", "no-function", "not-a-function", "a-service-unfaked"],
 )

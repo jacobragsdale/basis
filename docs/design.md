@@ -179,27 +179,34 @@ job or a model. Whatever schedules a job runs the container with that command, s
 
 A basis API and the basis-ui app that calls it live in different repos and deploy separately, so this contract is what
 keeps them working together. `basis-api`'s contract tests check its side, and basis-ui's tests run against a pinned copy
-of the `openapi.json` that this repo's example API produces.
+of the `openapi.json` that this repo's example API produces. [The contract page](contract.md) gives it field by field.
 
-- **The OpenAPI document.** Each API commits its `openapi.json`. Each operation's id is its handler's name, so a
-  generated client's functions read `getPositions` rather than FastAPI's default `read_positions_positions_get`, and
-  every model is strict. The API's breaking-change check compares the document with the one at its last release tag, and
-  fails when a field is removed, renamed or changes type. Adding a response field is never breaking, because basis-ui's
+- **The OpenAPI document.** Each API commits its `openapi.json`, which `basis sync` writes from its service and `basis
+  check` fails on when it is out of date. Each operation's id is its handler's name, so a generated client's functions
+  read `getPositions` rather than FastAPI's default `read_positions_positions_get`, and every model is strict. The API's
+  breaking-change check compares the document with the one at its last release tag, which the repo declares as a glob of
+  its release tags, and fails when a field is removed, renamed or changes type; with no earlier release, it passes and
+  says so, and in a clone that may lack its releases, a shallow one or one that fetches no tags, it fails with the fix. Adding a response field is never breaking, because basis-ui's
   schemas drop fields they do not know. Requests are the other way round: an API refuses unknown request fields, so an
   API that accepts a new one deploys before the UI that sends it, and it takes a decimal only as a string, as it sends
-  one, and a time only with its offset.
-- **Errors.** Every error is an RFC 9457 problem details response, from one exception map.
+  one, and a time only with its offset, as it sends one: a route whose request or response may hold a time without
+  its offset is refused when it is declared.
+- **Errors.** Every error is an RFC 9457 problem details response, from one exception map. A 422, whether basis or the
+  handler refuses the request, names each field at fault in `errors`, by a JSON Pointer into the body or by a query or
+  path parameter's name, as RFC 9457's own example does, so a UI puts each error on its field.
 - **Identity.** A UI sends the user's JWT as a bearer token, and the API verifies it. A missing token is anonymous; an
   invalid or expired one gets a 401 problem of type `invalid-token`, and a route that needs a user answers an anonymous
   request with a 401 of type `sign-in-required`, each with a `WWW-Authenticate: Bearer` challenge. While the sign-in
   system's keys cannot be fetched, a token whose key the API cannot look up gets a 503, `keys-unavailable`, which a UI
   retries rather than signing the user out. In development, a UI signs its tokens with basis's published development
   key.
-- **Datasets as Arrow.** A route that returns a dataset returns Arrow when the request asks for
-  `application/vnd.apache.arrow.stream`, which is how parallax, basis-ui's grid, receives its data.
-- **One origin.** A UI and its API sit behind one host on the AKS cluster, the ingress routing `/api` to the API and the
-  rest to the UI, so the browser makes no cross-origin calls. Where that routing is not possible, the API declares the
-  origins it allows, per environment; an empty list means the same origin only.
+- **Datasets as Arrow.** A route that returns a dataset declares it, and returns Arrow when the request asks for
+  `application/vnd.apache.arrow.stream`, which is how parallax, basis-ui's grid, receives its data. Its rows are flat,
+  one column for each field, so its Arrow and its JSON hold the same values.
+- **One origin.** A UI and its API sit behind one host on the AKS cluster, the ingress routing `/api` to the API,
+  removing the prefix, and the rest to the UI, so the browser makes no cross-origin calls. The document's paths carry no
+  `/api`, and a UI's client adds it. Where that routing is not possible, the API's settings declare the origins it
+  allows, per environment; an empty list, the default, means the same origin only.
 - **Recorded responses.** `basis records export` writes chosen recorded requests and responses as JSON files in the
   format basis-ui's fixture mode reads. They hold client data, so they go in a folder git ignores, never in a commit.
 

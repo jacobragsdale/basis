@@ -718,9 +718,18 @@ def test_the_outbox_table_has_a_column_for_each_of_a_rows_fields_in_order(dialec
     assert tuple(re.findall(r"^    ([a-z_]+) (?!KEY)", printed, re.MULTILINE)) == tuple(Row.model_fields)
 
 
+UNBOXED = api.Service(name="unboxed", settings=api.Settings, resources=[PLAIN, LEDGER], routes=[_post("/direct", book_directly)])
+"""A service whose one route calls another service directly, since it writes no database, so it keeps no outbox."""
+
+
 def test_ddl_of_a_service_without_an_outbox_is_one_error_line(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    assert _basis(repo, "ddl", "basis.api.example.service", "--dialect", "mssql") == 1
-    assert capsys.readouterr().err.splitlines()[-1].startswith("ERROR: service accruals keeps no outbox, so it has no table to create: declare one where a route sends a call")
+    assert _basis(repo, "ddl", f"{__name__}:UNBOXED", "--dialect", "mssql") == 1
+    assert capsys.readouterr().err.splitlines()[-1].startswith("ERROR: service unboxed keeps no outbox, so it has no table to create: declare one where a route sends a call")
+
+
+def test_ddl_prints_the_examples_outbox(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert _basis(repo, "ddl", "basis.api.example.service", "--dialect", "mssql") == 0
+    assert capsys.readouterr().out.startswith("CREATE TABLE accruals_outbox (\n")
 
 
 def test_basis_lists_relay_and_ddl_in_a_repo_with_an_api(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:

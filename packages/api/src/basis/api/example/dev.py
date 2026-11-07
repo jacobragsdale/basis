@@ -1,7 +1,8 @@
 """The example's fakes, which `basis dev` and `basis call --fake` run it on, as its service declares with
-`fakes="basis.api.example.dev:fakes"`: a warehouse of three synthetic bonds, and a pricing service that quotes two of
-them. The cache, the clock, the ids and the yield solver are the real ones, since they reach nothing outside the
-process; settlements recorded in dev mode go into the fake warehouse's memory, and end with the process."""
+`fakes="basis.api.example.dev:fakes"`: a warehouse of three synthetic bonds, a pricing service that quotes two of
+them, and a ledger that takes every booking. The cache, the clock, the ids and the yield solver are the real ones,
+since they reach nothing outside the process; settlements recorded in dev mode, and their bookings, go into the fake
+warehouse's memory, and end with the process."""
 
 from collections.abc import Mapping
 from datetime import date
@@ -25,13 +26,24 @@ PRICES = {"US912810TM64": "98.50", "XS2010030836": "101.125"}
 
 
 def fakes() -> dict[api.Resource | api.ComputeFunction[..., object], Fake]:
-    return {service.WAREHOUSE: Database(answers={service.BOND: Respond(_bond), service.RECORD: 1}), service.PRICING: Http(pricing())}
+    return {service.WAREHOUSE: Database(answers={service.BOND: Respond(_bond), service.RECORD: 1}), service.PRICING: Http(pricing()), service.LEDGER: Http(ledger())}
 
 
 def _bond(binds: Mapping[str, api.Bind]) -> list[Mapping[str, object]]:
     security = binds["security"]
     terms = BONDS.get(security) if isinstance(security, str) else None
     return [{"security_id": security, **terms}] if terms is not None else []
+
+
+def ledger() -> FastAPI:
+    """The ledger service, as far as the example calls it: it takes every booking."""
+    app = FastAPI()
+
+    @app.post("/bookings", status_code=HTTPStatus.CREATED)
+    def book() -> None:
+        return None
+
+    return app
 
 
 def pricing() -> FastAPI:

@@ -78,7 +78,8 @@ holds the interface, and its docstring is the reference.
   that adds its arguments to an argparse parser, and a handler that returns the exit code; and the fields core's verbs
   use, `files` (`sync`, `check`; read only when used), `docs` (`docs`), `new` (`new KIND NAME`), `runs` (`run`,
   `describe`, `resume`, `replay`, `regress` and `ddl`, which every part that runs things by name has, and
-  `regressions`, for `check --full`), `qa` (the QA tier), `contract` (`review`; `basis.api`'s, later), and `renamed`, which refuses the
+  `regressions`, for `check --full`), `qa` (the QA tier), `contract` (`check --full` and `review`, such as basis-api's breaking-change check of
+  `openapi.json`), and `renamed`, which refuses the
   variables an earlier version of the part read, before any verb runs, as `basis` refuses `ETL_*`.
 - A repo declares its parts in its `pyproject.toml`, as `[tool.basis] parts = ["job"]`, and basis never infers one
   from a folder. `basis` loads only those parts, and `basis --help` lists their verbs and each core verb one of them

@@ -18,6 +18,7 @@ alone, with its status and its content type."""
 import json
 import sys
 from dataclasses import dataclass
+from http import HTTPStatus
 from typing import Literal
 from urllib.parse import quote
 
@@ -110,14 +111,16 @@ def _text(value: Scalar) -> str:
 
 
 def _failed(route: Route, called: Called) -> int:
+    kind = errors.ValidationProblem if called.status == HTTPStatus.UNPROCESSABLE_CONTENT else errors.Problem
     try:
-        problem = errors.Problem.model_validate(called.body)
+        problem = kind.model_validate(called.body)
     except ValidationError:
         return fail(f"{route.name} answered {called.status}, without a problem", "see its log lines above")
+    fields = problem.errors if isinstance(problem, errors.ValidationProblem) else ()
     if problem.detail is not None:
         why = problem.detail
-    elif problem.errors is not None:
-        why = "; ".join(f"{found.location} {found.pointer or '/'}: {found.detail}" for found in problem.errors)
+    elif fields:
+        why = "; ".join(f"body {found.pointer}: {found.detail}" if isinstance(found, errors.PointerError) else f"parameter {found.parameter}: {found.detail}" for found in fields)
     else:
         why = problem.title
     return fail(f"{route.name} answered {problem.status} {problem.type}, {problem.title}", why)

@@ -2,6 +2,7 @@
 the errors it declares, each listed in the OpenAPI document."""
 
 import asyncio
+import re
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time
@@ -15,7 +16,7 @@ from uuid import UUID
 import pytest
 from fastapi import BackgroundTasks, Body, FastAPI, Query
 from fastapi.testclient import TestClient
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, RootModel, TypeAdapter, field_validator
+from pydantic import AfterValidator, AliasChoices, AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, RootModel, TypeAdapter, field_validator
 
 from basis import api
 from basis.api import fakes, strict
@@ -37,7 +38,7 @@ class Leg(BaseModel):
     """Lax, as pydantic's default is: basis reads a request strictly whatever a model says."""
 
     rate: Decimal
-    at: datetime
+    at: AwareDatetime
 
 
 class Order(BaseModel):
@@ -70,7 +71,7 @@ SLOW = "SELECT security, price FROM quotes WITH (HOLDLOCK)"
 INSERT = "INSERT INTO orders (security) VALUES (%(security)s)"
 
 
-def quote(security: str, size: int, side: Side, venue: Annotated[tuple[str, ...], Query()] = (), at: datetime | None = None) -> Quote:
+def quote(security: str, size: int, side: Side, venue: Annotated[tuple[str, ...], Query()] = (), at: AwareDatetime | None = None) -> Quote:
     del size, side, venue, at
     return Quote(security=security, price=Decimal("101.25"))
 
@@ -211,7 +212,7 @@ def embedded(security: str, order: Annotated[Order, Body(embed=True)]) -> Quote:
         (_ok(stale, errors=[api.DeadlineExceededError]), "which basis raises itself"),
         (_ok(stale, errors=[Stale, Stale]), "declares Stale twice"),
         (lambda: api.get("/lots/{number:int}", lot, deadline_s=1, response=Quote, errors=[]), r"converts \{number:int\} in its path: name the parameter alone, as \{number\}"),
-        (_ok(by_time), "query parameter at is time, which basis cannot read strictly from text"),
+        (_ok(by_time), "query parameter at holds time, a time of day, whose offset pydantic cannot require"),
         (_ok(by_mixed), r"query parameter pair is tuple\[int, str\]"),
         (lambda: api.post("/q/{security}", two_bodies, deadline_s=1, response=Quote, errors=[]), "takes 2 bodies, order, other"),
         (lambda: api.post("/q/{security}", embedded, deadline_s=1, response=Quote, errors=[]), "drop embed=True"),
@@ -261,19 +262,19 @@ def test_query_and_path_text_reads_by_its_types_grammar(kind: object, text: str,
 @pytest.mark.parametrize(
     ("path", "params", "errors"),
     [
-        ("/quotes/X", {"size": "10", "side": "buy", "sise": "10"}, [("query", "/sise", "Unknown query parameter: this route takes size, side, venue, at")]),
-        ("/quotes/X", {"size": "010", "side": "buy"}, [("query", "/size", "Input should be an integer, as 10 or -3: digits, with a minus sign only before them and no leading zero")]),
-        ("/quotes/X", [("size", "10"), ("size", "11"), ("side", "buy")], [("query", "/size", "Given 2 times: give it once")]),
-        ("/quotes/X", {"size": "10", "side": "BUY"}, [("query", "/side", "Input should be one of buy, sell")]),
-        ("/quotes/X", {"size": "10", "side": "buy", "at": "2026-11-06T14:30:00"}, [("query", "/at", "Input should be a time with its offset, as 2026-11-06T14:30:00Z or 2026-11-06T09:30:00-05:00")]),
-        ("/lots/007", {}, [("path", "/number", "Input should be an integer, as 10 or -3: digits, with a minus sign only before them and no leading zero")]),
+        ("/quotes/X", {"size": "10", "side": "buy", "sise": "10"}, [("sise", "Unknown query parameter: this route takes size, side, venue, at")]),
+        ("/quotes/X", {"size": "010", "side": "buy"}, [("size", "Input should be an integer, as 10 or -3: digits, with a minus sign only before them and no leading zero")]),
+        ("/quotes/X", [("size", "10"), ("size", "11"), ("side", "buy")], [("size", "Given 2 times: give it once")]),
+        ("/quotes/X", {"size": "10", "side": "BUY"}, [("side", "Input should be one of buy, sell")]),
+        ("/quotes/X", {"size": "10", "side": "buy", "at": "2026-11-06T14:30:00"}, [("at", "Input should be a time with its offset, as 2026-11-06T14:30:00Z or 2026-11-06T09:30:00-05:00")]),
+        ("/lots/007", {}, [("number", "Input should be an integer, as 10 or -3: digits, with a minus sign only before them and no leading zero")]),
     ],
     ids=["unknown-key", "leading-zero", "given-twice", "enum-case", "naive-time", "path"],
 )
-def test_query_and_path_parameters_are_read_strictly(client: TestClient, path: str, params: object, errors: list[tuple[str, str, str]]) -> None:
+def test_query_and_path_parameters_are_read_strictly(client: TestClient, path: str, params: object, errors: list[tuple[str, str]]) -> None:
     response = client.get(path, params=params)  # ty: ignore[invalid-argument-type] -- a mapping or pairs, as httpx takes them
     assert (response.status_code, response.json()["type"]) == (HTTPStatus.UNPROCESSABLE_CONTENT, "invalid-request")
-    assert [(error["location"], error["pointer"], error["detail"]) for error in response.json()["errors"]] == errors
+    assert [(error["parameter"], error["detail"]) for error in response.json()["errors"]] == errors
 
 
 def test_a_list_takes_its_key_once_for_each_value(client: TestClient) -> None:
@@ -292,29 +293,35 @@ def test_a_body_reaches_the_handler_exactly(client: TestClient) -> None:
 @pytest.mark.parametrize(
     ("changed", "pointer", "kind"),
     [
-        ({"quantity": "10"}, "/quantity", "Input should be a valid integer"),
-        ({"quantity": 10.0}, "/quantity", "Input should be a valid integer"),
-        ({"security": 912810}, "/security", "Input should be a valid string"),
-        ({"hedged": "true"}, "/hedged", "Input should be a valid boolean"),
-        ({"price": 101.25}, "/price", 'Input should be a string of the decimal, as "0.045"'),
-        ({"legs": [{"rate": 0.045, "at": "2026-11-06T14:30:00Z"}]}, "/legs/0/rate", 'Input should be a string of the decimal, as "0.045"'),
-        ({"legs": [{"rate": "0.045", "at": "2026-11-06T14:30:00"}]}, "/legs/0/at", "Input should be a time with its offset"),
-        ({"side": "buy"}, "/side", "Extra inputs are not permitted"),
-        ({"legs": [{"rate": "0.045", "at": "2026-11-06T14:30:00Z", "notional": "1"}]}, "/legs/0/notional", "Extra inputs are not permitted"),
+        ({"quantity": "10"}, "#/quantity", "Input should be a valid integer"),
+        ({"quantity": 10.0}, "#/quantity", "Input should be a valid integer"),
+        ({"security": 912810}, "#/security", "Input should be a valid string"),
+        ({"hedged": "true"}, "#/hedged", "Input should be a valid boolean"),
+        ({"price": 101.25}, "#/price", 'Input should be a string of the decimal, as "0.045"'),
+        ({"legs": [{"rate": 0.045, "at": "2026-11-06T14:30:00Z"}]}, "#/legs/0/rate", 'Input should be a string of the decimal, as "0.045"'),
+        ({"legs": [{"rate": "0.045", "at": "2026-11-06T14:30:00"}]}, "#/legs/0/at", "Input should have timezone info"),
+        ({"side": "buy"}, "#/side", "Extra inputs are not permitted"),
+        ({"price": "1e3"}, "#/price", 'Input should be a decimal\'s digits, as "0.045"'),
+        ({"price": "+1.5"}, "#/price", 'Input should be a decimal\'s digits, as "0.045"'),
+        ({"legs": [{"rate": " 0.045", "at": "2026-11-06T14:30:00Z"}]}, "#/legs/0/rate", 'Input should be a decimal\'s digits, as "0.045"'),
+        ({"legs": [{"rate": "0.045", "at": "2026-11-06T14:30:00Z", "notional": "1"}]}, "#/legs/0/notional", "Extra inputs are not permitted"),
     ],
-    ids=["int-as-text", "int-as-a-float", "str-as-a-number", "bool-as-text", "decimal-as-a-number", "nested-decimal-as-a-number", "naive-time", "unknown-key", "nested-unknown-key"],
-)
+    ids=[
+        "int-as-text", "int-as-a-float", "str-as-a-number", "bool-as-text", "decimal-as-a-number", "nested-decimal-as-a-number", "naive-time", "unknown-key",
+        "decimal-with-an-exponent", "decimal-with-a-plus", "nested-decimal-with-a-space", "nested-unknown-key",
+    ],
+)  # fmt: skip
 def test_a_body_is_read_strictly(client: TestClient, changed: dict[str, object], pointer: str, kind: str) -> None:
     response = client.post("/orders", json=ORDER | changed)
     [error] = response.json()["errors"]
-    assert (response.status_code, error["location"], error["pointer"]) == (HTTPStatus.UNPROCESSABLE_CONTENT, "body", pointer)
+    assert (response.status_code, error["pointer"]) == (HTTPStatus.UNPROCESSABLE_CONTENT, pointer)
     assert error["detail"].startswith(kind)
 
 
 def test_a_body_is_json_only_when_the_request_says_so(client: TestClient) -> None:
     response = client.post("/orders", content=b'{"security": "X", "quantity": 1, "price": "1"}', headers={"content-type": "text/plain"})
     [error] = response.json()["errors"]
-    assert (error["location"], error["detail"]) == ("body", "The body is text/plain, not JSON: send it as application/json")
+    assert (error["pointer"], error["detail"]) == ("#", "The body is text/plain, not JSON: send it as application/json")
 
 
 def test_a_declared_error_answers_its_problem(client: TestClient) -> None:
@@ -354,15 +361,16 @@ def test_each_error_a_route_answers_with_is_in_the_openapi_document_as_a_problem
     given: fakes.Fakes = {WAREHOUSE: fakes.Database(), PRICING: fakes.Http(_pricing())}
     document = _DOCUMENT.validate_python(api.build(SERVICE, settings=api.Settings.given(), fakes=given).asgi.openapi())
     problem = {"application/problem+json": {"schema": {"$ref": "#/components/schemas/Problem"}}}
+    invalid = {"application/problem+json": {"schema": {"$ref": "#/components/schemas/ValidationProblem"}}}
     assert _at(document, "paths", "/warehouse", "get", "responses") == {
         "200": _at(document, "paths", "/warehouse", "get", "responses", "200"),
-        "422": {"description": "invalid-request: The request is not valid", "content": problem},
+        "422": {"description": "invalid-request: The request is not valid", "content": invalid},
         "504": {"description": "deadline-exceeded: A call took longer than its deadline", "content": problem},
     }
     assert _at(document, "paths", "/stale/{security}", "get", "responses", "409") == {"description": "stale: The quote is stale", "content": problem}
     schemas = _at(document, "components", "schemas")
     assert isinstance(schemas, dict)
-    assert {"Problem", "FieldError"} <= set(schemas)
+    assert {"Problem", "ValidationProblem", "PointerError", "ParameterError"} <= set(schemas)
     assert "HTTPValidationError" not in schemas
 
 
@@ -401,7 +409,7 @@ def test_a_body_is_validated_once() -> None:
 
 def test_a_body_sent_to_a_route_that_takes_none_is_refused(client: TestClient) -> None:
     response = client.request("GET", "/stale/X", content=b'{"price": "1"}', headers={"content-type": "application/json"})
-    assert [(error["location"], error["detail"]) for error in response.json()["errors"]] == [("body", "This route takes no body: send the request without one")]
+    assert [(error["pointer"], error["detail"]) for error in response.json()["errors"]] == [("#", "This route takes no body: send the request without one")]
 
 
 @dataclass(frozen=True)
@@ -415,7 +423,7 @@ class Aliased(BaseModel):
     unit_price: Decimal = Field(alias="unitPrice")
     sizes: frozenset[Decimal] = frozenset()
     fills: tuple[Fill, ...] = ()
-    at: frozenset[datetime] = frozenset()
+    at: frozenset[AwareDatetime] = frozenset()
 
 
 @pytest.mark.parametrize(
@@ -424,7 +432,7 @@ class Aliased(BaseModel):
         (b'{"unitPrice": 1.5}', [(("body", "unitPrice"), "decimal_string")]),
         (b'{"unitPrice": "1.5", "sizes": ["1", 2]}', [(("body", "sizes", 1), "decimal_string")]),
         (b'{"unitPrice": "1.5", "fills": [{"price": 1.5}]}', [(("body", "fills", 0, "price"), "decimal_string")]),
-        (b'{"unitPrice": "1.5", "at": ["2026-11-06T14:30:00"]}', [(("body", "at"), "timezone_aware")]),
+        (b'{"unitPrice": "1.5", "at": ["2026-11-06T14:30:00"]}', [(("body", "at", 0), "timezone_aware")]),
         (b'{"unitPrice": "1.5", "sizes": ["1"], "fills": [{"price": "1"}], "at": ["2026-11-06T14:30:00Z"]}', []),
     ],
     ids=["aliased", "in-a-set", "in-a-dataclass", "naive-time-in-a-set", "all-exact"],
@@ -479,7 +487,7 @@ class Plain(BaseModel):
 
 
 @pytest.mark.parametrize(("kind", "precise"), [(Plain, False), (Order, True), (Aliased, True), (RootModel[list[int]], False)], ids=["no-decimal", "a-decimal", "nested", "a-list-of-ints"])
-def test_a_body_is_parsed_again_only_where_it_can_hold_a_decimal_or_a_time(kind: type, precise: bool) -> None:  # noqa: FBT001 -- a table's column
+def test_a_body_is_parsed_again_only_where_it_can_hold_a_decimal(kind: type, precise: bool) -> None:  # noqa: FBT001 -- a table's column
     declared = strict.shape("/a", _taking(kind), "taking").body
     assert declared is not None
     assert declared.precise is precise
@@ -493,3 +501,131 @@ def later(tasks: BackgroundTasks) -> dict[str, str]:
 def test_a_route_runs_no_background_tasks() -> None:
     with pytest.raises(api.ServiceError, match="takes BackgroundTasks, whose work runs after the response, outside the route's deadline"):
         api.get("/later", later, deadline_s=1, response=dict[str, str], errors=[])
+
+
+class Stamp(BaseModel):
+    at: AwareDatetime
+
+
+class NaiveStamp(BaseModel):
+    at: datetime
+
+
+class Opening(BaseModel):
+    opens: time
+
+
+class Branch(BaseModel):
+    """A model that refers to itself, through a recursive alias."""
+
+    at: AwareDatetime
+    below: Tree
+
+
+type Tree = int | list[Tree] | Branch
+"""A recursive alias, which the check of a route's times walks once."""
+
+
+def stamped(stamp: Stamp) -> Stamp:
+    return stamp
+
+
+def at_noon_naively() -> NaiveStamp:
+    raise NotImplementedError
+
+
+def naive_query(at: datetime) -> Stamp:
+    del at
+    raise NotImplementedError
+
+
+def naive_body(stamp: NaiveStamp) -> Stamp:
+    del stamp
+    raise NotImplementedError
+
+
+def by_desk() -> dict[str, datetime]:
+    raise NotImplementedError
+
+
+def opening() -> Opening:
+    raise NotImplementedError
+
+
+def tree() -> Tree:
+    return 1
+
+
+@pytest.mark.parametrize(
+    ("declare", "message"),
+    [
+        (lambda: api.get("/noon", at_noon_naively, deadline_s=1, response=NaiveStamp, errors=[]), "at_noon_naively's response holds NaiveStamp.at, a datetime, which takes a time without its offset"),
+        (lambda: api.get("/by-desk", by_desk, deadline_s=1, response=dict[str, datetime], errors=[]), "by_desk's response holds dict[str, datetime.datetime], a datetime"),
+        (lambda: api.get("/naive", naive_query, deadline_s=1, response=Stamp, errors=[]), "naive_query's query parameter at holds datetime, a datetime"),
+        (lambda: api.post("/naive", naive_body, deadline_s=1, response=Stamp, errors=[]), "naive_body's body holds NaiveStamp.at, a datetime"),
+        (lambda: api.get("/opening", opening, deadline_s=1, response=Opening, errors=[]), "opening's response holds Opening.opens, a time of day, whose offset pydantic cannot require"),
+    ],
+    ids=["a-response-model", "a-mapping", "a-query-parameter", "a-body", "a-time-of-day"],
+)
+def test_a_route_whose_times_may_lack_their_offsets_is_refused_when_it_is_declared(declare: Callable[[], object], message: str) -> None:
+    with pytest.raises(api.ServiceError, match=re.escape(message)):
+        declare()
+
+
+def test_the_fix_names_pydantics_aware_datetime() -> None:
+    with pytest.raises(api.ServiceError, match=re.escape("declare it pydantic's AwareDatetime, which refuses a time without its offset")):
+        api.get("/noon", at_noon_naively, deadline_s=1, response=NaiveStamp, errors=[])
+
+
+def test_a_recursive_alias_is_walked_once() -> None:
+    assert api.get("/tree", tree, deadline_s=1, response=Tree, errors=[]).name == "tree"
+
+
+def test_a_time_without_its_offset_is_refused_as_the_request_is_read() -> None:
+    service = _service(api.post("/stamps", stamped, deadline_s=1, response=Stamp, errors=[]))
+    with TestClient(api.build(service, settings=api.Settings.given(), fakes={WAREHOUSE: fakes.Database(), PRICING: fakes.Http(_pricing())}).asgi) as client:
+        assert client.post("/stamps", json={"at": "2026-11-06T12:00:00Z"}).json() == {"at": "2026-11-06T12:00:00Z"}
+        [error] = client.post("/stamps", json={"at": "2026-11-06T12:00:00"}).json()["errors"]
+    assert (error["pointer"], error["detail"]) == ("#/at", "Input should have timezone info")
+
+
+class Swap(BaseModel):
+    rate: int
+
+
+class Bond(BaseModel):
+    coupon: str
+
+
+def _positive(value: int) -> int:
+    if value <= 0:
+        msg = "must be positive"
+        raise ValueError(msg)
+    return value
+
+
+class Hedged(BaseModel):
+    leg: Swap | Bond
+    legs: list[Swap | Bond] = []
+    size: Annotated[int, AfterValidator(_positive)] | str = 1
+
+
+@pytest.mark.parametrize(
+    ("raw", "pointers"),
+    [
+        (b'{"leg": {"rate": "1"}}', {"#/leg/rate", "#/leg/coupon"}),
+        (b'{"leg": {"coupon": "c"}, "legs": [{"rate": "1"}]}', {"#/legs/0/rate", "#/legs/0/coupon"}),
+        (b'{"leg": {"coupon": "c"}, "size": 1.5}', {"#/size"}),
+    ],
+    ids=["a-union", "a-union-in-a-list", "a-validators-tag"],
+)
+def test_a_body_errors_pointer_names_the_bodys_own_keys_never_a_unions_tags(raw: bytes, pointers: set[str]) -> None:
+    service = _service(api.post("/hedges", hedge, deadline_s=1, response=Quote, errors=[]))
+    with TestClient(api.build(service, settings=api.Settings.given(), fakes={WAREHOUSE: fakes.Database(), PRICING: fakes.Http(_pricing())}).asgi) as client:
+        response = client.post("/hedges", content=raw, headers={"content-type": "application/json"})
+    assert {error["pointer"] for error in response.json()["errors"]} == pointers
+
+
+def hedge(hedged: Hedged) -> Quote:
+    del hedged
+    return Quote(security="X", price=Decimal(1))

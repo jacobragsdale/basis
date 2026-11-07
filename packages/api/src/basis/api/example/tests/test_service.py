@@ -4,10 +4,11 @@ from decimal import Decimal
 from http import HTTPStatus
 from uuid import UUID
 
+import pyarrow as pa
 import pytest
 from basis import api
 from basis.api import fakes
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
 from basis.api.example import dev, service
@@ -18,10 +19,27 @@ ISIN = "US912810TM64"
 UNPRICED = "US912810TN48"
 TERMS = {"security_id": ISIN, "coupon_rate": Decimal("0.045"), "convention": "30/360", "frequency": 2, "issued": date(2024, 11, 15), "maturity": date(2034, 11, 15)}
 AT = datetime(2026, 11, 6, 14, 30, tzinfo=UTC)
+ARROW = "application/vnd.apache.arrow.stream"
 
 
 def _bonds(binds: Mapping[str, api.Bind]) -> list[Mapping[str, object]]:
     return [TERMS | {"security_id": binds["security"]}] if binds["security"] in {ISIN, UNPRICED} else []
+
+
+BOOKED: list[tuple[str | None, dict[str, object]]] = []
+"""Each booking the fake ledger took, with its `Idempotency-Key`: a test clears it."""
+
+
+def _ledger() -> FastAPI:
+    """The ledger service, which takes every booking."""
+    ledger = FastAPI()
+
+    @ledger.post("/bookings", status_code=HTTPStatus.CREATED)
+    async def book(request: Request) -> None:
+        body: object = await request.json()
+        BOOKED.append((request.headers.get("idempotency-key"), {str(key): value for key, value in body.items()} if isinstance(body, dict) else {}))
+
+    return ledger
 
 
 def _pricing() -> FastAPI:
@@ -49,7 +67,8 @@ def terms() -> fakes.Cache:
 
 def _app(warehouse: fakes.Database, terms: fakes.Cache, **settings: object) -> api.App:
     given: fakes.Fakes = {
-        service.WAREHOUSE: warehouse, service.PRICING: fakes.Http(_pricing()), service.TERMS: terms, service.CLOCK: fakes.Clock(at=AT), service.IDS: fakes.Ids(),
+        service.WAREHOUSE: warehouse, service.PRICING: fakes.Http(_pricing()), service.LEDGER: fakes.Http(_ledger()), service.TERMS: terms, service.CLOCK: fakes.Clock(at=AT),
+        service.IDS: fakes.Ids(),
         service.SOLVE: fakes.Compute(),
     }  # fmt: skip
     return api.build(service.service, settings=Settings.given(**settings), fakes=given)
@@ -136,6 +155,11 @@ def test_what_it_refuses(client: TestClient, query: dict[str, str], kind: str) -
     assert (response.status_code, response.json()["type"]) == (HTTPStatus.UNPROCESSABLE_CONTENT, kind)
 
 
+def test_a_period_that_ends_before_it_starts_names_its_end(client: TestClient) -> None:
+    response = client.get("/accrued-interest", params=PERIOD | {"start": "2026-11-15", "end": "2026-05-15"})
+    assert response.json()["errors"] == [{"detail": "is before the start, 2026-11-15", "parameter": "end"}]
+
+
 def test_the_longest_period_is_a_setting(warehouse: fakes.Database, terms: fakes.Cache) -> None:
     with TestClient(_app(warehouse, terms, max_days=30).asgi) as client:
         response = client.get("/accrued-interest", params=PERIOD | {"start": "2026-05-15", "end": "2026-07-15"})
@@ -182,6 +206,26 @@ def test_a_bond_the_pricing_service_does_not_price(client: TestClient) -> None:
     assert (response.status_code, response.json()["type"]) == (HTTPStatus.NOT_FOUND, "unpriced")
 
 
+def test_a_bonds_coupons_are_its_schedule(client: TestClient) -> None:
+    coupons = client.get(f"/bonds/{ISIN}/coupons").json()
+    # semiannual from its issue to its maturity, each 30/360 period at 4.5% on 100: 2.25
+    assert (len(coupons), coupons[0], coupons[-1]) == (20, {"starts": "2024-11-15", "pays": "2025-05-15", "interest": "2.25"}, {"starts": "2034-05-15", "pays": "2034-11-15", "interest": "2.25"})
+
+
+def test_a_ui_takes_the_coupons_as_arrow(client: TestClient) -> None:
+    response = client.get(f"/bonds/{ISIN}/coupons", headers={"accept": ARROW})
+    assert (response.headers["content-type"], response.headers["vary"]) == (ARROW, "Accept")
+    table = pa.ipc.open_stream(response.content).read_all()
+    assert table.schema == pa.schema([pa.field("starts", pa.date32(), nullable=False), pa.field("pays", pa.date32(), nullable=False), pa.field("interest", pa.decimal128(12, 2), nullable=False)])
+    as_json = client.get(f"/bonds/{ISIN}/coupons").json()
+    assert table.to_pylist() == [{"starts": date.fromisoformat(row["starts"]), "pays": date.fromisoformat(row["pays"]), "interest": Decimal(row["interest"])} for row in as_json]
+
+
+def test_a_bond_it_has_no_coupons_for_is_a_problem_whatever_was_asked_for(client: TestClient) -> None:
+    response = client.get("/bonds/US0000000000/coupons", headers={"accept": ARROW})
+    assert (response.status_code, response.headers["content-type"], response.json()["type"]) == (HTTPStatus.NOT_FOUND, "application/problem+json", "unknown-bond")
+
+
 def test_a_settlement_is_recorded_with_a_new_id_and_the_time(client: TestClient, warehouse: fakes.Database) -> None:
     response = client.post("/settlements", json={"security_id": ISIN, "face": "1000000.00", "settle": "2026-11-06"})
     settlement_id = "00000000-0000-7000-8000-000000000001"
@@ -193,10 +237,19 @@ def test_a_settlement_is_recorded_with_a_new_id_and_the_time(client: TestClient,
     assert warehouse.committed == [fakes.Statement(RECORD, binds)]
 
 
+def test_a_settlement_is_booked_with_the_ledger_by_its_id_once_its_row_commits(client: TestClient, warehouse: fakes.Database) -> None:
+    BOOKED.clear()
+    settlement = client.post("/settlements", json={"security_id": ISIN, "face": "1000000.00", "settle": "2026-11-06"}).json()
+    [row] = warehouse.outbox
+    assert (row.service, row.method, row.path, row.idempotency_key, row.status) == ("ledger", "POST", "/bookings", settlement["settlement_id"], "done")
+    assert [(settlement["settlement_id"], settlement)] == BOOKED
+
+
 def test_a_settlement_on_a_bond_that_has_matured_records_nothing(client: TestClient, warehouse: fakes.Database) -> None:
+    BOOKED.clear()
     response = client.post("/settlements", json={"security_id": ISIN, "face": "100.00", "settle": "2035-01-02"})
     assert (response.status_code, response.json()["type"]) == (HTTPStatus.UNPROCESSABLE_CONTENT, "matured")
-    assert (warehouse.committed, warehouse.rolled_back) == ([], [])
+    assert (warehouse.committed, warehouse.rolled_back, warehouse.outbox, BOOKED) == ([], [], [], [])
 
 
 def test_a_bonds_yield_is_solved_from_its_dirty_price(client: TestClient) -> None:

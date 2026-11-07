@@ -17,6 +17,11 @@ class Missing(api.Error):
     title = "No such position"
 
 
+class Closed(api.Error):
+    status = HTTPStatus.UNPROCESSABLE_CONTENT
+    title = "The book is closed"
+
+
 class Upstream(api.Error):
     status = HTTPStatus.BAD_GATEWAY
     title = "The pricing service failed"
@@ -42,24 +47,75 @@ class Upstream(api.Error):
                     {"loc": ("body", 12), "msg": "JSON decode error", "type": "json_invalid", "input": {}, "ctx": {"error": "Expecting value"}},
                 ]
             ),
-            api.Problem(
+            api.ValidationProblem(
                 type="invalid-request",
                 title="The request is not valid",
                 status=422,
                 instance=REQUEST.urn,
                 errors=(
-                    api.FieldError(location="query", pointer="/end", detail="Field required"),
-                    api.FieldError(location="body", pointer="/legs/0/a~1b~0c", detail="Input should be a valid decimal"),
-                    api.FieldError(location="body", pointer="", detail="JSON decode error at character 12: Expecting value"),
+                    api.ParameterError(detail="Field required", parameter="end"),
+                    api.PointerError(detail="Input should be a valid decimal", pointer="#/legs/0/a~1b~0c"),
+                    api.PointerError(detail="JSON decode error at character 12: Expecting value", pointer="#"),
                 ),
             ),
             {},
         ),
+        (
+            RequestValidationError(
+                [
+                    {"loc": ("path", "security"), "msg": "Input should be a ISIN", "type": "strict_text", "input": "x"},
+                    {"loc": ("query", "symbol", 1), "msg": "Input should be text", "type": "strict_text", "input": "x"},
+                    {"loc": ("header", "x-desk"), "msg": "Field required", "type": "missing", "input": None},
+                    {"loc": ("body",), "msg": "This route takes no body: send the request without one", "type": "extra_forbidden", "input": None},
+                    {"loc": ("body", "notes", "50% off", "#tag"), "msg": "Input should be text", "type": "string_type", "input": 1},
+                ]
+            ),
+            api.ValidationProblem(
+                type="invalid-request",
+                title="The request is not valid",
+                status=422,
+                instance=REQUEST.urn,
+                errors=(
+                    api.ParameterError(detail="Input should be a ISIN", parameter="security"),
+                    api.ParameterError(detail="Input should be text", parameter="symbol"),
+                    api.ParameterError(detail="Field required", parameter="x-desk"),
+                    api.PointerError(detail="This route takes no body: send the request without one", pointer="#"),
+                    api.PointerError(detail="Input should be text", pointer="#/notes/50%25%20off/%23tag"),
+                ),
+            ),
+            {},
+        ),
+        (
+            Closed("the book ARCHIVE is closed", errors=[api.PointerError(detail="closed to new positions", pointer=api.pointer("book"))]),
+            api.ValidationProblem(
+                type="closed", title="The book is closed", status=422, detail="the book ARCHIVE is closed", instance=REQUEST.urn,
+                errors=(api.PointerError(detail="closed to new positions", pointer="#/book"),),
+            ),
+            {},
+        ),
+        (
+            Closed("the book ARCHIVE is closed"),
+            api.ValidationProblem(type="closed", title="The book is closed", status=422, detail="the book ARCHIVE is closed", instance=REQUEST.urn, errors=()),
+            {},
+        ),
     ],
-    ids=["declared", "declared-with-its-own-type", "no-route", "wrong-method", "http-detail", "http-dict-detail", "http-list-detail", "unexpected", "invalid-request"],
-)
+    ids=[
+        "declared", "declared-with-its-own-type", "no-route", "wrong-method", "http-detail", "http-dict-detail", "http-list-detail", "unexpected", "invalid-request",
+        "each-field-where-a-ui-places-it", "a-handlers-422-names-its-fields", "a-handlers-422-that-names-none",
+    ],
+)  # fmt: skip
 def test_one_map_makes_every_error_a_problem(error: Exception, expected: api.Problem, headers: dict[str, str]) -> None:
     assert problem(error, REQUEST) == (expected, headers)
+
+
+@pytest.mark.parametrize(("path", "pointer"), [((), "#"), (("legs", 0, "price"), "#/legs/0/price"), (("a/b", "c~d"), "#/a~1b/c~0d"), (("caf\u00e9 au lait",), "#/caf%C3%A9%20au%20lait")])
+def test_a_pointer_is_rfc_6901_in_a_uris_fragment(path: tuple[str | int, ...], pointer: str) -> None:
+    assert api.pointer(*path) == pointer
+
+
+def test_only_a_422_names_the_fields_it_refuses() -> None:
+    with pytest.raises(TypeError, match="only a 422 names the fields it refuses"):
+        Missing("position 7", errors=[api.ParameterError(detail="unknown", parameter="position")])
 
 
 @pytest.mark.parametrize(("name", "kind"), [("PositionNotFound", "position-not-found"), ("HTTPTimeout", "http-timeout"), ("NotReadyError", "not-ready"), ("Error", "error")])
