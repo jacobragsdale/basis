@@ -55,7 +55,7 @@ class Call:
         limit = deadlines.limit(f"compute {name}", None)
         with self._tracer.start_as_current_span(f"compute {name}", attributes={"basis.compute": name, "basis.deadline_s": limit.seconds}):
             if limit.seconds <= 0:
-                raise limit.exceeded()
+                raise deadlines.exceeded(limit)
             return await self._runs.run(self._declared, args, kwargs, limit)
 
 
@@ -102,7 +102,7 @@ class Pool:
             if not deadline.expired():
                 raise
             self._abandon(future, waiting, declared.name, started)
-            raise limit.exceeded() from error
+            raise deadlines.exceeded(limit) from error
         except asyncio.CancelledError:
             self._abandon(future, waiting, declared.name, started)
             raise
@@ -157,7 +157,7 @@ class InProcess:
                 result: object = await asyncio.to_thread(_crossing, function, crossed_args, crossed_kwargs)
         except TimeoutError as error:
             if deadline.expired():
-                raise limit.exceeded() from error
+                raise deadlines.exceeded(limit) from error
             raise
         return result
 

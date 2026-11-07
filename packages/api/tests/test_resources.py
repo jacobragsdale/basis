@@ -666,6 +666,17 @@ def test_another_services_failure_is_a_502(pricing: FastAPI, detail: str) -> Non
     assert (response.status_code, response.json()["type"], response.json()["detail"]) == (HTTPStatus.BAD_GATEWAY, "call-failed", detail)
 
 
+def test_a_record_logged_in_a_call_carries_the_requests_trace_and_the_calls_span(logged: Records) -> None:
+    app = _app(pricing=_pricing(status=HTTPStatus.SERVICE_UNAVAILABLE))
+    exporter = _spans(app)
+    with TestClient(app.asgi) as client:
+        response = client.get(f"/quotes/{SECURITY}")
+    called = _named(exporter.get_finished_spans(), "pricing GET")
+    [warned] = [record for record in logged() if record["message"] == f"pricing answered 503 to GET /prices/{SECURITY}"]
+    trace_id = response.headers["traceparent"].split("-")[1]
+    assert (warned["trace_id"], warned["span_id"], called.context.trace_id) == (trace_id, f"{called.context.span_id:016x}", int(trace_id, 16))
+
+
 def test_a_service_that_cannot_be_reached_is_a_502() -> None:
     with TestClient(_app(http={"pricing": {"url": "http://127.0.0.1:9"}}).asgi) as client:  # the discard port, which nothing serves here
         response = client.get(f"/quotes/{SECURITY}")

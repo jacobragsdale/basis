@@ -223,8 +223,10 @@ traces every call, and provides a fake of it for tests. The clock and new ids ne
 their spans record each value, so that a recorded request replays them. Handler code reaches the outside only through
 its resources, and an import contract, as basis-job's keeps job code pure, keeps handlers away from database drivers,
 HTTP clients and environment variables. "Pure" cannot mean "no I/O" for a handler that reads, decides, and reads again; it
-means "I/O only through the core", which lets the core bound, observe and record every call.
-Phase 5 moves resources into `basis.core`, for jobs too: see [What jobs and APIs share](#what-jobs-and-apis-share).
+means "I/O only through the core", which lets the core bound, observe and record every call. Another service, the
+clock, ids and tracing are `basis.core`'s, which jobs declare too, and `basis.api` builds on them: see [What jobs and
+APIs share](#what-jobs-and-apis-share). A request's transaction, its outbox, the cache, the compute pool and identity
+are the API's own.
 
 Request bodies and settings are strict models: an unknown key is refused and no value is coerced, so a misspelled field
 fails at the boundary instead of being silently ignored. A decimal in a request body is a JSON string, as it is in a

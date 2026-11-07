@@ -142,20 +142,19 @@ def _call(args: CallArgs) -> int:
 
 
 def _relay(args: ServeArgs) -> int:
-    from basis.api import relay, traces  # noqa: PLC0415 -- the clients and the drivers load when the verb runs
+    from basis.api import relay  # noqa: PLC0415 -- the clients and the drivers load when the verb runs
     from basis.api.settings import read  # noqa: PLC0415
-    from basis.core import logs, snapshots  # noqa: PLC0415
+    from basis.core import logs, snapshots, traces  # noqa: PLC0415
 
     found = load(args.service)
     planned = relay.plan(found, read(found.settings), {})
-    provider = traces.provider(found.name)
-    if (exporter := traces.exporter(planned.settings.traces)) is not None:
-        provider.add_span_processor(exporter)
-    try:
-        with logs.fields(run_id=snapshots.new_run_id(), relay=found.name):  # on each of the run's records, as a job's run has its id
-            relayed = relay.relay(planned, provider.get_tracer("basis.api"))
-    finally:
-        provider.shutdown()  # exports the spans still queued
+    run_id = snapshots.new_run_id()
+    settings = planned.settings
+    with (
+        logs.fields(run_id=run_id, relay=found.name),  # on each of the run's records, as a job's run has its id
+        traces.trace("relay", service=found.name, settings=settings.traces, version=settings.git_sha, environment=None, **{"basis.run_id": run_id}) as (tracer, _),
+    ):  # one trace, its spans exported when it ends
+        relayed = relay.relay(planned, tracer)
     sys.stdout.write(json.dumps({"service": found.name, "outboxes": [entry.summary() for entry in relayed]}, indent=2) + "\n")
     return fail(*failed) if (failed := relay.failure(relayed, found.name)) is not None else 0
 

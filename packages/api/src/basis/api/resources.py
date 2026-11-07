@@ -11,7 +11,9 @@ everything it needs stated, and none of it guessed:
 
 The app opens each one when it starts, and readiness reports 503 until all of them are open; it closes them when it
 stops. Every call a handler makes through one that can wait has a deadline, the declared `deadline_s`, and every call
-has a span of its own; for tests each resource has a fake, in `basis.api.fakes`. A handler asks for a resource with
+has a span of its own; for tests each resource has a fake, in `basis.api.fakes`. Another service, the clock and the
+ids are basis-core's resources, which jobs declare too (`basis.core.resources`); the database's request transaction,
+its outbox and the cache are the API's own. A handler asks for a resource with
 `api.given`, as it asks for its settings, annotated with what it gets, and only in its own parameters, never in a
 dependency of its own, so that a route's signature shows everything it reaches:
 
@@ -42,7 +44,7 @@ import math
 import re
 import types
 import typing
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -51,25 +53,27 @@ from http import HTTPStatus
 from typing import Annotated, Generic, Literal, Protocol, TypeAliasType, TypeVar, get_args, get_origin
 from uuid import UUID
 
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel
 
 from basis.api.compute import ComputeFunction
 from basis.api.errors import Error, ServiceError
+from basis.core import resources as core
+from basis.core.resources import NAME, Body, ClockResource, HttpMethod, HttpResource, IdsResource, Query, QueryValue
 from basis.core.settings import LEDGER as TABLE
 
-NAME = re.compile(r"[a-z][a-z0-9_]{0,62}")
-"""Lower-case letters, digits and underscores, so that a resource's settings are variables every shell can set."""
+__all__ = [
+    "NAME", "TABLE", "TABLE_LENGTH", "Bind", "Body", "Cache", "CacheResource", "CallFailedError", "Client", "Clock", "ClockResource", "DatabaseResource",
+    "DeadlineExceededError", "HttpMethod", "HttpResource", "Ids", "IdsResource", "Opened", "Outbox", "Query", "QueryValue", "Reader", "Resource", "SendMethod",
+    "Session", "Writer", "cache", "check_outboxes", "clock", "database", "http", "ids", "outbox",
+]  # fmt: skip
 
 type Bind = str | int | float | Decimal | bool | date | datetime | UUID | bytes | None
 """A value a statement binds by name, as basis-core's `databases.Bind`, which a service's modules do not import."""
-type HttpMethod = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
 type SendMethod = Literal["POST", "PUT", "PATCH", "DELETE"]
 """The methods of a call that changes another service's state, which `Client.send` makes."""
 TABLE_LENGTH = 125
 """The longest name of an outbox's table, after its schema, so that its key's constraint, `pk_NAME`, has the 128
 characters SQL Server and Oracle allow a name."""
-type QueryValue = str | int | float | Decimal | bool | date | datetime | UUID
-type Body = BaseModel | JsonValue
 
 
 @dataclass(frozen=True)
@@ -106,14 +110,6 @@ class DatabaseResource:
     database whose routes send none."""
 
 
-@dataclass(frozen=True)
-class HttpResource:
-    name: str
-    """The name its settings are under, as `BASIS_HTTP__PRICING__URL` for `pricing`."""
-    deadline_s: float
-    """Seconds each call may take, from the first byte sent to the last byte of the reply."""
-
-
 V_co = TypeVar("V_co", covariant=True)
 
 
@@ -128,16 +124,6 @@ class CacheResource(Generic[V_co]):  # noqa: UP046 -- covariant, so any cache is
     """The most values it keeps; past that, the one read longest ago goes."""
     deadline_s: float
     """Seconds a read may take, waiting for a load included, whether its own or another request's."""
-
-
-@dataclass(frozen=True)
-class ClockResource:
-    name: str
-
-
-@dataclass(frozen=True)
-class IdsResource:
-    name: str
 
 
 type Resource = DatabaseResource | HttpResource | CacheResource[object] | ClockResource | IdsResource
@@ -191,8 +177,9 @@ def check_outboxes(service: str, written: Iterable[tuple[str, float, DatabaseRes
 
 
 def http(name: str, *, deadline_s: float) -> HttpResource:
-    """Another HTTP service, whose base URL is the setting `BASIS_HTTP__NAME__URL`, and which answers in JSON."""
-    return HttpResource(_named(name, "http"), _deadline(name, deadline_s))
+    """Another HTTP service, whose base URL is the setting `BASIS_HTTP__NAME__URL`, and which answers in JSON:
+    basis-core's, as a job declares it too."""
+    return core.http(_named(name, "http"), deadline_s=_deadline(name, deadline_s))
 
 
 def cache[V](name: str, value: type[V], *, ttl_s: float, max_entries: int, deadline_s: float) -> CacheResource[V]:
@@ -246,13 +233,13 @@ def _immutable_class(kind: type, within: frozenset[type]) -> bool:
 
 
 def clock(name: str) -> ClockResource:
-    """The time, from the system's clock, or a fake's in a test."""
-    return ClockResource(_named(name, "clock"))
+    """The time, from the system's clock, or a fake's in a test: basis-core's."""
+    return core.clock(_named(name, "clock"))
 
 
 def ids(name: str) -> IdsResource:
-    """New ids, each a UUIDv7, which sorts by when it was made."""
-    return IdsResource(_named(name, "ids"))
+    """New ids, each a UUIDv7, which sorts by when it was made: basis-core's."""
+    return core.ids(_named(name, "ids"))
 
 
 def _named(name: str, kind: str) -> str:
@@ -290,17 +277,11 @@ class Writer(Reader, Protocol):
         ...
 
 
-class Client(Protocol):
-    """Another HTTP service. Each call's reply is validated as `reply`, from JSON; a reply that is not a 2xx, a
-    service that cannot be reached, or a body that is not a `reply` raises `CallFailedError`. `path` is the service's own,
-    after its base URL, and anything in it that a request supplied must be validated first: a path parameter's pattern,
-    say. Each call carries the request's trace on, as `traceparent`."""
-
-    async def call[T](self, method: HttpMethod, path: str, reply: type[T], /, *, query: Mapping[str, QueryValue | Sequence[QueryValue]] | None = None, body: Body = None) -> T: ...
-
-    async def get[T](self, path: str, reply: type[T], /, *, query: Mapping[str, QueryValue | Sequence[QueryValue]] | None = None) -> T: ...
-
-    async def post[T](self, path: str, reply: type[T], /, *, query: Mapping[str, QueryValue | Sequence[QueryValue]] | None = None, body: Body = None) -> T: ...
+class Client(core.Client, Protocol):
+    """Another HTTP service, as basis-core's `Client` calls it, and `send`. Each call's reply is validated as `reply`,
+    from JSON; a reply that is not a 2xx, a service that cannot be reached, or a body that is not a `reply` raises
+    `CallFailedError`. `path` is the service's own, after its base URL, and anything in it that a request supplied must
+    be validated first: a path parameter's pattern, say. Each call carries the request's trace on, as `traceparent`."""
 
     async def send(self, method: SendMethod, path: str, body: Body = None, /, *, key: str) -> None:
         """A call that changes the other service's state, with `key` as its `Idempotency-Key`: the service drops a call
@@ -324,40 +305,33 @@ class Cache[V](Protocol):
         ...
 
 
-class Clock(Protocol):
-    def now(self) -> datetime:
-        """The time now, in UTC."""
-        ...
+Clock = core.Clock
+Ids = core.Ids
 
 
-class Ids(Protocol):
-    def new(self) -> UUID:
-        """A new UUIDv7."""
-        ...
+class DeadlineExceededError(core.DeadlineExceededError, Error):
+    """basis-core's, as the 504 problem a route answers."""
 
-
-class DeadlineExceededError(Error):
     status = HTTPStatus.GATEWAY_TIMEOUT
     title = "A call took longer than its deadline"
 
-    def __init__(self, resource: str, deadline_s: float, *, detail: str | None = None) -> None:
-        super().__init__(detail if detail is not None else f"{resource} did not answer within its deadline of {deadline_s:g}s")
-        self.resource = resource
-        self.deadline_s = deadline_s
+    @classmethod
+    def of(cls, error: core.DeadlineExceededError) -> DeadlineExceededError:
+        """basis-core's `error` as the problem it is in a request: the same resource, deadline and detail."""
+        return error if isinstance(error, cls) else cls(error.resource, error.deadline_s, detail=str(error))
 
 
-class CallFailedError(Error):
-    """Another service's failure: a handler that has something better to say, such as a 404 of its own when the other
-    service has no such thing, catches it and raises its own error."""
+class CallFailedError(core.CallFailedError, Error):
+    """Another service's failure, basis-core's, as the 502 problem a route answers: a handler that has something better
+    to say, such as a 404 of its own when the other service has no such thing, catches it and raises its own error."""
 
     status = HTTPStatus.BAD_GATEWAY
     title = "A call to another service failed"
 
-    def __init__(self, detail: str, *, resource: str, reply: int | None) -> None:
-        super().__init__(detail)
-        self.resource = resource
-        self.reply = reply
-        """The status the other service replied with, or None when it gave no reply."""
+    @classmethod
+    def of(cls, error: core.CallFailedError) -> CallFailedError:
+        """basis-core's `error` as the problem it is in a request: the same detail, resource and reply."""
+        return error if isinstance(error, cls) else cls(str(error), resource=error.resource, reply=error.reply)
 
 
 class Opened(Protocol):

@@ -1,6 +1,7 @@
-"""The resources an app opens when it starts, through basis-core's databases, an httpx2 client, the process's memory
-and the system's clock, or through the fakes a test gives; and what every call through one gets, real or fake: a span
-of its own on the app's tracer, and, for every call that can wait, a deadline.
+"""The resources an app opens when it starts, through basis-core's databases, basis-core's own resources (another
+service's client, the system's clock and new ids, `basis.core.opened`) and the process's memory, or through the fakes a
+test gives; and what every call through one gets, real or fake: a span of its own on the app's tracer, and, for every
+call that can wait, a deadline.
 
 A deadline is the declared `deadline_s`, from when the call is made, or what is left of the route's deadline where that
 is shorter (`deadlines.py`): a call that has not finished by then raises `DeadlineExceededError`, a 504 problem. The
@@ -27,7 +28,6 @@ each login the routes use, within its deadline, and starts the pool's processes.
 import asyncio
 import contextvars
 import logging
-import ssl
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Collection, Coroutine, Generator, Mapping, Sequence
@@ -35,47 +35,30 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
+from datetime import timedelta
 from typing import Literal, Protocol, assert_never
-from uuid import UUID, uuid7
+from uuid import uuid7
 
 import httpx2
 import pyarrow as pa
-from opentelemetry.trace import Span, SpanKind, StatusCode, Tracer
-from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
-from pydantic import BaseModel, TypeAdapter, ValidationError
-from pydantic_core import to_json
+from opentelemetry.trace import Span, SpanKind, Tracer
+from pydantic import ValidationError
 
 from basis.api import deadlines, fakes, outboxes
 from basis.api.compute import ComputeFunction
 from basis.api.pool import Call, InProcess, Pool, Runs
-from basis.api.resources import (
-    Bind,
-    Body,
-    CacheResource,
-    CallFailedError,
-    ClockResource,
-    DatabaseResource,
-    DeadlineExceededError,
-    HttpMethod,
-    HttpResource,
-    IdsResource,
-    QueryValue,
-    Resource,
-    SendMethod,
-)
+from basis.api.resources import Bind, Body, CacheResource, CallFailedError, ClockResource, DatabaseResource, DeadlineExceededError, HttpMethod, HttpResource, IdsResource, Query, Resource, SendMethod
 from basis.api.service import Service, ServiceError
 from basis.api.settings import Settings
-from basis.core import logs
+from basis.core import logs, opened
+from basis.core import resources as core
 from basis.core.databases import Statements, open_database
+from basis.core.databases.base import SYSTEMS
 from basis.core.destination import Dialect
-from basis.core.settings import HttpService, MssqlSettings, SettingsError, variable
+from basis.core.opened import NewIds, SystemClock, adapter, client, content, utc_now
+from basis.core.settings import MssqlSettings, SettingsError, variable
 
 log = logging.getLogger(__name__)
-_PROPAGATOR = TraceContextTextMapPropagator()
-_SYSTEMS = {"mssql": "microsoft.sql_server", "oracle": "oracle.db"}
-"""OpenTelemetry's `db.system.name` for each kind of database."""
 
 
 class Opens(Protocol):
@@ -191,15 +174,6 @@ def fits(resource: Resource, fake: fakes.Fake) -> bool:
             assert_never(unreachable)
 
 
-def client(name: str, service: HttpService) -> httpx2.AsyncClient:
-    """The client of the service the settings name `name`: its certificate checked against the declared CA bundle or
-    the operating system's trusted CAs, through the declared proxy or none, and nothing read from the environment."""
-    verify: ssl.SSLContext | bool = ssl.create_default_context(cafile=service.ca_bundle) if service.ca_bundle is not None else True
-    proxy = str(service.proxy) if service.proxy is not None else None
-    log.debug("calls %s at %s", name, service.url, extra={"resource": name, "ca_bundle": str(service.ca_bundle) if service.ca_bundle else None, "proxy": proxy})
-    return httpx2.AsyncClient(base_url=str(service.url), verify=verify, proxy=proxy, trust_env=False)
-
-
 @dataclass
 class OpenDatabase:
     """A database the app opened: what it reaches, its kind for spans, and its own pool of threads."""
@@ -297,14 +271,14 @@ class Resources:
                 self._databases[resource.name] = database
                 await _answers(database, writes=writes)
             case HttpResource():
-                opened = fake.client(resource.name) if isinstance(fake, fakes.Http) else client(resource.name, planned.settings.http[resource.name])
-                self._clients.append(opened)
-                self._handles[resource.name] = HttpClient(resource, opened, tracer)
+                reaching = fake.client(resource.name) if isinstance(fake, fakes.Http) else client(resource.name, planned.settings.http[resource.name])
+                self._clients.append(reaching)
+                self._handles[resource.name] = HttpClient(opened.HttpClient(resource, reaching, tracer))
             case CacheResource():
                 monotonic = fake.monotonic if isinstance(fake, fakes.Cache) else time.monotonic
                 self._handles[resource.name] = MemoryCache(resource, monotonic, tracer)
             case ClockResource():
-                self._handles[resource.name] = SystemClock(resource, fake.now if isinstance(fake, fakes.Clock) else _utc_now, tracer)
+                self._handles[resource.name] = SystemClock(resource, fake.now if isinstance(fake, fakes.Clock) else utc_now, tracer)
             case IdsResource():
                 self._handles[resource.name] = NewIds(resource, fake.new if isinstance(fake, fakes.Ids) else uuid7, tracer)
             case unreachable:
@@ -329,8 +303,8 @@ class Resources:
         database's threads."""
         if self._pool is not None:
             await self._pool.close()
-        for opened in self._clients:
-            await opened.aclose()
+        for reaching in self._clients:
+            await reaching.aclose()
         if self._closing:
             _, waiting = await asyncio.wait(self._closing, timeout=self._linger_s)
             if waiting:
@@ -346,7 +320,7 @@ def open_one(resource: DatabaseResource, settings: Settings, fake: fakes.Fake | 
     if isinstance(fake, fakes.Database):
         return OpenDatabase(resource, fake, "fake", tracer, closing, None)
     kind = settings.database(resource.name).kind
-    return OpenDatabase(resource, open_database(settings, resource.name), _SYSTEMS[kind], tracer, closing, kind)
+    return OpenDatabase(resource, open_database(settings, resource.name), SYSTEMS[kind], tracer, closing, kind)
 
 
 _WRITING: ContextVar[tuple[deadlines.Deadline, DatabaseSession] | None] = ContextVar("basis.api.opened.writing", default=None)
@@ -455,16 +429,16 @@ class DatabaseSession:
         declared = resource.outbox
         if declared is None:
             msg = (
-                f"{serving.route} sends {method} {path} to {client.name}, and writes {resource.name}, which declares no outbox for the call to wait in until its commit:"
+                f"{serving.name} sends {method} {path} to {client.name}, and writes {resource.name}, which declares no outbox for the call to wait in until its commit:"
                 f" declare one, as api.database({resource.name!r}, ..., outbox=api.outbox(TABLE, ...)), and create its table with `basis ddl`"
             )
             raise RuntimeError(msg)
-        now = _utc_now()
+        now = utc_now()
         expires_at = now + timedelta(seconds=declared.max_age_s)
         due_at = now + timedelta(seconds=max(serving.at - time.monotonic(), 0.0))  # the route's deadline, which `max_age_s` outlasts
         request_id = logs.bound().get("request_id")
         row = outboxes.Row(
-            id=str(uuid7()), service=client.name, method=method, path=path, body=body, idempotency_key=key, route=serving.route[: outboxes.ROUTE_LENGTH],
+            id=str(uuid7()), service=client.name, method=method, path=path, body=body, idempotency_key=key, route=serving.name[: outboxes.ROUTE_LENGTH],
             request_id=request_id if isinstance(request_id, str) else None, created_at=now, expires_at=expires_at, next_at=due_at, attempts=0,
             status="pending", last_error=None, ended_at=None,
         )  # fmt: skip
@@ -486,7 +460,7 @@ class DatabaseSession:
                 except BaseException as error:
                     raised: BaseException = error
                     if isinstance(error, TimeoutError) or (isinstance(error, Exception) and time.monotonic() >= deadline_at):  # its deadline, or the driver's timeout at it
-                        raised = limit.exceeded()
+                        raised = deadlines.exceeded(limit)
                     self._fail(raised, running)
                     if raised is error:
                         raise
@@ -569,10 +543,10 @@ class DatabaseSession:
         if statements is None:
             return
         limit = deadlines.limit(resource.name, resource.deadline_s)
-        if limit.route is not None and limit.seconds <= 0:  # the route's deadline has passed, so its writes never commit
+        if (route := limit.enclosing) is not None and limit.seconds <= 0:  # the route's deadline has passed, so its writes never commit
             await self._roll_back(stack)
-            detail = f"route {limit.route.route}'s deadline of {limit.route.seconds:g}s passed before {resource.name}'s commit, so the request's writes there are rolled back, never committed"
-            raise DeadlineExceededError(resource.name, limit.route.seconds, detail=detail)
+            detail = f"{route.whose}'s deadline of {route.seconds:g}s passed before {resource.name}'s commit, so the request's writes there are rolled back, never committed"
+            raise DeadlineExceededError(resource.name, route.seconds, detail=detail)
         with self._database.span("commit"):
             committing = self._database.run(lambda: _commit(statements, stack))
             deadline = asyncio.timeout(limit.seconds)
@@ -583,9 +557,10 @@ class DatabaseSession:
                 if not deadline.expired():
                     raise
                 self._database.outlive(_fate(committing, resource.name, "commit"))
-                whose = f"what was left of route {limit.route.route}'s deadline of {limit.route.seconds:g}s" if limit.route is not None else f"its deadline of {resource.deadline_s:g}s"
+                route = limit.enclosing
+                whose = f"what was left of {route.whose}'s deadline of {route.seconds:g}s" if route is not None else f"its deadline of {resource.deadline_s:g}s"
                 detail = f"{resource.name}'s commit did not finish within {whose}: whether the request's writes there committed, the log says when it ends"
-                raise DeadlineExceededError(resource.name, limit.route.seconds if limit.route is not None else resource.deadline_s, detail=detail) from error
+                raise DeadlineExceededError(resource.name, route.seconds if route is not None else resource.deadline_s, detail=detail) from error
             except asyncio.CancelledError:
                 self._database.outlive(_fate(committing, resource.name, "commit"))
                 raise
@@ -632,7 +607,7 @@ class DatabaseSession:
         if declared is None or limit.seconds <= 0:
             log.info("no time was left to record the calls the request made after its commit: basis relay makes them again", extra={"resource": resource.name, "calls": len(outcomes)})
             return
-        at, deadline_at = _utc_now(), time.monotonic() + limit.seconds
+        at, deadline_at = utc_now(), time.monotonic() + limit.seconds
 
         def record() -> None:
             with database.port.statements(writes=True) as statements:
@@ -731,135 +706,60 @@ def _commit(statements: Statements, stack: ExitStack) -> None:
 
 
 class HttpClient:
-    def __init__(self, resource: HttpResource, client: httpx2.AsyncClient, tracer: Tracer) -> None:
-        self._resource = resource
-        self._client = client
-        self._tracer = tracer
+    """Another service, as `api.Client` gives it: basis-core's client, whose failures are the problems a route answers,
+    and `send`."""
+
+    def __init__(self, calls: opened.HttpClient) -> None:
+        self._calls = calls
 
     @property
     def name(self) -> str:
-        return self._resource.name
+        return self._calls.name
 
     @property
     def deadline_s(self) -> float:
-        return self._resource.deadline_s
+        return self._calls.deadline_s
 
-    async def get[T](self, path: str, reply: type[T], /, *, query: Mapping[str, QueryValue | Sequence[QueryValue]] | None = None) -> T:
+    async def get[T](self, path: str, reply: type[T], /, *, query: Query | None = None) -> T:
         return await self.call("GET", path, reply, query=query)
 
-    async def post[T](self, path: str, reply: type[T], /, *, query: Mapping[str, QueryValue | Sequence[QueryValue]] | None = None, body: Body = None) -> T:
+    async def post[T](self, path: str, reply: type[T], /, *, query: Query | None = None, body: Body = None) -> T:
         return await self.call("POST", path, reply, query=query, body=body)
+
+    async def call[T](self, method: HttpMethod, path: str, reply: type[T], /, *, query: Query | None = None, body: Body = None) -> T:
+        with _problems():
+            return await self._calls.call(method, path, reply, query=query, body=body)
 
     async def send(self, method: SendMethod, path: str, body: Body = None, /, *, key: str) -> None:
         outboxes.checked(path, key)
-        content = _content(body)
+        sent = content(body)
         writing, serving = _WRITING.get(), deadlines.serving()
         if writing is not None and serving is not None and writing[0] is serving:  # the route serving this request writes
-            await writing[1].enqueue(self, method, path, content.decode() if content is not None else None, key)
+            await writing[1].enqueue(self, method, path, sent.decode() if sent is not None else None, key)
             return
-        with self._span(method, path, key) as span:
-            await self._exchange(span, method, path, content=content, key=key)
+        with _problems():
+            await self._calls.request(method, path, content=sent, headers={"idempotency-key": key}, attributes={"basis.idempotency_key": key})
 
     async def deliver(self, row: outboxes.Row) -> outboxes.Failure | None:
         """Make the call an outbox's row holds, once: None when the service accepts it, and otherwise why it did not,
         with the status it answered."""
-        with self._span(row.method, row.path, row.idempotency_key) as span:
-            span.set_attribute("basis.outbox.row", row.id)
-            try:
-                await self._exchange(span, row.method, row.path, content=row.body.encode() if row.body is not None else None, key=row.idempotency_key)
-            except (CallFailedError, DeadlineExceededError) as failed:
-                span.record_exception(failed)
-                span.set_status(StatusCode.ERROR, str(failed))
-                return outboxes.Failure(str(failed), failed.reply if isinstance(failed, CallFailedError) else None)
-        return None
-
-    async def call[T](self, method: HttpMethod, path: str, reply: type[T], /, *, query: Mapping[str, QueryValue | Sequence[QueryValue]] | None = None, body: Body = None) -> T:
-        resource = self._resource
-        with self._span(method, path, None) as span:
-            response = await self._exchange(span, method, path, query=query, content=_content(body))
-            try:
-                return adapter(reply).validate_json(response.content)
-            except ValidationError as error:
-                name = getattr(reply, "__qualname__", str(reply))
-                log.warning(
-                    "%s answered %s %s with a body that is not a %s",
-                    resource.name,
-                    method,
-                    path,
-                    name,
-                    extra={"resource": resource.name, "errors": error.errors(include_url=False, include_input=False)},
-                )
-                msg = f"{resource.name} answered {method} {path} with a body that is not a {name}"
-                raise CallFailedError(msg, resource=resource.name, reply=response.status_code) from error
-
-    @contextmanager
-    def _span(self, method: HttpMethod, path: str, key: str | None) -> Generator[Span]:
-        resource = self._resource
-        attributes = {"http.request.method": method, "url.path": path, "basis.resource": resource.name, "basis.deadline_s": resource.deadline_s}
-        if key is not None:
-            attributes["basis.idempotency_key"] = key
-        with self._tracer.start_as_current_span(f"{resource.name} {method}", kind=SpanKind.CLIENT, attributes=attributes) as span:
-            yield span
-
-    async def _exchange(  # noqa: PLR0913 -- the request's parts, by keyword
-        self, span: Span, method: HttpMethod, path: str, *, query: Mapping[str, QueryValue | Sequence[QueryValue]] | None = None, content: bytes | None = None, key: str | None = None
-    ) -> httpx2.Response:
-        """One request to the service, within its deadline, and its reply, which must be a 2xx."""
-        resource = self._resource
-        headers: dict[str, str] = {}
-        _PROPAGATOR.inject(headers)  # this call's span, as the other service's parent
-        if content is not None:
-            headers["content-type"] = "application/json"
-        if key is not None:
-            headers["idempotency-key"] = key
-        limit = deadlines.limit(resource.name, resource.deadline_s)
-        if limit.seconds <= 0:
-            raise limit.exceeded()
-        deadline = asyncio.timeout(limit.seconds)
+        key, sent = row.idempotency_key, row.body.encode() if row.body is not None else None
         try:
-            async with deadline:
-                response = await self._client.request(method, path, params=_query(query), content=content, headers=headers, timeout=limit.seconds)
-        except TimeoutError as error:
-            if deadline.expired():
-                raise limit.exceeded() from error
-            raise
-        except httpx2.TimeoutException as error:  # one of the client's own timeouts, each the deadline
-            raise limit.exceeded() from error
-        except httpx2.RequestError as error:  # a transport's, or one such as a redirect loop or a body that does not decode
-            msg = f"{resource.name} could not be reached for {method} {path}: {type(error).__name__}"
-            raise CallFailedError(msg, resource=resource.name, reply=None) from error
-        span.set_attribute("http.response.status_code", response.status_code)
-        if not response.is_success:
-            log.warning("%s answered %s to %s %s", resource.name, response.status_code, method, path, extra={"resource": resource.name, "reply": response.status_code, "body": response.text[:2000]})
-            msg = f"{resource.name} answered {response.status_code} to {method} {path}"
-            raise CallFailedError(msg, resource=resource.name, reply=response.status_code)
-        return response
-
-
-def _content(body: Body) -> bytes | None:
-    """A call's body as JSON, or None for a call without one."""
-    if body is None:
+            await self._calls.request(row.method, row.path, content=sent, headers={"idempotency-key": key}, attributes={"basis.idempotency_key": key, "basis.outbox.row": row.id})
+        except (core.CallFailedError, core.DeadlineExceededError) as failed:  # its span records it
+            return outboxes.Failure(str(failed), failed.reply if isinstance(failed, core.CallFailedError) else None)
         return None
-    return body.model_dump_json().encode() if isinstance(body, BaseModel) else to_json(body)
 
 
-def _query(query: Mapping[str, QueryValue | Sequence[QueryValue]] | None) -> dict[str, str | list[str]] | None:
-    if query is None:
-        return None
-    encoded: dict[str, str | list[str]] = {}
-    for name, value in query.items():
-        encoded[name] = _text(value) if isinstance(value, str | int | float | Decimal | date | UUID) else [_text(item) for item in value]
-    return encoded
-
-
-def _text(value: QueryValue) -> str:
-    match value:
-        case bool():
-            return "true" if value else "false"
-        case date():  # a datetime too
-            return value.isoformat()
-        case _:
-            return str(value)
+@contextmanager
+def _problems() -> Generator[None]:
+    """basis-core's failures of a call as the problems a route answers: the same failure, as basis-api's error."""
+    try:
+        yield
+    except core.CallFailedError as error:
+        raise CallFailedError.of(error) from error
+    except core.DeadlineExceededError as error:
+        raise DeadlineExceededError.of(error) from error
 
 
 class _Abandoned(Exception):  # noqa: N818 -- not an error a caller sees: a waiter loads the value itself
@@ -882,14 +782,14 @@ class MemoryCache[V]:
         with self._tracer.start_as_current_span(f"{resource.name} get", attributes={"basis.resource": resource.name, "basis.deadline_s": resource.deadline_s}) as span:
             limit = deadlines.limit(resource.name, resource.deadline_s)
             if limit.seconds <= 0:
-                raise limit.exceeded()
+                raise deadlines.exceeded(limit)
             deadline = asyncio.timeout(limit.seconds)
             try:
                 async with deadline:
                     value, hit = await self._get(key, load)
             except TimeoutError as error:
                 if deadline.expired():
-                    raise limit.exceeded() from error
+                    raise deadlines.exceeded(limit) from error
                 raise
             span.set_attribute("basis.cache.hit", hit)
             return value
@@ -922,45 +822,3 @@ class MemoryCache[V]:
                 self._entries.popitem(last=False)
             loaded.set_result(value)
             return value, False
-
-
-class SystemClock:
-    def __init__(self, resource: ClockResource, now: Callable[[], datetime], tracer: Tracer) -> None:
-        self._resource = resource
-        self._now = now
-        self._tracer = tracer
-
-    def now(self) -> datetime:
-        with self._tracer.start_as_current_span(f"{self._resource.name} now", attributes={"basis.resource": self._resource.name}) as span:
-            value = self._now()
-            span.set_attribute("basis.value", value.isoformat())
-            return value
-
-
-class NewIds:
-    def __init__(self, resource: IdsResource, new: Callable[[], UUID], tracer: Tracer) -> None:
-        self._resource = resource
-        self._new = new
-        self._tracer = tracer
-
-    def new(self) -> UUID:
-        with self._tracer.start_as_current_span(f"{self._resource.name} new", attributes={"basis.resource": self._resource.name}) as span:
-            value = self._new()
-            span.set_attribute("basis.value", str(value))
-            return value
-
-
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
-
-
-_ADAPTERS: dict[object, object] = {}
-"""Each type's pydantic adapter, made the first time a row or a reply is validated as it: building one costs a few
-microseconds, which a route would otherwise pay on every call. A program validates a fixed set of types."""
-
-
-def adapter[T](kind: type[T]) -> TypeAdapter[T]:
-    if (made := _ADAPTERS.get(kind)) is None:
-        made = TypeAdapter(kind)
-        _ADAPTERS[kind] = made
-    return made  # ty: ignore[invalid-return-type] -- each type's entry is the adapter made for it, as above

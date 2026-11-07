@@ -511,7 +511,7 @@ def test_the_set_is_fetched_once_the_app_has_started_and_exports_spans(signin: S
     app = api.build(SERVICE, settings=api.Settings.given(identity=identity(signin.settings()), traces={"exporter": "console"}))
     with TestClient(app.asgi):
         pass
-    assert '"name": "identity keys GET"' in capsys.readouterr().out
+    assert '"name": "identity keys GET"' in capsys.readouterr().err
     with pytest.raises(api.ServiceError, match="has started once already"), TestClient(app.asgi):
         pass
     assert signin.fetches == 1

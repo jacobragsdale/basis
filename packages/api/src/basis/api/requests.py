@@ -1,5 +1,6 @@
 """Each request's boundary, the app's outermost middleware of its own. It gives the request an id, a UUIDv7, and adds
-it, with the trace's ids, to every log line logged while the request is served, its handler's included. It returns the
+it to every log line logged while the request is served, its handler's included, as basis-core's logs add the ids of
+the trace and of the span each line is logged in. It returns the
 id as `X-Request-Id` and the server span as `traceparent`, logs one line when the request ends, and turns an exception
 nothing expected into a 500 problem, logged once, with its traceback. FastAPI's telemetry, around it, has already read
 the caller's `traceparent` and started the server span, which is the current span here.
@@ -40,10 +41,8 @@ class Requests:
         request_id = uuid7()
         scope[REQUEST_ID] = request_id
         span = trace.get_current_span()
-        ids: dict[str, object] = {"request_id": str(request_id)}
         headers = [(b"x-request-id", str(request_id).encode())]
-        if (context := span.get_span_context()).is_valid:
-            ids |= {"trace_id": trace.format_trace_id(context.trace_id), "span_id": trace.format_span_id(context.span_id)}
+        if span.get_span_context().is_valid:
             carrier: dict[str, str] = {}
             _PROPAGATOR.inject(carrier)
             headers.extend((key.encode(), value.encode()) for key, value in carrier.items())
@@ -57,7 +56,7 @@ class Requests:
                 message = {**message, "headers": [*message.get("headers", ()), *headers]}
             await send(message)
 
-        with logs.fields(**ids):
+        with logs.fields(request_id=str(request_id)):
             try:
                 await self.app(scope, receive, respond)
             except Exception as error:
