@@ -22,12 +22,17 @@ Rules to keep:
   route writes one database at most, and a GET none.
 - Another service's URL, CA bundle and proxy are its settings, `BASIS_HTTP__NAME__URL`, `__CA_BUNDLE` and `__PROXY`;
   basis reads no `SSL_CERT_FILE` or `HTTP_PROXY`.
+- A service whose callers sign in declares `user=User`, its subclass of `api.User` with a field for each claim it
+  needs beside the subject, and a handler asks for `Annotated[User | None, api.given(User)]`: None is an anonymous
+  request, and a route that needs a user raises `api.SignInRequiredError`. basis verifies every request's bearer token
+  from the `BASIS_IDENTITY__*` settings; a handler never reads the `Authorization` header or decodes a token itself.
 - A handler fails by raising a subclass of `api.Error` that declares its `status` and `title`, and the caller gets a
   problem details response. Any other exception is a bare 500, logged once with its traceback.
 - Settings are `BASIS_*` variables, read once at startup; one that is missing stops the API with one `ERROR` line.
 - A test builds the app with `api.build(service, settings=Settings.given(...), fakes={...})`, a fake from
   `basis.api.fakes` for each resource, and calls it with FastAPI's `TestClient`, so the developer's own variables and
-  the outside world never change what it checks.
+  the outside world never change what it checks. A test of a signed-in route gives the settings
+  `identity={..., "keys": {"kind": "development"}}` and signs its token with `basis.api.tokens.sign`.
 
 Commands, all through `basis`, whose `--help` lists every verb this repo has:
 

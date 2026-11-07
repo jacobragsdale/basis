@@ -18,6 +18,7 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from basis.api import errors
+from basis.api.identity import USER, User
 from basis.core import logs
 
 REQUEST_ID = "basis.request_id"
@@ -80,4 +81,8 @@ def _level(path: str, status: int | None) -> int | None:
 
 def _summary(scope: Scope, status: int | None, started: float) -> dict[str, object]:
     route = scope.get("route")
-    return {"method": scope["method"], "path": scope["path"], "route": route.path if isinstance(route, Route) else None, "status": status, "ms": logs.ms_since(started)}
+    summary = {"method": scope["method"], "path": scope["path"], "route": route.path if isinstance(route, Route) else None, "status": status, "ms": logs.ms_since(started)}
+    if USER in scope:  # verified inside the boundary, in a service that declares a user: who made the request, or None
+        user = scope[USER]
+        summary["user"] = user.subject if isinstance(user, User) else None
+    return summary

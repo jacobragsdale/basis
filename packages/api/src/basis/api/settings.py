@@ -1,5 +1,5 @@
-"""An API's settings: basis-core's, which name each database, with how the API serves, where its spans go, and where
-each other service it calls is. A service subclasses `Settings` with fields of its own, which read from `BASIS_*`
+"""An API's settings: basis-core's, which name each database, with how the API serves, where its spans go, where
+each other service it calls is, and how it verifies its users' tokens (`identity`, which `basis.api.identity` holds). A service subclasses `Settings` with fields of its own, which read from `BASIS_*`
 variables too: `BASIS_SERVE__PORT` sets `serve.port`, `BASIS_HTTP__PRICING__URL` the pricing service's URL, and a
 service's `max_days` is `BASIS_MAX_DAYS`. The settings are read once, when the app is built,
 and a missing or invalid one stops it there, with one line that names the variable to set."""
@@ -8,10 +8,11 @@ import re
 from contextvars import ContextVar
 from typing import Annotated, Literal, Self, override
 
-from pydantic import Field, FilePath, HttpUrl, ValidationError, model_validator
+from pydantic import Field, FilePath, HttpUrl, PrivateAttr, ValidationError, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from pydantic_settings import SettingsError as SourceError
 
+from basis.api.identity import Identity
 from basis.core import settings as core
 from basis.core.model import Model
 from basis.core.settings import SettingsError, variable
@@ -63,6 +64,16 @@ class Settings(core.Settings):
     """Where the API's spans go. Without it they go nowhere, so a test or a desktop needs no collector."""
     http: dict[str, HttpService] = Field(default_factory=dict)
     """Each other service the API calls, by the name its `api.http` declaration gives."""
+    identity: Identity | None = None
+    """How the API verifies its users' tokens, which a service that declares a user needs: see `basis.api.identity`."""
+    _given: bool = PrivateAttr(default=False)
+    """Whether these settings were validated inside `given`; no variable, file or argument sets a private attribute."""
+
+    @property
+    def from_arguments(self) -> bool:
+        """Whether these settings are `given`'s, made in code from its arguments, as only a test's are, and never read
+        from the environment: the development key is refused in any other settings off a declared desktop."""
+        return self._given
 
     @classmethod
     def given(cls, **values: object) -> Self:
@@ -73,6 +84,11 @@ class Settings(core.Settings):
             return cls.model_validate(values)
         finally:
             _ARGUMENTS_ONLY.reset(token)
+
+    @override
+    def model_post_init(self, context: object, /) -> None:
+        super().model_post_init(context)
+        self._given = _ARGUMENTS_ONLY.get()
 
     @classmethod
     @override
@@ -98,7 +114,7 @@ def read[S: Settings](settings: type[S]) -> S:
     try:
         return settings()
     except ValidationError as error:
-        problems = "; ".join(f"{variable(entry['loc'])}: {entry['msg']}" for entry in error.errors(include_url=False, include_input=False))
+        problems = "; ".join(f"{variable(entry['loc'], settings)}: {entry['msg']}" for entry in error.errors(include_url=False, include_input=False))
         msg = f"the settings are not valid, so the API cannot start: set {problems}"
         raise SettingsError(msg) from None  # the validation error would print every value beside the field it names
     except SourceError as error:  # a value that does not parse before it is validated, such as a block's JSON

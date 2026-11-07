@@ -11,11 +11,12 @@ an app it did not build.
     )
 
 A handler is a FastAPI path operation, so its parameters are FastAPI's: path, query and body parameters by their
-types. What basis gives it, its settings and its resources, it asks for with `api.given`, which the app answers once it
-has started:
+types. What basis gives it, its settings, its resources and the request's user, it asks for with `api.given`, which the app
+answers once it has started:
 
     def accrued_interest(start: date, end: date, settings: Annotated[Settings, api.given(Settings)]) -> Accrual: ...
     async def bond(security: str, warehouse: Annotated[api.Reader, api.given(WAREHOUSE)]) -> Bond: ...
+    def holdings(user: Annotated[User | None, api.given(User)]) -> Holdings: ...  # None for an anonymous request
 
 What a handler asks for is checked when its route is declared, and when its service is: that it asks for what the
 service gives, annotated as what it gets, and from an `async def` where the calls are awaited. A handler asks for its
@@ -42,6 +43,7 @@ from starlette.requests import Request
 from starlette.routing import Route as StarletteRoute
 
 from basis.api.errors import ServiceError
+from basis.api.identity import GivenUser, User, annotation_refusal
 from basis.api.resources import Cache, CacheResource, Client, Clock, ClockResource, DatabaseResource, HttpResource, Ids, IdsResource, Opened, Reader, Resource, Session, Writer
 from basis.api.settings import Settings
 
@@ -64,7 +66,7 @@ class Ask:
     parameter: str
     annotation: object
     """The parameter's type, without the `Annotated` metadata that holds `api.given`."""
-    given: type[Settings] | Resource
+    given: type[Settings | User] | Resource
 
 
 @dataclass(frozen=True)
@@ -99,13 +101,17 @@ class Route:
         if self.status not in range(200, 300):
             msg = f"route {self.path!r} succeeds with status {self.status}: give a 2xx, and raise an api.Error for each way it fails"
             raise ServiceError(msg)
-        for path, resource in _asked_within(handler, (), set()):
+        for path, asked in _asked_within(handler, (), set()):
             msg = (
-                f"{self.name}'s dependency {' -> '.join(path)} asks for {resource.name}: ask for it in {self.name}'s own parameters,"
+                f"{self.name}'s dependency {' -> '.join(path)} asks for {asked}: ask for it in {self.name}'s own parameters,"
                 " and pass what it gives to the dependency, so the route shows everything it reaches"
             )
             raise ServiceError(msg)
         asks = tuple(_asks_for(handler))
+        for ask in asks:
+            if isinstance(ask.given, type) and issubclass(ask.given, User) and (fix := annotation_refusal(ask.given, ask.annotation)) is not None:
+                msg = f"{self.name}'s parameter {ask.parameter} asks for the user: {fix}"
+                raise ServiceError(msg)
         object.__setattr__(self, "asks", asks)
         object.__setattr__(self, "writes", _written(self, asks))
 
@@ -141,6 +147,10 @@ class Service:
     resources: Sequence[Resource] = ()
     """Everything its handlers reach outside the process, each declared with `api.database`, `api.http`,
     `api.cache`, `api.clock` or `api.ids`."""
+    user: type[User] | None = None
+    """`api.User`, or the service's subclass of it with the claims it needs, for a service whose requests' bearer
+    tokens are verified, which the settings' `identity` configures: see `basis.api.identity`. None for a service
+    that verifies no tokens, whose requests are all anonymous."""
 
     def __post_init__(self) -> None:
         if not NAME.fullmatch(self.name):
@@ -162,12 +172,13 @@ class Service:
                 msg = f"service {self.name} has a {type(route).__name__} among its routes: declare each with api.get(path, handler) or api.post, api.put, api.patch, api.delete"
                 raise ServiceError(msg)
             for ask in route.asks:
-                if isinstance(ask.given, type) and not issubclass(self.settings, ask.given):
+                if isinstance(ask.given, type) and issubclass(ask.given, Settings) and not issubclass(self.settings, ask.given):
                     msg = f"{route.name} asks for {ask.given.__qualname__}, which service {self.name} does not give: its settings are {self.settings.__qualname__}"
                     raise ServiceError(msg)
                 if not isinstance(ask.given, type) and ask.given not in resources:
                     msg = f"{route.name} asks for {ask.given.name}, which service {self.name} does not declare: add it to the service's resources=[...]"
                     raise ServiceError(msg)
+        _check_user(self.name, self.user, routes)
         seen: dict[tuple[Method, str], Route] = {}
         for route in routes:
             if (first := seen.get(route.shape)) is not None:
@@ -240,16 +251,22 @@ class _GivenDatabase:
         await session.end(commit=True)
 
 
-def given(kind: type[Settings] | Resource) -> params.Depends:
+def given(kind: type[Settings | User] | Resource) -> params.Depends:
     """What basis gives a handler, as the metadata of its parameter's type: `Annotated[Settings, api.given(Settings)]`,
-    the service's settings, or one of its resources, as `Annotated[api.Reader, api.given(WAREHOUSE)]`."""
+    the service's settings; `Annotated[User | None, api.given(User)]`, the request's user, or None when it is
+    anonymous; or one of its resources, as `Annotated[api.Reader, api.given(WAREHOUSE)]`."""
     if isinstance(kind, type) and issubclass(kind, Settings):
         return params.Depends(_Given(kind))
+    if isinstance(kind, type) and issubclass(kind, User):
+        return params.Depends(GivenUser(kind))
     if isinstance(kind, DatabaseResource):
         return params.Depends(_GivenDatabase(kind), scope="function")
     if isinstance(kind, HttpResource | CacheResource | ClockResource | IdsResource):
         return params.Depends(_GivenResource(kind))
-    msg = f"api.given({kind!r}): basis gives a handler its service's settings, a subclass of api.Settings, or one of its resources, as api.database(...) declares"
+    msg = (
+        f"api.given({kind!r}): basis gives a handler its service's settings, a subclass of api.Settings,"
+        " the request's user, a subclass of api.User, or one of its resources, as api.database(...) declares"
+    )
     raise ServiceError(msg)
 
 
@@ -260,15 +277,16 @@ def _asks_for(handler: FunctionType) -> Iterator[Ask]:
         annotation: object = parameter.annotation
         base, metadata = (get_args(annotation)[0], get_args(annotation)[1:]) if get_origin(annotation) is Annotated else (annotation, ())
         for marker in (*metadata, parameter.default):
-            if isinstance(marker, params.Depends) and isinstance(marker.dependency, _Given):
+            if isinstance(marker, params.Depends) and isinstance(marker.dependency, _Given | GivenUser):
                 yield Ask(parameter.name, base, marker.dependency.kind)
             elif isinstance(marker, params.Depends) and isinstance(marker.dependency, (_GivenDatabase, _GivenResource)):
                 yield Ask(parameter.name, base, marker.dependency.resource)
 
 
-def _asked_within(call: object, path: tuple[str, ...], seen: set[int]) -> Iterator[tuple[tuple[str, ...], Resource]]:
-    """Each resource that a dependency of `call`'s, at any depth, asks for, with the dependencies that lead to it:
-    `call`'s own parameters ask for theirs where `path` is empty."""
+def _asked_within(call: object, path: tuple[str, ...], seen: set[int]) -> Iterator[tuple[tuple[str, ...], str]]:
+    """Each resource, by name, or the user, that a dependency of `call`'s, at any depth, asks for, with the dependencies
+    that lead to it: `call`'s own parameters ask for theirs where `path` is empty. The user is refused there as a
+    resource is, so that a route's own parameters show it reads the user, and the 401 it may answer."""
     if id(call) in seen:
         return
     seen.add(id(call))
@@ -285,7 +303,10 @@ def _asked_within(call: object, path: tuple[str, ...], seen: set[int]) -> Iterat
             dependency = marker.dependency if marker.dependency is not None else base  # `Depends()` depends on the type
             if isinstance(dependency, _GivenDatabase | _GivenResource):
                 if path:
-                    yield (*path, parameter.name), dependency.resource
+                    yield (*path, parameter.name), dependency.resource.name
+            elif isinstance(dependency, GivenUser):
+                if path:
+                    yield (*path, parameter.name), "the user"
             elif not isinstance(dependency, _Given) and callable(dependency):
                 yield from _asked_within(dependency, (*path, getattr(dependency, "__name__", type(dependency).__name__)), seen)
 
@@ -352,6 +373,20 @@ def _annotate(resource: Resource) -> str:
             return "new ids: annotate it Annotated[api.Ids, api.given(...)]"
         case unreachable:
             assert_never(unreachable)
+
+
+def _check_user(service: str, user: object, routes: Sequence[Route]) -> None:
+    """That the service's user is an `api.User`, and that each route that asks for a user asks for that one, or a base
+    of it."""
+    if user is not None and not (isinstance(user, type) and issubclass(user, User)):
+        msg = f"service {service}'s user is {user!r}, not a subclass of api.User: declare `class User(api.User)` with the claims it needs, or pass api.User itself"
+        raise ServiceError(msg)
+    for route in routes:
+        for ask in route.asks:
+            if isinstance(ask.given, type) and issubclass(ask.given, User) and (user is None or not issubclass(user, ask.given)):
+                given = f"its user is {user.__qualname__}" if user is not None else "it declares no user=..."
+                msg = f"{route.name} asks for {ask.given.__qualname__}, which service {service} does not give: {given}"
+                raise ServiceError(msg)
 
 
 def _check_resources(service: str, resources: Sequence[object]) -> None:

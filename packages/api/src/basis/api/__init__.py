@@ -32,6 +32,8 @@ one exception map, health and readiness endpoints, and a graceful shutdown. A se
 
 A resource is anything a handler reaches outside the process: a database, another HTTP service, a cache, the clock and
 new ids. `resources.py` says how each is declared, and what a handler gets for it; `basis.api.fakes` holds their fakes.
+A service that declares `user=User` has each request's bearer token verified, and its handlers ask for `User | None`:
+`identity.py` says how.
 
 `api.build` and `api.serve` load the app's machinery on first use, so a service's modules, which import this package
 for their declarations, import no server, no exporter, no database driver and no HTTP client."""
@@ -39,6 +41,7 @@ for their declarations, import no server, no exporter, no database driver and no
 from typing import TYPE_CHECKING
 
 from basis.api.errors import Error, FieldError, Problem, ServiceError
+from basis.api.identity import SignInRequiredError, User
 from basis.api.resources import Bind, Cache, CallFailedError, Client, Clock, DeadlineExceededError, Ids, Reader, Resource, Writer, cache, clock, database, http, ids
 from basis.api.service import Route, Service, delete, get, given, load, patch, post, put
 from basis.api.settings import Serve, Settings, SettingsError, Traces
@@ -67,7 +70,9 @@ __all__ = [
     "ServiceError",
     "Settings",
     "SettingsError",
+    "SignInRequiredError",
     "Traces",
+    "User",
     "Writer",
     "build",
     "cache",

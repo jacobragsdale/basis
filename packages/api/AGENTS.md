@@ -4,8 +4,8 @@ This package is basis-api, which API repos depend on. A service declares its nam
 its routes as an `api.Service`, and basis builds the FastAPI app around them, the same in every repo; a service never
 makes the app itself. The plumbing it runs on is basis-core's, in `packages/core`, which imports nothing from here.
 [The design](../../docs/design.md#apis-basisapi) holds the decisions, and [the roadmap](../../docs/roadmap.md#phase-2-apis)
-the steps still to come: routes' deadlines, response models and errors (2.3), identity (2.4), the UI contract (2.5),
-contract tests (2.6) and `basis-api new app` (2.7).
+the steps still to come: routes' deadlines, response models and errors (2.3), the UI contract (2.5), contract tests
+(2.6) and `basis-api new app` (2.7).
 
 ## Where things are
 
@@ -18,7 +18,9 @@ Paths are under `src/basis/api/`.
 | `resources.py` | The resources a service declares (`database`, `http`, `cache`, `clock`, `ids`), what a handler gets for each (`Reader`, `Writer`, `Client`, `Cache`, `Clock`, `Ids`), and `DeadlineExceededError` and `CallFailedError`. Its docstring is the reference. |
 | `opened.py` | Each resource as the app opens it, through basis-core's databases, httpx2, memory and the system's clock, or a fake: every call's deadline and span, a request's transaction, and the checks at build and startup. |
 | `fakes.py` | A fake of each kind of resource, which `api.build(..., fakes=...)` takes for tests. |
-| `settings.py` | `Settings`, basis-core's with `serve`, `traces` and `http`; `Settings.given`, settings from arguments alone, for tests; `read`, which names each variable to set. |
+| `settings.py` | `Settings`, basis-core's with `serve`, `traces`, `http` and `identity`; `Settings.given`, settings from arguments alone, for tests; `read`, which names each variable to set, and refuses the development key off a declared desktop. |
+| `identity.py` | Who makes a request: `User`, which a service subclasses with the claims it needs; `SignInRequiredError` and the other identity errors; the `Identity` settings and their keys (`Jwks`, `PublicKey`, `Development`); `Machine`, how a desktop is declared, and the development key's refusal. Its docstring is the reference. |
+| `tokens.py` | Verifying bearer tokens with PyJWT: `plan`, the checks at build; `Verifier` and `KeySet`, the JWK set's fetches and cache; `Bearer`, the middleware inside the request boundary; `DEVELOPMENT_KEY` and `sign`, for tests and `basis dev`. |
 | `errors.py` | `Error`, which a service subclasses with a status and a title, or with `abstract=True` as a base for others; `Problem`; `problem`, the one exception map. |
 | `app.py` | `build`: the app, its lifespan, which opens and closes the resources, its exception handlers, its health endpoints and the `Lifecycle` readiness reports. |
 | `requests.py` | The request boundary: the request id, log fields, `X-Request-Id` and `traceparent` out, one log line per request, and the 500 for an exception nothing expected. |
@@ -51,6 +53,13 @@ Paths are under `src/basis/api/`.
 - A failure the developer can fix is a `BasisError`, such as `ServiceError` or basis-core's `SettingsError`, whose
   message ends with the fix, so `basis` prints it as one line.
 - Each app has its own tracer provider; nothing sets OpenTelemetry's global one.
+- A token that does not verify is a 401, never anonymity; only a request with no `Authorization` header is anonymous.
+  Verification accepts only the settings' algorithms, all of them asymmetric, and a key only for an algorithm it fits;
+  it never reads a key the token carries. Every check it makes is in `tokens.py`'s docstring, and each has a test.
+- The development key is published, so every app refuses it on any machine that is not a declared desktop
+  (`identity.Machine`), in `tokens.plan`, which every app passes through; only settings from `Settings.given`, which a
+  test makes in code and no variable can mark, take it anywhere.
+- A token whose key the JWK set holds never waits for a fetch; only one naming a key it does not hold does.
 - A test builds its app with `Settings.given(...)`, so the developer's environment never changes what it checks.
 
 ## Checks
@@ -62,6 +71,14 @@ uv run pre-commit run --all-files   # ruff, ty, the lockfile and the import cont
 uv run pytest packages/api          # this package's tests and the example's
 uv run pytest -m integration packages/api   # real SQL Server and Oracle, as packages/job/tests/integration/README.md sets them up
 ```
+
+Tokens are verified with PyJWT, which every basis environment already holds (mssql-python needs azure-identity, which
+needs msal, which needs `pyjwt[crypto]`), so it adds no package to a repo's lock and no second JWT library to keep
+patched. Its `decode` requires the algorithms it accepts, a JWK it parses is bound to one algorithm, its HMAC refuses a
+PEM public key as a secret, and it refuses a critical header extension it does not know. It reads the system's clock
+for `exp`, `nbf` and `iat`, so basis checks those itself, against a clock it is given. joserfc, the other maintained
+choice, takes a clock and types each kind of key, but would be a second JWT library in every repo, for checks basis
+makes itself anyway by accepting asymmetric algorithms only and fitting each key to the token's algorithm.
 
 The HTTP client is httpx2: Pydantic's maintained continuation of httpx, which its README says sees little activity
 now, with the API agents already know, an async client whose calls a deadline can cancel, and the ASGI transport that

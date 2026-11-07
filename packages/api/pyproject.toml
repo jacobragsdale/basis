@@ -6,11 +6,13 @@ license = "MIT"
 requires-python = ">=3.14"
 dependencies = [
     "basis-core==0.0.0",  # every basis package depends on basis-core at exactly its own version
+    "cryptography>=50.0.2",  # the public keys a token verifies with, read from PEM
     "fastapi>=0.162.0",
     "httpx2>=2.16.0",  # the client of the services an API calls, and the transport of their fakes
     "opentelemetry-api>=1.45.2",
     "opentelemetry-exporter-otlp-proto-http>=1.45.2",
     "opentelemetry-sdk>=1.45.2",
+    "pyjwt[crypto]>=2.15.1",  # verifies bearer tokens: see basis.api.tokens
     "uvicorn>=0.54.0",
 ]
 

@@ -67,6 +67,8 @@ class Error(Exception):
     type: ClassVar[str]
     """A URI for the kind of problem, by default the class's name in kebab case without an `Error` suffix, such as
     `period-reversed` for `PeriodReversed` or `PeriodReversedError`."""
+    headers: ClassVar[Mapping[str, str]] = _NO_HEADERS
+    """Headers its every response carries, such as a 401's `WWW-Authenticate` challenge, which RFC 9110 requires."""
 
     def __init_subclass__(cls, *, abstract: bool = False) -> None:
         super().__init_subclass__()
@@ -80,6 +82,9 @@ class Error(Exception):
         title = getattr(cls, "title", None)
         if not isinstance(title, str) or not title.strip():
             msg = f'{cls.__qualname__} declares no title: give it `title = "..."`, what kind of problem it is, in the same words every time'
+            raise ServiceError(msg)
+        if status == HTTPStatus.UNAUTHORIZED and "www-authenticate" not in {name.lower() for name in cls.headers}:
+            msg = f'{cls.__qualname__} is a 401, whose response carries a challenge: raise api.SignInRequiredError instead, or give it `headers = MappingProxyType({{"WWW-Authenticate": "Bearer"}})`'
             raise ServiceError(msg)
         if "type" not in vars(cls):
             cls.type = re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "-", cls.__name__.removesuffix("Error") or cls.__name__).lower()
@@ -125,7 +130,7 @@ def problem(error: Exception, request_id: UUID | None) -> tuple[Problem, Mapping
     instance = request_id.urn if request_id is not None else None
     match error:
         case Error():
-            return Problem(type=error.type, title=error.title, status=error.status, detail=error.detail, instance=instance), _NO_HEADERS
+            return Problem(type=error.type, title=error.title, status=error.status, detail=error.detail, instance=instance), error.headers
         case RequestValidationError():
             return Problem(type="invalid-request", title="The request is not valid", status=HTTPStatus.UNPROCESSABLE_CONTENT, instance=instance, errors=_field_errors(error.errors())), _NO_HEADERS
         case HTTPException():
