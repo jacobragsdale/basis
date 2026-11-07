@@ -81,13 +81,14 @@ and the fallback for each no.
 
 Lane A. Needs spike 0.2.
 
-1. **1.1 Workspace.** Set up `packages/core` and `packages/job` as uv workspace members, with:
-   - root ruff and ty settings with every rule an error, as etl-framework has them;
-   - the import contract: `core` imports nothing else, and `job`, `api` and `optim` import `core` only;
-   - GitHub Actions CI, which runs only the jobs whose paths changed;
+1. **1.1 Workspace.** Set up the uv workspace with `packages/core` as its first member, with:
+   - root ruff and ty settings with every rule an error, as etl-framework has them, and pytest in importlib mode (spike
+     0.2);
+   - GitHub Actions CI, which skips changes to docs alone;
    - this repo's own commit hook.
 
-   Done when an empty `core` and `job` pass CI.
+   `packages/job` arrives in step 1.2 with etl-framework, and the import contract with it, since import-linter needs
+   the second package to have something to forbid. Done when an empty `core` passes CI.
 2. **1.2 Move etl-framework.** Bring etl-framework into `packages/job` with its history (`git subtree add`, or `git
    filter-repo` and a merge), with its code and tests unchanged. Needs 1.1. Done when its 90 unit and 33 integration
    tests pass in this repo's CI, against SQL Server and Oracle service containers.
