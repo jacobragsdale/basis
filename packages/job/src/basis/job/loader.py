@@ -25,6 +25,7 @@ import polars as pl
 from opentelemetry.trace import Tracer
 
 from basis.core.databases import Database
+from basis.core.errors import BadReply
 from basis.core.interval import Interval
 from basis.core.logs import ms_since
 from basis.core.opened import HttpClient
@@ -124,11 +125,18 @@ async def _fetch_all(fetches: Mapping[str, Fetch], interval: Interval | None, re
 
 
 async def _fetch(name: str, fetch: Fetch, interval: Interval | None, client: HttpClient) -> tuple[pl.DataFrame, InputRecord]:
+    """The fetch's rows, or the kind of `ServiceError` its GET failed with, as basis-core's client makes it, or
+    `BadReply` for a reply that is not rows of the fetch's row, which `json_rows` says why of."""
     start = time.perf_counter()
     what = f"dataset {name} ({fetch.describe()})"
     try:
-        response = await client.request("GET", fetch.location(interval))
-        frame = json_rows(response.content, fetch.row, what=what)
+        location = fetch.location(interval)
+        response = await client.request("GET", location)
+        try:
+            frame = json_rows(response.content, fetch.row, what=what)
+        except (ValueError, TypeError) as error:
+            msg = f"{fetch.http} answered GET {location} with a body that is not rows of {fetch.row.__name__}"
+            raise BadReply(msg, resource=fetch.http, status=response.status_code, reason=str(error)) from error
     except Exception as error:
         error.add_note(f"while loading {what}")
         raise

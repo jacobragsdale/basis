@@ -72,14 +72,17 @@ Rows another service answers a GET with: the one way a job reaches another servi
 | `row` | `type[etl.Row]` | The rows' columns. |
 | `http` | `str` | The service's name, as `BASIS_HTTP__NAME__*` configures it. |
 | `path` | `str` | The service's own path, after its base URL. `{start}` and `{end}` give the interval's ends in ISO 8601, as `2026-11-05T00:00:00+00:00`, or in the format the path names, as `prices/{start:%Y-%m-%d}`, each percent-encoded, so a `+` reaches the service as a `+`. |
-| `deadline_s` | `float` | Seconds the GET may take, from the first byte sent to the last byte of the reply. |
+| `deadline_s` | `float` | Seconds the GET may take, from the first byte sent to the last byte of the reply, the attempts it makes again included. |
 | `empty` | `"fail"` or `"allow"` | Whether a run may continue when the service answers no rows. |
 
 The service answers a JSON list of objects, one per row, each of the row's columns by name; a field the object leaves
 out is null, and a field the row has no column for, a value that is an object or a list, or `NaN` or `Infinity`, which
-are no JSON numbers, fails the run. Each value is read as its text, as a CSV's is, so a number keeps the digits it was sent with. A reply that is not a 2xx, or one
-that takes longer than `deadline_s`, fails the run. The rows are saved in the snapshot like any input's, so a replay
-never calls the service.
+are no JSON numbers, fails the run. Each value is read as its text, as a CSV's is, so a number keeps the digits it was
+sent with. A GET that fails fails the run, its `error` naming the kind of service error it is: `Timeout` past
+`deadline_s` or for a 504; `Unavailable` for a service that cannot be reached or answers 502, 503 or 429, which the GET
+makes again, after a backoff, while `deadline_s` allows; `BadReply` for a reply that is not the rows; and `NotFound`,
+`Conflict`, `Rejected`, `Denied` or `Failed` for a 404, a 409, a 400 or 422, a 401 or 403, or any other status. The rows
+are saved in the snapshot like any input's, so a replay never calls the service.
 
 ### `etl.File(row, *, path, empty)`
 

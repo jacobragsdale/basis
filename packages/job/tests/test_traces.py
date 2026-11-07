@@ -25,6 +25,7 @@ import basis.job as etl
 from basis.core import fakes, logs
 from basis.core.databases import Database
 from basis.core.databases.mssql import MssqlReader
+from basis.core.errors import KINDS, BadReply, ServiceError, Unavailable
 from basis.core.logs import JsonFormatter
 from basis.core.settings import GivenSettings
 from basis.core.storage import Root
@@ -246,9 +247,28 @@ def test_a_service_the_settings_do_not_configure_fails_the_run_naming_its_variab
     assert "set BASIS_HTTP__VENUES__URL" in result.record.error
 
 
-def test_a_service_that_fails_its_get_fails_the_run_naming_it(tmp_path: Path, sql: Path) -> None:
-    result = run(tmp_path, stamping(sql), traced()[0], venues=venues(status=503))
-    assert (result.record.status, result.record.error) == ("failed", "CallFailedError: venues answered 503 to GET /venues/2026-11-05")
+@pytest.mark.parametrize("kind", [kind for kind in KINDS if kind not in {Unavailable, BadReply}], ids=lambda kind: kind.__name__)
+def test_a_service_that_fails_its_get_fails_the_run_naming_the_kind(tmp_path: Path, sql: Path, kind: type[ServiceError]) -> None:
+    fake = venues()
+    fake.fails("/venues/2026-11-05", kind)
+    result = run(tmp_path, stamping(sql), traced()[0], venues=fake)
+    assert (result.record.status, result.record.error) == ("failed", f"{kind.__name__}: venues answered {fakes.ANSWERS[kind]} to GET /venues/2026-11-05")
+
+
+def test_a_get_unavailable_once_is_made_again_and_the_run_goes_on(tmp_path: Path, sql: Path) -> None:
+    fake = venues()
+    fake.fails("/venues/2026-11-05", Unavailable, times=1)
+    result = run(tmp_path, stamping(sql), traced()[0], venues=fake)
+    assert (result.record.status, result.record.error) == ("checked", None)
+
+
+def test_a_reply_that_is_not_the_fetchs_rows_fails_the_run_as_a_bad_reply(tmp_path: Path, sql: Path) -> None:
+    fake = venues()
+    fake.fails("/venues/2026-11-05", BadReply)
+    result = run(tmp_path, stamping(sql), traced()[0], venues=fake)
+    assert result.record.status == "failed"
+    assert result.record.error is not None
+    assert result.record.error.startswith("BadReply: venues answered GET /venues/2026-11-05 with a body that is not rows of Venue: Expecting value")
 
 
 def test_a_runs_spans_carry_the_settings_commit_as_their_version(tmp_path: Path, sql: Path, capsys: pytest.CaptureFixture[str]) -> None:
