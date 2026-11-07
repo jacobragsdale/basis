@@ -321,7 +321,8 @@ A model repo's command is `basis`, and `uv run basis --help` lists every verb it
 under its earlier name. `run`, `describe`, `replay` and `regress` are verbs jobs have too: in a repo with both jobs and
 models, the model's name comes first, and `basis VERB NAME --help` gives the model's arguments. Every verb reads its
 settings from the process's environment, as `uv run --env-file .env basis ...` sets them, logs JSON lines on stderr,
-and prints each failure as one line on stderr, `ERROR: REASON: FIX`, after the logs. Paths are the working
+ends its stderr with a log record, `finished VERB`, with its exit code and how long it took, and then prints each
+failure as one line, `ERROR: REASON: FIX`, the last. Paths are the working
 directory's. `--portfolios` takes ids, or `@FILE` with one per line.
 
 ### `basis run`
@@ -378,7 +379,10 @@ Replays the model's, or without `MODEL` every model's, `--last` (default 20) mos
 (default `BASIS_SNAPSHOT_ROOT`), replays aside and only those with every `--label` given, with each run's own params,
 and writes a row per change: `run_id`, `portfolio_id`, `status_before`, `status_after`, `limit` (either decision
 stopped at a time limit), and for a changed trade `security_id`, `side`, `before` and `after`, the rounded quantities.
-Exits 1 if anything changed.
+With `MODEL`, the rows are a table, CSV on stdout or the `--out` file; without it, each row also names its `model`,
+and they are JSON on stdout, a list of objects, or the `--out` file. In a repo with jobs too, `basis regress` without a
+name takes only `--snapshots`, `--last` and `--label`, which a job's takes as well, and prints one JSON object, each
+part's result by part, `job` and `optim`. Exits 1 if anything changed.
 
 ### `basis describe`
 

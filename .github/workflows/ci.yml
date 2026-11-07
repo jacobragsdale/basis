@@ -309,4 +309,7 @@ jobs:
           uv run --env-file .env basis run positions --params jobs/positions/params/default.json --data jobs/positions/tests/fixture --interval 2026-11-05..2026-11-06
           uv run --env-file .env basis run income --params models/income/params/default.json --data models/income/tests/fixture
           uv run basis describe | python3 -c 'import json, sys; assert set(json.load(sys.stdin)) == {"income", "ladder", "positions"}'
-          if uv run --env-file .env basis run positions --params jobs/positions/params/default.json --portfolios P1; then echo "a model's option was taken for a job" >&2; exit 1; fi
+          uv run --env-file .env basis regress | python3 -c 'import json, sys; assert set(json.load(sys.stdin)) == {"job", "optim"}'
+          if uv run --env-file .env basis run positions --params jobs/positions/params/default.json --portfolios P1 2> "$RUNNER_TEMP/refused.log"; then echo "a model's option was taken for a job" >&2; exit 1; fi
+          tail -n 1 "$RUNNER_TEMP/refused.log" | grep --quiet '^ERROR: basis run: unrecognized arguments: --portfolios P1'
+          tail -n 2 "$RUNNER_TEMP/refused.log" | head -n 1 | grep --quiet '"message":"finished run".*"exit_code":2' || { cat "$RUNNER_TEMP/refused.log" >&2; exit 1; }

@@ -76,6 +76,26 @@ def test_a_replay_names_the_model_whose_run_it_is(basis: Basis, capsys: pytest.C
     assert error_line(capsys) == f"ERROR: run {run_id} is a run of optim.example.model, not toys.basic: give optim.example.model, or leave the model out"
 
 
+def test_a_replay_takes_the_name_a_models_module_is_listed_under_now(basis: Basis, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    """The run was saved under the model's module path; the repo lists that module as `earnings` now."""
+    assert basis("run", "optim.example.model", "--params", str(EXAMPLE / "params" / "default.json"), "--data", str(EXAMPLE / "tests" / "fixture")) == 0
+    run_id = capsys.readouterr().out.splitlines()[0].removeprefix("run ")
+    monkeypatch.setattr("optim.models.installed", lambda: {"earnings": "optim.example.model"})
+
+    assert basis("replay", "earnings", run_id) == 0
+
+
+def test_regress_without_a_model_prints_json_and_with_one_a_table(basis: Basis, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("optim.models.installed", lambda: {"income": "optim.example.model"})
+    assert basis("run", "income", "--params", str(EXAMPLE / "params" / "default.json"), "--data", str(EXAMPLE / "tests" / "fixture"), "--label", "purpose=test") == 0
+    capsys.readouterr()
+
+    assert basis("regress") == 0
+    assert json.loads(capsys.readouterr().out) == []  # the run replays as it ran
+    assert basis("regress", "income") == 0
+    assert capsys.readouterr().out == "run_id,portfolio_id,status_before,status_after,limit,security_id,side,before,after\n"
+
+
 @pytest.mark.parametrize(
     ("argv", "problem"),
     [
@@ -118,6 +138,8 @@ def test_a_repo_with_jobs_and_models_runs_each_by_its_name(jobs_and_models: Path
     assert json.loads(capsys.readouterr().out) == {"positions": "basis.job.example.job", "income": "optim.example.model"}
     assert basis_in(jobs_and_models, "describe", "income") == 0
     assert json.loads(capsys.readouterr().out)["model"] == "income"
+    assert basis_in(jobs_and_models, "regress") == 0
+    assert json.loads(capsys.readouterr().out) == {"job": [], "optim": []}  # one JSON document, each part's result by part
 
 
 def test_in_a_repo_with_jobs_and_models_an_option_of_the_other_part_is_refused(jobs_and_models: Path, capsys: pytest.CaptureFixture[str]) -> None:

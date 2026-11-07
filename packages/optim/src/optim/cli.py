@@ -187,7 +187,7 @@ def _run(args: RunArgs) -> int:
         ran = run_model(
             ctx.loader, settings.snapshots(), model, args.params, as_of_date=as_of_date, portfolio_ids=args.portfolios, data_dir=args.data, workers=workers, labels=args.labels, orders=ctx.orders
         )
-    return _report(ran)
+    return _report(ran, model.name)
 
 
 def _replay_arguments(parser: argparse.ArgumentParser) -> None:
@@ -204,8 +204,9 @@ def _replay(args: ReplayArgs) -> int:
     """Reads a run and saves one: no sources or cache."""
     settings = Settings()
     workers = args.workers or settings.optim.workers
-    ran = replay_run(_snapshot(args.run, args.model), settings.snapshots(), params_file=args.params, portfolio_ids=args.portfolios, workers=workers, labels=args.labels)
-    return _report(ran)
+    saved = _snapshot(args.run, args.model)
+    ran = replay_run(saved, settings.snapshots(), params_file=args.params, portfolio_ids=args.portfolios, workers=workers, labels=args.labels)
+    return _report(ran, saved.info.model.name)
 
 
 def _sweep_arguments(parser: argparse.ArgumentParser) -> None:
@@ -244,12 +245,20 @@ def _regress_from(n: argparse.Namespace) -> int:
 
 
 def _regress(args: RegressArgs) -> int:
-    """A row per change, for the model named or every model the repo lists; exits 1 when anything changed."""
+    """A row per change, for the model named, as a table, CSV on stdout or `--out`; or for every model the repo
+    lists, with a `model` column, as JSON on stdout, as every part's `regress` without a name prints, or `--out`.
+    Exits 1 when anything changed."""
     store = Root.at(args.snapshots) if args.snapshots is not None else Settings().snapshots()
-    names = [args.model] if args.model is not None else sorted(models.installed())
-    tables = [research.regress(_model(name), store, last=args.last, labels=args.labels, workers=args.workers) for name in names]
-    changes = pd.concat(tables, ignore_index=True) if tables else pd.DataFrame(columns=research.CHANGES)
-    _write(changes, args.out)
+    if args.model is not None:
+        changes = research.regress(_model(args.model), store, last=args.last, labels=args.labels, workers=args.workers)
+        _write(changes, args.out)
+    else:
+        found = [research.regress(_model(name), store, last=args.last, labels=args.labels, workers=args.workers).assign(model=name) for name in sorted(models.installed())]
+        changes = pd.concat(found, ignore_index=True)[["model", *research.CHANGES]] if found else pd.DataFrame(columns=pd.Index(["model", *research.CHANGES]))
+        if args.out is not None:
+            _write(changes, args.out)
+        else:
+            sys.stdout.write(json.dumps(json.loads(changes.to_json(orient="records")), indent=2) + "\n")
     if len(changes):
         where = args.out if args.out is not None else "stdout"
         fix = f"{where} lists each; fix the code, or say in the pull request why the change is meant"
@@ -311,7 +320,7 @@ def _snapshot(run: str, model: str | None) -> Saved:
     is given."""
     with deliberate(LookupError):  # no such run, or a manifest that is not optim's
         saved = snapshots.read(Root.at(run)) if "/" in run or "\\" in run else snapshots.find([Settings().snapshots()], run)
-    if model is not None and model not in {saved.info.model.name, saved.info.model.module, models.installed().get(model)}:
+    if model is not None and model != saved.info.model.name and models.installed().get(model, model) not in {saved.info.model.name, saved.info.model.module}:
         msg = f"run {saved.info.run_id} is a run of {saved.info.model.name}, not {model}: give {saved.info.model.name}, or leave the model out"
         raise BasisError(msg)
     return saved
@@ -341,10 +350,11 @@ def _write(table: pd.DataFrame, out: Path | None) -> None:
         table.to_csv(out, index=False)
 
 
-def _report(ran: Run) -> int:
+def _report(ran: Run, model: str) -> int:
+    """`ran`'s summary, and a failure, naming `model`, as the run named it, if a portfolio was rejected."""
     sys.stdout.write(ran.summary())
     if ran.ok:
         return 0
     rejected = sum(not outcome.accepted for outcome in ran.outcomes)
-    fix = f"fix what each says; `basis replay {ran.run_id}` decides them again on what the run read"
+    fix = f"fix what each says; `basis replay {model} {ran.run_id}` decides them again on what the run read"
     return fail(f"run {ran.run_id} rejected {rejected} of its {len(ran.outcomes)} portfolios, for the reasons above", fix)

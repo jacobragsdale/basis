@@ -115,3 +115,10 @@ def test_a_model_name_that_is_taken_or_cannot_name_a_module_is_refused(tmp_path:
 def test_a_model_is_added_only_to_a_model_repo(tmp_path: Path) -> None:
     with pytest.raises(NewError, match=r"is not a model repo: .*`uvx optim new repo NAME MODEL`"):
         new.model(tmp_path, "ladder", install=False)
+
+
+def test_a_new_repo_from_a_pre_release_takes_its_minor_versions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(optim, "__version__", "0.3.0rc1")
+    repo = new.repo(tmp_path / "sma", "income", index=INDEX, framework_path=None, install=False)
+
+    assert tomllib.loads((repo / "pyproject.toml").read_text())["project"]["dependencies"] == ["optim>=0.3.0rc1,<0.4"]
