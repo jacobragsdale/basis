@@ -22,6 +22,18 @@ abstract, and only the classes it raises declare a status and a title:
         status = HTTPStatus.NOT_FOUND
         title = "No price for the security"
 
+A domain's errors are plain Python exceptions, defined in its domain module, since the same domain code runs in jobs,
+which have no HTTP. The API gives each its HTTP meaning once, in its `errors.py`, with `error`, and its routes declare
+that meaning as they declare an `Error`:
+
+    MATURED = api.error(domain.Matured, status=HTTPStatus.UNPROCESSABLE_CONTENT, title="The bond has matured")
+
+    api.get("/bonds/{security}/dirty-price", dirty_price, ..., errors=[MATURED])
+
+A route that declares it answers its problem when its handler raises the exception, or a subclass of it that no other
+error the route declares means more of, with the exception's message as its `detail`, and its type the exception's
+name in kebab case, `matured`. A domain exception a route does not declare is a defect, a 500, as any other is.
+
 Every 422 is a `ValidationProblem`, whose `errors` name each field at fault, as RFC 9457's own example does, so a UI
 puts each error on its field: a field of the body by an RFC 6901 JSON Pointer in URI fragment form, `#/legs/0/rate`,
 where `#` is the whole body, and a query, path or header parameter by its name.
@@ -122,6 +134,50 @@ class Error(Exception):
         super().__init__(detail)
         self.detail = detail
         self.errors: tuple[FieldError, ...] = tuple(errors)
+
+
+class DomainError(Error, abstract=True):
+    """The HTTP meaning `error` gives a domain's exception, which a route that declares it raises in its place."""
+
+    exception: ClassVar[type[Exception]]
+    """The domain's exception it means, which a route that declares it answers for, its subclasses too."""
+
+
+def error(exception: type[Exception], *, status: int, title: str) -> type[DomainError]:
+    """The HTTP meaning of `exception`, a plain exception of a domain's own, for the routes that declare it: a problem
+    of `status`, a 4xx or 5xx, and `title`, which says what kind of problem it is in the same words every time; its
+    type is the exception's name in kebab case, less any `Error` suffix."""
+    if not (isinstance(exception, type) and issubclass(exception, Exception)):
+        msg = f"api.error({exception!r}, ...) is given no exception: give it a domain's own, as `class Matured(Exception)` in domain.py"
+        raise DeclarationError(msg)
+    if issubclass(exception, Error):
+        msg = f"api.error({exception.__qualname__}, ...) is given an api.Error, which has its status and title already: declare it in the route's errors=[...] as it is"
+        raise DeclarationError(msg)
+    if issubclass(exception, ServiceError):
+        msg = f"api.error({exception.__qualname__}, ...) is given a kind of api.ServiceError, which basis answers as its own problem on each route that can meet it: remove the declaration"
+        raise DeclarationError(msg)
+    if exception.__module__ == "builtins":
+        msg = f"api.error({exception.__qualname__}, ...) is given a builtin exception, which code anywhere raises: give it a domain's own, as `class Matured(Exception)` in domain.py"
+        raise DeclarationError(msg)
+    if isinstance(status, bool) or not isinstance(status, int) or status not in _STATUSES:
+        msg = f"api.error({exception.__qualname__}, ...) has status {status!r}: give it a 4xx or 5xx, as status=HTTPStatus.UNPROCESSABLE_CONTENT"
+        raise DeclarationError(msg)
+    if status == HTTPStatus.UNAUTHORIZED:
+        msg = f"api.error({exception.__qualname__}, ...) is a 401, which basis answers itself for a request whose route needs a user: raise api.SignInRequiredError, or give it a 403"
+        raise DeclarationError(msg)
+    if not isinstance(title, str) or not title.strip():
+        msg = f'api.error({exception.__qualname__}, ...) has no title: give it title="...", what kind of problem it is, in the same words every time'
+        raise DeclarationError(msg)
+    means, declared_status, declared_title = exception, status, title
+
+    class DeclaredError(DomainError):
+        exception = means
+        status = declared_status
+        title = declared_title
+        type = _kebab(means.__name__.removesuffix("Error") or means.__name__)
+
+    DeclaredError.__name__, DeclaredError.__qualname__, DeclaredError.__module__ = exception.__name__, exception.__qualname__, exception.__module__
+    return DeclaredError
 
 
 def _kebab(name: str) -> str:

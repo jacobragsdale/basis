@@ -10,7 +10,9 @@
 - `basis ddl [SERVICE] --dialect DIALECT`, basis-core's verb, prints the CREATE TABLE of each outbox the service's
   databases declare (`outboxes.py`).
 - `basis sync` writes, and `basis check` checks, the repo's `openapi.json` with the API's other files (`sync.py`), and
-  `basis check --full` compares it with the last release's (`contract.py`).
+  `basis check --full` compares it with the last release's (`contract.py`);
+- `basis check` holds the repo's code to its layers (`layers.py`), and builds the app on its fakes, which Schemathesis
+  then sends the requests it makes from its document (`fuzz.py`).
 
 A failure prints as one line, as every `basis` failure does: a service that declares too little, settings that name no
 value the API needs, or a call whose response is an error. uvicorn loads when a verb runs, not for every
@@ -29,6 +31,7 @@ from basis.api.resources import DatabaseResource
 from basis.api.service import GROUP, load
 from basis.core import hooks
 from basis.core.destination import Dialect
+from basis.core.sync import Problem
 from basis.core.verbs import Part, Runs, Shared, Verb, fail
 
 LOCAL = "127.0.0.1"
@@ -65,8 +68,8 @@ class DdlArgs:
 
 def part() -> Part:
     """basis-api's verbs, which the `basis.verbs` entry point named `api` gives the `basis` command; its files, its
-    block of `AGENTS.md`, its line of the Dockerfile and the repo's `openapi.json`; and its contract, the
-    breaking-change check of `openapi.json`."""
+    block of `AGENTS.md`, its line of the Dockerfile and the repo's `openapi.json`; its contract, the breaking-change
+    check of `openapi.json`; and its checks of the repo's code, its layers and its app on its fakes."""
     return Part(
         verbs=(
             Verb("serve", "serve the API with uvicorn until SIGTERM, which drains it first", _service_argument, lambda n: _serve(ServeArgs(n.service))),
@@ -81,7 +84,14 @@ def part() -> Part:
             ddl=Shared("print the CREATE TABLE of each outbox the service's databases declare", lambda n: _ddl(DdlArgs(n.name, "mssql" if n.dialect == "mssql" else "oracle")), _ddl_arguments),
         ),
         contract=_contract,
+        checks=_checks,
     )
+
+
+def _checks(repo: Path) -> list[Problem]:
+    from basis.api import fuzz, layers  # noqa: PLC0415 -- grimp, FastAPI and Schemathesis load when the check runs, not for every `basis --help`
+
+    return [*layers.problems(repo), *fuzz.problems()]
 
 
 def _contract(repo: Path) -> str | None:

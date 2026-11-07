@@ -6,12 +6,23 @@ RFC 9457 problem details for every error, health and readiness endpoints, and a 
 resource when the app starts. The service never makes the app itself, and the repo lists it under
 `[project.entry-points."basis.apis"]` in its `pyproject.toml`.
 
+The API's code sits in layers, each a module basis knows by its own name, at any depth, so `bonds/handlers.py` is a
+handlers module too: `service.py`, the routes; `handlers.py`, one function per route, the only place resources
+arrive; `repository.py`, all the SQL and every call to another service, each function taking the resource it needs
+and returning domain types; and `domain.py`, pure types and rules. Beside them, `resources.py` declares the settings
+and the resources, and `errors.py` the errors. `basis check` holds three rules, each failure one `ERROR` line with its
+fix: imports go down that list only, each layer importing the declarations, which import only domain modules; a
+domain module imports nothing of basis, no FastAPI, settings, driver, client or socket, directly or through a helper,
+so a job can run it too; and a handler passes each resource `api.given` gives it on to a repository function, and
+never calls its methods itself.
+
 Rules to keep:
 
 - Declare each route with `api.get`, `api.post`, `api.put`, `api.patch` or `api.delete`, and a named handler: `def`
   where it calls blocking code, `async def` only where it awaits. Every route declares `deadline_s`, the seconds it has
   to answer, which caps every call it makes; `response`, which is its handler's return annotation; and `errors`, each
-  `api.Error` its handler raises, or `[]`. An error it does not declare, or an `HTTPException`, answers 500.
+  `api.Error` its handler raises and each meaning `errors.py` gives a domain exception it may meet, or `[]`. An error
+  it does not declare, or an `HTTPException`, answers 500.
 - A route reads its request strictly: a key it does not declare is refused, a JSON body's values have their own JSON
   types, a decimal is a string (`"0.045"`, never `0.045`), a time has its offset, and query and path text reads by its
   type's grammar (`10`, `0.045`, `true`, `2026-11-06`). Declare query parameters one by one, or as one model with
@@ -47,6 +58,11 @@ Rules to keep:
   request, and a route that needs a user raises `api.SignInRequiredError`, which basis adds to the errors of every
   route that asks for the user, so it is never declared. basis verifies every request's bearer token from the
   `BASIS_IDENTITY__*` settings; a handler never reads the `Authorization` header or decodes a token itself.
+- A domain's errors are plain exceptions in `domain.py`, as `class Matured(Exception)`, raised by its rules and its
+  repositories alike; `errors.py` gives each its HTTP meaning once, as
+  `MATURED = api.error(domain.Matured, status=HTTPStatus.UNPROCESSABLE_CONTENT, title="The bond has matured")`, and a
+  route that may meet it declares `MATURED` in its errors. Its problem's type is the exception's name in kebab case,
+  `matured`, and its detail the exception's message. A domain exception a route does not declare is a 500.
 - A handler fails by raising a subclass of `api.Error` that declares its `status` and `title`, and the caller gets a
   problem details response. Any other exception is a bare 500, logged once with its traceback. A 422 names the fields
   it refuses, so a UI puts each error on its field: `raise PeriodReversed(msg, errors=[api.ParameterError(detail=...,
@@ -78,7 +94,12 @@ Rules to keep:
   its token with `basis.api.tokens.sign`.
 - The service names its fakes for `basis dev` and `basis call --fake` as `api.Service(..., fakes="module:function")`:
   a function of the repo's own that returns a fake for each database and other service, from synthetic data in it or
-  in the repo's fixtures.
+  in the repo's fixtures. `basis check` builds the app on them, from its settings' defaults, and sends it the
+  requests Schemathesis makes from `openapi.json`, which its development dependencies hold: a 500, or an answer the
+  document does not list, fails the check with the `basis call` that makes that request again.
+- Test the domain on its own values, the handlers on fakes, each error a route declares among them, a resource's
+  failure made with its fake's `fails`, as `pricing.fails("/prices/X", api.Unavailable)`; and the repository in the
+  integration tier, `@pytest.mark.integration`, against a real database, which the coverage floor leaves out.
 
 Commands, all through `basis`, whose `--help` lists every verb this repo has:
 
