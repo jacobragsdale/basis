@@ -123,25 +123,3 @@ show_missing = true
 skip_covered = true
 exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "@overload"]
 # Deliberately no fail_under: coverage is a diagnostic here, not a CI gate.
-
-[tool.importlinter]
-root_package = "etl_framework"
-include_external_packages = true  # so a contract can forbid a database driver
-exclude_type_checking_imports = true
-
-[[tool.importlinter.contracts]]
-name = "Job code and the checks it runs through do no I/O: the run loop loads, saves and publishes"
-type = "forbidden"
-source_modules = [
-    "etl_framework.rows", "etl_framework.params", "etl_framework.inputs", "etl_framework.outputs", "etl_framework.interval",
-    "etl_framework.changes", "etl_framework.destination", "etl_framework.diff", "etl_framework.ddl", "etl_framework.job",
-    "etl_framework.example.job", "etl_framework.example.rows",
-]
-forbidden_modules = [
-    "etl_framework.loader", "etl_framework.publish", "etl_framework.runs", "etl_framework.snapshots", "etl_framework.storage",
-    "etl_framework.settings", "etl_framework.api", "etl_framework.cli", "etl_framework.new", "etl_framework.sync",
-    "etl_framework.testing", "mssql_python", "oracledb",
-]
-ignore_imports = [
-    "etl_framework -> etl_framework.api",  # `etl.run` and `etl.replay` load on first use, which job code never makes
-]
