@@ -1,17 +1,20 @@
 [project]
-name = "{{repo}}"
+name = "{repo}"
 version = "0.1.0"
 description = "Portfolio models that run on optim"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = ["{{optim}}"]
+dependencies = ["optim>={version},<0.{next_minor}"]  # 0.x: a minor release may break the contract, so a repo takes patches alone
 
-# Each model by name: its folder's model.py, which `optim run NAME` and a replay find it by.
+# Each model by name: its folder's model.py, which `basis run NAME` and a replay find it by.
 [project.entry-points."optim.models"]
-{{model}} = "models.{{module}}.model"
+{model} = "models.{module}.model"
+
+[tool.basis]
+parts = ["optim"]  # the parts this repo has, whose verbs `basis` offers; basis never infers one from a folder
 
 [build-system]
-requires = ["uv_build>=0.12.7,<0.13.0"]
+requires = ["uv_build>=0.13.6,<0.14"]
 build-backend = "uv_build"
 
 # The package is `models`, at the repo's root, installed in editable mode, so `from models.MODEL import model` works
@@ -20,17 +23,19 @@ build-backend = "uv_build"
 module-name = "models"
 module-root = ""
 
+{source}
 [dependency-groups]
 dev = [
     "pandas-stubs>=3.0.5.260914",
-    "pytest>=9.1.1",
-    "ruff>=0.17.1",
+    "pytest>=9.2.0",
+    "ruff==0.17.4",
     "scipy-stubs>=1.18.1.1",
-    "ty>=0.0.89",
+    "ty==0.0.99",
 ]
-{{source}}
+
 [tool.ruff]
 line-length = 200
+required-version = ">=0.17.4"
 force-exclude = true
 
 [tool.ruff.lint]

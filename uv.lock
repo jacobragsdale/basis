@@ -1225,7 +1225,7 @@ wheels = [
 
 [[package]]
 name = "optim"
-version = "0.2.0"
+version = "0.0.0"
 source = { editable = "packages/optim" }
 dependencies = [
     { name = "basis-core" },

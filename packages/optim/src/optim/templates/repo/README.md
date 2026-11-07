@@ -1,4 +1,4 @@
-# {{repo}}
+# {repo}
 
 Portfolio models that run on `optim`, which loads their data, decides each portfolio, checks each decision, and saves
 every run as a snapshot that replays. Each model is a folder in `models/`, and its own `README.md` says what it does in
@@ -6,29 +6,32 @@ business terms.
 
 | Model | Folder |
 |---|---|
-| `{{model}}` | `models/{{module}}/` |
+| `{model}` | `models/{module}/` |
 
 ## Start here
 
 1. Install [uv](https://docs.astral.sh/uv/), which installs Python on first use, then install the repo and run its
-   tests, which need no database:
+   checks, which need no database: ruff, ty, the tests, and the files basis writes.
 
    ```sh
    uv sync
-   uv run pytest
+   uv run basis check
    ```
 
 2. Open the repo in your editor, with `.venv` as its Python interpreter.
 3. Copy `.env.example` to `.env`, and set the sources your machine reads: it says which variables each source needs.
-4. Open `models/{{module}}/main.py` and press Run. It decides portfolios with live data and prints a row for each.
+4. Open `models/{module}/main.py` and press Run. It decides portfolios with live data and prints a row for each.
    Add `data="tests/fixture"` to its `run(...)` to run on the model's fixture instead, with no database.
 
 Each run from `main.py` saves its snapshot in `snapshots/`, which git ignores; delete it whenever you like. A run from
-`main.py` never writes orders: only `optim run`, in production, does.
+`main.py` never writes orders: only `basis run`, in production, does.
+
+The repo's command is `basis`, and `uv run basis --help` lists every verb it has; `optim` is the same command, under
+the name optim had before it ran on basis. Every commit runs `basis check`, through the hooks in `.githooks/`.
 
 ## To change something, edit this
 
-Paths are in a model's folder, `models/MODEL/`. `uv run optim docs PAGE` prints each guide.
+Paths are in a model's folder, `models/MODEL/`. `uv run basis docs optim/PAGE` prints each guide.
 
 | To | Edit | Guide |
 |---|---|---|
@@ -41,8 +44,8 @@ Paths are in a model's folder, `models/MODEL/`. `uv run optim docs PAGE` prints 
 | run on QA or production data | `env=".env.qa"` or `env=".env.prod"` in `main.py` | `how-to/run-on-live-data` |
 | find out why a portfolio was rejected | `replay(...)` in `main.py`, as its docstring shows | `how-to/find-out-why-a-portfolio-was-rejected` |
 | compare params | `sweep(...)` in `main.py`, as its docstring shows | `how-to/compare-params-with-a-sweep` |
-| add a model | `uv run optim new model NAME` | `how-to/share-code-between-models` |
+| add a model | `uv run basis new model NAME` | `how-to/share-code-between-models` |
 | share code between models | `models/shared/`, which the second model brings | `how-to/share-code-between-models` |
 
-`uv run optim docs` lists every guide, and `uv run optim docs tutorial` is the place to start. `AGENTS.md` holds the
-contract every model keeps, for people and agents alike.
+`uv run basis docs` lists every guide, and `uv run basis docs optim/tutorial` is the place to start. `AGENTS.md` holds
+the contract every model keeps, for people and agents alike.

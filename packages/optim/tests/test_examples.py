@@ -6,11 +6,10 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from fakes import EXAMPLE, Rows, loader, saved
+from fakes import EXAMPLE, Basis, Rows, loader, saved
 
 from basis.core.storage import Root
 from optim import Decision, models
-from optim.cli import main
 from optim.example import model, prep
 from optim.example.datasets.controls import CONTROLS
 from optim.example.tests.builders import MARKET, params, portfolio
@@ -84,11 +83,11 @@ def test_a_portfolio_with_nothing_it_may_hold_or_buy_decides_nothing() -> None:
     assert model.decide(replace(found, universe=found.universe.iloc[0:0]), MARKET, params()) == Decision()
 
 
-def test_optim_run_on_the_fixture_decides_as_of_its_date(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_basis_run_on_the_fixture_decides_as_of_its_date(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], basis: Basis) -> None:
     """As a run from Python does: the fixture's rows are of the date in its `fixture.json`."""
     monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", str(tmp_path))
 
-    assert main(["run", "optim.example.model", "--params", str(EXAMPLE / "params" / "default.json"), "--data", str(EXAMPLE / "tests" / "fixture")]) == 0
+    assert basis("run", "optim.example.model", "--params", str(EXAMPLE / "params" / "default.json"), "--data", str(EXAMPLE / "tests" / "fixture")) == 0
 
     run_id = capsys.readouterr().out.splitlines()[0].removeprefix("run ")
     assert saved(Root.at(tmp_path), run_id).info.as_of_date == AS_OF

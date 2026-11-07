@@ -9,7 +9,7 @@ Prerequisites:
 - A saved run of the model to sweep: its id, in the repo's `snapshots/` or under the settings file's
   `BASIS_SNAPSHOT_ROOT`, such as production's in `.env.prod`. Any run works, a replay included; a replay of some
   portfolios sweeps those alone.
-- The model's params, which `uv run optim describe MODEL` prints as a JSON schema, with each field's description.
+- The model's params, which `uv run basis describe MODEL` prints as a JSON schema, with each field's description.
 
 To sweep params files:
 
@@ -69,11 +69,11 @@ The table has a row per params file and portfolio, with these columns:
 
 ## Sweep from the command line
 
-`optim sweep` sweeps every params file in a folder and writes the same table as CSV, which suits an agent or a
+`basis sweep` sweeps every params file in a folder and writes the same table as CSV, which suits an agent or a
 pipeline. Put the variants in a folder of their own, such as `models/income/params/sweep/`, then:
 
 ```sh
-uv run --env-file .env optim sweep RUN_ID models/income/params/sweep --out sweep.csv
+uv run --env-file .env basis sweep RUN_ID models/income/params/sweep --out sweep.csv
 ```
 
 `RUN_ID` is a run under `BASIS_SNAPSHOT_ROOT`, which `.env.example` sets to the repo's `snapshots/`, or the path of its

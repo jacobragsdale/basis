@@ -20,4 +20,4 @@ To add one:
 2. Call it in `prepare_portfolio`, where it applies.
 3. Test it in `tests/test_rules.py`, on a few rows: `builders.portfolio(...)` makes the portfolio.
 
-`uv run optim docs how-to/write-a-rule` says more.
+`uv run basis docs optim/how-to/write-a-rule` says more.

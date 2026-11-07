@@ -11,9 +11,9 @@ Before you start, you need:
 - An editor, such as PyCharm or VS Code, and a terminal: PowerShell on Windows, or any shell elsewhere. The commands
   are the same in both.
 - The address of the firm's internal package index, where `optim` is published, which we call `INDEX_URL`. If the
-  index needs a login, set uv's credentials for it first, as the index's owner describes. To try a checkout of `optim`
-  instead, run `uv run optim new repo sma-optimizer income --optim-path . --dir DIR` in the checkout, where `DIR` is
-  the folder to make the repo in, and go on from `cd DIR/sma-optimizer`.
+  index needs a login, set uv's credentials for it first, as the index's owner describes. To try a checkout of basis,
+  which holds `optim`, instead, run `uv run optim new repo sma-optimizer income --framework-path . --dir DIR` at the
+  checkout's root, where `DIR` is the folder to make the repo in, and go on from `cd DIR/sma-optimizer`.
 
 ## Make the repo
 
@@ -25,35 +25,34 @@ cd sma-optimizer
 ```
 
 The first `--index` is where `uvx` finds `optim`; the second is written into the new repo, so that its own `uv sync`
-finds it too. The last line of the output names the folder it made:
+finds it too. The last line of the output, a log record, names the folder it made:
 
 ```text
-created /home/you/sma-optimizer: commit it once you have read it
+{"time":"...","level":"info","logger":"optim.cli","message":"made /home/you/sma-optimizer: run `uv run basis check` in it"}
 ```
 
-`optim` has made the repo, run `git init`, and installed its dependencies; the first commit is yours, whenever you
-like. Open the folder in your editor, with `.venv` as its Python interpreter. Notice that everything about the model
-is in one folder, `models/income/`: its code, its params in `params/default.json`, and its tests, with its fixture in
-`tests/fixture/`, one CSV file per dataset.
+`optim` has made the repo, run `git init`, pointed git at the repo's commit and push hooks, and installed its
+dependencies; the first commit is yours, whenever you like. From here on, the repo's command is `basis`, which every
+basis repo has; `optim` is the same command, under its earlier name. Open the folder in your editor, with `.venv` as
+its Python interpreter. Notice that everything about the model is in one folder, `models/income/`: its code, its
+params in `params/default.json`, and its tests, with its fixture in `tests/fixture/`, one CSV file per dataset.
 
-## Run the tests
+## Run the checks
 
 ```sh
-uv run pytest
+uv run basis check
 ```
 
-The output should end with:
+It runs ruff, ty and the tests, and checks the files basis writes, such as `AGENTS.md`'s blocks and the skills, and the
+hooks. The output should end with:
 
 ```text
-models/income/tests/test_contract.py ...                                 [ 21%]
-models/income/tests/test_optimizer.py ....                               [ 50%]
-models/income/tests/test_rules.py ......                                 [ 92%]
-tests/test_agent_files.py .                                              [100%]
-
-======================= 14 passed, 1 deselected in 1.57s =======================
+All checks passed!
+.............                                                            [100%]
+13 passed, 1 deselected in 0.66s
 ```
 
-The three tests in `test_contract.py` check that the model's default params are valid, that it accepts every
+Every commit runs the same checks, through the commit hook. The three tests in `test_contract.py` check that the model's default params are valid, that it accepts every
 portfolio of its fixture, and that its code cannot reach a database or an API through its imports. The deselected
 test is the QA suite, which runs only against QA.
 
@@ -184,7 +183,7 @@ with the changes given. Run the tests:
 uv run pytest
 ```
 
-The output should end with `15 passed, 1 deselected`. Run `main.py` again. The trades should now be:
+The output should end with `14 passed, 1 deselected`. Run `main.py` again. The trades should now be:
 
 ```text
   portfolio_id security_id  side  quantity  decided

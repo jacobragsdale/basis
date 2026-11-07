@@ -14,7 +14,7 @@ Prerequisites:
 
 To port a model:
 
-1. Start the model from optim's example: `uv run optim new model NAME`. It writes the model's folder, `models/NAME/`,
+1. Start the model from optim's example: `uv run basis new model NAME`. It writes the model's folder, `models/NAME/`,
    with its `main.py`, `model.py`, `prep.py`, `datasets/`, `rules/`, `optimizer/`, `params/default.json` and `tests/`, a
    fixture included, and lists the model in `pyproject.toml` and the repo's `README.md`. The example is a starting
    point, not a requirement: as the port lands, delete the example's datasets, rules and tests that the old system does
@@ -106,8 +106,8 @@ Paths are in the model's folder, `models/NAME/`.
 | Sets values for a group of portfolios | Fields of `Params`, in one params file per group |
 | Sets values that differ for every portfolio | A per-portfolio dataset, read in a rule as `portfolio.data.NAME` |
 | Lets portfolios compete for a bond's supply | `reserve` and `order` ([how to decide portfolios one at a time](decide-portfolios-in-turn.md)) |
-| Sends orders | Nothing: `optim run` writes accepted orders to the orders table in production |
-| Runs on a schedule | An Airflow task that runs the repo's image: `optim run NAME --params models/NAME/params/default.json --as-of DATE` |
+| Sends orders | Nothing: `basis run` writes accepted orders to the orders table in production |
+| Runs on a schedule | An Airflow task that runs the repo's image: `basis run NAME --params models/NAME/params/default.json --as-of DATE` |
 
 A rule reads only the portfolio, the market and the params it is given. If it needs data the model lacks, add a
 dataset first.
@@ -133,7 +133,7 @@ To sanity-check the port:
 
 1. Export one business day of the old system's inputs to `old/` at the repo's root, one CSV or Parquet file per
    dataset of the port, named by the dataset's `name` (`old/holdings.csv` for `HOLDINGS`), with exactly the fields of
-   its row model, which `uv run optim describe NAME` lists under `datasets`. Rename columns as the dataset's SQL aliases
+   its row model, which `uv run basis describe NAME` lists under `datasets`. Rename columns as the dataset's SQL aliases
    them, such as `account_id` to `portfolio_id`. Git ignores `old/`, which holds client data: `git check-ignore
    old/holdings.csv` prints the path when it is ignored.
 2. Run the port on the export, for the export's date. In the model's `main.py`, change the call to:

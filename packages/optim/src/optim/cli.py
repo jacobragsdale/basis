@@ -1,19 +1,23 @@
-"""The command line, for Airflow, Docker, CI and agents; an analyst runs a model's `main.py` instead, which calls the
-same code (`optim.api`). Settings come from `BASIS_*` environment variables; choose the settings file explicitly:
+"""optim's part of the `basis` command, which its `basis.verbs` entry point names, and the `optim` command, which is
+`basis` itself under the name quants know, except that `optim new repo` makes a model repo wherever it runs. An analyst
+runs a model's `main.py` instead, which calls the same code (`optim.api`). Settings come from `BASIS_*` environment
+variables; choose the settings file explicitly:
 
-uv run --env-file .env optim run income --params models/income/params/default.json
-uv run --env-file .env optim run income --params models/income/params/default.json --portfolios P1 P2 --as-of 2026-10-16
-uv run --env-file .env optim run income --params models/income/params/default.json --data models/income/tests/fixture
-uv run --env-file .env optim replay RUN_ID --params models/income/params/wider.json
-uv run --env-file .env optim sweep RUN_ID models/income/params/sweep --out sweep.csv
-uv run --env-file .env optim regress income --snapshots //share/optim/snapshots --label purpose=production
-uv run --env-file .env optim warm income
-uv run optim describe income
+uv run --env-file .env basis run income --params models/income/params/default.json
+uv run --env-file .env basis run income --params models/income/params/default.json --portfolios P1 P2 --as-of 2026-10-16
+uv run --env-file .env basis run income --params models/income/params/default.json --data models/income/tests/fixture
+uv run --env-file .env basis replay RUN_ID --params models/income/params/wider.json --portfolios P1
+uv run --env-file .env basis sweep RUN_ID models/income/params/sweep --out sweep.csv
+uv run --env-file .env basis regress income --snapshots //share/optim/snapshots --label purpose=production
+uv run --env-file .env basis warm income
+uv run basis describe income
 uvx --index INDEX_URL optim new repo sma-optimizer income --index INDEX_URL
-uv run optim new model ladder
-uv run optim sync
-uv run optim docs tutorial
-"""
+uv run basis new model ladder
+
+`run`, `describe`, `replay` and `regress` are the verbs core shares with jobs: core parses the model's NAME and the
+RUN_ID, and these add the rest. `sweep` and `warm` are optim's own. Each handler reads its arguments as a frozen
+dataclass. `run` exits 0 only when every portfolio was accepted, and is the only thing that writes orders; `regress`
+exits 1 when anything changed. A failure prints one `ERROR` line after the logs; results are on stdout."""
 
 import argparse
 import json
@@ -22,14 +26,16 @@ import os
 import signal
 import sys
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import cast
 
 import pandas as pd
 
-from basis.core import logs
+from basis.core import command, logs
+from basis.core.errors import BasisError, deliberate
 from basis.core.storage import Root
+from basis.core.verbs import Part, Runs, Shared, Verb, fail
 from optim import models, new, research, snapshots, sync
 from optim.context import open_context
 from optim.contract import LISTING, declared
@@ -39,22 +45,112 @@ from optim.snapshots import Saved
 
 log = logging.getLogger(__name__)
 
+DOCS = Path(__file__).parent / "docs"
+"""The docs for quants, which ship with the package: `basis docs` lists them as `optim/PAGE`."""
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """Exit 0 only when every portfolio was accepted. An error is logged once, with its root cause, and exits 1."""
-    args = _parser().parse_args(argv)
-    handler = cast("Callable[[argparse.Namespace], int]", args.handler)  # each command's, set by `_command`; a Namespace is untyped
-    signal.signal(signal.SIGTERM, _stopped)
-    try:
+
+@dataclass(frozen=True)
+class RunArgs:
+    model: str
+    params: Path
+    portfolios: tuple[str, ...] | None
+    as_of: date | None
+    data: Path | None
+    labels: dict[str, str]
+    workers: int | None
+    cache: bool
+
+
+@dataclass(frozen=True)
+class ReplayArgs:
+    model: str | None
+    run: str
+    """A run's id, or the path or URL of its manifest."""
+    params: Path | None
+    portfolios: tuple[str, ...] | None
+    labels: dict[str, str]
+    workers: int | None
+
+
+@dataclass(frozen=True)
+class SweepArgs:
+    run: str
+    variants: Path
+    out: Path | None
+    workers: int
+
+
+@dataclass(frozen=True)
+class RegressArgs:
+    model: str | None
+    """The model whose runs to replay, or None for every model the repo lists."""
+    snapshots: str | None
+    last: int
+    labels: dict[str, str]
+    out: Path | None
+    workers: int
+
+
+@dataclass(frozen=True)
+class WarmArgs:
+    models: tuple[str, ...]
+    as_of: date | None
+
+
+@dataclass(frozen=True)
+class NewRepoArgs:
+    name: str
+    model: str
+    directory: Path
+    index: str | None
+    framework_path: Path | None
+
+
+def part() -> Part:
+    """optim's side of the verbs core shares with jobs, its own verbs, and what core's verbs do with its models:
+    `basis new model`, its docs and its agent files."""
+    return Part(
+        verbs=(
+            Verb("sweep", "decide a saved run once per params file in a folder, into one comparison table; reads only the run", _sweep_arguments, _optim(_sweep_from)),
+            Verb("warm", "fill the cache with every cached dataset the models read, before the day's first run", _warm_arguments, _optim(_warm_from)),
+        ),
+        files=sync.agent_files,
+        docs=DOCS,
+        new={"model": new.model},
+        runs=Runs(
+            "model",
+            models.installed,
+            run=Shared("decide portfolios with a model, and save the run", _optim(_run_from), _run_arguments),
+            describe=Shared("print a model's params schema, datasets and metrics as JSON, or every model's name", _describe_from),
+            replay=Shared("decide a saved run again with today's code, and other params if given; reads only the run", _optim(_replay_from), _replay_arguments),
+            regress=Shared("replay a model's recent runs with today's code, and list every trade that changed", _optim(_regress_from), _regress_arguments),
+        ),
+        renamed=refuse_renamed,
+    )
+
+
+def main() -> int:
+    """The `optim` console script: `optim new repo NAME MODEL` makes a model repo wherever it runs, as `uvx optim new
+    repo` does from the feed; anything else is `basis`, in the repo it runs in."""
+    if sys.argv[1:3] == ["new", "repo"]:
+        return scaffold(sys.argv[1:])
+    return command.main()
+
+
+def scaffold(argv: Sequence[str]) -> int:
+    """`optim new repo NAME MODEL`, which runs before a repo exists."""
+    return command.standalone("optim", "Make a model repo.", [Verb("new", "make a model repo: optim new repo NAME MODEL", _new_arguments, _new_from)], argv)
+
+
+def _optim(handle: Callable[[argparse.Namespace], int]) -> Callable[[argparse.Namespace], int]:
+    """`handle`, logging optim's records as basis's are, and a scheduler's SIGTERM before dying by it."""
+
+    def handled(namespace: argparse.Namespace) -> int:
         logs.include("optim")
-        logs.setup()
-        refuse_renamed(os.environ)
-        with logs.timed(log, f"finished {args.command}") as fields:
-            fields["exit_code"] = code = handler(args)
-    except Exception:
-        log.exception("%s failed", args.command, extra={"cli": logs.brief(vars(args))})
-        return 1
-    return code
+        signal.signal(signal.SIGTERM, _stopped)
+        return handle(namespace)
+
+    return handled
 
 
 def _stopped(signum: int, _frame: object) -> None:
@@ -64,89 +160,175 @@ def _stopped(signum: int, _frame: object) -> None:
     os.kill(os.getpid(), signum)
 
 
-def _run(args: argparse.Namespace) -> int:
+def _run_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--params", type=command.existing_file, required=True, help="the params JSON file")
+    parser.add_argument("--portfolios", nargs="+", help="portfolio ids, or @FILE with one per line (default: every portfolio the model lists, or with --data, every one in its holdings)")
+    parser.add_argument("--as-of", type=date.fromisoformat, help="the business date (default: the date in --data's fixture.json, where it has one, or today in New York)")
+    parser.add_argument("--data", type=command.existing_folder, help="read each dataset that has a file here, NAME.parquet or NAME.csv, instead of its source")
+    _deciding(parser)
+    parser.add_argument("--no-cache", action="store_true", help="read every dataset live")
+
+
+def _deciding(parser: argparse.ArgumentParser) -> None:
+    """The options of a verb that decides portfolios and saves a run."""
+    parser.add_argument("--label", type=command.label, action="append", default=[], dest="labels", metavar="KEY=VALUE", help="recorded in the run's manifest, such as purpose=production; repeatable")
+    parser.add_argument("--workers", type=command.positive, help="worker processes (default: BASIS_OPTIM__WORKERS, or 1)")
+
+
+def _run_from(n: argparse.Namespace) -> int:
+    return _run(RunArgs(n.name, n.params, _portfolios(n.portfolios), n.as_of, n.data, dict(n.labels), n.workers, cache=not n.no_cache))
+
+
+def _run(args: RunArgs) -> int:
     """The only thing that writes orders, where the environment configures a table."""
-    settings, model = Settings(), models.load(args.model)
-    with open_context(settings, cache=not args.no_cache) as ctx:
-        as_of_date, workers, labels = args.as_of or fixture_date(args.data) or today(), args.workers or settings.optim.workers, dict(args.labels)
+    settings, model = Settings(), _model(args.model)
+    with open_context(settings, cache=args.cache) as ctx:
+        as_of_date, workers = args.as_of or fixture_date(args.data) or today(), args.workers or settings.optim.workers
         ran = run_model(
-            ctx.loader, settings.snapshots(), model, args.params, as_of_date=as_of_date, portfolio_ids=args.portfolios, data_dir=args.data, workers=workers, labels=labels, orders=ctx.orders
+            ctx.loader, settings.snapshots(), model, args.params, as_of_date=as_of_date, portfolio_ids=args.portfolios, data_dir=args.data, workers=workers, labels=args.labels, orders=ctx.orders
         )
     return _report(ran)
 
 
-def _replay(args: argparse.Namespace) -> int:
-    """Reads a snapshot and writes one: no sources or cache."""
+def _replay_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--params", type=command.existing_file, help="a params JSON file (default: the params the run used)")
+    parser.add_argument("--portfolios", nargs="+", help="only these portfolios, or @FILE with one per line (default: every portfolio in the run)")
+    _deciding(parser)
+
+
+def _replay_from(n: argparse.Namespace) -> int:
+    return _replay(ReplayArgs(n.name, n.run_id, n.params, _portfolios(n.portfolios), dict(n.labels), n.workers))
+
+
+def _replay(args: ReplayArgs) -> int:
+    """Reads a run and saves one: no sources or cache."""
     settings = Settings()
-    ran = replay_run(_snapshot(args.run), settings.snapshots(), params_file=args.params, portfolio_ids=args.portfolios, workers=args.workers or settings.optim.workers, labels=dict(args.labels))
+    workers = args.workers or settings.optim.workers
+    ran = replay_run(_snapshot(args.run, args.model), settings.snapshots(), params_file=args.params, portfolio_ids=args.portfolios, workers=workers, labels=args.labels)
     return _report(ran)
 
 
-def _sweep(args: argparse.Namespace) -> int:
-    """Reads a snapshot alone, and writes only the table."""
+def _sweep_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("run", metavar="RUN", help="a run's id under BASIS_SNAPSHOT_ROOT, or the path or URL of its manifest")
+    parser.add_argument("variants", metavar="VARIANTS", type=command.existing_folder, help="a folder of params JSON files, one per variant")
+    _tabled(parser)
+
+
+def _tabled(parser: argparse.ArgumentParser) -> None:
+    """The options of a verb whose result is a table."""
+    parser.add_argument("--out", type=Path, help="write the table to this .csv or .parquet file (default: CSV on stdout)")
+    parser.add_argument("--workers", type=command.positive, default=1, help="worker processes (default: 1)")
+
+
+def _sweep_from(n: argparse.Namespace) -> int:
+    return _sweep(SweepArgs(n.run, n.variants, n.out, n.workers))
+
+
+def _sweep(args: SweepArgs) -> int:
+    """Reads a run alone, and writes only the table."""
     if not (variants := sorted(args.variants.glob("*.json"))):
-        msg = f"{args.variants} has no params files (*.json) to sweep"
-        raise FileNotFoundError(msg)
-    _write(research.sweep(read_snapshot(_snapshot(args.run)), variants, workers=args.workers or 1), args.out)
+        return fail(f"{args.variants} has no params files (*.json) to sweep", "add one per variant, such as a copy of the model's params/default.json with a value changed")
+    _write(research.sweep(read_snapshot(_snapshot(args.run, None)), variants, workers=args.workers), args.out)
     return 0
 
 
-def _regress(args: argparse.Namespace) -> int:
-    changes = research.regress(models.load(args.model), Root.at(args.snapshots) if args.snapshots else Settings().snapshots(), last=args.last, labels=dict(args.labels), workers=args.workers or 1)
+def _regress_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--snapshots", help="the run store to read, such as production's (default: BASIS_SNAPSHOT_ROOT)")
+    parser.add_argument("--last", type=command.positive, default=20, help="how many of each model's most recent runs (default: 20)")
+    parser.add_argument("--label", type=command.label, action="append", default=[], dest="labels", metavar="KEY=VALUE", help="only runs labelled so, such as purpose=production; repeatable")
+    _tabled(parser)
+
+
+def _regress_from(n: argparse.Namespace) -> int:
+    return _regress(RegressArgs(n.name, n.snapshots, n.last, dict(n.labels), n.out, n.workers))
+
+
+def _regress(args: RegressArgs) -> int:
+    """A row per change, for the model named or every model the repo lists; exits 1 when anything changed."""
+    store = Root.at(args.snapshots) if args.snapshots is not None else Settings().snapshots()
+    names = [args.model] if args.model is not None else sorted(models.installed())
+    tables = [research.regress(_model(name), store, last=args.last, labels=args.labels, workers=args.workers) for name in names]
+    changes = pd.concat(tables, ignore_index=True) if tables else pd.DataFrame(columns=research.CHANGES)
     _write(changes, args.out)
-    return 1 if len(changes) else 0
-
-
-def _describe(args: argparse.Namespace) -> int:
-    sys.stdout.write(json.dumps(research.describe(models.load(args.model)), indent=2) + "\n")
+    if len(changes):
+        where = args.out if args.out is not None else "stdout"
+        fix = f"{where} lists each; fix the code, or say in the pull request why the change is meant"
+        return fail(f"{len(changes)} portfolios or trades changed when the runs were replayed with today's code", fix)
     return 0
 
 
-def _new_repo(args: argparse.Namespace) -> int:
-    index = args.index or (None if args.optim_path else os.environ.get("UV_INDEX"))
-    repo = new.new_repo(args.name, args.model, directory=args.dir, index=index, optim_path=args.optim_path, uv_sync=not args.no_sync)
-    sys.stdout.write(f"created {repo}: commit it once you have read it\n")
+def _describe_from(n: argparse.Namespace) -> int:
+    sys.stdout.write(json.dumps(research.describe(_model(n.name)), indent=2) + "\n")
     return 0
 
 
-def _new_model(args: argparse.Namespace) -> int:
-    sys.stdout.write(f"created {new.new_model(args.name, repo=Path.cwd(), uv_sync=not args.no_sync)}\n")
-    return 0
+def _warm_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("models", metavar="MODEL", nargs="+", help="the models' names, or module paths")
+    parser.add_argument("--as-of", type=date.fromisoformat, help="the business date (default: today in New York)")
 
 
-def _sync(_args: argparse.Namespace) -> int:
-    for path in sync.sync(Path.cwd()):
-        sys.stdout.write(f"wrote {path}\n")
-    return 0
+def _warm_from(n: argparse.Namespace) -> int:
+    return _warm(WarmArgs(tuple(n.models), n.as_of))
 
 
-DOCS = Path(__file__).parent / "docs"
-
-
-def _docs(args: argparse.Namespace) -> int:
-    """A page of optim's docs, or the list of them: the same text whichever repo installs this optim."""
-    pages = {path.relative_to(DOCS).with_suffix("").as_posix(): path for path in sorted(DOCS.rglob("*.md"))}
-    sys.stdout.reconfigure(encoding="utf-8")  # ty: ignore[unresolved-attribute] -- a TextIOWrapper's; a redirected Windows console is cp1252
-    if args.page is None:
-        width = max(map(len, pages)) + 2
-        sys.stdout.write("".join(f"{name:{width}}{path.read_text(encoding='utf-8').partition(chr(10))[0].lstrip('# ')}\n" for name, path in pages.items()))
-        return 0
-    if args.page not in pages:
-        msg = f"no page {args.page!r}: the pages are {', '.join(pages)}"
-        raise LookupError(msg)
-    sys.stdout.write(pages[args.page].read_text(encoding="utf-8"))
-    return 0
-
-
-def _warm(args: argparse.Namespace) -> int:
+def _warm(args: WarmArgs) -> int:
     settings = Settings()
     if settings.optim.cache_root is None:
-        msg = "warm needs BASIS_OPTIM__CACHE_ROOT: without it there is no cache to fill"
-        raise ValueError(msg)
-    read_whole = (dataset for name in args.models for attribute, dataset in declared(models.load(name).data).items() if attribute == LISTING or not dataset.per_portfolio)
+        return fail("warm fills the cache, and no cache is configured", "set BASIS_OPTIM__CACHE_ROOT, as .env.example shows")
+    read_whole = (dataset for name in args.models for attribute, dataset in declared(_model(name).data).items() if attribute == LISTING or not dataset.per_portfolio)
     datasets = {dataset.name: dataset for dataset in read_whole}
     with open_context(settings) as ctx:
-        return 0 if ctx.loader.warm(datasets.values(), args.as_of or today()) else 1
+        if ctx.loader.warm(datasets.values(), args.as_of or today()):
+            return 0
+    return fail("the cache is not warm: a dataset did not load, as the log records above say", "fix what they say, and warm it again")
+
+
+def _new_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("what", metavar="repo", choices=["repo"], help="what to make: a repo")
+    parser.add_argument("name", metavar="NAME", help="the repo's folder")
+    parser.add_argument("model", metavar="MODEL", help="its first model, a copy of the example, which names its folder in models/ and its entry point")
+    parser.add_argument("--dir", type=Path, default=Path(), help="where to make the repo")
+    parser.add_argument("--index", help="the package index optim is published to, written into the repo")
+    parser.add_argument("--framework-path", type=Path, help="a checkout of basis, whose packages the repo installs editable")
+
+
+def _new_from(n: argparse.Namespace) -> int:
+    args = NewRepoArgs(n.name, n.model, n.dir, n.index, n.framework_path)
+    logs.include("optim")
+    path = new.repo(args.directory / args.name, args.model, index=args.index, framework_path=args.framework_path)
+    log.info("made %s: run `uv run basis check` in it", path)
+    return 0
+
+
+def _model(name: str) -> models.LoadedModel:
+    """The model `name` names, a name the repo lists or a module path."""
+    with deliberate(LookupError):  # no model by that name or module path
+        return models.load(name)
+
+
+def _snapshot(run: str, model: str | None) -> Saved:
+    """A run by the path or URL of its manifest, or by its id under `BASIS_SNAPSHOT_ROOT`: a run of `model`, where it
+    is given."""
+    with deliberate(LookupError):  # no such run, or a manifest that is not optim's
+        saved = snapshots.read(Root.at(run)) if "/" in run or "\\" in run else snapshots.find([Settings().snapshots()], run)
+    if model is not None and model not in {saved.info.model.name, saved.info.model.module, models.installed().get(model)}:
+        msg = f"run {saved.info.run_id} is a run of {saved.info.model.name}, not {model}: give {saved.info.model.name}, or leave the model out"
+        raise BasisError(msg)
+    return saved
+
+
+def _portfolios(given: Sequence[str] | None) -> tuple[str, ...] | None:
+    """Portfolio ids as given, each `@FILE` replaced by the ids in that file, one per line."""
+    if given is None:
+        return None
+    ids: list[str] = []
+    for value in given:
+        if value.startswith("@"):
+            with deliberate(OSError):  # a file that is not there, or cannot be read
+                ids += [line.strip() for line in Path(value[1:]).read_text(encoding="utf-8").splitlines() if line.strip()]
+        else:
+            ids.append(value)
+    return tuple(ids)
 
 
 def _write(table: pd.DataFrame, out: Path | None) -> None:
@@ -161,85 +343,8 @@ def _write(table: pd.DataFrame, out: Path | None) -> None:
 
 def _report(ran: Run) -> int:
     sys.stdout.write(ran.summary())
-    return 0 if ran.ok else 1
-
-
-def _snapshot(run: str) -> Saved:
-    """A run by the path or URL of its manifest, or by its id, under `BASIS_SNAPSHOT_ROOT`."""
-    return snapshots.read(Root.at(run)) if "/" in run or "\\" in run else snapshots.find([Settings().snapshots()], run)
-
-
-def _label(text: str) -> tuple[str, str]:
-    key, equals, value = text.partition("=")
-    if not (key and equals):
-        msg = f"expected KEY=VALUE, got {text!r}"
-        raise argparse.ArgumentTypeError(msg)
-    return key, value
-
-
-def _command(
-    commands: argparse._SubParsersAction[argparse.ArgumentParser], name: str, handler: Callable[[argparse.Namespace], int], help_: str, *parents: argparse.ArgumentParser
-) -> argparse.ArgumentParser:
-    """A command's parser, which runs `handler` with its arguments."""
-    parser = commands.add_parser(name, parents=list(parents), help=help_)
-    parser.set_defaults(handler=handler)
-    return parser
-
-
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="optim", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter, fromfile_prefix_chars="@")
-    commands = parser.add_subparsers(dest="command", required=True)
-
-    deciding = argparse.ArgumentParser(add_help=False)
-    deciding.add_argument("--label", type=_label, action="append", default=[], dest="labels", metavar="KEY=VALUE", help="recorded in the run's manifest, e.g. purpose=production; repeat for more")
-    deciding.add_argument("--workers", type=int, help="worker processes (default: BASIS_OPTIM__WORKERS, or 1)")
-    tabled = argparse.ArgumentParser(add_help=False)
-    tabled.add_argument("--out", type=Path, help="write the table to this .csv or .parquet file (default: CSV on stdout)")
-    tabled.add_argument("--workers", type=int, help="worker processes (default: 1)")
-    dated = argparse.ArgumentParser(add_help=False)
-    dated.add_argument("--as-of", type=date.fromisoformat, help="the business date (default: the date in --data's fixture.json, where it has one, or today in New York)")
-
-    run_command = _command(commands, "run", _run, "decide portfolios with a model, and save the run's snapshot", deciding, dated)
-    run_command.add_argument("model", help="a model's name in the optim.models entry points, or its module path")
-    run_command.add_argument("--params", type=Path, required=True, help="the params JSON file")
-    run_command.add_argument("--portfolios", nargs="+", help="portfolio ids, or @file with one per line (default: every portfolio the model lists, or with --data, every one in its holdings)")
-    run_command.add_argument("--data", type=Path, help="read each dataset that has a file here, NAME.parquet or NAME.csv, instead of its source")
-    run_command.add_argument("--no-cache", action="store_true", help="read every dataset live")
-
-    replay_command = _command(commands, "replay", _replay, "decide a saved run again with today's code, and other params if given; reads only the snapshot", deciding)
-    replay_command.add_argument("run", help="a run id under BASIS_SNAPSHOT_ROOT, or the path or URL of its manifest")
-    replay_command.add_argument("--params", type=Path, help="a params JSON file (default: the params the run used)")
-    replay_command.add_argument("--portfolios", nargs="+", help="only these portfolios (default: every portfolio in the run)")
-
-    sweep_command = _command(commands, "sweep", _sweep, "decide a saved run once per params file in a directory, into one comparison table; reads only the snapshot", tabled)
-    sweep_command.add_argument("run", help="a run id under BASIS_SNAPSHOT_ROOT, or the path or URL of its manifest")
-    sweep_command.add_argument("variants", type=Path, help="a directory of params JSON files, one per variant")
-
-    regress_command = _command(commands, "regress", _regress, "replay a model's recent runs with today's code, and list every trade that changed; exits 1 if any did", tabled)
-    regress_command.add_argument("model", help="a model's name in the optim.models entry points, or its module path")
-    regress_command.add_argument("--snapshots", help="the snapshot root to read, such as production's (default: BASIS_SNAPSHOT_ROOT)")
-    regress_command.add_argument("--last", type=int, default=20, help="how many of the most recent runs (default: 20)")
-    regress_command.add_argument("--label", type=_label, action="append", default=[], dest="labels", metavar="KEY=VALUE", help="only runs labelled so, e.g. purpose=production")
-
-    describe_command = _command(commands, "describe", _describe, "print a model's params schema, datasets and metrics as JSON")
-    describe_command.add_argument("model", help="a model's name in the optim.models entry points, or its module path")
-
-    new_command = commands.add_parser("new", help="make a model repo, or add a model to this one, from optim's example")
-    new_kind = new_command.add_subparsers(dest="what", required=True)
-    syncing = argparse.ArgumentParser(add_help=False)
-    syncing.add_argument("--no-sync", action="store_true", help="leave out `uv sync`")
-    repo_command = _command(new_kind, "repo", _new_repo, "make a model repo with one model, run git init and uv sync", syncing)
-    repo_command.add_argument("name", help="the repo")
-    repo_command.add_argument("model", help="its first model, which names its folder in models/ and its entry point")
-    repo_command.add_argument("--dir", type=Path, default=Path.cwd(), help="where to make it (default: here)")
-    repo_command.add_argument("--index", help="the internal index optim is published to, written into its pyproject (default: UV_INDEX)")
-    repo_command.add_argument("--optim-path", type=Path, help="take optim from this checkout of it, editable, instead of an index: to try a change to optim")
-    model_command = _command(new_kind, "model", _new_model, "add a model to the repo this runs in, with its entry point, and models/shared/ with the second", syncing)
-    model_command.add_argument("name", help="the model's name, which names its folder in models/ and its entry point")
-    docs_command = _command(commands, "docs", _docs, "print a page of optim's docs, or list them")
-    docs_command.add_argument("page", nargs="?", help="such as tutorial, how-to/add-a-dataset, reference or explanation (default: list the pages)")
-    _command(commands, "sync", _sync, "write optim's contract into AGENTS.md and copy its skills, for the installed optim")
-
-    warm_command = _command(commands, "warm", _warm, "fill the cache with every cached dataset the models read, before the day's first run", dated)
-    warm_command.add_argument("models", nargs="+", help="model names or module paths")
-    return parser
+    if ran.ok:
+        return 0
+    rejected = sum(not outcome.accepted for outcome in ran.outcomes)
+    fix = f"fix what each says; `basis replay {ran.run_id}` decides them again on what the run read"
+    return fail(f"run {ran.run_id} rejected {rejected} of its {len(ran.outcomes)} portfolios, for the reasons above", fix)

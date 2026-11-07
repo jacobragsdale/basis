@@ -43,8 +43,14 @@ uv run basis check                  # the framework files, the hooks, the lockfi
 git add --all && git commit -m "First commit"   # the commit hook fixes, formats and runs basis check
 ```
 
-To check what `optim new repo` generates, follow the Checks section of [packages/optim/AGENTS.md](packages/optim/AGENTS.md)
-from `packages/optim`, whose `--optim-path .` is that folder.
+To check what `optim new repo` generates, from the root, then as the Checks section of
+[packages/optim/AGENTS.md](packages/optim/AGENTS.md) goes on:
+
+```sh
+uv run optim new repo sma income --dir SCRATCH --framework-path .   # its first model is income
+cd SCRATCH/sma && uv run basis new model ladder
+uv run basis check
+```
 
 A repo whose image builds needs basis from git rather than a checkout: push the branch, and make one with
 `uvx --from 'git+https://github.com/jacobragsdale/basis@BRANCH#subdirectory=packages/job' basis-job new repo loads`,
@@ -56,7 +62,7 @@ docs, and builds that repo's image and publishes its job to SQL Server.
 `basis` is basis-core's console script, and each part adds its verbs to it; `packages/core/src/basis/core/verbs.py`
 holds the interface, and its docstring is the reference.
 
-- A part lists one entry point in the `basis.verbs` group, named after the part (`job`, `api`, later `optim`), that
+- A part lists one entry point in the `basis.verbs` group, named after the part (`job`, `api`, `optim`), that
   points at a callable returning its `Part`: its own `verbs`, each a `Verb` with a name, a one-line help, a function
   that adds its arguments to an argparse parser, and a handler that returns the exit code; and the fields core's verbs
   use, `files` (`sync`, `check`; read only when used), `docs` (`docs`), `new` (`new KIND NAME`), `runs` (`run`,

@@ -5,7 +5,7 @@ description: Find out why optim rejected a portfolio, by reading its reasons and
 
 # Find out why a portfolio was rejected
 
-Follow `uv run optim docs how-to/find-out-why-a-portfolio-was-rejected`. In short:
+Follow `uv run basis docs optim/how-to/find-out-why-a-portfolio-was-rejected`. In short:
 
 1. Read its reasons: the run's summary, `results.reasons` from `main.py`, or the snapshot's `results/reasons`. A
    hook's error names the line of model code that raised; the run's log holds its traceback.

@@ -50,6 +50,10 @@ def _row(outcome: Outcome) -> dict[str, object]:
     }
 
 
+CHANGES = pd.Index(["run_id", "portfolio_id", "status_before", "status_after", "limit", "security_id", "side", "before", "after"])
+"""The columns of `regress`'s table of changes."""
+
+
 def regress(model: LoadedModel, snapshots: Root | str | Path, *, last: int = 20, labels: dict[str, str] | None = None, workers: int = 1) -> pd.DataFrame:
     """Replay the model's `last` most recent runs in the run store at `snapshots`, a path or URL, replays aside, with
     the code you have now and each run's own params, and list every change: a portfolio whose acceptance changed, and
@@ -71,7 +75,7 @@ def regress(model: LoadedModel, snapshots: Root | str | Path, *, last: int = 20,
             common["limit"] = stops[outcome.portfolio_id] == "limit" or (solver is not None and solver.stop == "limit")
             changed = _changed_trades(trades.get(outcome.portfolio_id, {}), outcome.decision)
             rows += [common | change for change in changed] if changed else [common] if was != now else []
-    return pd.DataFrame(rows, columns=pd.Index(["run_id", "portfolio_id", "status_before", "status_after", "limit", "security_id", "side", "before", "after"]))
+    return pd.DataFrame(rows, columns=CHANGES)
 
 
 def _recent(model: LoadedModel, snapshots: Root, *, last: int, labels: dict[str, str]) -> list[Saved]:

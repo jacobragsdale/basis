@@ -1,14 +1,12 @@
 [project]
 name = "optim"
-version = "0.2.0"
+version = "0.0.0"
 description = "The run loop that quants' portfolio models share: loading, parallelism, rounding, acceptance, snapshots and replay"
 readme = "README.md"
 authors = [{ name = "Jacob Ragsdale", email = "jacobragsdale@protonmail.com" }]
 requires-python = ">=3.14"
 dependencies = [
-    # basis-core's databases, settings, logs, storage and run store; optim takes basis's own version when it releases
-    # with it (roadmap step 3.6), and depends on basis-core at exactly that version, as every basis package does
-    "basis-core==0.0.0",
+    "basis-core==0.0.0",  # every basis package depends on basis-core at exactly its own version
     "cvxpy>=1.9.3",
     "highspy>=1.15.1",
     "httpx>=0.28.1",
@@ -22,7 +20,10 @@ dependencies = [
 ]
 
 [project.scripts]
-optim = "optim.cli:main"
+optim = "optim.cli:main"  # `basis` under its earlier name, and `uvx optim new repo NAME MODEL`, which makes a model repo
+
+[project.entry-points."basis.verbs"]
+optim = "optim.cli:part"  # optim's verbs, in a repo whose [tool.basis] parts include "optim"
 
 [project.entry-points.pytest11]
 optim = "optim.pytest_plugin"

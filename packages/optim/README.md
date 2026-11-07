@@ -4,7 +4,8 @@ The run loop that a firm's portfolio models share. A model is a folder of plain 
 parameters and datasets and decides each portfolio's trades in a pure function; `optim` runs everything else the same
 way for every model: loading in the parent process, deciding in parallel worker processes, rounding to trading
 increments, acceptance, snapshots that replay, research sweeps, logging and saving orders. Models live in their own
-repos, which depend on `optim`, and an analyst runs one by pressing Run on its `main.py`.
+repos, which depend on `optim` and run on basis, and an analyst runs one by pressing Run on its `main.py`. A model
+repo's command is `basis`, like every basis repo's; `optim` is the same command, under its earlier name.
 
 ## Start a model repo
 
@@ -13,20 +14,21 @@ You need [uv](https://docs.astral.sh/uv/) and git. `INDEX_URL` is the internal p
 ```sh
 uvx --index INDEX_URL optim new repo sma-optimizer income --index INDEX_URL
 cd sma-optimizer
-uv run pytest
+uv run basis check
 ```
 
 The new repo holds one model, `models/income/`, copied from `optim`'s example: its `main.py`, `model.py`, `prep.py`,
 `datasets/`, `rules/`, `optimizer/`, params, and tests with a fixture and the model's contract tests. Around it are a
-README that maps each kind of change to the file it goes in, a `Dockerfile`, an `azure-pipelines.yml` stub, the
-`.env.example` its settings files are copied from, and the agent files that `optim sync` keeps current. The second
-`--index` is required: PyPI has an unrelated package named `optim`, which a repo without it would install.
-`uv run optim new model ladder` adds a second model, and `models/shared/` for what they share.
+README that maps each kind of change to the file it goes in, the `.env.example` its settings files are copied from,
+and what `basis sync` writes and `basis check` checks: a `Dockerfile`, an `azure-pipelines.yml` stub, the commit and
+push hooks, and the agent files. The second `--index` is written into the repo, which takes every package from the
+index, so it never takes PyPI's unrelated package named `optim`. `uv run basis new model ladder` adds a second model,
+and `models/shared/` for what they share.
 
 ## Documentation
 
-The docs ship with the package, so a repo reads the ones for the `optim` it installed: `uv run optim docs` lists them,
-and `uv run optim docs PAGE` prints one.
+The docs ship with the package, so a repo reads the ones for the `optim` it installed: `uv run basis docs` lists them,
+and `uv run basis docs optim/PAGE` prints one.
 
 - [Build, replay and sweep your first model](src/optim/docs/tutorial.md): from a new repo to a run, a rule, a
   constraint, a replay and a sweep, on the fixture.
@@ -49,12 +51,14 @@ and `uv run optim docs PAGE` prints one.
 
 ## Develop optim
 
+optim is a package of the basis workspace. From its root:
+
 ```sh
 uv sync
-uv run pre-commit run --all-files   # ruff, ty, the lockfile and the import contract
-uv run pytest                        # the core's tests, which also run the example's
+uv run pre-commit run --all-files   # ruff, ty, the lockfile and the import contracts
+uv run pytest                        # every package's tests, optim's and its example's among them
 ```
 
 `uv sync` also installs COPT, which the tests run without a license, size-limited. [AGENTS.md](AGENTS.md) maps every
-module and lists the rules to keep. The firm's pipeline builds and publishes the package to the internal index when a
-version is tagged; the version is in `pyproject.toml`.
+module and lists the rules to keep. optim releases with basis, under basis's version, and depends on basis-core at
+exactly that version.

@@ -1,8 +1,7 @@
 """What a model repo's tests use from optim: the contract tests, and builders for behaviour tests.
 
-`ContractTests` holds the contract tests of one model, which its `tests/test_contract.py` subclasses, and
-`check_agent_files` the check of the repo's agent files, which its `tests/test_agent_files.py` calls. They are plain
-tests, which run like any other, in the IDE's test panel too.
+`ContractTests` holds the contract tests of one model, which its `tests/test_contract.py` subclasses. They are plain
+tests, which run like any other, in the IDE's test panel too; `basis check` checks the repo's agent files.
 
 The builders make frames from a few partial rows, each filled from a valid default row, so a test states only the
 fields it is about, and a model's `Data` from those frames. Every frame is validated by its dataset's row model, as a
@@ -22,7 +21,7 @@ import pandas as pd
 
 from basis.core import testing as core
 from basis.core.testing import ContractError
-from optim import models, sync
+from optim import models
 from optim.contract import LISTING, Datasets, declared
 from optim.data.dataset import Dataset
 from optim.data.frames import empty_frame
@@ -109,14 +108,6 @@ def check_imports(model: LoadedModel) -> None:
     # `optim.run` and friends load on first use, which model code never makes
     if chains := core.import_chains(model.module, packages=["optim", "basis.core"], forbidden=FORBIDDEN, lazy=[("optim", "optim.api")]):
         msg = f"{model.name} can reach I/O through its imports, which model code must not do: data arrives in its Data.\n" + "\n".join(" -> ".join(chain) for chain in sorted(chains))
-        raise ContractError(msg)
-
-
-def check_agent_files(repo: Path) -> None:
-    """`AGENTS.md`'s optim block and the `optim-*` skills in the repo at `repo` match the installed optim."""
-    __tracebackhide__ = True
-    if stale := sync.stale(repo):
-        msg = f"the agent files do not match the installed optim: run `uv run optim sync`, which rewrites {', '.join(map(str, stale))}"
         raise ContractError(msg)
 
 

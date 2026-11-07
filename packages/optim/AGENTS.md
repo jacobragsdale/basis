@@ -16,7 +16,7 @@ are under `src/optim/`.
 |---|---|
 | `__init__.py` | The model contract's names, and `optim.run`, `optim.replay` and `optim.sweep`, which load `api.py` on first use. |
 | `api.py` | `run`, `replay` and `sweep`, as a model's `main.py` calls them: paths from the model's folder, a settings file set for the call alone, snapshots in the repo's `snapshots/`, and no orders. |
-| `cli.py` | Every `optim` command, one handler each; `run` exits 0 only when every portfolio was accepted, and is the only thing that writes orders. |
+| `cli.py` | optim's part of the `basis` command (`part`, its `basis.verbs` entry point): its side of the verbs core shares with jobs (`run`, `describe`, `replay`, `regress`), its own (`sweep`, `warm`), `basis new model`, its docs and agent files, and the `OPTIM_*` refusal; and the `optim` console script, which is `basis` itself, except `optim new repo`, which runs outside a repo. `run` exits 0 only when every portfolio was accepted, and is the only thing that writes orders. |
 | `settings.py`, `context.py` | basis-core's `BASIS_*` settings with optim's block, `BASIS_OPTIM__*`, the refusal of optim 0.2.0's `OPTIM_*`, and the only place sources, the cache and the orders table open. |
 | `models.py` | Finding a model by its `optim.models` entry point or module path, and reading its hooks. |
 | `contract.py` | `optim.Params` (strict), `optim.Datasets` (typed dataset attributes, `portfolios` among them), `optim.Decision`, `optim.Metrics`. |
@@ -31,12 +31,12 @@ are under `src/optim/`.
 | `snapshots.py` | Runs in basis-core's run store: the manifest, `runs/optim/MODEL/RUN_ID.json`, with the run's record (`RunInfo`) and the hash of each dataset as loaded and each result table. |
 | `orders.py` | Writing accepted portfolios' orders to the orders table, where the environment configures one. |
 | `research.py` | `sweep`, `regress`, `describe`, and `trial`, which decides one portfolio of a snapshot from Python. |
-| `testing.py` | What a model repo's tests use: `ContractTests`, which each model's `tests/test_contract.py` subclasses, the import check's `FORBIDDEN`, `check_agent_files`, and builders. |
+| `testing.py` | What a model repo's tests use: `ContractTests`, which each model's `tests/test_contract.py` subclasses, the import check's `FORBIDDEN`, and builders. |
 | `pytest_plugin.py` | The `pytest11` plugin: the e2e suite's `optim_qa` fixture and its safeguards. It injects no tests. |
-| `sync.py`, `templates/contract.md`, `skills/` | The agent files `optim sync` writes into a model repo: the contract block in `AGENTS.md` and the `optim-*` skills in `.agents/skills/`. |
-| `new.py`, `templates/repo/`, `templates/shared/` | `optim new repo` and `optim new model`: a model repo, or a model in one, from the example and the templates, and `models/shared/` with a repo's second model. |
-| `example/` | The example model, laid out as a model's folder in a repo, with its fixture, params and tests, which `optim new` copies into `models/MODEL/`. Its `ruff.toml`, which `optim new` leaves out, sorts imports as a model repo does. |
-| `docs/` | The docs for quants: one tutorial, the how-to guides, the reference and the explanation. `optim docs` prints them. |
+| `sync.py`, `templates/contract.md`, `skills/` | optim's `AgentFiles`, which `basis sync` writes into a model repo beside basis's own files: the contract block in `AGENTS.md`, the `optim-*` skills in `.agents/skills/` and `.claude/skills/`, and the Dockerfile's line for models. `basis check` fails when they differ. |
+| `new.py`, `templates/repo/`, `templates/shared/` | `optim new repo` and `basis new model`, on `basis.core.new`: a model repo from basis's templates and optim's, or a model in one, from the example, and `models/shared/` with a repo's second model. basis-core writes the Dockerfile, the pipeline stub and the hooks. |
+| `example/` | The example model, laid out as a model's folder in a repo, with its fixture, params and tests, which `optim new repo` and `basis new model` copy into `models/MODEL/`. Its `ruff.toml`, which they leave out, sorts imports as a model repo does. |
+| `docs/` | The docs for quants: one tutorial, the how-to guides, the reference and the explanation. `basis docs` lists them as `optim/PAGE`, and prints one. |
 
 ## Rules to keep
 
@@ -45,7 +45,7 @@ are under `src/optim/`.
   contract tests enforce it in model repos, from `model.py`'s imports: `main.py` and the tests are not model code.
 - `optim/__init__.py` loads `api.py` only on first use of `optim.run`, `optim.replay` or `optim.sweep`, so model code,
   which imports `optim`, imports no source; the import contract and the contract tests' graph both drop that one edge.
-- A run from Python never writes orders; only `optim run` does.
+- A run from Python never writes orders; only `basis run` does.
 - Snapshots hold each dataset as loaded, never a frame derived from one, so replay reruns the model's hooks.
 - Every query takes only the as-of date and, for a dataset read per portfolio, the portfolio ids. Params never change
   what is loaded, so a sweep can run every variant from one snapshot.
@@ -74,7 +74,9 @@ are under `src/optim/`.
   in a commit of its own that the pull request names; a larger one gets a pull request of its own. Changes to
   basis-core land one pull request at a time.
 - A solver is a reader in `optim.cvxpy._READERS` and a name in `SolveSettings.solver`.
-- A command is a handler in `cli.py`, registered with `_command`; its Python twin, if it has one, is in `api.py`.
+- A verb is a handler in `cli.py`, which reads its arguments into a frozen dataclass: optim's own is a `Verb` in
+  `part()`'s `verbs`, and its side of a verb core shares with jobs is a `Shared` in its `Runs`, whose NAME and RUN_ID
+  core parses (`basis.core.verbs`). Its Python twin, if it has one, is in `api.py`.
 - A docs page is a Markdown file in `docs/`, and a link from the README.
 
 ## Checks
@@ -86,18 +88,21 @@ uv run pre-commit run --all-files   # ruff, ty, lockfile, import contracts
 uv run pytest                        # every package's tests, optim's and its example's among them
 ```
 
-To check what `optim new` generates, make a repo in a scratch directory that takes `optim` from this checkout, add a
-second model, then run its checks, its model's `main.py` on the fixture, and the command line:
+To check what `optim new repo` generates, make a repo in a scratch directory that takes optim from this checkout of
+basis, whose root `--framework-path` names, add a second model, then run its checks, its model's `main.py` on the
+fixture, the command line under both its names, and a commit through its hooks:
 
 ```sh
-uv run optim new repo sma SCRATCH_MODEL --dir SCRATCH --optim-path .
+uv run optim new repo sma SCRATCH_MODEL --dir SCRATCH --framework-path ../..
 cd SCRATCH/sma
-uv run optim new model ladder
-uv run pytest && uv run ruff check . && uv run ruff format --check . && uv run ty check
+uv run basis new model ladder
+uv run basis check                  # the framework files, the hooks, the lockfile, ruff, ty and pytest
 cp .env.example .env
 uv run python -c 'from optim import run; from models.ladder import model; run(model, data="tests/fixture")'
 uv run python models/ladder/main.py   # live data: stops, naming the settings to set
+uv run --env-file .env basis run ladder --params models/ladder/params/default.json --data models/ladder/tests/fixture
 uv run --env-file .env optim run ladder --params models/ladder/params/default.json --data models/ladder/tests/fixture
+git add --all && git commit -m "First commit"   # the commit hook fixes, formats and runs basis check
 ```
 
 `SCRATCH_MODEL` is the first model's name, such as `income`. `snapshots/` is not in git, and a run saved before a

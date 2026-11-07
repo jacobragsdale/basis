@@ -22,7 +22,7 @@ with a hundred variants of its params without touching production data.
 `optim` is one package that each model repo depends on, rather than a template copied into each repo, because hundreds
 of copies of an engine drift apart. Everything that must stay the same across repos ships in the package and upgrades
 with it: the loop, the shared datasets, the contract tests and the import check, the e2e safeguards, the example the
-generator copies, and the agent guidance `optim sync` writes. A repo depends on a version range, and every run's
+generator copies, and the agent guidance `basis sync` writes. A repo depends on a version range, and every run's
 manifest and first log line records the version it ran, so production snapshots show which model runs which
 version. The package stays at 0.x until real models run on it in production, since a minor release may still break
 the contract, as 0.2 broke 0.1's.
@@ -116,13 +116,13 @@ model defines no `prepare_market`. Loading is I/O-bound and batched, so the pare
 
 ## One path from main.py and the command line
 
-`main.py` calls `optim.run`, and Airflow calls `optim run`; both reach the same code, from loading to saving, so a
+`main.py` calls `optim.run`, and Airflow calls `basis run`; both reach the same code, from loading to saving, so a
 laptop run behaves as production does. They differ only where an analyst's machine and production differ. A call from
 Python takes its paths from the model's folder, because an editor runs a file from wherever it likes. It names its
 settings file, `.env`, `.env.qa` or `.env.prod`, and sets that file's variables for the call alone, so a notebook that
 reads QA and then production does not mix them. It saves its snapshot in the repo's `snapshots/`, where the analyst
 finds it, whichever settings file it read, so research runs never land in production's store. And it never writes
-orders: only `optim run` does, where production's environment configures the orders table. A laptop with read-only
+orders: only `basis run` does, where production's environment configures the orders table. A laptop with read-only
 production credentials can then decide real portfolios, or replay production's runs, and write nothing to a shared
 system.
 
@@ -199,7 +199,7 @@ rule can write `rating <= "A-"`.
 A dataset that may be cached declares how long an entry stays fresh. The cache is a Parquet file per entry under
 `BASIS_OPTIM__CACHE_ROOT`, written through `pyarrow.fs` as the run store is, with the time its source was read in the
 file. A laptop points the root at a local folder and production at shared storage, so every run shares the entries, and
-`optim warm` fills them before the day's first run. Without the setting, nothing is cached. Redis, which the engine used
+`basis warm` fills them before the day's first run. Without the setting, nothing is cached. Redis, which the engine used
 before, would be infrastructure in every environment, bounded by memory, and awkward on Windows laptops; the cache sits
 behind a small interface, so another backend can be added if files prove too slow for some dataset.
 
@@ -230,7 +230,7 @@ alternative, writing every limit a second time in pandas to check the rounded tr
 constraint that nothing held in step. `check` stays, for anything a
 desk wants beyond the problem.
 
-A rejected portfolio writes no orders, its decision and reasons stay in the snapshot, and `optim run` exits non-zero.
+A rejected portfolio writes no orders, its decision and reasons stay in the snapshot, and `basis run` exits non-zero.
 `optim` never submits orders: they are released elsewhere.
 
 ## Solving through optim.cvxpy

@@ -10,7 +10,7 @@ class Model(BaseModel):
     """Base for every model that crosses a boundary: settings, job requests, database rows. Lax, so exact
     conversions pass (a driver's `Decimal` for a float, Oracle's midnight `datetime` for a date, an ISO string, `1000.0`
     for an int) and lossy ones fail (`1000.5` for an int, `5` for a str). Document a field with a docstring under it, not a comment:
-    it becomes the field's description in the model's JSON schema, which `optim describe` prints for params."""
+    it becomes the field's description in the model's JSON schema, which `basis describe` prints for params."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, validate_default=True, revalidate_instances="always", allow_inf_nan=False, use_attribute_docstrings=True)
 

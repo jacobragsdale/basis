@@ -12,4 +12,4 @@ To add one:
 3. Add a CSV of a few rows to `tests/fixture/`, named as the dataset, with a header row of its fields.
 4. Read it in `prep.py` or a rule: `portfolio.data.limits`.
 
-`uv run optim docs how-to/add-a-dataset` says more.
+`uv run basis docs optim/how-to/add-a-dataset` says more.

@@ -7,13 +7,13 @@ or from the portfolio, where a rule set it from a dataset.
 
 Prerequisites:
 
-- A model made by `optim new`, with its tests passing.
+- A model made by `optim new repo` or `basis new model`, with its tests passing.
 - For a limit from a dataset, the dataset (see [how to add a dataset](add-a-dataset.md)).
 
 ## Change a limit for every portfolio, in the params
 
 The example's constraints read their limits from the params: `max_bond_weight`, `max_issuer_weight`, `sector_caps` and
-`max_turnover`, which `uv run optim describe MODEL` lists with their docstrings.
+`max_turnover`, which `uv run basis describe MODEL` lists with their docstrings.
 
 1. Set the limit in `params/default.json`:
 
