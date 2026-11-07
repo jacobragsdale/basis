@@ -22,7 +22,6 @@ repos:
     hooks:
       - id: uv-lock   # fails the commit if a pyproject.toml changed without uv.lock
 
-
   - repo: local
     hooks:
       - id: ty   # ty-pre-commit's hook found no Python files at this virtual workspace root and checked nothing
@@ -31,6 +30,17 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
+        always_run: true   # a commit that only deletes a file, or changes ty's settings, can break another file
+        require_serial: true
+
+      - id: ty-optim-tests   # optim's tests, whose `builders` is not basis-job's: see [tool.ty.environment]
+        name: ty (optim's tests)
+        entry: uv run ty check --extra-search-path packages/optim/tests packages/optim/tests
+        language: system
+        types: [python]
+        pass_filenames: false
+        always_run: true
+        require_serial: true
 
       - id: lint-imports   # the import contracts in pyproject.toml
         name: lint-imports

@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+snapshots/
+cache/
+.env
+.env.*
+!.env.example
+# A port's sanity check: the old system's inputs, which are client data
+/old/

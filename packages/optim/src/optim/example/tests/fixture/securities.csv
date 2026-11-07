@@ -1,0 +1,7 @@
+security_id,cusip,isin,asset_class,currency,issuer,sector,rating,maturity,price,accrued,price_per,increment,min_piece,min_remaining
+USD,,,cash,USD,,,,,1,0,1,0.01,,
+A,AAAAAAAA1,,bond,USD,Issuer A,Utilities,AA,2030-10-15,101.25,0.5,100,1000,5000,5000
+B,BBBBBBBB2,,bond,USD,Issuer B,Financials,A,2029-06-15,99.5,1.2,100,1000,5000,5000
+C,CCCCCCCC3,,bond,USD,Issuer C,Financials,AA-,2031-03-01,100,0.8,100,1000,5000,5000
+D,DDDDDDDD4,,bond,USD,Issuer D,Industrials,BBB,2032-12-01,97,0.3,100,1000,5000,5000
+E,EEEEEEEE5,,bond,USD,Issuer E,Industrials,AA+,2033-05-15,98.5,0.4,100,1000,5000,5000
