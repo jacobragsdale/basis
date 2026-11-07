@@ -17,7 +17,7 @@ with nulls stays an integer, a `Decimal` stays exact, and a `datetime` keeps its
 is lost (an Oracle `NUMBER(10)` to an `int`, a CSV's text to a date, a transform's numpy column to Arrow's) and reports
 every column it cannot convert, by `basis.core.frames.convert`'s rules."""
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -173,19 +173,12 @@ def conform(frame: pd.DataFrame, row: type[Row], *, what: str, naive: Naive) -> 
 
 def conform_columns(frame: pd.DataFrame, columns: Sequence[Column], *, what: str, naive: Naive) -> pd.DataFrame:
     """`conform`, for some of a row's columns: those a delete matches on."""
-    by_name: dict[str, list[object]] = {}
-    for name in frame.columns:
-        by_name.setdefault(str(name).lower(), []).append(name)
+    by_name = _by_name(frame)
     names = [column.name for column in columns]
-    problems: list[str] = []
-    if repeated := sorted(name for name, found in by_name.items() if len(found) > 1):
-        problems.append(f"columns named more than once: {', '.join(repeated)}")
+    problems = _named_once(by_name, by_name)
     if extra := sorted(set(by_name) - set(names)):
         problems.append(f"columns the row does not declare: {', '.join(extra)}")
-    if missing := [name for name in names if name not in by_name]:
-        indexed = [name for name in missing if name in {str(level).lower() for level in frame.index.names if level is not None}]
-        hint = f" ({', '.join(indexed)} in the frame's index: reset_index() it, or group with as_index=False)" if indexed else ""
-        problems.append(f"missing columns: {', '.join(missing)}{hint}")
+    problems.extend(_missing(frame, by_name, names))
     if problems:
         raise SchemaError(what, problems)
     converted: dict[str, pd.Series] = {}
@@ -199,6 +192,38 @@ def conform_columns(frame: pd.DataFrame, columns: Sequence[Column], *, what: str
     if problems:
         raise SchemaError(what, problems)
     return pd.DataFrame(converted, copy=False) if converted else pd.DataFrame()
+
+
+def select(frame: pd.DataFrame, names: Sequence[str], *, what: str) -> pd.DataFrame:
+    """`frame`'s columns `names`, matched as `conform` matches them, without regard to case, or `SchemaError` naming
+    each that is missing or named more than once, as `conform` would."""
+    by_name = _by_name(frame)
+    if problems := _named_once(by_name, names) + _missing(frame, by_name, names):
+        raise SchemaError(what, problems)
+    return frame[[by_name[name][0] for name in names]]
+
+
+def _by_name(frame: pd.DataFrame) -> dict[str, list[object]]:
+    """Each of a frame's column names, in lower case, with every column it names."""
+    found: dict[str, list[object]] = {}
+    for name in frame.columns:
+        found.setdefault(str(name).lower(), []).append(name)
+    return found
+
+
+def _named_once(by_name: dict[str, list[object]], names: Iterable[str]) -> list[str]:
+    """Which of `names` the frame names more than once."""
+    repeated = sorted(name for name in set(names) if len(by_name.get(name, [])) > 1)
+    return [f"columns named more than once: {', '.join(repeated)}"] if repeated else []
+
+
+def _missing(frame: pd.DataFrame, by_name: dict[str, list[object]], names: Sequence[str]) -> list[str]:
+    """Why columns are missing, naming those a frame keeps in its index, as a `groupby` without `as_index=False` does."""
+    if not (missing := [name for name in names if name not in by_name]):
+        return []
+    indexed = [name for name in missing if name in {str(level).lower() for level in frame.index.names if level is not None}]
+    hint = f" ({', '.join(indexed)} in the frame's index: reset_index() it, or group with as_index=False)" if indexed else ""
+    return [f"missing columns: {', '.join(missing)}{hint}"]
 
 
 def _invalid(series: pd.Series, column: Column) -> list[str]:

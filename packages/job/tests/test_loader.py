@@ -22,6 +22,7 @@ from basis.core.snapshots import InputRecord
 from basis.job.inputs import Dataset
 from basis.job.loader import EmptyInputError, Reach, json_rows
 from basis.job.loader import load as loading
+from basis.job.rows import SchemaError
 
 type Message = MutableMapping[str, Any]
 
@@ -113,6 +114,26 @@ def test_a_csvs_text_is_never_read_as_a_null_or_a_number_unless_its_row_says_so(
     (tmp_path / "prices.csv").write_text("day,security_id,price,note,booked_at\n2026-11-05,0012,100.5,NA,\n2026-11-05,S2,100.5,null,\n", encoding="utf-8")
     frames, _ = load(make_job(write=etl.Append()).inputs.declared(), DAY, open_database=no_databases, data=tmp_path)
     assert (frames["prices"]["security_id"].tolist(), frames["prices"]["note"].tolist()) == (["0012", "S2"], ["NA", "null"])
+
+
+class Note(etl.Row):
+    note: str | None
+
+
+class Noted(etl.Inputs):
+    notes = etl.File(Note, path="notes.csv", empty="fail")
+
+
+def test_a_blank_line_in_a_csv_of_one_column_is_a_row_whose_value_is_null(tmp_path: Path) -> None:
+    (tmp_path / "notes.csv").write_text("note\na\n\nb\n", encoding="utf-8")
+    frames, records = load(Noted.declared(), DAY, open_database=no_databases, data=tmp_path)
+    assert (frames["notes"]["note"].tolist(), records["notes"].rows) == (["a", pd.NA, "b"], 3)
+
+
+def test_a_csv_header_that_names_a_column_twice_is_refused_as_named_more_than_once(tmp_path: Path) -> None:
+    (tmp_path / "prices.csv").write_text("day,security_id,price,note,booked_at,price\n2026-11-05,S1,100.5,,,100.5\n", encoding="utf-8")
+    with pytest.raises(SchemaError, match="columns named more than once: price"):
+        load(make_job(write=etl.Append()).inputs.declared(), DAY, open_database=no_databases, data=tmp_path)
 
 
 def test_a_fetchs_empty_list_fails_unless_its_dataset_allows_it(tmp_path: Path) -> None:

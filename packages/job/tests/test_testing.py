@@ -3,13 +3,14 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
-from builders import Price, make_job, params_file
+from builders import DAY, Price, make_job, params_file
 
 import basis.job as etl
 from basis.core.testing import ContractError
 from basis.job.job import Job
 from basis.job.params import Params
-from basis.job.testing import check_fixture, check_imports, inputs
+from basis.job.rows import SchemaError
+from basis.job.testing import check_fixture, check_imports, frame, inputs
 
 
 @pytest.mark.parametrize("statement", ["import pyarrow.fs", "from pyarrow import fs", "from pyarrow.fs import LocalFileSystem", "import pyarrow as pa"])
@@ -22,6 +23,11 @@ def test_a_job_that_imports_pyarrow_itself_is_caught_though_basis_frames_types_c
     job = Job("leaky", "leaky_jobs.job", Params, object, object, print, None, package)  # ty: ignore[invalid-argument-type] -- the import check reads the module alone
     with pytest.raises(ContractError, match=r"leaky_jobs\.job -> pyarrow"):
         check_imports(job)
+
+
+def test_a_builders_decimal_text_that_is_no_number_is_a_schema_error_as_a_csvs_is() -> None:
+    with pytest.raises(SchemaError, match="price: text that is not a number with at most 4 decimal places"):
+        frame(Price, {"day": DAY.start.date(), "security_id": "S1", "price": "abc"})
 
 
 class _Stamped(etl.Inputs):

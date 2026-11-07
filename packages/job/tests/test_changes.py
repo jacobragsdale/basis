@@ -80,6 +80,19 @@ def test_every_frame_is_conformed_to_the_row() -> None:
     assert "insert: price: 1 of 1 values change when stored as decimal128(18, 4)" in reasons[0]
 
 
+def test_replace_where_matching_finds_its_columns_as_conform_does_and_says_why_it_cannot() -> None:
+    renamed = planned(etl.ReplaceWhere(matching=("security_id",)), prices({}).rename(columns={"security_id": "SECURITY_ID"}))
+    assert renamed.reasons == []
+    assert renamed.changes is not None
+    assert renamed.changes.delete is not None
+    assert renamed.changes.delete.matching is not None
+    assert renamed.changes.delete.matching["security_id"].tolist() == ["S1"]
+    [missing] = planned(etl.ReplaceWhere(matching=("security_id",)), prices({}).drop(columns=["security_id"])).reasons
+    assert missing == "prices: the frame ReplaceWhere(matching=...) deletes by does not match its row:\n  - missing columns: security_id"
+    [indexed] = planned(etl.ReplaceWhere(matching=("security_id",)), prices({}).set_index("security_id")).reasons
+    assert "missing columns: security_id (security_id in the frame's index: reset_index() it, or group with as_index=False)" in indexed
+
+
 def test_an_empty_replace_deletes_every_row_and_inserts_none() -> None:
     changes = planned(etl.Replace(), Price.empty()).changes
     assert changes is not None

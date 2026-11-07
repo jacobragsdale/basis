@@ -201,8 +201,13 @@ def _read_file(dataset: Dataset, location: str, *, source: str) -> tuple[pd.Data
 
 def _read_csv(content: bytes) -> pd.DataFrame:
     """A CSV's columns as their text, as a fetch's arrive, for `conform` to type by the dataset's row: nothing is
-    inferred, and only an empty field is null, never text such as `NA` or `null`."""
-    return pd.read_csv(io.BytesIO(content), dtype=_TEXT, keep_default_na=False, na_values=[""])
+    inferred, and only an empty field is null, never text such as `NA` or `null`. Every line after the header is a
+    row, a blank one too, which in a CSV of one column is a null; the header is read as written, so a name it repeats
+    is one `conform` refuses, where pandas would rename it `NAME.1`."""
+    read = pd.read_csv(io.BytesIO(content), header=None, dtype=_TEXT, keep_default_na=False, na_values=[""], skip_blank_lines=False)
+    frame = read.iloc[1:].reset_index(drop=True)
+    frame.columns = pd.Index([str(name) for name in read.iloc[0]] if len(read) else [], dtype=object)
+    return frame
 
 
 _TEXT = "string[pyarrow]"

@@ -19,7 +19,7 @@ ids do.
 
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from types import ModuleType
 
@@ -118,9 +118,13 @@ def frame(row: type[Row], *rows: Mapping[str, object]) -> pd.DataFrame:
 
 def _loose(column: Column, value: object) -> object:
     """A builder's Python value as it is read, before conforming: a decimal's int or str as a `Decimal`, so it is
-    exact; the rest as given, a naive datetime for the column's zone."""
+    exact; the rest as given, a naive datetime for the column's zone, and text that is no number too, which `conform`
+    then refuses as it refuses a CSV's."""
     if column.kind == "decimal" and isinstance(value, int | str) and not isinstance(value, bool):
-        return Decimal(value)
+        try:
+            return Decimal(value)
+        except InvalidOperation:
+            return value
     return value
 
 

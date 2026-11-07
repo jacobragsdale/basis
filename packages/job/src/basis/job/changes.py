@@ -15,7 +15,7 @@ import pandas as pd
 from basis.core.interval import Interval
 from basis.core.tables import Changes, Delete, Range
 from basis.job.outputs import Append, InsertNew, Manual, Outputs, Replace, ReplaceWhere, Target, Upsert
-from basis.job.rows import SchemaError, conform, conform_columns
+from basis.job.rows import SchemaError, conform, conform_columns, select
 
 
 @dataclass(frozen=True)
@@ -58,7 +58,8 @@ def build(target: Target, value: pd.DataFrame | Changes, interval: Interval | No
                     msg = f"ReplaceWhere(interval={column!r}) replaces the run's interval, and this run has none: give it one"
                     raise ValueError(msg)
                 within = Range(column, interval.start, interval.end)
-            return Changes(delete=Delete(within, value[list(matching)].drop_duplicates(ignore_index=True) if matching else None), insert=value)
+            matched = select(value, matching, what="the frame ReplaceWhere(matching=...) deletes by").drop_duplicates(ignore_index=True) if matching else None
+            return Changes(delete=Delete(within, matched), insert=value)
         case Upsert(), pd.DataFrame():
             return Changes(upsert=value)
         case InsertNew(), pd.DataFrame():

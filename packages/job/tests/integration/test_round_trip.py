@@ -12,6 +12,7 @@ import pytest
 from integration.scratch import Scratch, run
 
 import basis.job as etl
+from basis.core import frames
 from basis.core.interval import Interval
 from basis.core.settings import GivenSettings
 from basis.core.storage import Root
@@ -87,7 +88,7 @@ def test_an_integer_with_nulls_a_decimal_and_a_zone_aware_time_come_back_as_they
 
     saved = published.snapshot.changes()["kept"].upsert
     assert saved is not None
-    for found in (read.inputs["kept"], read.snapshot.inputs()["kept"], saved):
+    for found in (read.inputs["kept"], frames.from_arrow(read.snapshot.inputs()["kept"]), saved):
         assert found.sort_values("id", ignore_index=True).equals(KEPT)
     assert [str(dtype) for dtype in KEPT.dtypes] == ["string[pyarrow]", "int64[pyarrow]", "decimal128(28, 10)[pyarrow]", "timestamp[us, tz=UTC][pyarrow]"]
     assert KEPT["lots"].tolist() == [pd.NA, 2**62, -1]
