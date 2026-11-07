@@ -30,6 +30,7 @@ from basis.core.databases import Database
 from basis.core.destination import TableSpec, check_table, check_values
 from basis.core.interval import Interval
 from basis.core.logs import utc_now
+from basis.core.publish import refused_overlap
 from basis.core.runs import Regression
 from basis.core.settings import Settings, publish_refusal
 from basis.core.snapshots import InputRecord, PublishRecord, RunRecord, Snapshot, Status
@@ -91,13 +92,17 @@ def targets_of(job: Job) -> dict[str, Target]:
     return {name: table.target for name, table in job.outputs.declared().items()}
 
 
-def run(job: Job, settings: Settings, request: Request, *, snapshot_root: Root, clock: Callable[[], datetime] = utc_now) -> Result:
+def run(  # noqa: PLR0913 -- what the run reads and where it saves, by keyword
+    job: Job, settings: Settings, request: Request, *, snapshot_root: Root, clock: Callable[[], datetime] = utc_now, databases: Callable[[str], Database] | None = None
+) -> Result:
+    """Run `job` as `request` asks, reading and writing the databases `settings` configure, each opened by
+    `databases` when given, such as the QA tier's, which refuse a table it does not allow."""
     params, params_text = read_params(job, request.params)
     run_id = snapshots.new_run_id()
     logs.bind(run_id=run_id, job=job.name)
     started = clock()
     log.info("started", extra={"interval": str(request.interval) if request.interval else None, "params": str(request.params), "labels": request.labels, "version": VERSION})
-    databases = core_runs.opener(settings)
+    databases = databases if databases is not None else core_runs.opener(settings)
     record = _Record(
         run_id=run_id, job=job.name, module=job.module, version=VERSION, git_sha=request.git_sha, started_at=started,
         interval=str(request.interval) if request.interval is not None else None, params_path=str(request.params),
@@ -130,6 +135,36 @@ def run(job: Job, settings: Settings, request: Request, *, snapshot_root: Root, 
     snapshot = result.snapshot.save_record(final)
     _summary(final)
     return Result(final, snapshot, frames, planned)
+
+
+def failure_of(record: RunRecord, *, publish: bool) -> tuple[str, str] | None:
+    """Why a run did not do what it was asked, and the fix, or None when it did: `checked` without `--publish`, or
+    `published` with it."""
+    if record.status == ("published" if publish else "checked"):
+        return None
+    run = f"run {record.run_id} of {record.job}"
+    if record.status == "partial":
+        return f"{run} published to some of its databases and failed on another", f"fix what its publishes record, then `{resume_command(record)}`"
+    if record.error is not None:
+        return f"{run} failed: {record.error}", "fix it, and run the job again"
+    if record.reasons:
+        more = f", and {len(record.reasons) - 1} more the log lists" if len(record.reasons) > 1 else ""
+        replay = f"; `basis replay {record.job} {record.run_id}` reruns it on what it read" if record.inputs else ""
+        return f"{run} wrote nothing, because {record.reasons[0]}{more}", f"fix {'each' if more else 'it'}, and run the job again{replay}"
+    if errors := [f"{name}: {entry.error}" for name, entry in record.publishes.items() if entry.error is not None]:
+        again = refused_overlap(record.publishes)
+        return (
+            f"{run} committed to no database: {'; '.join(errors)}",
+            "run the job again with --again, if its rows are meant to be inserted a second time" if again else "fix it, and run the job again",
+        )
+    return f"{run} ended {record.status} with no reason recorded, when it was asked to publish", "its log records say what happened; run it again, and report it if it does the same"
+
+
+def resume_command(record: RunRecord) -> str:
+    """The command that finishes publishing `record`'s run: told `--again` as the run was, or where a database refused
+    it for an interval its ledger has, since the next attempt needs it then."""
+    again = record.again or refused_overlap(record.publishes)
+    return f"basis resume {record.job} {record.run_id}{' --again' if again else ''}"
 
 
 def _check_destinations(targets: Mapping[str, Target], settings: Settings, databases: Callable[[str], Database], *, publishing: bool) -> tuple[dict[str, TableSpec], list[str]]:

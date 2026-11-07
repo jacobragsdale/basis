@@ -207,9 +207,10 @@ def worktrees(repo: Path, git: Git) -> list[str]:
     return [line for line in git(repo, "worktree", "list", "--porcelain").splitlines() if line.startswith("worktree ")] + [path.name for path in repo.parent.glob(f".{repo.name}.push.*")]
 
 
-def test_the_push_hook_checks_head_in_place_when_the_tree_is_clean(pushing: Path, tmp_path: Path, git: Git) -> None:
+def test_the_push_hook_checks_head_in_full_in_place_when_the_tree_is_clean(pushing: Path, tmp_path: Path, git: Git) -> None:
     assert pushed(pushing, "main").returncode == 0
     assert checks(tmp_path) == [(pushing, git(pushing, "rev-parse", "HEAD").strip())]
+    assert uv_ran(tmp_path) == ["run --frozen --quiet basis check --full"]
 
 
 @pytest.mark.parametrize("dirty", ["a change", "a new file"])
@@ -220,6 +221,7 @@ def test_the_push_hook_checks_head_in_a_worktree_of_its_own_when_the_tree_has_ch
     assert folder.parent == pushing.parent
     assert folder.name.startswith(f".{pushing.name}.push.")
     assert commit == git(pushing, "rev-parse", "HEAD").strip()
+    assert uv_ran(tmp_path) == [f"run --frozen --quiet basis check --full --settings-from {pushing}/"]  # its untracked files, such as .env.qa, are there
     assert worktrees(pushing, git) == [f"worktree {pushing}"]
 
 
@@ -238,7 +240,7 @@ def test_a_failing_check_stops_the_push_and_leaves_no_worktree(pushing: Path, tm
     monkeypatch.setenv("CHECK", "1")
     found = pushed(pushing, ref)
     assert found.returncode == 1
-    assert "ERROR: a commit being pushed fails basis check, as above: fix it, commit, and push again" in found.stderr.splitlines()  # before git's own line
+    assert "ERROR: a commit being pushed fails basis check --full, as above: fix it, commit, and push again" in found.stderr.splitlines()  # before git's own line
     assert git(tmp_path / "remote.git", "rev-list", "--all") == ""
     assert worktrees(pushing, git) == [f"worktree {pushing}"]
 

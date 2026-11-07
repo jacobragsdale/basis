@@ -1,11 +1,12 @@
 #!/bin/sh
 # This file is managed by basis: `basis sync` rewrites it from the installed version, and `basis check` fails when it differs.
-# The push hook: `basis check` on each commit being pushed, so what reaches the remote has passed it, whatever was
-# committed with --no-verify. A commit that is HEAD, in a clean working tree, is checked in place; any other, in a
-# temporary worktree of that commit beside the clone, removed after: at the clone's depth, a path the lockfile gives
-# relative to the repo, such as a checkout of basis, holds there too. `basis check --full`, which adds
-# `regress` where the run store is reachable and the QA tier where QA settings exist, takes its place once basis has
-# it. Never skip it with `git push --no-verify`: fix what each ERROR line says, and push again.
+# The push hook: `basis check --full` on each commit being pushed, so what reaches the remote has passed it, whatever
+# was committed with --no-verify: `basis check`, then `regress` where the run store is reachable, and the QA tier
+# where the repo declares one and this machine has its settings. It records what it found for `basis review`. A commit
+# that is HEAD, in a clean working tree, is checked in place; any other, in a temporary worktree of that commit beside
+# the clone, removed after, reading the files git does not track, such as the QA settings, from the clone's own
+# folder: at the clone's depth, a path the lockfile gives relative to the repo, such as a checkout of basis, holds
+# there too. Never skip it with `git push --no-verify`: fix what each ERROR line says, and push again.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -41,15 +42,15 @@ while read -r _ commit _ _; do
     case "$checked" in *" $commit "*) continue ;; esac
     checked="$checked$commit "
     if [ "$commit" = "$head" ] && [ -z "$(git status --porcelain </dev/null)" ]; then
-        uv run --frozen --quiet basis check </dev/null || failed=1
+        uv run --frozen --quiet basis check --full </dev/null || failed=1
     else
         printf 'basis: checking %s, as it is pushed, in a temporary worktree\n' "$commit" >&2
         tree=$(mktemp -d "$(dirname "$top")/.$(basename "$top").push.XXXXXX")
         git worktree add --quiet --detach "$tree" "$commit" </dev/null
-        (cd "$tree/$prefix" && unset VIRTUAL_ENV && uv run --frozen --quiet basis check) </dev/null || failed=1
+        (cd "$tree/$prefix" && unset VIRTUAL_ENV && uv run --frozen --quiet basis check --full --settings-from "$top/$prefix") </dev/null || failed=1
         cleanup
     fi
 done <<EOF
 $refs
 EOF
-[ "$failed" = 0 ] || fail "a commit being pushed fails basis check, as above: fix it, commit, and push again"
+[ "$failed" = 0 ] || fail "a commit being pushed fails basis check --full, as above: fix it, commit, and push again"

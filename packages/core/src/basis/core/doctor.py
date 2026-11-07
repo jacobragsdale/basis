@@ -1,0 +1,271 @@
+"""`basis doctor`: whether this desktop is set up for basis, on Windows and in WSL, with the fix for each problem. It
+checks uv and its version, git, that the repo's clone runs its hooks (pointing a clone that names no hooks folder at
+them, as `basis check` does), the feed, and the settings. It runs in a repo or outside one, where it checks what the
+desktop has alone. Each check passed prints one line on stdout, and each problem one `ERROR` line on stderr that ends
+with its fix. It reads no database and no network.
+
+The feed is the default index of the user's `uv.toml`: the design has each developer name the firm's feed there as
+the default index, not an extra one, so a name the feed holds is never looked up on public PyPI. uv reads
+`%APPDATA%\\uv\\uv.toml` on Windows and `$XDG_CONFIG_HOME/uv/uv.toml` (`~/.config/uv/uv.toml`) elsewhere, and a
+system-wide file below it; `UV_CONFIG_FILE` replaces both, `UV_NO_CONFIG` turns them off, and `UV_DEFAULT_INDEX` or
+`UV_INDEX_URL` overrides their default index. basis does not know the firm's feed: where the repo's `pyproject.toml`
+names a default index, as a repo made with `--index` does, the user's must be the same one."""
+
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+import tomllib
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+
+from pydantic import ValidationError
+
+from basis.core import hooks, qa, settings
+from basis.core.errors import BasisError
+from basis.core.settings import Settings
+from basis.core.storage import Root
+from basis.core.sync import Problem
+from basis.core.verbs import Part
+
+UV = (0, 13, 6)
+"""The oldest uv basis works with: the version of the build backend, uv_build, that its repos build with."""
+GIT = (2, 9, 0)
+"""The oldest git basis works with: the first to run hooks from the folder `core.hooksPath` names."""
+PYPI = re.compile(r"^https?://(pypi\.org|pypi\.python\.org|files\.pythonhosted\.org)(/|$)")
+_VERSION = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
+
+type Run = Callable[[Sequence[str]], str | None]
+"""Runs a command and returns what it prints, or None when it fails."""
+
+
+@dataclass(frozen=True)
+class Desktop:
+    """What doctor reads of the machine it runs on, given so a test can be any machine."""
+
+    environ: Mapping[str, str]
+    system: str
+    """`Windows`, `WSL` or `Linux`."""
+    which: Callable[[str], str | None]
+    run: Run
+    home: Path
+
+    @classmethod
+    def here(cls) -> Desktop:
+        system = platform.system()
+        wsl = system == "Linux" and ("WSL_DISTRO_NAME" in os.environ or "microsoft" in platform.release().lower())
+        return cls(os.environ, "WSL" if wsl else system, shutil.which, _output, Path.home())
+
+
+def _output(argv: Sequence[str]) -> str | None:
+    try:
+        found = subprocess.run(argv, capture_output=True, text=True, check=False)
+    except OSError:
+        return None
+    return found.stdout.strip() if found.returncode == 0 else None
+
+
+@dataclass(frozen=True)
+class Found:
+    """One check: what it found, and the problem, if any. A `note` is neither: a piece of the gates this desktop
+    skips by choice, such as `regress` without a run store."""
+
+    what: str
+    problem: Problem | None = None
+    note: bool = False
+
+
+type Describe = Callable[[Exception], str]
+"""A failure's one line, `REASON: FIX`, as `basis` prints it."""
+
+
+def doctor(repo: Path | None, parts: Mapping[str, Part], desktop: Desktop, *, describe: Describe, unread: str | None = None) -> int:
+    """Check the desktop, and the repo at `repo` when doctor runs in one; `unread` says why a folder with a
+    `pyproject.toml` is no basis repo basis can read. 0 when nothing is wrong."""
+    found = [Found(f"{desktop.system}, Python {platform.python_version()}"), _uv(desktop), _git(desktop), *_feed(repo, desktop)]
+    if unread is not None:
+        found.append(Found("the repo", _split(unread)))
+    if repo is not None:
+        found += [*_hooks(repo), *_where(repo, desktop), *_settings(repo, parts, desktop, describe)]
+    problems = 0
+    for entry in found:
+        if entry.problem is None:
+            sys.stdout.write(f"{'note' if entry.note else 'ok'}: {entry.what}\n")
+            sys.stdout.flush()  # so the lines keep their order, on stdout and stderr
+        else:
+            sys.stderr.write(f"ERROR: {entry.problem[0]}: {entry.problem[1]}\n")
+            problems += 1
+    return 1 if problems else 0
+
+
+def _split(line: str) -> Problem:
+    """A failure's line as its reason and its fix, which it ends with after the last `: `."""
+    reason, _, fix = line.rpartition(": ")
+    return (reason, fix) if reason else (line, "fix it")
+
+
+def _version(text: str) -> tuple[int, int, int] | None:
+    found = _VERSION.search(text)
+    return (int(found[1]), int(found[2]), int(found[3] or 0)) if found is not None else None
+
+
+def _dotted(version: tuple[int, int, int]) -> str:
+    return ".".join(map(str, version))
+
+
+def _uv(desktop: Desktop) -> Found:
+    install = "install it for your user, with no admin rights, as https://docs.astral.sh/uv/getting-started/installation/ says, and open a new terminal"
+    if (path := desktop.which("uv")) is None:
+        return Found("uv", ("uv is not on the PATH, and basis runs every check through it", install))
+    printed = desktop.run([path, "--version"]) or ""
+    if (version := _version(printed)) is None:
+        return Found("uv", (f"{path} --version printed {printed!r}, which names no version", f"reinstall uv: {install}"))
+    if version < UV:
+        return Found("uv", (f"uv is {_dotted(version)}, and basis needs {_dotted(UV)} or later", "run `uv self update`, or update it as your desktop installed it"))
+    return Found(f"uv {_dotted(version)} at {path}")
+
+
+def _git(desktop: Desktop) -> Found:
+    fix = "install git (on Windows, Git for Windows, which also runs the hooks' sh), and put it on the PATH"
+    if (path := desktop.which("git")) is None:
+        return Found("git", ("git is not on the PATH, so the repo's commit and push hooks cannot run", fix))
+    printed = desktop.run([path, "--version"]) or ""
+    if (version := _version(printed)) is None:
+        return Found("git", (f"{path} --version printed {printed!r}, which names no version", fix))
+    if version < GIT:
+        return Found("git", (f"git is {_dotted(version)}, which does not run hooks from the folder core.hooksPath names", f"update it to {_dotted(GIT)} or later"))
+    return Found(f"git {_dotted(version)} at {path}")
+
+
+def _hooks(repo: Path) -> list[Found]:
+    hooks.ensure(repo)
+    if (problem := hooks.problem(repo)) is not None:
+        return [Found("the hooks", problem)]
+    missing = [hook for hook in hooks.HOOKS if not (repo / hooks.FOLDER / hook).is_file()]
+    skipped = [hook for hook in hooks.HOOKS if hook not in missing and os.name != "nt" and not os.access(repo / hooks.FOLDER / hook, os.X_OK)]
+    if missing or skipped:
+        names = ", ".join(f"{hooks.FOLDER}/{hook}" for hook in [*missing, *skipped])
+        return [Found("the hooks", (f"{names} {'is' if len(missing) + len(skipped) == 1 else 'are'} missing or not executable, so git skips them", "run `uv run basis sync`, which writes them"))]
+    return [Found(f"the clone runs the repo's hooks from {hooks.FOLDER}/")]
+
+
+def _where(repo: Path, desktop: Desktop) -> list[Found]:
+    """In WSL, a repo on a Windows drive shares one clone, and one `.venv`, with Windows, which uv rebuilds for each."""
+    resolved = repo.resolve().as_posix()
+    if desktop.system == "WSL" and re.match(r"^/mnt/[a-z]/", resolved):
+        reason = f"{resolved} is on a Windows drive, where WSL's uv and Windows' share one .venv, rebuilding it for each, and WSL reads every file slowly"
+        return [Found("the repo's folder", (reason, "clone the repo again in WSL's own filesystem, such as ~/repos, and work on it there"))]
+    return []
+
+
+def _feed(repo: Path | None, desktop: Desktop) -> list[Found]:
+    environ = desktop.environ
+    if environ.get("UV_NO_CONFIG", "") not in {"", "0", "false"}:
+        return [Found("the feed", ("UV_NO_CONFIG is set, so uv reads no uv.toml, and takes packages from public PyPI unless told otherwise", "unset it"))]
+    wanted = _repo_index(repo) if repo is not None else None
+    for variable in ("UV_DEFAULT_INDEX", "UV_INDEX_URL"):
+        if (url := environ.get(variable)) is not None:
+            return [_index(url, f"{variable}, which overrides uv.toml's default index", wanted)]
+    files = _uv_tomls(desktop)
+    for path in files:
+        if not path.is_file():
+            continue
+        try:
+            data: object = tomllib.loads(path.read_text(encoding="utf-8"))
+        except tomllib.TOMLDecodeError as error:
+            return [Found("the feed", (f"{path} is not TOML ({error}), so uv stops at every command", "fix it"))]
+        if (url := _default_index(data)) is not None:
+            return [_index(url, str(path), wanted)]
+    where = files[0] if files else Path("uv.toml")
+    reason = f"no uv.toml names a default index (uv reads {', '.join(map(str, files))}), so uv takes packages from public PyPI, where anyone may publish a name the firm's feed holds"
+    return [Found("the feed", (reason, f"add the firm's feed to {where} as [[index]] with url = FEED and default = true, as the feed's setup says"))]
+
+
+def _uv_tomls(desktop: Desktop) -> list[Path]:
+    """The uv.toml files uv reads, the user's before the system's."""
+    environ = desktop.environ
+    if (given := environ.get("UV_CONFIG_FILE")) is not None:
+        return [Path(given)]
+    if desktop.system == "Windows":
+        user = [Path(environ["APPDATA"]) / "uv" / "uv.toml"] if "APPDATA" in environ else []
+        return [*user, Path(environ.get("SYSTEMDRIVE", "C:") + "\\") / "ProgramData" / "uv" / "uv.toml"]
+    config = Path(xdg) if (xdg := environ.get("XDG_CONFIG_HOME", "")) != "" else desktop.home / ".config"
+    system = [Path(folder) / "uv" / "uv.toml" for folder in environ.get("XDG_CONFIG_DIRS", "").split(":") if folder] or [Path("/etc/uv/uv.toml")]
+    return list(dict.fromkeys([config / "uv" / "uv.toml", *system]))
+
+
+def _default_index(data: object) -> str | None:
+    """The default index a uv.toml names: an `[[index]]` with `default = true`, or the older `index-url`."""
+    if not isinstance(data, dict):
+        return None
+    indexes = data.get("index")
+    for entry in indexes if isinstance(indexes, list) else []:
+        if isinstance(entry, dict) and entry.get("default") is True and isinstance(url := entry.get("url"), str):
+            return url
+    url = data.get("index-url")
+    return url if isinstance(url, str) else None
+
+
+def _repo_index(repo: Path) -> str | None:
+    """The default index the repo's `pyproject.toml` names in `[[tool.uv.index]]`, if any."""
+    try:
+        tool: object = tomllib.loads((repo / "pyproject.toml").read_text(encoding="utf-8")).get("tool")
+    except OSError, tomllib.TOMLDecodeError:
+        return None
+    uv = tool.get("uv") if isinstance(tool, dict) else None
+    return _default_index(uv)
+
+
+def _index(url: str, where: str, wanted: str | None) -> Found:
+    if PYPI.match(url):
+        return Found("the feed", (f"{where} makes public PyPI the default index, not the firm's feed", "make the feed the default index there"))
+    if wanted is not None and url.rstrip("/") != wanted.rstrip("/"):
+        return Found("the feed", (f"{where} makes {url} the default index, and the repo's pyproject.toml names {wanted}", "make the repo's index the default there"))
+    return Found(f"the feed: {url}, the default index in {where}")
+
+
+def _settings(repo: Path, parts: Mapping[str, Part], desktop: Desktop, describe: Describe) -> list[Found]:
+    """The settings every command reads, from the process's environment, and the QA tier's, from its file."""
+    return [*_environment(repo, desktop, describe), *_qa(repo, parts, describe)]
+
+
+def _environment(repo: Path, desktop: Desktop, describe: Describe) -> list[Found]:
+    found: list[Found] = []
+    try:
+        settings.refuse_renamed(desktop.environ)
+        configured = Settings().snapshot_root
+    except (ValidationError, BasisError) as error:
+        return [Found("the settings", _split(describe(error)))]
+    if configured is not None:
+        location = configured if "://" in configured or Path(configured).is_absolute() else (repo / configured).as_posix()
+        try:
+            reachable = Root.at(location).is_dir()
+        except (OSError, ValueError) as error:
+            reachable, location = False, f"{location} ({' '.join(str(error).split())})"
+        problem = (f"BASIS_SNAPSHOT_ROOT is {location}, which this machine cannot reach, so the push hook skips regress", "correct it, or unset it") if not reachable else None
+        found.append(Found(f"the run store regress replays: {location}", problem))
+    else:
+        found.append(Found("BASIS_SNAPSHOT_ROOT is not set, so the push hook skips regress", note=True))
+    return found
+
+
+def _qa(repo: Path, parts: Mapping[str, Part], describe: Describe) -> list[Found]:
+    try:
+        declared = qa.declared(repo / "pyproject.toml", parts)
+    except BasisError as error:
+        return [Found("the QA tier", _split(describe(error)))]
+    if declared is None:
+        return [Found("the repo declares no QA tier, so the push hook runs none", note=True)]
+    source = declared.settings_file(repo)
+    if not source.is_file():
+        return [Found("the QA tier", (f"the repo declares a QA tier, and this machine has no {source}, so the push hook skips it", "copy .env.example to it, and fill in QA's databases and store"))]
+    try:
+        read = settings.read(source)
+    except ValidationError as error:
+        reason, fix = _split(describe(error))
+        return [Found("the QA tier", (f"{source}: {reason}", fix))]
+    problems = qa.problems(read, declared, source=source)
+    return [Found("the QA tier", problem) for problem in problems] or [Found(f"the QA settings in {source}, each pointing at QA")]

@@ -14,7 +14,8 @@ ERROR line is the last line, and monitoring finds every exit code. The exit code
 does not parse. A `BasisError`, which basis raises on purpose with the fix in its message, prints as that line alone,
 as does a pydantic `ValidationError` of the caller's settings or params; any other exception is a defect, and its
 traceback is logged before the line, as every exception's is with `BASIS_LOG_LEVEL=DEBUG`. `standalone` runs a
-command of the same kind outside a repo, such as `basis-job`, which makes one."""
+command of the same kind outside a repo, such as `basis-job`, which makes one. `basis doctor` and `basis --version`
+run outside a repo too."""
 
 import argparse
 import contextlib
@@ -28,23 +29,26 @@ import tomllib
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property, partial
-from importlib.metadata import EntryPoint, entry_points, version
+from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
 from typing import Literal, NoReturn, override
 
 from pydantic import ValidationError
 
-from basis.core import check, ddl, hooks, logs, settings, sync
+from basis.core import check, ddl, doctor, full, hooks, logs, qa, review, settings, sync, upgrade
 from basis.core.destination import Dialect
 from basis.core.errors import BasisError
+from basis.core.logs import utc_now
 from basis.core.verbs import Part, Runs, Shared, Verb, error_line, fail, holding
 
 GROUP = "basis.verbs"
 PACKAGES = {"job": "basis-job", "api": "basis-api", "optim": "optim"}
 """The package each part comes in, for the fix when a repo declares a part that is not installed."""
-CORE = ("check", "new", "sync", "docs")
-"""Core's verbs, which no part may add: in the order `basis --help` lists them. `check` and `sync` are always listed,
-since every repo has basis's own files, and each of the others when a declared part gives it something to do."""
+CORE = ("check", "review", "new", "sync", "upgrade", "doctor", "docs")
+"""Core's verbs, which no part may add: in the order `basis --help` lists them. `check`, `review`, `sync`, `upgrade`
+and `doctor` are always listed, since every repo has basis's own files and gates, and each of the others when a
+declared part gives it something to do."""
+ALWAYS = frozenset({"check", "review", "sync", "upgrade", "doctor"})
 
 
 @dataclass(frozen=True)
@@ -121,6 +125,8 @@ def _run(argv: Sequence[str], *, cwd: Path, installed: Installed) -> int:
         if list(argv[:1]) == ["--version"]:  # which needs no repo
             sys.stdout.write(f"{versions()}\n")
             return 0
+        if list(argv[:1]) == ["doctor"]:  # which runs outside a repo too, and says what is wrong with one
+            return _doctor(argv, cwd, installed)
         settings.refuse_renamed(os.environ)
         repo = find(cwd, installed)
         for part in repo.parts.values():
@@ -163,11 +169,7 @@ def _finishing(prog: str, argv: Sequence[str], execute: Callable[[], int]) -> in
 
 def versions() -> str:
     """basis-core's version and each installed part's package's, as `--version` prints them."""
-    found = {"basis-core": version("basis-core")}
-    for entry in entry_points(group=GROUP):
-        if entry.dist is not None:
-            found.setdefault(entry.dist.name, entry.dist.version)
-    return ", ".join(f"{name} {number}" for name, number in found.items())
+    return ", ".join(f"{name} {number}" for name, number in review.versions().items())
 
 
 def find(cwd: Path, installed: Installed) -> Repo:
@@ -198,8 +200,8 @@ def declared(pyproject: Path) -> list[str]:
     if table is None:
         msg = f"{pyproject} declares no basis parts: add {example}"
         raise CommandError(msg)
-    if unknown := sorted(set(table) - {"parts", sync.APT}):
-        msg = f"{pyproject}'s [tool.basis] has {', '.join(unknown)}, which basis does not read: remove it; basis reads parts, as {example}, and {sync.APT}"
+    if unknown := sorted(set(table) - {"parts", sync.APT, qa.KEY}):
+        msg = f"{pyproject}'s [tool.basis] has {', '.join(unknown)}, which basis does not read: remove it; basis reads parts, as {example}, {sync.APT} and {qa.KEY}"
         raise CommandError(msg)
     names = table.get("parts")
     if not isinstance(names, list) or not names or not all(isinstance(name, str) for name in names):
@@ -268,19 +270,29 @@ def _core(repo: Repo) -> list[Verb]:
         return [read() for read in files]
 
     def run_check(n: argparse.Namespace) -> int:
-        args = CheckArgs(staged=bool(n.staged))
-        return check.check(repo.root, agent_files(), run=check.run_command, staged=args.staged)
+        args = CheckArgs(staged=bool(n.staged), full=bool(n.full), settings_from=n.settings_from)
+        if not args.full:
+            if args.settings_from is not None:
+                return fail("--settings-from names where `basis check --full` reads its settings files, and was given without --full", "give --full too, or leave it out")
+            return check.check(repo.root, agent_files(), run=check.run_command, staged=args.staged)
+        if args.staged:
+            return fail("--staged checks a commit's staged files, and --full a commit being pushed", "give one of them")
+        folder = args.settings_from.resolve() if args.settings_from is not None else repo.root
+        return full.full(repo.root, agent_files(), repo.parts, run=check.run_command, report=reported, folder=folder, clock=utc_now)
 
     def run_sync(n: argparse.Namespace) -> int:
         return _sync(repo.root, agent_files(), SyncArgs(adopt=bool(n.adopt)))
 
     offered = {
-        "check": Verb("check", "lint, format check, type check and test the repo, and check its framework files and hooks", _check_arguments, run_check),
+        "check": Verb("check", "lint, format check, type check and test the repo, and check its framework files and hooks; --full adds regress and the QA tier", _check_arguments, run_check),
+        "review": Verb("review", "print the pull request's summary of what basis check --full found on a commit, as Markdown", _review_arguments, lambda n: review.review(repo.root, str(n.commit))),
+        "upgrade": Verb("upgrade", "relock basis's packages, sync, check in full, and print what changed", _no_arguments, lambda _: _upgrade(repo)),
+        "doctor": Verb("doctor", DOCTOR, _no_arguments, lambda _: doctor.doctor(repo.root, repo.parts, doctor.Desktop.here(), describe=one_line)),
         "new": Verb("new", f"add a {' or a '.join(kinds)} to the repo", partial(_new_arguments, kinds), lambda n: _new(repo, kinds[str(n.kind)], str(n.name))),
         "sync": Verb("sync", "rewrite the repo's framework and agent files from the installed version", _sync_arguments, run_sync),
         "docs": Verb("docs", "list the docs of the installed parts, or print one", _docs_arguments, lambda n: _docs(_pages(repo), n.page)),
     }
-    given = {"check", "sync"}.union(*map(_gives, parts))
+    given = ALWAYS.union(*map(_gives, parts))
     return [offered[name] for name in CORE if name in given]
 
 
@@ -357,7 +369,8 @@ def _shared(repo: Repo) -> list[Verb]:
 
 
 def _no_arguments(_: argparse.ArgumentParser) -> None:
-    """A shared verb's arguments in the parser of every verb: none, since its parts' parsers read them."""
+    """Adds no arguments: for a verb that takes none, and for a shared verb in the parser of every verb, since its
+    parts' parsers read them."""
 
 
 def _dispatched(dispatch: Callable[[Sequence[str]], int], _: argparse.Namespace) -> int:
@@ -516,6 +529,36 @@ def _print(value: object) -> int:
     return 0
 
 
+def _upgrade(repo: Repo) -> int:
+    packages = {"basis-core", *PACKAGES.values()}
+
+    def write(line: str) -> None:
+        sys.stdout.write(f"{line}\n")
+
+    return upgrade.upgrade(repo.root, packages, run=check.run_command, write=write)
+
+
+DOCTOR = "check this desktop's uv, git, hooks, feed and settings, with the fix for each problem"
+
+
+def _doctor(argv: Sequence[str], cwd: Path, installed: Installed) -> int:
+    """`basis doctor`, which runs in the repo at or above `cwd`, or outside any, and reports a folder whose
+    `pyproject.toml` basis cannot read as one of its problems."""
+
+    def handle(_: argparse.Namespace) -> int:
+        repo: Repo | None = None
+        unread: str | None = None
+        try:
+            repo = find(cwd, installed)
+        except CommandError as error:
+            if any((folder / "pyproject.toml").is_file() for folder in (cwd, *cwd.parents)):
+                unread = str(error)
+        return doctor.doctor(repo.root if repo is not None else None, repo.parts if repo is not None else {}, doctor.Desktop.here(), describe=one_line, unread=unread)
+
+    verb = Verb("doctor", DOCTOR, _no_arguments, handle)
+    return _execute(_parser("basis", "Check this desktop's setup for basis.", [verb]), {"doctor": verb}, argv)
+
+
 def _new(repo: Repo, make: Callable[[Path, str], Path], name: str) -> int:
     log.info("made %s", make(repo.root, name))
     hooks.ensure(repo.root)
@@ -526,6 +569,10 @@ def _new(repo: Repo, make: Callable[[Path, str], Path], name: str) -> int:
 class CheckArgs:
     staged: bool
     """Whether to check the files staged for a commit as well, as the commit hook does."""
+    full: bool
+    """Whether to add regress, the QA tier and the contract diffs, as the push hook does."""
+    settings_from: Path | None
+    """The clone's own folder, where the files git does not track are, for a check in another worktree."""
 
 
 @dataclass(frozen=True)
@@ -567,6 +614,19 @@ def _docs(pages: Mapping[str, Path], page: str | None) -> int:
 
 def _check_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--staged", action="store_true", help="also check the files staged for a commit, as the commit hook does: no private key, none over 500 KB, YAML and TOML that parse")
+    parser.add_argument(
+        "--full", action="store_true", help="also regress where the run store is reachable, and run the QA tier where the repo declares one and this machine has its settings: what the push hook runs"
+    )
+    parser.add_argument(
+        "--settings-from",
+        type=existing_folder,
+        metavar="DIR",
+        help="with --full, read the QA settings file and a relative BASIS_SNAPSHOT_ROOT from DIR, the clone's own folder: for a commit the push hook checks in a worktree of its own",
+    )
+
+
+def _review_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--commit", default="HEAD", metavar="REF", help="the commit to summarize, which basis check --full has checked (default: HEAD)")
 
 
 def _sync_arguments(parser: argparse.ArgumentParser) -> None:
@@ -670,6 +730,12 @@ def _execute(parser: argparse.ArgumentParser, verbs: Mapping[str, Verb], argv: S
     return verbs[str(namespace.verb)].handle(namespace)
 
 
+def reported(error: Exception) -> str:
+    """Print `error` as `report` does, and return its line, without `ERROR: `."""
+    report(error)
+    return one_line(error) if isinstance(error, BasisError | ValidationError) else f"{type(error).__name__}: {one_line(error)}: a defect"
+
+
 def report(error: Exception) -> int:
     """Print `error` as its one line, after its traceback if it is a defect, and return its exit code."""
     if isinstance(error, CommandError):
@@ -699,7 +765,7 @@ def one_line(error: BaseException) -> str:
 
 def _invalid(error: ValidationError) -> str:
     """A validation error as each value it refuses: for settings, the variable that sets it."""
-    variable = {"Settings": settings.variable, "LogSettings": logs.variable}.get(error.title)
+    variable = {"Settings": settings.variable, "FileSettings": settings.variable, "LogSettings": logs.variable}.get(error.title)
     problems = error.errors(include_url=False, include_input=False)
     if variable is not None:
         named = "; ".join(f"{variable(problem['loc'])}: {problem['msg']}" for problem in problems)

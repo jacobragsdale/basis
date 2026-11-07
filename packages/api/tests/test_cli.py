@@ -2,6 +2,7 @@
 include `api`."""
 
 import os
+import re
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -31,7 +32,7 @@ def test_basis_lists_serve_in_a_repo_with_an_api(repo: Path, capsys: pytest.Capt
     assert basis(repo, "--help") == 0
     out = capsys.readouterr().out
     assert "From the api part:" in out
-    assert "serve  serve the API with uvicorn until SIGTERM" in out
+    assert re.search(r"^  serve +serve the API with uvicorn until SIGTERM", out, re.MULTILINE)  # whatever the column's width
 
 
 def test_sync_writes_the_apis_image_command_and_agent_block(repo: Path) -> None:

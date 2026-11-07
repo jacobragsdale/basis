@@ -10,6 +10,18 @@ dependencies = ["basis-job>={version},<0.{next_minor}", "polars>=2.1.0"]  # jobs
 [tool.basis]
 parts = ["job"]  # the parts this repo has, whose verbs `basis` offers; basis never infers one from a folder
 
+# The QA tier, which the push hook's `basis check --full` runs on a desktop with the settings file below: each job,
+# published to QA. It refuses to run unless every database in the file, and its store, has a name that contains the
+# marker, and writes only the tables listed, ledgers included. `basis docs job/reference` says more.
+# [tool.basis.qa]
+# settings = ".env.qa"
+# marker = "qa"
+# stores = ["abfs://runs@qaaccount.dfs.core.windows.net/{repo}"]
+# writes = { warehouse = ["daily_positions", "account_activity", "etl.publishes"] }
+#
+# [tool.basis.qa.job]
+# {job} = { params = "jobs/{job}/params/default.json", interval = "2026-11-05..2026-11-06" }
+
 [build-system]
 requires = ["uv_build>=0.13.6,<0.14"]
 build-backend = "uv_build"

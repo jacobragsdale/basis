@@ -119,7 +119,7 @@ def error_line(capsys: pytest.CaptureFixture[str]) -> str:
 def test_help_lists_the_declared_parts_verbs_and_the_core_verbs_they_give_something_to_do(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert basis(repo(tmp_path), "--help") == 0
     listed = [line.split()[0] for line in capsys.readouterr().out.splitlines() if line.startswith("  ") and not line.lstrip().startswith("-")]
-    assert listed == ["check", "sync", "serve"]
+    assert listed == ["check", "review", "sync", "upgrade", "doctor", "serve"]
 
 
 def test_a_verb_runs_from_a_folder_inside_the_repo(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

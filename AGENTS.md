@@ -66,8 +66,9 @@ holds the interface, and its docstring is the reference.
   points at a callable returning its `Part`: its own `verbs`, each a `Verb` with a name, a one-line help, a function
   that adds its arguments to an argparse parser, and a handler that returns the exit code; and the fields core's verbs
   use, `files` (`sync`, `check`; read only when used), `docs` (`docs`), `new` (`new KIND NAME`), `runs` (`run`,
-  `describe`, `resume`, `replay`, `regress` and `ddl`, which jobs and models both have), and `renamed`, which refuses
-  the variables an earlier version of the part read, before any verb runs, as `basis` refuses `ETL_*`.
+  `describe`, `resume`, `replay`, `regress` and `ddl`, which jobs and models both have, and `regressions`, for
+  `check --full`), `qa` (the QA tier), `contract` (`review`; `basis.api`'s, later), and `renamed`, which refuses the
+  variables an earlier version of the part read, before any verb runs, as `basis` refuses `ETL_*`.
 - A repo declares its parts in its `pyproject.toml`, as `[tool.basis] parts = ["job"]`, and basis never infers one
   from a folder. `basis` loads only those parts, and `basis --help` lists their verbs and each core verb one of them
   gives something to do. A declared part that is not installed, or a verb of one that is not declared, is refused.
@@ -100,5 +101,21 @@ holds the interface, and its docstring is the reference.
   the fix, when the clone runs other hooks or is no clone. The hooks are POSIX sh, which Git for Windows runs too. The
   commit hook ends with `basis check --staged`, whose checks of the staged files are `basis.core.hygiene`'s; the push
   hook checks each pushed commit, in a temporary worktree inside the git folder when it is not a clean HEAD.
+- `basis check --full` (`basis.core.full`), which the push hook and the pipeline run, adds `regress` from the process's
+  `BASIS_SNAPSHOT_ROOT` where it is reachable, the QA tier where the repo declares `[tool.basis.qa]` and the machine has
+  its settings file, and each part's `contract`; a piece that does not run prints one `SKIPPED:` line. An output
+  `regress` sees change fails nothing. It records what it found for `basis review` in the git folder the clone's
+  worktrees share (`basis/checks/PREFIX/COMMIT.json`), when the repo's folder has nothing uncommitted. The push hook
+  checks a commit that is not a clean HEAD in a worktree of its own, with `--settings-from` naming the clone's folder,
+  where the untracked QA settings are.
+- The QA tier (`basis.core.qa`) keeps optim's end-to-end safeguards, all declared in `[tool.basis.qa]`: `settings`, the
+  one file it reads, never the environment; `marker`, which every database those settings configure must carry, in a
+  SQL Server connection string's one server or database, or an Oracle DSN; `stores`, one of which
+  `BASIS_SNAPSHOT_ROOT` must be; and `writes`, the tables it may write, by database, ledgers included. While any
+  setting or any part's plan is refused, nothing runs, and the databases a part gets refuse other tables as they
+  write. A part's own runs are its `[tool.basis.qa.PART]` table, such as basis-job's `[tool.basis.qa.job]`.
+- `basis doctor` (`basis.core.doctor`) runs in a repo or outside one, and checks uv, git, the hooks, the feed (the
+  user's `uv.toml` default index) and the settings; `basis upgrade` (`basis.core.upgrade`) relocks basis's packages,
+  then runs `basis sync` and `basis check --full` through `uv run`, so the new version does them.
 - A command that runs before a repo exists, such as `basis-job new repo NAME`, is a `standalone` command in
   `basis.core.command`, with the same failures.

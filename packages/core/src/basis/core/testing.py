@@ -7,9 +7,10 @@ from collections.abc import Iterable
 import grimp
 
 FORBIDDEN = (
-    "basis.core.check", "basis.core.command", "basis.core.databases", "basis.core.hooks", "basis.core.hygiene", "basis.core.new", "basis.core.publish",
-    "basis.core.runs", "basis.core.settings", "basis.core.snapshots", "basis.core.storage", "basis.core.sync",
-    "basis.core.testing", "basis.core.verbs", "mssql_python", "oracledb",
+    "basis.core.check", "basis.core.clone", "basis.core.command", "basis.core.databases", "basis.core.doctor", "basis.core.full", "basis.core.hooks",
+    "basis.core.hygiene", "basis.core.new", "basis.core.publish", "basis.core.qa", "basis.core.review", "basis.core.runs", "basis.core.settings",
+    "basis.core.snapshots", "basis.core.storage", "basis.core.sync", "basis.core.testing", "basis.core.upgrade", "basis.core.verbs",
+    "mssql_python", "oracledb",
     "pyodbc", "pymssql", "cx_Oracle", "sqlalchemy", "psycopg", "psycopg2", "snowflake", "httpx", "httpx2", "requests", "urllib3",
     "aiohttp", "pyarrow", "boto3", "azure",
 )  # fmt: skip
@@ -17,7 +18,8 @@ FORBIDDEN = (
 storage. Each part adds its own run loop. An installed package is named whole, since an import graph records only an
 external package's top-level name: `pyarrow`, whose `fs` reads and writes files, rather than `pyarrow.fs`, which no
 graph holds. Pure code needs no pyarrow of its own: its part hands it frames, such as basis-job's polars. The
-command is I/O too: `basis.core.check` runs tools, and `basis.core.verbs` writes to stderr."""
+command is I/O too: `basis.core.check` runs tools, `basis.core.verbs` writes to stderr, and the gates (`clone`,
+`full`, `qa`, `review`, `doctor`, `upgrade`) run git, read settings files and write records."""
 
 
 class ContractError(AssertionError):

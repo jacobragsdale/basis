@@ -160,9 +160,11 @@ source_modules = [
 ]
 forbidden_modules = [
     "basis.job.loader", "basis.job.runs", "basis.job.api", "basis.job.cli", "basis.job.new", "basis.job.sync", "basis.job.testing",
+    "basis.job.qa",
     "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.storage",
     "basis.core.settings", "basis.core.new", "basis.core.sync", "basis.core.testing", "basis.core.command",
-    "basis.core.check", "basis.core.verbs", "basis.core.hooks", "basis.core.hygiene", "mssql_python", "oracledb",
+    "basis.core.check", "basis.core.verbs", "basis.core.hooks", "basis.core.hygiene", "basis.core.clone", "basis.core.full",
+    "basis.core.qa", "basis.core.review", "basis.core.doctor", "basis.core.upgrade", "mssql_python", "oracledb",
 ]
 ignore_imports = [
     "basis.job -> basis.job.api",  # `etl.run` and `etl.replay` load on first use, which job code never makes

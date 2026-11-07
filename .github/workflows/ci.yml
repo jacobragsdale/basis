@@ -119,6 +119,107 @@ jobs:
           test "$(cat Dockerfile.before-basis)" = "FROM python:3.14-slim"
           rm Dockerfile.before-basis && test -z "$(git status --porcelain)"
 
+  job-gates:
+    # The desktop gates in a generated repo: its push hook runs regress against a local run store, and the QA tier
+    # against a SQL Server standing in for QA, and basis review prints both.
+    runs-on: ubuntu-latest
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: Etl-test-1234
+        ports: ["1433:1433"]
+    env:
+      QA: Server=127.0.0.1,1433;Database=pricing_qa;UID=sa;PWD=Etl-test-1234;Encrypt=yes;TrustServerCertificate=yes
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.13.7"
+      - run: uv sync --locked
+      - name: Make a job repo from this checkout, and QA's database, with the example's sources, tables and ledger
+        run: |
+          uv run basis-job new repo pricing-etl --dir "$RUNNER_TEMP" --framework-path .
+          cd "$RUNNER_TEMP/pricing-etl"
+          git config user.name ci && git config user.email ci@example.com
+          uv run basis ddl positions --dialect mssql > "$RUNNER_TEMP/tables.sql"
+          uv run basis ddl --ledger etl.publishes --dialect mssql > "$RUNNER_TEMP/ledger.sql"
+          uv run python - <<'PY'
+          import csv, os, time
+          from pathlib import Path
+          import mssql_python
+          master = os.environ["QA"].replace("Database=pricing_qa", "Database=master")
+          for attempt in range(60):
+              try:
+                  connection = mssql_python.connect(master, autocommit=True)
+                  break
+              except mssql_python.Error:
+                  time.sleep(2)
+          else:
+              raise SystemExit("SQL Server did not start")
+          connection.cursor().execute("CREATE DATABASE pricing_qa")
+          connection.cursor().execute("ALTER DATABASE pricing_qa SET ALLOW_SNAPSHOT_ISOLATION ON")
+          cursor = mssql_python.connect(os.environ["QA"], autocommit=True).cursor()
+          cursor.execute("CREATE TABLE dbo.accounts (account_id varchar(20) PRIMARY KEY, name varchar(100) NOT NULL, closed bit NOT NULL)")
+          cursor.execute(
+              "CREATE TABLE dbo.trades (trade_id varchar(32) PRIMARY KEY, account_id varchar(20) NOT NULL, security_id varchar(12) NOT NULL,"
+              " trade_date date NOT NULL, side varchar(4) NOT NULL, quantity decimal(18,4) NOT NULL, price decimal(18,6) NOT NULL, booked_at datetime2 NOT NULL)"
+          )
+          for table in ("accounts", "trades"):
+              with Path(f"jobs/positions/tests/fixture/{table}.csv").open(encoding="utf-8") as file:
+                  header, *rows = list(csv.reader(file))
+              marks = ", ".join(f"%(c{index})s" for index in range(len(header)))
+              for row in rows:
+                  cursor.execute(f"INSERT INTO dbo.{table} VALUES ({marks})", {f"c{index}": {"true": 1, "false": 0}.get(value, value) for index, value in enumerate(row)})
+          cursor.execute("CREATE SCHEMA etl")
+          for script in ("tables.sql", "ledger.sql"):
+              cursor.execute((Path(os.environ["RUNNER_TEMP"]) / script).read_text(encoding="utf-8"))
+          PY
+      - name: Declare the QA tier, fill in its settings, and publish a run to a local store for regress
+        working-directory: ${{ runner.temp }}/pricing-etl
+        run: |
+          printf '\n[tool.basis.qa]\nsettings = ".env.qa"\nmarker = "qa"\nstores = ["%s/runs-qa"]\nwrites = { warehouse = ["daily_positions", "account_activity", "etl.publishes"] }\n' "$RUNNER_TEMP" >> pyproject.toml
+          printf '\n[tool.basis.qa.job]\npositions = { params = "jobs/positions/params/default.json", interval = "2026-11-05..2026-11-06" }\n' >> pyproject.toml
+          {
+            echo "BASIS_SNAPSHOT_ROOT=$RUNNER_TEMP/runs-qa"
+            for name in SOURCE WAREHOUSE; do
+              echo "BASIS_DATABASES__${name}__KIND=mssql"
+              echo "BASIS_DATABASES__${name}__CONNECTION_STRING='$QA'"
+              echo "BASIS_DATABASES__${name}__TIMEOUT_S=60"
+              echo "BASIS_DATABASES__${name}__MAX_ROWS=1000"
+            done
+            echo "BASIS_DATABASES__SOURCE__ISOLATION=snapshot"
+            echo "BASIS_DATABASES__WAREHOUSE__ISOLATION=read_committed"
+            echo "BASIS_DATABASES__WAREHOUSE__WRITE__CONNECTION_STRING='$QA'"
+            echo "BASIS_DATABASES__WAREHOUSE__WRITE__LEDGER=etl.publishes"
+          } > .env.qa
+          mkdir "$RUNNER_TEMP/store"
+          uv run --env-file .env.qa env BASIS_SNAPSHOT_ROOT="$RUNNER_TEMP/store" basis run positions --params jobs/positions/params/default.json --interval 2026-11-05..2026-11-06 --publish
+          uv run basis doctor || true  # the runner has no feed; the rest of its lines say what it found
+          git add --all && git commit --quiet --message "First commit"
+      - name: Push a change through the hook, from a tree with changes of its own, and print what it found
+        working-directory: ${{ runner.temp }}/pricing-etl
+        run: |
+          sed -i 's/.sum().round(2), trades=pl.len())/.sum().round(0), trades=pl.len())/' jobs/positions/job.py
+          git add --all && git commit --quiet --message "Round gross notional to whole units"
+          echo "A change not yet committed." >> README.md
+          git init --quiet --bare "$RUNNER_TEMP/remote.git"
+          BASIS_SNAPSHOT_ROOT="$RUNNER_TEMP/store" git push --quiet "$RUNNER_TEMP/remote.git" main 2> "$RUNNER_TEMP/push.log" || { cat "$RUNNER_TEMP/push.log"; exit 1; }
+          grep -v '^{' "$RUNNER_TEMP/push.log"
+          git checkout --quiet -- README.md
+          uv run basis review | tee "$RUNNER_TEMP/review.md"
+          grep --quiet "^| positions | \`.*\` | positions: insert: 1 changed (gross_notional 1) |$" "$RUNNER_TEMP/review.md"
+          grep --quiet "^| job | positions | \`.*\` | published: account_activity (2 upserted), daily_positions (3 deleted, 3 inserted) |$" "$RUNNER_TEMP/review.md"
+          grep --quiet "passed on commit \`$(git rev-parse HEAD)\`" "$RUNNER_TEMP/review.md"
+      - name: Refuse QA settings that point outside QA, and run nothing
+        working-directory: ${{ runner.temp }}/pricing-etl
+        run: |
+          sed -i 's/Database=pricing_qa/Database=master/' .env.qa
+          if uv run basis check --full 2> "$RUNNER_TEMP/refused.log"; then echo "the QA tier ran against settings outside QA" >&2; exit 1; fi
+          grep "^ERROR: " "$RUNNER_TEMP/refused.log"
+          grep --quiet "^ERROR: the QA tier ran nothing, for the reasons above" "$RUNNER_TEMP/refused.log"
+
   job-image:
     # The repo a developer makes with uvx, from this commit on GitHub: its checks, its image, and its example job
     # published from the image to SQL Server.

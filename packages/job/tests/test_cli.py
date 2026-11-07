@@ -9,7 +9,8 @@ import pytest
 from basis.core import command, snapshots
 from basis.core.snapshots import RunRecord
 from basis.core.storage import Root
-from basis.job import cli
+from basis.job import cli, runs
+from basis.job.diff import OperationDiff
 from basis.job.example import job
 
 EXAMPLE = Path(job.__file__).parent
@@ -176,12 +177,32 @@ def test_regress_replays_each_job_on_its_own(repo: Path, snapshot_root: Path, ca
     run_id = ran(repo, capsys)
     source = snapshots.find(Root.at(snapshot_root), run_id)
     source.save_record(RunRecord.model_validate(source.record().model_dump() | {"status": "published"}))
-    assert cli.regress_jobs(cli.RegressArgs(("no_such_job", "basis.job.example.job"), 10, {}, None)) == 1
-    captured = capsys.readouterr()
-    assert [(entry["job"], entry["run_id"], entry["differences"]) for entry in json.loads(captured.out)] == [("basis.job.example.job", run_id, [])]
-    assert [line for line in captured.err.splitlines() if line.startswith("ERROR")] == [
-        "ERROR: while regressing no_such_job: no job named 'no_such_job', and it is no module path: give one the repo lists (none yet), or a job's module path, as jobs.NAME.job"
+    found = cli.regress_jobs(cli.RegressArgs(("no_such_job", "basis.job.example.job"), 10, {}, None))
+    assert [(entry.name, entry.run_id, entry.changed) for entry in found.replayed] == [("basis.job.example.job", run_id, False)]
+    assert [command.one_line(error) for error in found.failures] == [
+        "while regressing no_such_job: no job named 'no_such_job', and it is no module path: give one the repo lists (none yet), or a job's module path, as jobs.NAME.job"
     ]
+
+
+def test_regress_prints_each_run_replayed_as_json(repo: Path, snapshot_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    run_id = ran(repo, capsys)
+    source = snapshots.find(Root.at(snapshot_root), run_id)
+    source.save_record(RunRecord.model_validate(source.record().model_dump() | {"status": "published"}))
+    assert basis(repo, "regress", "basis.job.example.job") == 0
+    assert [(entry["job"], entry["run_id"], entry["differences"]) for entry in json.loads(capsys.readouterr().out)] == [("basis.job.example.job", run_id, [])]
+
+
+@pytest.mark.parametrize(
+    ("found", "summary"),
+    [
+        (OperationDiff("positions", "upsert", added=2, removed=0, changed=1, columns={"price": 1}), "upsert: 2 added, 1 changed (price 1)"),
+        (OperationDiff("positions", "insert", added=0, removed=3, changed=0), "insert: 3 removed"),
+        (OperationDiff("positions", "delete", added=0, removed=0, changed=1), "its delete differs"),
+    ],
+    ids=["counts-and-columns", "removed-only", "the-delete"],
+)
+def test_a_difference_reads_in_a_few_words(found: OperationDiff, summary: str) -> None:
+    assert cli.difference(found).summary == summary
 
 
 RECORD = {"run_id": "R1", "job": "prices", "module": "jobs.prices.job", "version": "0.0.0", "started_at": datetime(2026, 11, 6, tzinfo=UTC), "params_path": "p.json", "params_sha256": "0"}
@@ -215,7 +236,7 @@ READ = {"inputs": {"trades": {"source": "source: sql/trades.sql", "rows": 5, "re
     ids=["checked", "published", "partial", "an-error", "reasons-and-inputs", "a-reason-before-loading", "no-database-committed", "checked-when-asked-to-publish"],
 )
 def test_a_runs_failure_says_why_and_how_to_fix_it(fields: dict[str, object], *, publish: bool, failure: tuple[str, str] | None) -> None:
-    assert cli.failure_of(RunRecord.model_validate(RECORD | fields), publish=publish) == failure
+    assert runs.failure_of(RunRecord.model_validate(RECORD | fields), publish=publish) == failure
 
 
 OVERLAPPED = {
@@ -242,7 +263,7 @@ OVERLAPPED = {
     ids=["a-partial-run-told-again", "a-partial-run-a-ledger-refused", "a-run-a-ledger-refused"],
 )
 def test_a_fix_carries_again_where_the_next_attempt_needs_it(fields: dict[str, object], failure: tuple[str, str]) -> None:
-    assert cli.failure_of(RunRecord.model_validate(RECORD | fields), publish=True) == failure
+    assert runs.failure_of(RunRecord.model_validate(RECORD | fields), publish=True) == failure
 
 
 def test_a_repo_made_before_basis_has_a_release_fails_with_one_error_line_that_names_the_fix(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

@@ -294,11 +294,22 @@ fix, when they are missing. The verbs a container or a scheduler runs, such as `
 The QA tier runs a repo's parts against the QA databases from the desktop, with the safeguards of optim's and
 etl-framework's end-to-end suites: it refuses to run unless every configured source carries the QA marker, and writes
 only to an allowlist of QA tables and the QA store. With no Docker on the desktops, it is also the only place a repo's
-code meets a real database before production.
+code meets a real database before production. All of it is declared in the repo's `pyproject.toml`, as
+`[tool.basis.qa]`, and nothing is inferred: the one settings file the tier reads, never the process's environment, so a
+variable set for production never mixes in; the marker, which every database that file configures must carry, in the one
+server or database a SQL Server connection string names, its write block's included, or in an Oracle DSN; the QA stores,
+one of which the file's run store must be; and the tables it may write, by database, ledgers included. The checks run
+before anything does, for every part at once, and the databases a part gets refuse any other table as they write. Each
+part reads its own runs from its own table, `[tool.basis.qa.job]` for jobs, each with what `basis run` takes. QA
+settings "exist" where the repo declares the tier and the machine has that file; elsewhere the push hook says it skipped
+it.
 
 A reviewer judges what a change does. `basis review` writes the pull request's summary: the outputs `regress` saw
 change, the API contract's diff, the versions, and the commit that was checked, so the reviewer reads a summary of
-behaviour rather than lines of agent-written code.
+behaviour rather than lines of agent-written code. `basis check --full` records what it found on each commit it checks
+with nothing uncommitted, in the git folder the clone's worktrees share, and `basis review` prints that record. An
+output `regress` sees change fails no check, since a change may be meant: the summary shows it, and the pull request
+says why.
 
 A hook can be skipped with `--no-verify`, and agents do skip it. `AGENTS.md` says never to, and the synced Claude Code
 settings deny `--no-verify`, but until CI exists the gates are only as strong as the hooks, and the commit `basis
