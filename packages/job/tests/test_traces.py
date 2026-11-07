@@ -269,3 +269,15 @@ def test_a_replays_records_carry_its_own_fields_whatever_an_earlier_run_bound(tm
     ours = [record for record in logged() if record.get("replay_of") == result.record.run_id]
     assert ours
     assert {(record["run_id"], record["job"], record["service"]) for record in ours} == {(replayed.record.run_id, "stamping", "stamping")}
+
+
+def test_a_run_that_follows_a_replay_in_the_same_process_logs_none_of_the_replays_fields(tmp_path: Path, sql: Path, logged: Records) -> None:
+    first = run(tmp_path, stamping(sql), traced()[0], venues=venues())
+    assert first.snapshot is not None
+    replayed, _ = runs.replay(stamping(sql), first.snapshot, provider=traced()[0])
+    after = run(tmp_path, stamping(sql), traced()[0], venues=venues())
+    records = logged()
+    assert {record.get("replay_of") for record in records if record.get("run_id") == replayed.record.run_id} == {first.record.run_id}
+    ours = [record for record in records if record.get("run_id") == after.record.run_id]
+    assert ours
+    assert all("replay_of" not in record for record in ours)

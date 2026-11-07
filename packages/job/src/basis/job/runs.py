@@ -394,15 +394,14 @@ def replay(  # noqa: PLR0913 -- what it replays, and where it saves and traces, 
     its changes differ from the run's: one trace, exported where `tracing` says, or on a test's `provider`. Reads no
     database and writes none, and gives the transform the times and ids the run kept."""
     with (
-        logs.fields(job=job.name, service=job.name, replay_of=source.run_id),  # the replay's own, whatever an earlier run in the process bound
+        logs.fields(job=job.name, service=job.name, replay_of=source.run_id),  # the replay's own, whatever an earlier run in the process bound, until it ends
         traces.trace("replay", service=job.name, settings=tracing, version=None, environment=None, given=provider, **{"basis.job": job.name, "basis.replay_of": source.run_id}) as (tracer, _),
     ):
         return _replay(job, source, params=params, snapshot_root=snapshot_root, clock=clock, tracer=tracer)
 
 
 def _replay(job: Job, source: Snapshot, *, params: Path | None, snapshot_root: Root | None, clock: Callable[[], datetime], tracer: Tracer) -> tuple[Result, list[OperationDiff]]:  # noqa: PLR0913 -- replay's, by keyword
-    opened = core_runs.replaying(source, name=job.name, module=job.module, params=params, parse=job.params.model_validate_json, reads=job.inputs.declared())
-    with logs.fields(run_id=opened.run_id):
+    with core_runs.replaying(source, name=job.name, module=job.module, params=params, parse=job.params.model_validate_json, reads=job.inputs.declared()) as opened:
         return _replayed(job, source, opened, snapshot_root=snapshot_root, clock=clock, tracer=tracer)
 
 
