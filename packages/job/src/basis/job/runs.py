@@ -124,7 +124,7 @@ def run(  # noqa: PLR0913 -- what the run reads and where it saves, by keyword
     given = _checked(job, faked or {})
     run_id = snapshots.new_run_id()
     logs.bind(run_id=run_id, job=job.name, service=job.name)
-    with traces.trace("run", service=job.name, settings=settings.traces, version=request.git_sha, environment=None, given=provider, **{"basis.job": job.name, "basis.run_id": run_id}) as (tracer, _):
+    with traces.trace("run", service=job.name, settings=settings.traces, version=settings.git_sha, environment=None, given=provider, **{"basis.job": job.name, "basis.run_id": run_id}) as (tracer, _):
         return _run(job, settings, request, _Run(params, params_text, run_id, snapshot_root, clock, databases, given, tracer))
 
 
@@ -162,7 +162,11 @@ def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
     except Exception as error:
         log.exception("could not load the inputs")
         return _summarized(_finish(record.done("failed", error=_headline(error), finished_at=clock()), snapshot_root, params_text, {}, {}))
-    kept = handles.live(job.inputs, this.faked, this.tracer)
+    try:
+        kept = handles.live(job.inputs, this.faked, this.tracer)
+    except Exception as error:  # a defect: the inputs' declarations are checked when their class is made
+        log.exception("could not give the transform its clocks and ids")
+        return _summarized(_finish(record.with_outputs({}, inputs).done("failed", error=_headline(error), finished_at=clock()), snapshot_root, params_text, frames, {}))
     planned, reasons = _transform(job, params, frames, request.interval, kept)
     for name, entry in planned.items():
         if (spec := specs.get(name)) is not None and entry.changes is not None:
@@ -389,13 +393,20 @@ def replay(  # noqa: PLR0913 -- what it replays, and where it saves and traces, 
     """Run a saved run's transform again on its inputs, with the code of the day and, if given, other params, and how
     its changes differ from the run's: one trace, exported where `tracing` says, or on a test's `provider`. Reads no
     database and writes none, and gives the transform the times and ids the run kept."""
-    with traces.trace("replay", service=job.name, settings=tracing, version=None, environment=None, given=provider, **{"basis.job": job.name, "basis.replay_of": source.run_id}) as (tracer, _):
-        logs.bind(service=job.name)
+    with (
+        logs.fields(job=job.name, service=job.name, replay_of=source.run_id),  # the replay's own, whatever an earlier run in the process bound
+        traces.trace("replay", service=job.name, settings=tracing, version=None, environment=None, given=provider, **{"basis.job": job.name, "basis.replay_of": source.run_id}) as (tracer, _),
+    ):
         return _replay(job, source, params=params, snapshot_root=snapshot_root, clock=clock, tracer=tracer)
 
 
 def _replay(job: Job, source: Snapshot, *, params: Path | None, snapshot_root: Root | None, clock: Callable[[], datetime], tracer: Tracer) -> tuple[Result, list[OperationDiff]]:  # noqa: PLR0913 -- replay's, by keyword
     opened = core_runs.replaying(source, name=job.name, module=job.module, params=params, parse=job.params.model_validate_json, reads=job.inputs.declared())
+    with logs.fields(run_id=opened.run_id):
+        return _replayed(job, source, opened, snapshot_root=snapshot_root, clock=clock, tracer=tracer)
+
+
+def _replayed(job: Job, source: Snapshot, opened: core_runs.Replay[Params], *, snapshot_root: Root | None, clock: Callable[[], datetime], tracer: Tracer) -> tuple[Result, list[OperationDiff]]:  # noqa: PLR0913 -- replay's, by keyword
     original = opened.original
     interval = original.parsed_interval()
     record = _Record(

@@ -18,6 +18,7 @@ import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Never
 
 import httpx2
 import polars as pl
@@ -138,10 +139,15 @@ async def _fetch(name: str, fetch: Fetch, interval: Interval | None, client: Htt
 
 def json_rows(content: bytes, row: type[Row], *, what: str) -> pl.DataFrame:
     """A JSON list of objects as `row`'s frame: each value as its text, as a CSV's arrives, so that a number keeps the
-        digits it was sent with, and `conform` converts each value as it converts a CSV's. A field the row has no column
-        for, or a value that is an object or a list, is refused; a field an object leaves out is null. This and `conform` are
-    the one place a fetch's rows become a frame."""
-    parsed: object = json.loads(content, parse_float=str, parse_int=str)
+    digits it was sent with, and `conform` converts each value as it converts a CSV's. A field the row has no column
+    for, a value that is an object or a list, and `NaN` or `Infinity`, which Python reads and JSON has not, are
+    refused; a field an object leaves out is null. This and `conform` are the one place a fetch's rows become a frame."""
+
+    def refuse(constant: str) -> Never:
+        msg = f"{what} has {constant}, which is no JSON number: send a value its row reads, or null"
+        raise ValueError(msg)
+
+    parsed: object = json.loads(content, parse_float=str, parse_int=str, parse_constant=refuse)
     entries: list[dict[str, object]] = []
     for entry in parsed if isinstance(parsed, list) else [parsed]:
         if not isinstance(parsed, list) or not isinstance(entry, dict):

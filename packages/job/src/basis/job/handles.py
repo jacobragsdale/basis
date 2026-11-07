@@ -18,7 +18,7 @@ from opentelemetry.trace import Tracer
 from basis.core import fakes, resources
 from basis.core.opened import NewIds, SystemClock, utc_now
 from basis.core.snapshots import RunRecord
-from basis.job.inputs import Clock, Handles, Inputs
+from basis.job.inputs import Clock, Handles, Ids, Inputs
 from basis.job.inputs import NewIds as NewIdsOf
 
 log = logging.getLogger(__name__)
@@ -35,33 +35,57 @@ class Kept:
 
 def live(inputs: type[Inputs], given: Mapping[str, fakes.Fake], tracer: Tracer) -> Kept:
     """The handles of a run: the system's clock and new UUIDv7s, or the fakes `given` names for them."""
-    kept_clocks: dict[str, list[datetime]] = {}
-    kept_ids: dict[str, list[UUID]] = {}
-    clocks: dict[str, resources.Clock] = {}
-    ids: dict[str, NewIdsOf] = {}
-    for name, declared in inputs.declared_resources().items():
-        fake = given.get(name)
-        if isinstance(declared, Clock):
-            clocks[name] = SystemClock(resources.clock(name), _keeping(fake.now if isinstance(fake, fakes.Clock) else utc_now, kept_clocks.setdefault(name, [])), tracer)
-        else:
-            ids[name] = _Ids(NewIds(resources.ids(name), _keeping(fake.new if isinstance(fake, fakes.Ids) else uuid7, kept_ids.setdefault(name, [])), tracer))
-    return Kept(Handles(clocks, ids), kept_clocks, kept_ids)
+
+    def time_of(name: str) -> Callable[[], datetime]:
+        return fake.now if isinstance(fake := given.get(name), fakes.Clock) else utc_now
+
+    def ids_of(name: str) -> Callable[[], UUID]:
+        return fake.new if isinstance(fake := given.get(name), fakes.Ids) else uuid7
+
+    return _built(inputs, tracer, time_of, ids_of)
 
 
 def replayed(inputs: type[Inputs], record: RunRecord, tracer: Tracer) -> Kept:
     """The handles of a replay of `record`'s run, which give the values the run kept, in order."""
+
+    def time_of(name: str) -> Callable[[], datetime]:
+        times = record.clocks.get(name, [])
+        return _Again(times, _Last(times[-1] if times else record.started_at), f"clock {name}", record.run_id)
+
+    def ids_of(name: str) -> Callable[[], UUID]:
+        return _Again(record.ids.get(name, []), uuid7, f"ids {name}", record.run_id)
+
+    return _built(inputs, tracer, time_of, ids_of)
+
+
+def faked(inputs: type[Inputs], now: datetime | None, *, fix: str) -> dict[str, fakes.Fake]:
+    """A fake of each clock and ids `inputs` declare, by name: each clock at `now`, and ids that count up from 1, as a
+    fixture's run and a transform's test have them. A clock without `now` is refused, with `fix`, which says where to
+    give it."""
+    given: dict[str, fakes.Fake] = {}
+    for name, declared in inputs.declared_resources().items():
+        if isinstance(declared, Ids):
+            given[name] = fakes.Ids()
+        elif now is not None:
+            given[name] = fakes.Clock(at=now)
+        else:
+            msg = f"{inputs.__qualname__}.{name} is a clock, and no time is given for it to read: {fix}"
+            raise ValueError(msg)
+    return given
+
+
+def _built(inputs: type[Inputs], tracer: Tracer, time_of: Callable[[str], Callable[[], datetime]], ids_of: Callable[[str], Callable[[], UUID]]) -> Kept:
+    """The handles of each clock and ids `inputs` declare, basis-core's, each giving what `time_of` or `ids_of` gives
+    it by name, and keeping every value."""
     kept_clocks: dict[str, list[datetime]] = {}
     kept_ids: dict[str, list[UUID]] = {}
     clocks: dict[str, resources.Clock] = {}
     ids: dict[str, NewIdsOf] = {}
     for name, declared in inputs.declared_resources().items():
         if isinstance(declared, Clock):
-            times = record.clocks.get(name, [])
-            again = _Again(times, _Last(times[-1] if times else record.started_at), f"clock {name}", record.run_id)
-            clocks[name] = SystemClock(resources.clock(name), _keeping(again, kept_clocks.setdefault(name, [])), tracer)
+            clocks[name] = SystemClock(declared.resource, _keeping(time_of(name), kept_clocks.setdefault(name, [])), tracer)
         else:
-            made = _Again(record.ids.get(name, []), uuid7, f"ids {name}", record.run_id)
-            ids[name] = _Ids(NewIds(resources.ids(name), _keeping(made, kept_ids.setdefault(name, [])), tracer))
+            ids[name] = _Ids(NewIds(declared.resource, _keeping(ids_of(name), kept_ids.setdefault(name, [])), tracer))
     return Kept(Handles(clocks, ids), kept_clocks, kept_ids)
 
 

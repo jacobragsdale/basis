@@ -36,7 +36,7 @@ def test_a_transforms_inputs_give_the_time_a_test_names_and_ids_that_count_up() 
     assert (given.clock.now(), given.ids.new(), given.ids.new(2), given.prices.height) == (
         at, UUID("00000000-0000-7000-8000-000000000001"), [UUID("00000000-0000-7000-8000-000000000002"), UUID("00000000-0000-7000-8000-000000000003")], 0,
     )  # fmt: skip
-    with pytest.raises(TypeError, match=r"_Stamped.clock is a clock: give the time it reads, as inputs\(..., now="):
+    with pytest.raises(ValueError, match=r"_Stamped\.clock is a clock, and no time is given for it to read: give it, as inputs\(\.\.\., now="):
         inputs(_Stamped)
     with pytest.raises(LookupError, match=r"_Stamped\.clock is a clock the run gives, and these inputs have none"):
         _Stamped({}, interval=None).clock.now()
@@ -49,5 +49,20 @@ def test_a_fixture_holds_a_file_for_each_fetch_and_the_time_each_clock_reads(tmp
     with pytest.raises(ContractError, match=r"has no file for \['prices'\]"):
         check_fixture(stamped, tmp_path, params_file(tmp_path), tmp_path / "snapshots")
     (tmp_path / "prices.csv").write_text("day,security_id,price,note,booked_at\n", encoding="utf-8")
-    with pytest.raises(ValueError, match=r'its fixture gives no time for it to read: add "now": "2026-11-06T06:00:00\+00:00" to its fixture.json'):
+    with pytest.raises(ValueError, match=r'no time is given for it to read: add "now": "2026-11-06T06:00:00\+00:00" to .*fixture\.json'):
         check_fixture(stamped, tmp_path, params_file(tmp_path), tmp_path / "snapshots")
+
+
+def test_a_clock_or_ids_is_named_as_a_resource_is_and_declared_once() -> None:
+    with pytest.raises(TypeError, match="clock '_clock': a resource's name is lower-case letters") as raised:
+
+        class Hidden(etl.Inputs):
+            _clock = etl.Clock()
+
+    assert "declared as test_a_clock_or_ids_is_named_as_a_resource_is_and_declared_once.<locals>.Hidden._clock: rename it" in raised.value.__notes__
+    shared = etl.Ids()
+    with pytest.raises(TypeError, match=r"Twice\.second is already declared as 'first': declare each ids once per name"):
+
+        class Twice(etl.Inputs):
+            first = shared
+            second = shared

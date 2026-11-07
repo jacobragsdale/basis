@@ -4,6 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs
 
 import httpx2
 import polars as pl
@@ -118,3 +119,28 @@ def test_a_fetch_declares_its_service_and_its_deadline() -> None:
         etl.Fetch(Price, http="Pricing", path="/prices", deadline_s=5, empty="fail")
     with pytest.raises(TypeError, match="pricing's deadline is 0s"):
         etl.Fetch(Price, http="pricing", path="/prices", deadline_s=0, empty="fail")
+
+
+def test_a_fetchs_interval_ends_are_iso_8601_and_percent_encoded_so_an_offsets_plus_reaches_the_service(tmp_path: Path) -> None:
+    class Ranged(etl.Inputs):
+        prices = etl.Fetch(Price, http="pricing", path="/prices?from={start}&to={end}&on={start:%Y-%m-%d}", deadline_s=5, empty="allow")
+
+    seen: list[Message] = []
+
+    async def app(scope: Message, receive: Callable[[], Awaitable[Message]], send: Callable[[Message], Awaitable[None]]) -> None:
+        await receive()
+        seen.append(scope)
+        await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"application/json")]})
+        await send({"type": "http.response.body", "body": b"[]"})
+
+    interval = Interval.parse("2026-11-05T05:30:00+05:30..2026-11-06T05:30:00+05:30")
+    load(Ranged.declared(), interval, open_database=no_databases, data=tmp_path, reach=fakes.Http(app).client)
+    [scope] = seen
+    assert parse_qs(scope["query_string"].decode()) == {"from": ["2026-11-05T00:00:00+00:00"], "to": ["2026-11-06T00:00:00+00:00"], "on": ["2026-11-05"]}
+
+
+def test_a_fetchs_nan_or_infinity_is_refused_as_no_json_number() -> None:
+    with pytest.raises(ValueError, match="dataset prices has NaN, which is no JSON number: send a value its row reads, or null"):
+        json_rows(b'[{"day": "2026-11-05", "security_id": "S1", "price": NaN}]', Price, what="dataset prices")
+    with pytest.raises(ValueError, match="has -Infinity, which is no JSON number"):
+        json_rows(b'[{"day": "2026-11-05", "security_id": "S1", "price": -Infinity}]', Price, what="dataset prices")

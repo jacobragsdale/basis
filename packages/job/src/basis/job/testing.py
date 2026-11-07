@@ -25,7 +25,6 @@ from types import ModuleType
 import polars as pl
 from opentelemetry.trace import NoOpTracer
 
-from basis.core import fakes
 from basis.core import testing as core_testing
 from basis.core.interval import Interval
 from basis.core.settings import GivenSettings
@@ -33,7 +32,7 @@ from basis.core.storage import Root
 from basis.core.testing import ContractError
 from basis.job import api, handles, runs
 from basis.job import job as jobs
-from basis.job.inputs import Clock, Fetch, Inputs, Query
+from basis.job.inputs import Fetch, Inputs, Query
 from basis.job.rows import Row, conform
 
 FORBIDDEN = (
@@ -86,7 +85,7 @@ def check_fixture(job: jobs.Job, fixture: Path, params: Path, snapshot_root: Pat
         raise ContractError(msg)
     found = api.read_fixture(fixture)
     request = runs.Request(params, Interval.parse(found.interval) if found.interval is not None else None, fixture)
-    result = runs.run(job, GivenSettings(), request, snapshot_root=Root.at(snapshot_root), faked=api.fixture_fakes(job, found))
+    result = runs.run(job, GivenSettings(), request, snapshot_root=Root.at(snapshot_root), faked=api.fixture_fakes(job, found, fixture))
     if not result.ok:
         problems = result.record.reasons + ([result.record.error] if result.record.error is not None else [])
         msg = f"{job.name} fails on its fixture {fixture}:\n" + "\n".join(f"  - {problem}" for problem in problems)
@@ -131,15 +130,7 @@ def inputs[I: Inputs](cls: type[I], *, interval: Interval | str | None = None, n
     if unknown := sorted(set(frames) - set(declared)):
         msg = f"{cls.__qualname__} reads no datasets named {unknown}; it reads {sorted(declared)}"
         raise TypeError(msg)
-    given: dict[str, fakes.Fake] = {}
-    for name, resource in cls.declared_resources().items():
-        if isinstance(resource, Clock):
-            if now is None:
-                msg = f"{cls.__qualname__}.{name} is a clock: give the time it reads, as inputs(..., now=datetime(2026, 11, 6, 6, 0, tzinfo=UTC))"
-                raise TypeError(msg)
-            given[name] = fakes.Clock(at=now)
-        else:
-            given[name] = fakes.Ids()
+    given = handles.faked(cls, now, fix="give it, as inputs(..., now=datetime(2026, 11, 6, 6, 0, tzinfo=UTC))")
     parsed = Interval.parse(interval) if isinstance(interval, str) else interval
     made = handles.live(cls, given, NoOpTracer())
     return cls({name: frames[name] if name in frames else dataset.row.empty() for name, dataset in declared.items()}, interval=parsed, handles=made.handles)

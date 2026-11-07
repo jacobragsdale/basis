@@ -71,13 +71,13 @@ Rows another service answers a GET with: the one way a job reaches another servi
 |---|---|---|
 | `row` | `type[etl.Row]` | The rows' columns. |
 | `http` | `str` | The service's name, as `BASIS_HTTP__NAME__*` configures it. |
-| `path` | `str` | The service's own path, after its base URL. `{start}` and `{end}` format the interval's ends, as `prices/{start:%Y-%m-%d}`. |
+| `path` | `str` | The service's own path, after its base URL. `{start}` and `{end}` give the interval's ends in ISO 8601, as `2026-11-05T00:00:00+00:00`, or in the format the path names, as `prices/{start:%Y-%m-%d}`, each percent-encoded, so a `+` reaches the service as a `+`. |
 | `deadline_s` | `float` | Seconds the GET may take, from the first byte sent to the last byte of the reply. |
 | `empty` | `"fail"` or `"allow"` | Whether a run may continue when the service answers no rows. |
 
 The service answers a JSON list of objects, one per row, each of the row's columns by name; a field the object leaves
-out is null, and a field the row has no column for, or a value that is an object or a list, fails the run. Each value
-is read as its text, as a CSV's is, so a number keeps the digits it was sent with. A reply that is not a 2xx, or one
+out is null, and a field the row has no column for, a value that is an object or a list, or `NaN` or `Infinity`, which
+are no JSON numbers, fails the run. Each value is read as its text, as a CSV's is, so a number keeps the digits it was sent with. A reply that is not a 2xx, or one
 that takes longer than `deadline_s`, fails the run. The rows are saved in the snapshot like any input's, so a replay
 never calls the service.
 
@@ -94,7 +94,8 @@ A run given a folder of files (`--data DIR`, or `data=` from Python) reads each 
 
 ### `etl.Clock()` and `etl.Ids()`
 
-The time, and new ids, for a transform that needs them, named by their attributes on `Inputs`. `inputs.NAME.now()` is
+The time, and new ids, for a transform that needs them, named by their attributes on `Inputs`, each a resource's name:
+lower-case letters, digits and underscores, starting with a letter. One instance names one attribute. `inputs.NAME.now()` is
 the time, in UTC; `inputs.NAME.new()` is a new UUIDv7, and `inputs.NAME.new(count)` a list of `count`, for a column's.
 A run keeps every value they give in its manifest, and a replay of the run is given the same values again, in the same
 order, so it changes nothing a transform makes from them. A replay that asks for more than its run kept is given, past
@@ -251,7 +252,8 @@ returns the replay's result and its differences.
 Paths are relative to the job's folder. `env` names a settings file, looked for in the job's folder and each folder
 above it up to the repo's root; its variables are set for the call alone, and the process's environment overrides them. Snapshots are saved in the repo's
 `snapshots/`. `replay` looks for the run there, then under the settings file's `BASIS_SNAPSHOT_ROOT`. Given `data` and
-no `interval`, `run` uses the fixture's interval from `fixture.json`, and its clocks read the fixture's `now`.
+no `interval`, `run` uses the fixture's interval from `fixture.json`. Given `data`, whatever the interval, its clocks
+read the fixture's `now`, which a job with a clock needs, and its ids count up from 1.
 
 ## Settings
 

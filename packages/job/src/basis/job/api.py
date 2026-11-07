@@ -29,10 +29,9 @@ from basis.core.interval import Interval
 from basis.core.model import Model
 from basis.core.settings import Settings
 from basis.core.storage import Root
+from basis.job import handles, runs
 from basis.job import job as jobs
-from basis.job import runs
 from basis.job.diff import OperationDiff
-from basis.job.inputs import Clock
 
 log = logging.getLogger(__name__)
 
@@ -48,14 +47,17 @@ def run(  # noqa: PLR0913 -- main.py writes every value out, by keyword
     snapshot_root: str | Path | None = None,
 ) -> runs.Result:
     """Run a job without publishing. `data` names a folder of files, such as `tests/fixture`, that replace the datasets
-    they name; with it and no `interval`, the fixture's own interval applies, and its clocks read the fixture's time."""
+    they name: a run on a fixture, whose clocks read its `fixture.json`'s time and whose ids count up from 1, whatever
+    its interval, and, with no `interval`, whose interval is the fixture's."""
     found = jobs.read(job)
     _setup_logs(found)
     folder = data if data is None else found.directory / data
     faked: dict[str, fakes.Fake] = {}
-    if interval is None and folder is not None:
-        fixture = read_fixture(folder)
-        interval, faked = fixture.interval, fixture_fakes(found, fixture)
+    if folder is not None:
+        fixture = read_fixture(folder) if interval is None or (folder / FIXTURE).exists() else None
+        if interval is None and fixture is not None:
+            interval = fixture.interval
+        faked = fixture_fakes(found, fixture, folder)
     request = runs.Request(found.directory / params, Interval.parse(interval) if interval is not None else None, folder, dict(labels or {}))
     root = Root.at(found.directory / snapshot_root) if snapshot_root is not None else Root.at(jobs.repo_root(found.directory) / "snapshots")
     with _environment(_settings_file(found.directory, env)):
@@ -73,11 +75,11 @@ def replay(job: ModuleType, run_id: str, *, params: str | Path | None = None, en
     local = Root.at(found.directory / snapshot_root) if snapshot_root is not None else Root.at(jobs.repo_root(found.directory) / "snapshots")
     roots = [local]
     with _environment(_settings_file(found.directory, env)):
-        configured = Settings().snapshot_root
-    if configured is not None:
-        roots.append(Root.at(configured))
+        configured = Settings()
+    if configured.snapshot_root is not None:
+        roots.append(Root.at(configured.snapshot_root))
     source = core_runs.find(roots, run_id, found.name)
-    result, diffs = runs.replay(found, source, params=found.directory / params if params is not None else None, snapshot_root=local)
+    result, diffs = runs.replay(found, source, params=found.directory / params if params is not None else None, snapshot_root=local, tracing=configured.traces)
     _report(result)
     for entry in diffs:
         log.info("differs", extra=vars(entry))
@@ -96,28 +98,24 @@ def fixture_interval(folder: Path) -> str | None:
     return read_fixture(folder).interval
 
 
+FIXTURE = "fixture.json"
+
+
 def read_fixture(folder: Path) -> Fixture:
     """A fixture's `fixture.json`: its interval, and the time its run's clocks read, as
     `{"interval": "2026-11-05..2026-11-06", "now": "2026-11-06T06:00:00+00:00"}`."""
-    path = folder / "fixture.json"
+    path = folder / FIXTURE
     if not path.exists():
         msg = f'{folder} has no fixture.json, which gives the fixture\'s interval: write {{"interval": "2026-11-05..2026-11-06"}}, or null'
         raise FileNotFoundError(msg)
     return Fixture.model_validate_json(path.read_bytes())
 
 
-def fixture_fakes(job: jobs.Job, fixture: Fixture) -> dict[str, fakes.Fake]:
-    """What a run on a fixture gives its clocks and ids: the fixture's time, and ids that count up from 1."""
-    given: dict[str, fakes.Fake] = {}
-    for name, resource in job.inputs.declared_resources().items():
-        if isinstance(resource, Clock):
-            if fixture.now is None:
-                msg = f'{job.name} declares a clock, {name}, and its fixture gives no time for it to read: add "now": "2026-11-06T06:00:00+00:00" to its fixture.json'
-                raise ValueError(msg)
-            given[name] = fakes.Clock(at=fixture.now)
-        else:
-            given[name] = fakes.Ids()
-    return given
+def fixture_fakes(job: jobs.Job, fixture: Fixture | None, folder: Path) -> dict[str, fakes.Fake]:
+    """What a run on the fixture in `folder` gives its clocks and ids: the time its `fixture.json` gives, and ids that
+    count up from 1."""
+    fix = f'add "now": "2026-11-06T06:00:00+00:00" to {folder / FIXTURE}'
+    return handles.faked(job.inputs, fixture.now if fixture is not None else None, fix=fix)
 
 
 def _settings_file(directory: Path, env: str | Path | None) -> Path | None:

@@ -17,8 +17,10 @@ function of what the run saved."""
 import inspect
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Literal, Protocol, Self, overload, override
+from urllib.parse import quote
 from uuid import UUID
 
 import polars as pl
@@ -103,9 +105,10 @@ class Fetch(Dataset):
     """Rows another service answers a GET with: a JSON list of objects, one per row, each of the row's columns by its
     name, which a run reads as it reads a CSV's text, so a decimal or a time may come as a string, and a number keeps
     the digits it was sent with. `http` names the service, as `BASIS_HTTP__NAME__URL` configures it, and `path` is the
-    service's own, after its base URL, binding only the run's interval: `{start}` and `{end}` format its ends, as in
-    `prices/{start:%Y-%m-%d}`. The GET has `deadline_s` and a span of its own, and its rows are saved in the run's
-    snapshot like any input's, so a replay never calls the service."""
+    service's own, after its base URL, binding only the run's interval: `{start}` and `{end}` give its ends in ISO
+    8601, as `2026-11-05T00:00:00+00:00`, or in the format the path names, as `prices/{start:%Y-%m-%d}`, each
+    percent-encoded, so that its `+` and `:` reach the service as they are. The GET has `deadline_s` and a span of its
+    own, and its rows are saved in the run's snapshot like any input's, so a replay never calls the service."""
 
     def __init__(self, row: type[Row], *, http: str, path: str, deadline_s: float, empty: Empty) -> None:
         super().__init__(row, empty=empty, base=_caller_folder())
@@ -117,17 +120,30 @@ class Fetch(Dataset):
         return self.resource.name
 
     def location(self, interval: Interval | None) -> str:
-        """The path of the run's GET, its interval's ends formatted in."""
+        """The path of the run's GET, its interval's ends formatted in, and percent-encoded."""
         if "{" not in self.path:
             return self.path
         if interval is None:
             msg = f"{self.path} formats the interval, and this run has none: give it one"
             raise ValueError(msg)
-        return self.path.format(start=interval.start, end=interval.end)
+        return self.path.format(start=_End.of(interval.start), end=_End.of(interval.end))
 
     @override
     def describe(self) -> str:
         return f"{self.http}: GET {self.path}"
+
+
+class _End(datetime):
+    """An interval's end as a fetch's path gives it: in ISO 8601 unless the path names a format, and percent-encoded,
+    as a path segment or a query's value needs it."""
+
+    @classmethod
+    def of(cls, moment: datetime) -> _End:
+        return cls.combine(moment.date(), moment.timetz())
+
+    @override
+    def __format__(self, spec: str) -> str:
+        return quote(super().__format__(spec) if spec else self.isoformat(), safe="")
 
 
 class File(Dataset):
@@ -188,7 +204,8 @@ class Handles:
 
 
 class _Given:
-    """A clock or ids, named by its attribute on a job's `Inputs`."""
+    """A clock or ids, named by its attribute on a job's `Inputs`, which must be a resource's name, as basis-core's
+    `resources.NAME` says, checked when the class is made."""
 
     kind = "resource"
 
@@ -203,8 +220,13 @@ class _Given:
         return self._name
 
     def __set_name__(self, owner: type, name: str) -> None:
-        if not IDENTIFIER.match(name):
-            msg = f"{owner.__qualname__}.{name}: a {self.kind}'s name is lower-case letters, digits and underscores"
+        try:
+            resources.named(name, self.kind)
+        except resources.ResourceError as error:
+            error.add_note(f"declared as {owner.__qualname__}.{name}: rename it")
+            raise
+        if self._name not in {None, name}:
+            msg = f"{owner.__qualname__}.{name} is already declared as {self._name!r}: declare each {self.kind} once per name"
             raise TypeError(msg)
         self._name = name
 
@@ -217,6 +239,10 @@ class Clock(_Given):
     the times its run read, in order."""
 
     kind = "clock"
+
+    @property
+    def resource(self) -> resources.ClockResource:
+        return resources.ClockResource(self.name)
 
     @overload
     def __get__(self, instance: None, owner: type) -> Self: ...
@@ -235,6 +261,10 @@ class Ids(_Given):
     random in a run, and in a replay the ids its run made, in order."""
 
     kind = "ids"
+
+    @property
+    def resource(self) -> resources.IdsResource:
+        return resources.IdsResource(self.name)
 
     @overload
     def __get__(self, instance: None, owner: type) -> Self: ...

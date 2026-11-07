@@ -22,7 +22,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 import basis.job as etl
-from basis.core import fakes
+from basis.core import fakes, logs
 from basis.core.databases import Database
 from basis.core.databases.mssql import MssqlReader
 from basis.core.logs import JsonFormatter
@@ -249,3 +249,23 @@ def test_a_service_the_settings_do_not_configure_fails_the_run_naming_its_variab
 def test_a_service_that_fails_its_get_fails_the_run_naming_it(tmp_path: Path, sql: Path) -> None:
     result = run(tmp_path, stamping(sql), traced()[0], venues=venues(status=503))
     assert (result.record.status, result.record.error) == ("failed", "CallFailedError: venues answered 503 to GET /venues/2026-11-05")
+
+
+def test_a_runs_spans_carry_the_settings_commit_as_their_version(tmp_path: Path, sql: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    settings = GivenSettings(git_sha="abc123", traces={"exporter": "console"})
+    request = runs.Request(params_file(tmp_path), DAY)  # a run from Python, whose request names no commit
+    runs.run(stamping(sql), settings, request, snapshot_root=Root.at(tmp_path / "snapshots"), databases=_databases, faked={"venues": venues()})
+    err = capsys.readouterr().err
+    assert '"service.version": "abc123"' in err
+    assert '"service.name": "stamping"' in err
+
+
+def test_a_replays_records_carry_its_own_fields_whatever_an_earlier_run_bound(tmp_path: Path, sql: Path, logged: Records, monkeypatch: pytest.MonkeyPatch) -> None:
+    result = run(tmp_path, stamping(sql), traced()[0], venues=venues())
+    assert result.snapshot is not None
+    monkeypatch.setattr(logs, "_bound", {})  # the process's fields, which this test binds, as they were after it
+    logs.bind(run_id="an-earlier-run", job="another-job", service="another-job")
+    replayed, _ = runs.replay(stamping(sql), result.snapshot, provider=traced()[0])
+    ours = [record for record in logged() if record.get("replay_of") == result.record.run_id]
+    assert ours
+    assert {(record["run_id"], record["job"], record["service"]) for record in ours} == {(replayed.record.run_id, "stamping", "stamping")}
