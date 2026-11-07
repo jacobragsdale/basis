@@ -1,8 +1,10 @@
 """`basis check --full`, which the push hook runs: `basis check`, then `regress` where the run store is reachable, the QA
-tier where the repo declares one and this machine has its settings file (`basis.core.qa`), and each part's contract
-diff. Each piece that does not run prints one `SKIPPED:` line that says why, and each that runs prints one line of
-what it found. `regress` seeing an output change fails nothing: the change may be meant, and `basis review` shows it to
-the reviewer. A failure to regress, a QA tier that refuses or a QA run that fails, fails the check.
+tier where the repo declares one and this machine has its settings file (`basis.core.qa`), each part's contract
+diff, and mutation testing of the domain functions the change touches, in WSL and on Linux (`basis.core.mutation`).
+Each piece that does not run prints one `SKIPPED:` line that says why, and each that runs prints one line of what it
+found. `regress` seeing an output change fails nothing: the change may be meant, and `basis review` shows it to the
+reviewer; nor does a mutant that survives, or mutmut failing. A failure to regress, a QA tier that refuses or a QA run
+that fails, fails the check.
 
 `regress` reads the store `basis regress` reads, the process's `BASIS_SNAPSHOT_ROOT`, and writes nothing. When the
 push hook checks a commit in a worktree of its own, it names the clone's own folder (`folder`), where the files git
@@ -11,6 +13,7 @@ does not track are: the QA settings file, and a run store a relative path names.
 its `ERROR` line, and the pieces after it still run and are recorded. `basis upgrade` leaves the QA tier out, since
 its relock is not yet a commit: the push runs it."""
 
+import logging
 import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -19,7 +22,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from basis.core import check, clone, qa, review
+from basis.core import check, clone, mutation, qa, review
 from basis.core.check import Runner
 from basis.core.errors import BasisError
 from basis.core.settings import Settings, locate
@@ -35,6 +38,8 @@ type Report = Callable[[Exception], str]
 """Prints a failure as its one line, with its traceback first if it is a defect, and returns the line."""
 
 
+log = logging.getLogger(__name__)
+
 QA_LATER = "it runs when you push, once the change is committed"
 """Why `basis upgrade`'s check leaves the QA tier out."""
 
@@ -47,15 +52,17 @@ def full(  # noqa: PLR0913 -- the repo, its parts, and how the check reaches the
     found = clone.of(repo)
     commit = found.head() if found is not None else None
     clean = found is not None and found.clean()  # before the check, which may write what git does not ignore
-    checked = check.check(repo, files, run=run) == 0
+    checked = check.check(repo, files, run=run, checks=check.checks_of(parts)) == 0
     if checked:
         regressed = _regress(parts, folder, report)
         tier = _qa(repo, parts, commit=commit, folder=folder, report=report) if with_qa else _skip_qa(QA_LATER)
         contracts, broken, unoffered = _contracts(repo, parts, report)
+        mutated = _mutation(repo)
     else:
         why = "basis check failed, as above"
         regressed, tier, contracts, broken, unoffered = _skip_regress(why), _skip_qa(why), {}, 0, why
         _skipped("the contract diffs", why)
+        mutated = _skip_mutation(why)
     passed = checked and not regressed.failures and not tier.refused and not any(run.failure for run in tier.runs) and not broken
     if found is None or commit is None:
         _skipped("the record for basis review", "the repo is in no clone with a commit")
@@ -73,6 +80,7 @@ def full(  # noqa: PLR0913 -- the repo, its parts, and how the check reaches the
             qa=tier,
             contracts=contracts,
             contracts_skipped=unoffered,
+            mutation=mutated,
         )
         review.save(found, record)
         _said(f"recorded that commit {commit} {'passed' if passed else 'failed'}, for `uv run basis review`")
@@ -182,6 +190,29 @@ def _contracts(repo: Path, parts: Mapping[str, Part], report: Report) -> tuple[d
         diff = found[name]
         _said(f"the {name} part's contract is unchanged" if diff is None else f"the {name} part's contract: {_summary(diff)}, as `uv run basis review` shows")
     return found, broken, None
+
+
+def _mutation(repo: Path) -> review.MutationRecord:
+    try:
+        found = mutation.mutate(repo)
+    except Exception as error:
+        log.exception("mutation testing failed")
+        failure = f"{type(error).__name__}: {' '.join(str(error).split())}, a defect in basis; the log record above holds its traceback"
+        _said(f"mutation testing failed, which fails nothing: {failure}")
+        return review.MutationRecord(failure=failure)
+    if found.skipped is not None:
+        return _skip_mutation(found.skipped, found)
+    count = f"{found.mutants} mutant{'' if found.mutants == 1 else 's'}"
+    functions = f"{len(found.functions)} domain function{'' if len(found.functions) == 1 else 's'}"
+    survived = f"{found.survived} survived, as `uv run basis review` lists" if found.survived else "none survived"
+    failed = f"; mutmut failed, which fails nothing: {found.failure}" if found.failure is not None else ""
+    _said(f"mutation testing made {count} of the {functions} the change touches: {survived}{failed}")
+    return found
+
+
+def _skip_mutation(why: str, found: review.MutationRecord | None = None) -> review.MutationRecord:
+    _skipped("mutation testing", why)
+    return found if found is not None else review.MutationRecord(skipped=why)
 
 
 def _summary(diff: str) -> str:

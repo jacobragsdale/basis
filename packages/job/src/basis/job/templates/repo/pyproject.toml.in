@@ -9,6 +9,7 @@ dependencies = ["basis-job>={version},<0.{next_minor}", "polars>=2.1.0"]  # jobs
 
 [tool.basis]
 parts = ["job"]  # the parts this repo has, whose verbs `basis` offers; basis never infers one from a folder
+coverage = 90  # the percentage of the code's lines and branches the unit tests must cover, which `basis check` holds them to
 
 # The QA tier, which the push hook's `basis check --full` runs on a desktop with the settings file below: each job,
 # published to QA. It refuses to run unless every database in the file, and its store, has a name that contains the
@@ -32,7 +33,9 @@ module-root = ""
 
 {source}
 [dependency-groups]
-dev = ["pytest>=9.2.0", "ruff==0.17.4", "ty==0.0.99"]
+# pytest-cov measures the coverage `basis check` holds the unit tests to, and mutmut tests mutants in `basis check
+# --full`, which needs fork: WSL or Linux.
+dev = ["mutmut>=3.8.1; sys_platform == 'linux'", "pytest>=9.2.0", "pytest-cov>=7.1.0", "ruff==0.17.4", "ty==0.0.99"]
 
 [tool.ruff]
 line-length = 200

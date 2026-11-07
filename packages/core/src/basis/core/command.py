@@ -34,7 +34,7 @@ from typing import Literal, NoReturn, override
 
 from pydantic import ValidationError
 
-from basis.core import check, ddl, doctor, full, hooks, invalid, logs, qa, review, settings, sync, upgrade
+from basis.core import check, ddl, doctor, full, gates, hooks, invalid, logs, qa, review, settings, sync, upgrade
 from basis.core.destination import Dialect
 from basis.core.errors import BasisError
 from basis.core.logs import utc_now
@@ -211,9 +211,9 @@ def declared(pyproject: Path) -> list[str]:
         raise CommandError(msg)
     names = table.get("parts")
     listed = {str(name) for name in names} if isinstance(names, list) else set[str]()
-    unknown = sorted(set(table) - {"parts", sync.APT, qa.KEY} - listed)
+    unknown = sorted(set(table) - {"parts", sync.APT, gates.KEY, qa.KEY} - listed)
     if unread := [key for key in unknown if not isinstance(table[key], dict)]:
-        reads = f"parts, as {example}, {sync.APT}, {qa.KEY}, and a table of each declared part's own, as [tool.basis.job]"
+        reads = f"parts, as {example}, {sync.APT}, {gates.KEY}, {qa.KEY}, and a table of each declared part's own, as [tool.basis.job]"
         msg = f"{pyproject}'s [tool.basis] has {', '.join(unread)}, which basis does not read: remove it; basis reads {reads}"
         raise CommandError(msg)
     if not isinstance(names, list) or not names or not all(isinstance(name, str) for name in names):
@@ -286,7 +286,7 @@ def _core(repo: Repo) -> list[Verb]:
         if not args.full:
             if args.settings_from is not None or not args.with_qa:
                 return fail("--settings-from and --no-qa change what `basis check --full` does, and were given without --full", "give --full too, or leave them out")
-            return check.check(repo.root, agent_files(), run=check.run_command, staged=args.staged)
+            return check.check(repo.root, agent_files(), run=check.run_command, staged=args.staged, checks=check.checks_of(repo.parts))
         if args.staged:
             return fail("--staged checks a commit's staged files, and --full a commit being pushed", "give one of them")
         folder = args.settings_from.resolve() if args.settings_from is not None else repo.root

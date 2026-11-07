@@ -1,4 +1,5 @@
 import os
+import sys
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from importlib.metadata import version
@@ -29,7 +30,7 @@ def repo(tmp_path: Path, git: Git) -> Path:
     """A clone of a repo whose files are what basis writes, with every change committed."""
     folder = tmp_path / "repo"
     folder.mkdir()
-    (folder / "pyproject.toml").write_text('[tool.basis]\nparts = ["alpha"]\n', encoding="utf-8")
+    (folder / "pyproject.toml").write_text('[tool.basis]\nparts = ["alpha"]\ncoverage = 90\n', encoding="utf-8")
     sync.write(folder, [])
     git(folder, "init", "--quiet")
     hooks.ensure(folder)
@@ -38,12 +39,21 @@ def repo(tmp_path: Path, git: Git) -> Path:
     return folder
 
 
-def passing(_argv: Sequence[str], _folder: Path) -> int:
+def passing(argv: Sequence[str], _folder: Path) -> int:
+    covered(argv)
     return 0
 
 
 def failing(argv: Sequence[str], _folder: Path) -> int:
+    covered(argv)
     return 1 if "pytest" in argv else 0
+
+
+def covered(argv: Sequence[str]) -> None:
+    """Write the coverage report pytest-cov writes, of every line, where `basis check` asks for one."""
+    for argument in argv:
+        if argument.startswith("--cov-report=json:"):
+            Path(argument.removeprefix("--cov-report=json:")).write_text('{"totals": {"percent_covered": 100.0}}', encoding="utf-8")
 
 
 def regressing(*found: Regressed, failures: Sequence[Exception] = ()) -> tuple[list[Regress], Runs]:
@@ -148,6 +158,7 @@ def test_a_failing_check_skips_regress_and_the_qa_tier_and_records_that_the_comm
         "SKIPPED: regress: basis check failed, as above",
         "SKIPPED: the QA tier: basis check failed, as above",
         "SKIPPED: the contract diffs: basis check failed, as above",
+        "SKIPPED: mutation testing: basis check failed, as above",
     ]
     assert asked == []
     assert not record(repo).passed
@@ -308,3 +319,91 @@ def test_a_record_is_kept_where_every_worktree_of_the_clone_finds_it(repo: Path,
 def test_the_contract_line_is_its_diffs_plain_first_line(declared: Path, capsys: pytest.CaptureFixture[str], diff: str, line: str) -> None:
     assert checked(declared, Part(contract=lambda _: diff)) == 0
     assert f"basis check --full: the alpha part's contract: {line}, as `uv run basis review` shows" in capsys.readouterr().err
+
+
+DOMAIN = "def clamp(x: int, low: int, high: int) -> int:\n    if x < low:\n        return low\n    return x\n"
+CLAMPED = "from rates import domain\n\n\ndef test_clamp() -> None:\n    assert domain.clamp(-1, 0, 10) == 0\n    assert domain.clamp(5, 0, 10) == 5\n"
+PYTEST = '\n[tool.pytest.ini_options]\naddopts = "-ra --import-mode=importlib -p no:randomly"\ntestpaths = ["rates"]\n'
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="mutmut runs in WSL or on Linux only")
+def test_review_lists_a_mutant_of_a_domain_function_the_change_touches_that_survived(repo: Path, git: Git, capsys: pytest.CaptureFixture[str]) -> None:
+    """The change's mutants survive or die by the repo's own unit tests, which mutmut runs; a survivor fails nothing."""
+    with (repo / "pyproject.toml").open("a", encoding="utf-8") as file:
+        file.write(PYTEST)
+    for name, text in {"rates/__init__.py": "", "rates/domain.py": DOMAIN, "rates/tests/__init__.py": "", "rates/tests/test_domain.py": CLAMPED}.items():
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_text(text, encoding="utf-8")
+    git(repo, "add", "--all")
+    git(repo, "commit", "--quiet", "--no-verify", "--message", "Clamp rates")
+    assert checked(repo, Part()) == 0
+    assert "basis check --full: mutation testing made 1 mutant of the 1 domain function the change touches: 1 survived, as `uv run basis review` lists" in lines(capsys)
+    assert record(repo).passed
+    assert review.review(repo, "HEAD") == 0
+    printed = capsys.readouterr().out
+    first = clone.of(repo)
+    assert first is not None
+    base = first.commit("HEAD^")
+    assert f"### Mutation testing\n\nmutmut made 1 mutant of the domain functions the change since `{base}` touches, `rates.domain.clamp`: the tests killed 0, and 1 survived" in printed
+    assert "| `rates.domain.clamp` | `rates.domain.x_clamp__mutmut_1` | `if x < low: -> if x <= low:` |" in printed
+
+
+def test_without_a_domain_function_the_change_touches_mutation_testing_is_skipped(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert checked(repo, Part()) == 0
+    why = "the change touches no domain function" if sys.platform == "linux" else "mutmut runs in WSL or on Linux only, since it forks a process for each mutant: push from WSL to have it run"
+    assert f"SKIPPED: mutation testing: {why}" in lines(capsys)
+    assert review.review(repo, "HEAD") == 0
+    assert f"### Mutation testing\n\nSkipped: {why}.\n" in capsys.readouterr().out
+
+
+def test_a_defect_in_mutation_testing_fails_nothing_and_is_recorded(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(_repo: Path) -> review.MutationRecord:
+        msg = "no mutants today"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(full.mutation, "mutate", broken)
+    assert checked(repo, Part()) == 0
+    said = "RuntimeError: no mutants today, a defect in basis; the log record above holds its traceback"
+    assert f"basis check --full: mutation testing failed, which fails nothing: {said}" in lines(capsys)
+    assert record(repo).mutation.failure == said
+
+
+@pytest.mark.parametrize(
+    ("found", "printed"),
+    [
+        (
+            review.MutationRecord(base="abc", functions=["rates.domain.clamp"], mutants=3, killed=3),
+            ["mutmut made 3 mutants of the domain functions the change since `abc` touches, `rates.domain.clamp`: the tests killed 3, and none survived."],
+        ),
+        (
+            review.MutationRecord(functions=["rates.domain.clamp"], mutants=4, killed=1, unsettled={"timeout": 1}, survived=2, shown=[review.MutantRecord(name="m1", function="f", change="a -> b")]),
+            [
+                "mutmut made 4 mutants of the domain functions the change in the first commit touches, `rates.domain.clamp`: the tests killed 1, 1 timeout, and 2 survived, which no test fails:",
+                "",
+                "| Function | Mutant | What it changed |",
+                "|---|---|---|",
+                "| `f` | `m1` | `a -> b` |",
+                "",
+                "And 1 more.",
+            ],
+        ),
+        (
+            review.MutationRecord(functions=["rates.domain.clamp"], failure="mutmut stopped"),
+            [
+                "mutmut failed, which fails nothing: mutmut stopped",
+                "",
+                "mutmut made 0 mutants of the domain functions the change in the first commit touches, `rates.domain.clamp`: the tests killed 0, and none survived.",
+            ],
+        ),
+    ],
+    ids=["all-killed", "survivors", "mutmut-failed"],
+)
+def test_review_says_what_mutation_testing_found(found: review.MutationRecord, printed: list[str]) -> None:
+    record = review.Record(commit="c", folder="", checked_at=AT, checked=True, passed=True, versions={}, regress=review.RegressRecord(skipped="x"), qa=review.QaRecord(skipped="y"), mutation=found)
+    assert "\n### Mutation testing\n\n" + "\n".join(printed) + "\n\n### Versions" in review.markdown(record)
+
+
+def test_a_record_from_before_mutation_testing_still_reads() -> None:
+    kept = review.Record(commit="c", folder="", checked_at=AT, checked=True, passed=True, versions={}, regress=review.RegressRecord(skipped="x"), qa=review.QaRecord(skipped="y"))
+    older = kept.model_dump(mode="json", exclude={"mutation"})
+    assert review.Record.model_validate(older).mutation.skipped == "the basis that checked this commit tested no mutants"

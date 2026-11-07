@@ -9,11 +9,19 @@ line that starts with `ERROR`, gives the reason and ends with the fix.
   each commit being pushed. Never skip either with `--no-verify` or `-n`: when one fails, fix what each `ERROR` line
   says, and commit or push again. `.claude/settings.json` denies the usual ways to skip them, as best it can; the push
   hook is the backstop.
+- `basis check` holds the tests to three gates. The unit tests cover at least the percentage of the code's lines and
+  branches that `[tool.basis] coverage` gives, every module counted but tests and repository modules, which the
+  integration tier covers; lower it only in a change of its own. A test uses no `unittest.mock` or pytest-mock, but in
+  a file with a line saying why, `# basis: allow-mocks -- WHY`: a fake is a test's double. A unit test opens no
+  network socket; mark one that needs a real database or service `@pytest.mark.integration`, which the default run
+  leaves out.
 - `uv run basis check --full` adds `regress`, which replays recent published runs from `BASIS_SNAPSHOT_ROOT` with
-  this code, and the QA tier, which runs each part against QA where `pyproject.toml` declares `[tool.basis.qa]` and
-  this machine has its settings file; a piece that cannot run prints one `SKIPPED` line saying why. An output that
-  `regress` sees change fails nothing: say in the pull request why it is meant. Open the pull request with
-  `uv run basis review` as its description, which summarizes what the push's check found on the commit.
+  this code; the QA tier, which runs each part against QA where `pyproject.toml` declares `[tool.basis.qa]` and
+  this machine has its settings file; and, in WSL or on Linux, mutation testing of each domain function the change
+  touches; a piece that cannot run prints one `SKIPPED` line saying why. An output that `regress` sees change fails
+  nothing: say in the pull request why it is meant. Nor does a mutant that survives: it is a change to the code that
+  no test fails, so add a test that does. Open the pull request with `uv run basis review` as its description, which
+  summarizes what the push's check found on the commit, the surviving mutants among it.
 - `uv run basis doctor` checks this desktop's uv, git, hooks, feed and settings, and `uv run basis upgrade` takes a
   basis release: it relocks, syncs, checks in full and says what changed, for a commit of its own.
 - basis writes, and owns: each file whose first lines say basis manages it, skills in `.agents/skills/` and their

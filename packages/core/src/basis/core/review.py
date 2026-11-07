@@ -1,6 +1,7 @@
 """`basis review`: a pull request's summary, in Markdown, of what `basis check --full` found on a commit, so a reviewer
 reads what the change does rather than lines of agent-written code: the outputs `regress` saw change, what the QA tier
-ran, each part's contract diff, the basis versions, and the commit that was checked.
+ran, each part's contract diff, the mutants of the domain functions the change touches that no test killed
+(`basis.core.mutation`), the basis versions, and the commit that was checked.
 
 `check --full` records what it found as a `Record`, once per commit, in the git folder every worktree of the clone
 shares, at `basis/checks/PREFIX/COMMIT.json`, where PREFIX is the repo's folder in the clone. The push hook checks
@@ -60,6 +61,35 @@ class QaRecord(Model):
     runs: list[QaRunRecord] = Field(default_factory=list)
 
 
+class MutantRecord(Model):
+    name: str
+    """Its name, as mutmut gives it, which `uv run mutmut show NAME` shows in a copy of the repo."""
+    function: str
+    """The domain function it changed, by its module's dotted name."""
+    change: str
+    """The lines it changed, before and after, as `BEFORE -> AFTER`."""
+
+
+class MutationRecord(Model):
+    """What mutation testing found, as `check --full` ran it: never a failure of the check."""
+
+    skipped: str | None = None
+    """Why it did not run, when it did not."""
+    base: str | None = None
+    """The commit the change was measured from, or None for a first commit, whose every domain function is new."""
+    functions: list[str] = Field(default_factory=list)
+    """The domain functions the change touches, by their modules' dotted names."""
+    mutants: int = 0
+    killed: int = 0
+    survived: int = 0
+    shown: list[MutantRecord] = Field(default_factory=list)
+    """The mutants that survived, as many as `basis.core.mutation.SHOWN`."""
+    unsettled: dict[str, int] = Field(default_factory=dict)
+    """How many mutants were neither killed nor survived, by what mutmut says of them, such as `timeout`."""
+    failure: str | None = None
+    """What mutmut said when it failed, which fails nothing."""
+
+
 class Record(Model):
     """What `basis check --full` found on one commit."""
 
@@ -79,6 +109,7 @@ class Record(Model):
     """Each part's contract diff, by the part's name, or None when its contract has not changed."""
     contracts_skipped: str | None = None
     """Why there are no contract diffs, when there are none: no part offers a contract, or `basis check` failed."""
+    mutation: MutationRecord = Field(default_factory=lambda: MutationRecord(skipped="the basis that checked this commit tested no mutants"))
 
 
 def versions() -> dict[str, str]:
@@ -137,6 +168,7 @@ def markdown(record: Record) -> str:
         lines += ["", "### Contracts", "", f"Skipped: {record.contracts_skipped}."]
     for part, diff in record.contracts.items():
         lines += ["", f"### The {part} contract", "", diff if diff is not None else "Unchanged since the last release."]
+    lines += ["", "### Mutation testing", "", *_mutation(record.mutation)]
     lines += ["", "### Versions", "", *(f"- {name} {number}" for name, number in record.versions.items())]
     return "\n".join(lines) + "\n"
 
@@ -168,6 +200,20 @@ def _qa(found: QaRecord) -> list[str]:
     result = f"{failed} failed" if failed else "it did what it was asked" if len(found.runs) == 1 else "each did what it was asked"
     made = f"{len(found.runs)} run{'' if len(found.runs) == 1 else 's'}"
     return [f"The QA tier made {made} against QA{store}, and {result}:", "", "| Part | Name | Run | What it did |", "|---|---|---|---|", *rows]
+
+
+def _mutation(found: MutationRecord) -> list[str]:
+    if found.skipped is not None:
+        return [f"Skipped: {found.skipped}."]
+    since = f"since `{found.base}`" if found.base is not None else "in the first commit"
+    made = f"mutmut made {found.mutants} mutant{'' if found.mutants == 1 else 's'} of the domain functions the change {since} touches, {', '.join(f'`{name}`' for name in found.functions)}"
+    failed = [f"mutmut failed, which fails nothing: {found.failure}", ""] if found.failure is not None else []
+    outcome = f"the tests killed {found.killed}" + "".join(f", {count} {status}" for status, count in sorted(found.unsettled.items()))
+    if not found.survived:
+        return [*failed, f"{made}: {outcome}, and none survived."]
+    rows = [f"| `{_cell(mutant.function)}` | `{_cell(mutant.name)}` | `{_cell(mutant.change)}` |" for mutant in found.shown]
+    more = ["", f"And {found.survived - len(found.shown)} more."] if found.survived > len(found.shown) else []
+    return [*failed, f"{made}: {outcome}, and {found.survived} survived, which no test fails:", "", "| Function | Mutant | What it changed |", "|---|---|---|", *rows, *more]
 
 
 def _runs(count: int) -> str:
