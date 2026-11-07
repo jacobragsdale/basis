@@ -167,7 +167,8 @@ of the `openapi.json` that this repo's example API produces.
   every model is strict. The API's breaking-change check compares the document with the one at its last release tag, and
   fails when a field is removed, renamed or changes type. Adding a response field is never breaking, because basis-ui's
   schemas drop fields they do not know. Requests are the other way round: an API refuses unknown request fields, so an
-  API that accepts a new one deploys before the UI that sends it.
+  API that accepts a new one deploys before the UI that sends it, and it takes a decimal only as a string, as it sends
+  one.
 - **Errors.** Every error is an RFC 9457 problem details response, from one exception map.
 - **Identity.** A UI sends the user's JWT as a bearer token, and the API verifies it. A missing token is anonymous; an
   invalid or expired one gets a 401 problem of type `invalid-token`, and a route that needs a user answers an anonymous
@@ -199,11 +200,13 @@ clients and environment variables. "Pure" cannot mean "no I/O" for a handler tha
 means "I/O only through the core", which lets the core bound, observe and record every call.
 
 Request bodies and settings are strict models: an unknown key is refused and no value is coerced, so a misspelled field
-fails at the boundary instead of being silently ignored. Every route declares its deadline, its response model and its
-errors. Database writes in a request commit only after the handler returns and its response validates, and calls to
-other services that change state go after that commit. A declared pure compute function runs in a process pool, off the
-event loop, because CPU-bound quant code inside an `async def` stalls every request on that worker. An unexpected error
-is logged once, with its traceback.
+fails at the boundary instead of being silently ignored. A decimal in a request body is a JSON string, as it is in a
+response, because a JSON number reaches a decimal through a float; query and path parameters, which arrive as text,
+are read by each type's grammar. Every route declares its deadline, which caps every call its request makes, its
+response model and its errors, and an error it does not declare answers 500. Database writes in a request commit only
+after the handler returns and its response validates, and calls to other services that change state go after that
+commit. A declared pure compute function runs in a process pool, off the event loop, because CPU-bound quant code
+inside an `async def` stalls every request on that worker. An unexpected error is logged once, with its traceback.
 
 Identity is optional. A request with a token has it verified (signature, expiry, issuer and audience), and an invalid or
 expired token is refused rather than treated as anonymous, so a broken sign-in in a UI fails loudly. A handler sees the

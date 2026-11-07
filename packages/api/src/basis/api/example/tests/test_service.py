@@ -10,7 +10,7 @@ from basis.api import fakes
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from basis.api.example import service
+from basis.api.example import dev, service
 from basis.api.example.service import BOND, RECORD, Bond, Convention, Matured, NotIssued, Settings, day_count, last_coupon
 
 PERIOD = {"face": "1000000", "rate": "0.045", "convention": "30/360"}
@@ -48,7 +48,10 @@ def terms() -> fakes.Cache:
 
 
 def _app(warehouse: fakes.Database, terms: fakes.Cache, **settings: object) -> api.App:
-    given: dict[api.Resource, fakes.Fake] = {service.WAREHOUSE: warehouse, service.PRICING: fakes.Http(_pricing()), service.TERMS: terms, service.CLOCK: fakes.Clock(at=AT), service.IDS: fakes.Ids()}
+    given: fakes.Fakes = {
+        service.WAREHOUSE: warehouse, service.PRICING: fakes.Http(_pricing()), service.TERMS: terms, service.CLOCK: fakes.Clock(at=AT), service.IDS: fakes.Ids(),
+        service.SOLVE: fakes.Compute(),
+    }  # fmt: skip
     return api.build(service.service, settings=Settings.given(**settings), fakes=given)
 
 
@@ -194,3 +197,24 @@ def test_a_settlement_on_a_bond_that_has_matured_records_nothing(client: TestCli
     response = client.post("/settlements", json={"security_id": ISIN, "face": "100.00", "settle": "2035-01-02"})
     assert (response.status_code, response.json()["type"]) == (HTTPStatus.UNPROCESSABLE_CONTENT, "matured")
     assert (warehouse.committed, warehouse.rolled_back) == ([], [])
+
+
+def test_a_bonds_yield_is_solved_from_its_dirty_price(client: TestClient) -> None:
+    response = client.get(f"/bonds/{ISIN}/yield", params={"settle": "2026-11-06"})
+    # 98.50 clean, and 171 days of 30/360 interest at 4.5% on 100: 100.6375 dirty, nine days of a 180-day period before
+    # the first of 17 coupons of 2.25
+    assert response.json() == {"security_id": ISIN, "settle": "2026-11-06", "clean": "98.50", "dirty": "100.637500", "annual_yield": "0.0472658580"}
+
+
+def test_a_yield_needs_a_price(client: TestClient) -> None:
+    response = client.get(f"/bonds/{UNPRICED}/yield", params={"settle": "2026-11-06"})
+    assert (response.status_code, response.json()["type"]) == (HTTPStatus.NOT_FOUND, "unpriced")
+
+
+def test_the_services_own_fakes_run_it() -> None:
+    """What `basis dev` and `basis call --fake` run it on, with the solver run here rather than in the pool."""
+    app = api.build(service.service, settings=Settings.given(), fakes=dev.fakes() | {service.SOLVE: fakes.Compute()})
+    with TestClient(app.asgi) as client:
+        assert client.get("/bonds/XS2010030836").json()["convention"] == "ACT/360"
+        assert client.get("/bonds/XS2010030836/yield", params={"settle": "2026-11-06"}).status_code == HTTPStatus.OK
+        assert client.get("/bonds/DE0001102580/dirty-price", params={"face": "100", "settle": "2026-11-06"}).json()["type"] == "unpriced"

@@ -14,10 +14,10 @@ one exception map, health and readiness endpoints, and a graceful shutdown. A se
         title = "The period ends before it starts"
 
 
-    def accrued_interest(start: date, end: date, settings: Annotated[Settings, api.given(Settings)]) -> Accrual: ...
+    def accrued_interest(period: Annotated[Period, Query()], settings: Annotated[Settings, api.given(Settings)]) -> Accrual: ...
 
 
-    WAREHOUSE = api.database("warehouse", deadline_s=5)
+    WAREHOUSE = api.database("warehouse", deadline_s=5, max_concurrent=8)
 
 
     async def bond(security: str, warehouse: Annotated[api.Reader, api.given(WAREHOUSE)]) -> Bond: ...
@@ -27,11 +27,16 @@ one exception map, health and readiness endpoints, and a graceful shutdown. A se
         name="accruals",
         settings=Settings,
         resources=[WAREHOUSE],
-        routes=[api.get("/accrued-interest", accrued_interest), api.get("/bonds/{security}", bond)],
+        routes=[
+            api.get("/accrued-interest", accrued_interest, deadline_s=1, response=Accrual, errors=[PeriodReversed]),
+            api.get("/bonds/{security}", bond, deadline_s=5, response=Bond, errors=[UnknownBond]),
+        ],
     )
 
-A resource is anything a handler reaches outside the process: a database, another HTTP service, a cache, the clock and
-new ids. `resources.py` says how each is declared, and what a handler gets for it; `basis.api.fakes` holds their fakes.
+Each route declares its deadline, its response and its errors (`service.py`), and reads its request strictly
+(`strict.py`). A resource is anything a handler reaches outside the process: a database, another HTTP service, a cache,
+the clock and new ids. `resources.py` says how each is declared, and what a handler gets for it; `basis.api.fakes`
+holds their fakes. CPU-bound work a handler hands to the service's process pool is a compute function (`compute.py`).
 A service that declares `user=User` has each request's bearer token verified, and its handlers ask for `User | None`:
 `identity.py` says how.
 
@@ -40,6 +45,7 @@ for their declarations, import no server, no exporter, no database driver and no
 
 from typing import TYPE_CHECKING
 
+from basis.api.compute import Compute, ComputeFunction, compute
 from basis.api.errors import Error, FieldError, Problem, ServiceError
 from basis.api.identity import SignInRequiredError, User
 from basis.api.resources import Bind, Cache, CallFailedError, Client, Clock, DeadlineExceededError, Ids, Reader, Resource, Writer, cache, clock, database, http, ids
@@ -57,6 +63,8 @@ __all__ = [
     "CallFailedError",
     "Client",
     "Clock",
+    "Compute",
+    "ComputeFunction",
     "DeadlineExceededError",
     "Error",
     "FieldError",
@@ -77,6 +85,7 @@ __all__ = [
     "build",
     "cache",
     "clock",
+    "compute",
     "database",
     "delete",
     "get",

@@ -173,16 +173,31 @@ ignore_imports = [
 [[tool.importlinter.contracts]]
 name = "A service's declarations, and the example's, load no server, exporter, database, HTTP client or token verifier: basis builds the app, opens its resources and verifies its users"
 type = "forbidden"
-source_modules = ["basis.api.service", "basis.api.errors", "basis.api.settings", "basis.api.resources", "basis.api.identity", "basis.api.example.service"]
+source_modules = [
+    "basis.api.service", "basis.api.errors", "basis.api.settings", "basis.api.resources", "basis.api.identity", "basis.api.compute", "basis.api.strict",
+    "basis.api.example.service",
+]
 forbidden_modules = [
     "basis.api.app", "basis.api.requests", "basis.api.server", "basis.api.traces", "basis.api.cli", "basis.api.sync", "basis.api.opened",
-    "basis.api.fakes", "basis.api.tokens", "jwt", "cryptography", "uvicorn", "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.command",
-    "basis.core.check", "basis.core.hooks", "basis.core.hygiene", "basis.core.sync", "mssql_python", "oracledb", "httpx", "httpx2", "requests",
-    "urllib3", "aiohttp",
+    "basis.api.fakes", "basis.api.routes", "basis.api.pool", "basis.api.call", "basis.api.dev", "basis.api.tokens", "jwt", "cryptography", "uvicorn",
+    "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.command", "basis.core.check", "basis.core.hooks",
+    "basis.core.hygiene", "basis.core.sync", "mssql_python", "oracledb", "httpx", "httpx2", "requests", "urllib3", "aiohttp",
 ]
 ignore_imports = [
     "basis.api -> basis.api.app",  # `api.build` loads on first use, which a service's modules never make
     "basis.api -> basis.api.server",  # as does `api.serve`
+]
+
+[[tool.importlinter.contracts]]
+name = "Compute modules do no I/O and reach no resource: the process pool gives each function values, and it returns one"
+type = "forbidden"
+source_modules = ["basis.api.example.compute"]
+forbidden_modules = [
+    "basis.api.app", "basis.api.call", "basis.api.cli", "basis.api.compute", "basis.api.deadlines", "basis.api.dev", "basis.api.errors", "basis.api.fakes",
+    "basis.api.identity", "basis.api.opened", "basis.api.pool", "basis.api.requests", "basis.api.resources", "basis.api.routes", "basis.api.server",
+    "basis.api.service", "basis.api.settings", "basis.api.strict", "basis.api.sync", "basis.api.tokens", "basis.api.traces", "basis.api.example.service",
+    "basis.api.example.dev", "basis.core",
+    "fastapi", "starlette", "uvicorn", "pydantic_settings", "mssql_python", "oracledb", "httpx", "httpx2", "requests", "urllib3", "aiohttp",
 ]
 
 # optim's contract (roadmap step 3.2), with basis-core's I/O forbidden beside optim's own since optim's plumbing became

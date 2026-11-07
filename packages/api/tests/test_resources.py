@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import dataclasses
+import inspect
 import ipaddress
 import json
 import ssl
@@ -12,6 +13,7 @@ from decimal import Decimal
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import FunctionType
 from typing import Annotated, Literal, override
 from uuid import UUID
 
@@ -51,6 +53,11 @@ class Refused(api.Error):
     title = "The price is refused"
 
 
+class NoPrice(api.Error):
+    status = HTTPStatus.NOT_FOUND
+    title = "No price for the security"
+
+
 WAREHOUSE = api.database("warehouse", deadline_s=1, max_concurrent=4)
 QUICK = api.database("quick", deadline_s=0.05, max_concurrent=4)
 PRICING = api.http("pricing", deadline_s=0.5)
@@ -70,7 +77,8 @@ PRICE = {"security": SECURITY, "price": "101.25"}
 async def read_price(security: str, warehouse: Annotated[api.Reader, api.given(WAREHOUSE)]) -> Price:
     found = await warehouse.fetch_one(Price, SELECT, security=security)
     if found is None:
-        raise HTTPException(HTTPStatus.NOT_FOUND)
+        msg = f"no price for {security}"
+        raise NoPrice(msg)
     return found
 
 
@@ -165,26 +173,33 @@ def stamp(clock: Annotated[api.Clock, api.given(CLOCK)], ids: Annotated[api.Ids,
     return {"at": clock.now().isoformat(), "id": str(ids.new()), "next": str(ids.new())}
 
 
+def _route(declare: Callable[..., api.Route], path: str, handler: FunctionType, *errors: type[api.Error]) -> api.Route:
+    """A route of these tests, which are of resources: it answers what its handler returns, and its deadline is longer than
+    any resource's, so that each resource's own deadline is the one that binds."""
+    returns = inspect.signature(handler, eval_str=True).return_annotation
+    return declare(path, handler, deadline_s=10, response=returns, errors=list(errors), status=HTTPStatus.NO_CONTENT if returns is None else HTTPStatus.OK)
+
+
 SERVICE = api.Service(
     name="prices",
     settings=api.Settings,
     resources=[WAREHOUSE, QUICK, PRICING, PRICES, ONCE, CLOCK, IDS],
     routes=[
-        api.get("/prices/{security}", read_price),
-        api.post("/prices", set_price),
-        api.post("/refused", set_then_refuse),
-        api.post("/broken", set_then_break),
-        api.post("/misanswered", set_then_misanswer),
-        api.get("/slow", slow_read),
-        api.post("/stubborn", set_then_wait),
-        api.post("/cached-write", set_then_cache_slowly),
-        api.post("/carried-on", set_then_carry_on),
-        api.get("/again", read_again),
-        api.post("/quick", set_quickly),
-        api.post("/quick-refused", set_quickly_then_refuse),
-        api.get("/quotes/{security}", quote),
-        api.get("/cached/{security}", cached),
-        api.get("/stamp", stamp),
+        _route(api.get, "/prices/{security}", read_price, NoPrice),
+        _route(api.post, "/prices", set_price),
+        _route(api.post, "/refused", set_then_refuse, Refused),
+        _route(api.post, "/broken", set_then_break),
+        _route(api.post, "/misanswered", set_then_misanswer),
+        _route(api.get, "/slow", slow_read),
+        _route(api.post, "/stubborn", set_then_wait),
+        _route(api.post, "/cached-write", set_then_cache_slowly),
+        _route(api.post, "/carried-on", set_then_carry_on),
+        _route(api.get, "/again", read_again),
+        _route(api.post, "/quick", set_quickly),
+        _route(api.post, "/quick-refused", set_quickly_then_refuse, Refused),
+        _route(api.get, "/quotes/{security}", quote),
+        _route(api.get, "/cached/{security}", cached),
+        _route(api.get, "/stamp", stamp),
     ],
 )
 
@@ -205,7 +220,7 @@ def _pricing(*, status: int = HTTPStatus.OK, body: object = None, wait_s: float 
 
 
 def _app(warehouse: fakes.Database | None = None, *, quick: fakes.Database | None = None, pricing: FastAPI | None = None, **settings: object) -> api.App:
-    given: dict[api.Resource, fakes.Fake] = {
+    given: dict[fakes.Faked, fakes.Fake] = {
         WAREHOUSE: warehouse or fakes.Database(), QUICK: quick or fakes.Database(), PRICES: fakes.Cache(), ONCE: fakes.Cache(), CLOCK: fakes.Clock(at=AT), IDS: fakes.Ids(),
     }  # fmt: skip
     if pricing is not None or "http" not in settings:
@@ -311,19 +326,19 @@ class Plain:
         (lambda: api.cache("prices", Listed, ttl_s=1, max_entries=1, deadline_s=1), "holds Listed, which can change"),
         (lambda: api.cache("prices", Loose, ttl_s=1, max_entries=1, deadline_s=1), "holds Loose, which can change"),
         (lambda: api.cache("prices", Plain, ttl_s=1, max_entries=1, deadline_s=1), "holds Plain, which can change"),
-        (lambda: api.get("/w", _via_a_dependency), "_via_a_dependency's dependency _reads_a_price -> warehouse asks for warehouse: ask for it in _via_a_dependency's own parameters"),
-        (lambda: api.get("/w", _via_two_dependencies), "_via_two_dependencies's dependency _priced -> _reads_a_price -> warehouse asks for warehouse"),
-        (lambda: api.get("/w", _via_a_class), "_via_a_class's dependency _Pricer -> warehouse asks for warehouse"),
-        (lambda: api.get("/w", _as_writer_in_a_get), "a GET only reads"),
-        (lambda: api.post("/w", _as_a_client), r"asks for warehouse, a database: annotate it Annotated\[api.Reader"),
-        (lambda: api.post("/w", _as_another_cache), r"a cache of Price: annotate it Annotated\[api.Cache\[Price\]"),
-        (lambda: api.get("/w", _sync), "whose calls are awaited: declare it `async def _sync`"),
-        (lambda: api.get("/w", _twice), "asks for warehouse twice"),
-        (lambda: api.post("/w", _two_writes), "writes warehouse and quick, and a request commits one transaction"),
-        (_service(api.get("/w", _undeclared)), "asks for pricing, which service prices does not declare"),
-        (_service(api.get("/p/{security}", read_price), resources=[WAREHOUSE, api.database("warehouse", deadline_s=2, max_concurrent=4)]), "declares warehouse twice"),
-        (_service(api.get("/p/{security}", read_price), resources=[WAREHOUSE, "pricing"]), "has a str among its resources"),
-        (lambda: api.given("warehouse"), "or one of its resources"),  # ty: ignore[invalid-argument-type] -- wrong on purpose
+        (lambda: _route(api.get, "/w", _via_a_dependency), "_via_a_dependency's dependency _reads_a_price -> warehouse asks for warehouse: ask for it in _via_a_dependency's own parameters"),
+        (lambda: _route(api.get, "/w", _via_two_dependencies), "_via_two_dependencies's dependency _priced -> _reads_a_price -> warehouse asks for warehouse"),
+        (lambda: _route(api.get, "/w", _via_a_class), "_via_a_class's dependency _Pricer -> warehouse asks for warehouse"),
+        (lambda: _route(api.get, "/w", _as_writer_in_a_get), "a GET only reads"),
+        (lambda: _route(api.post, "/w", _as_a_client), r"asks for warehouse, a database: annotate it Annotated\[api.Reader"),
+        (lambda: _route(api.post, "/w", _as_another_cache), r"a cache of Price: annotate it Annotated\[api.Cache\[Price\]"),
+        (lambda: _route(api.get, "/w", _sync), "whose calls are awaited: declare it `async def _sync`"),
+        (lambda: _route(api.get, "/w", _twice), "asks for warehouse twice"),
+        (lambda: _route(api.post, "/w", _two_writes), "writes warehouse and quick, and a request commits one transaction"),
+        (_service(_route(api.get, "/w", _undeclared)), "asks for pricing, which service prices does not declare"),
+        (_service(_route(api.get, "/p/{security}", read_price), resources=[WAREHOUSE, api.database("warehouse", deadline_s=2, max_concurrent=4)]), "declares warehouse twice"),
+        (_service(_route(api.get, "/p/{security}", read_price), resources=[WAREHOUSE, "pricing"]), "has a str among its resources"),
+        (lambda: api.given("warehouse"), "one of its resources"),  # ty: ignore[invalid-argument-type] -- wrong on purpose
     ],
     ids=[
         "name", "hyphen", "no-deadline", "nan-deadline", "no-ttl", "no-entries", "no-threads", "threads-as-a-bool", "mutable-value", "a-dict", "a-list",
@@ -349,7 +364,7 @@ async def _with_a_plain_dependency(security: Annotated[str, Depends(_security)],
 
 
 def test_a_dependency_that_asks_for_no_resource_is_the_handlers_own_business() -> None:
-    assert api.get("/w/{security}", _with_a_plain_dependency).asks[0].given == WAREHOUSE
+    assert _route(api.get, "/w/{security}", _with_a_plain_dependency).asks[0].given == WAREHOUSE
 
 
 def test_a_route_knows_the_database_it_writes() -> None:
@@ -385,7 +400,7 @@ def test_an_oracle_database_a_route_writes_needs_its_write_user_and_password() -
     ],
     ids=["undeclared", "wrong-kind"],
 )
-def test_a_fake_fakes_a_declared_resource_of_its_kind(given: dict[api.Resource, fakes.Fake], message: str) -> None:
+def test_a_fake_fakes_a_declared_resource_of_its_kind(given: fakes.Fakes, message: str) -> None:
     with pytest.raises(api.ServiceError, match=message):
         api.build(SERVICE, settings=api.Settings.given(), fakes=given)
 
@@ -519,7 +534,7 @@ def test_a_statement_waits_for_one_of_its_databases_threads_within_its_deadline(
         release.wait(5)
         return []
 
-    service = api.Service(name="narrow", settings=api.Settings, resources=[NARROW], routes=[api.get("/slow", narrow_read)])
+    service = api.Service(name="narrow", settings=api.Settings, resources=[NARROW], routes=[_route(api.get, "/slow", narrow_read)])
     app = api.build(service, settings=api.Settings.given(), fakes={NARROW: fakes.Database(answers={SLOW: fakes.Respond(answer)})})
     with TestClient(app.asgi) as client, ThreadPoolExecutor(1) as pool:
         first = pool.submit(client.get, "/slow")
@@ -846,7 +861,7 @@ def test_the_clock_and_ids_are_the_fakes_given() -> None:
 
 
 def test_the_systems_clock_is_in_utc_and_its_ids_are_uuid7s() -> None:
-    service = api.Service(name="stamps", settings=api.Settings, resources=[CLOCK, IDS], routes=[api.get("/stamp", stamp)])
+    service = api.Service(name="stamps", settings=api.Settings, resources=[CLOCK, IDS], routes=[_route(api.get, "/stamp", stamp)])
     with TestClient(api.build(service, settings=api.Settings.given()).asgi) as client:
         stamped = client.get("/stamp").json()
     assert (datetime.fromisoformat(stamped["at"]).utcoffset(), UUID(stamped["id"]).version, stamped["id"] < stamped["next"]) == (timedelta(0), 7, True)
@@ -918,7 +933,7 @@ def test_each_given_resource_answers_only_its_own_requests() -> None:
         kept.append(warehouse)
         return {}
 
-    service = api.Service(name="keeps", settings=api.Settings, resources=[WAREHOUSE], routes=[api.get("/keep", keep)])
+    service = api.Service(name="keeps", settings=api.Settings, resources=[WAREHOUSE], routes=[_route(api.get, "/keep", keep)])
     with TestClient(api.build(service, settings=api.Settings.given(), fakes={WAREHOUSE: _written()}).asgi) as client:
         client.get("/keep").raise_for_status()
 

@@ -58,12 +58,22 @@ class HttpService(Model):
     """The proxy each call goes through, such as `http://proxy.internal.example:8080`. Without it, calls go direct."""
 
 
+class Pool(Model):
+    """The processes a service's compute functions run in, which start with the app."""
+
+    workers: Annotated[int, Field(ge=1)]
+    """How many: each runs one call at a time, so at most this many run at once and the rest wait their turn, within
+    their deadlines. Each is a Python process of its own, with the service's compute modules imported."""
+
+
 class Settings(core.Settings):
     serve: Serve = Field(default_factory=Serve)
     traces: Traces | None = None
     """Where the API's spans go. Without it they go nowhere, so a test or a desktop needs no collector."""
     http: dict[str, HttpService] = Field(default_factory=dict)
     """Each other service the API calls, by the name its `api.http` declaration gives."""
+    compute: Pool | None = None
+    """The process pool, `BASIS_COMPUTE__WORKERS`, which a service whose routes ask for a compute function must give."""
     identity: Identity | None = None
     """How the API verifies its users' tokens, which a service that declares a user needs: see `basis.api.identity`."""
     _given: bool = PrivateAttr(default=False)

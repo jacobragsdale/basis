@@ -7,8 +7,26 @@ an app it did not build.
         name="accruals",
         settings=Settings,
         resources=[WAREHOUSE],
-        routes=[api.get("/accrued-interest", accrued_interest), api.get("/bonds/{security}", bond)],
+        routes=[
+            api.get("/accrued-interest", accrued_interest, deadline_s=1, response=Accrual, errors=[PeriodReversed]),
+            api.get("/bonds/{security}", bond, deadline_s=5, response=Bond, errors=[UnknownBond]),
+        ],
     )
+
+Every route declares three things, none of which has a default, so a route that leaves one out is refused:
+
+- `deadline_s`, the seconds it has to answer, from when it begins to serve a request: every call it makes through a
+  resource or a compute function has what is left of it, or the resource's own deadline where that is shorter, the
+  commit of its writes included (see `deadlines.py`);
+- `response`, what it answers when it succeeds, which its handler's return annotation must be; None for a route
+  that answers 204 with no body;
+- `errors`, every `api.Error` its handler may raise. Each appears in the OpenAPI document under its status, and an
+  error the route does not declare, or an `HTTPException`, answers 500 as the defect it is. basis adds its own: an
+  invalid request's 422 on every route, a deadline's 504 on one that asks for a resource or a compute function, and
+  another service's 502 on one that asks for an `api.http`. `Route.answers` holds them all.
+
+A route reads its request strictly (see `strict.py`): no unknown key, and no value coerced, in its body, its query or
+its path.
 
 A handler is a FastAPI path operation, so its parameters are FastAPI's: path, query and body parameters by their
 types. What basis gives it, its settings, its resources and the request's user, it asks for with `api.given`, which the app
@@ -17,6 +35,8 @@ answers once it has started:
     def accrued_interest(start: date, end: date, settings: Annotated[Settings, api.given(Settings)]) -> Accrual: ...
     async def bond(security: str, warehouse: Annotated[api.Reader, api.given(WAREHOUSE)]) -> Bond: ...
     def holdings(user: Annotated[User | None, api.given(User)]) -> Holdings: ...  # None for an anonymous request
+
+and it asks for a compute function the same way (see `compute.py`), which runs in the service's process pool.
 
 What a handler asks for is checked when its route is declared, and when its service is: that it asks for what the
 service gives, annotated as what it gets, and from an `async def` where the calls are awaited. A handler asks for its
@@ -29,6 +49,7 @@ A repo lists its service as an entry point in the `basis.apis` group, `NAME = "m
 
 import importlib
 import inspect
+import math
 import re
 from collections.abc import AsyncIterator, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -42,9 +63,28 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.routing import Route as StarletteRoute
 
-from basis.api.errors import ServiceError
+from basis.api import strict
+from basis.api.compute import Compute, ComputeFunction
+from basis.api.errors import Error, NotReadyError, ServiceError
 from basis.api.identity import GivenUser, User, annotation_refusal
-from basis.api.resources import Cache, CacheResource, Client, Clock, ClockResource, DatabaseResource, HttpResource, Ids, IdsResource, Opened, Reader, Resource, Session, Writer
+from basis.api.resources import (
+    Cache,
+    CacheResource,
+    CallFailedError,
+    Client,
+    Clock,
+    ClockResource,
+    DatabaseResource,
+    DeadlineExceededError,
+    HttpResource,
+    Ids,
+    IdsResource,
+    Opened,
+    Reader,
+    Resource,
+    Session,
+    Writer,
+)
 from basis.api.settings import Settings
 
 GROUP = "basis.apis"
@@ -54,6 +94,9 @@ RESERVED = ("/health", "/docs", "/redoc", "/openapi.json")
 """Paths the app itself answers: its health endpoints and its OpenAPI document and pages."""
 NAME = re.compile(r"[a-z][a-z0-9-]{0,62}")
 _PARAMETER = re.compile(r"\{[^}]*\}")
+_REFERENCE = re.compile(r"[A-Za-z_][\w.]*:[A-Za-z_]\w*")
+BASIS_ERRORS: tuple[type[Error], ...] = (DeadlineExceededError, CallFailedError, NotReadyError)
+"""The errors basis raises itself, which a route never declares: `Route.answers` adds each where the route can meet it."""
 
 type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
 _RESOURCES = (DatabaseResource, HttpResource, CacheResource, ClockResource, IdsResource)
@@ -66,7 +109,7 @@ class Ask:
     parameter: str
     annotation: object
     """The parameter's type, without the `Annotated` metadata that holds `api.given`."""
-    given: type[Settings | User] | Resource
+    given: type[Settings | User] | Resource | ComputeFunction[..., object]
 
 
 @dataclass(frozen=True)
@@ -76,6 +119,14 @@ class Route:
     handler: FunctionType
     """A named function, sync where it calls blocking code, which FastAPI runs in its threadpool, and async only where
     it awaits. Its name is the route's name."""
+    deadline_s: float
+    """Seconds the route has to answer a request, which cap every call it makes through a resource or a compute
+    function."""
+    response: object
+    """What a request that succeeds answers, which is the handler's return annotation: a model, a list of them, or
+    None for a 204 with no body."""
+    errors: Sequence[type[Error]]
+    """Each `api.Error` the handler may raise, but basis's own, which `answers` adds."""
     status: int = HTTPStatus.OK
     """The status of a response that succeeds."""
     name: str = field(init=False)
@@ -85,6 +136,10 @@ class Route:
     writes: DatabaseResource | None = field(init=False)
     """The database the handler writes, which it asks for as an `api.Writer`: one at most, since a request commits one
     transaction."""
+    answers: tuple[type[Error], ...] = field(init=False)
+    """Every `api.Error` the route may answer with: its declared `errors`, and each of basis's own that it can meet."""
+    reads: strict.Shape = field(init=False)
+    """What it reads from a request, strictly."""
 
     def __post_init__(self) -> None:
         if not self.path.startswith("/"):
@@ -101,6 +156,18 @@ class Route:
         if self.status not in range(200, 300):
             msg = f"route {self.path!r} succeeds with status {self.status}: give a 2xx, and raise an api.Error for each way it fails"
             raise ServiceError(msg)
+        if converted := [found for found in _PARAMETER.findall(self.path) if ":" in found]:
+            alone = converted[0][1:].partition(":")[0]
+            msg = (
+                f"route {self.path!r} converts {', '.join(converted)} in its path: name the parameter alone, as {{{alone}}}, and give its type in {self.name}'s parameters, which basis reads strictly"
+            )
+            raise ServiceError(msg)
+        deadline: object = self.deadline_s
+        if isinstance(deadline, bool) or not isinstance(deadline, int | float) or not 0 < deadline < math.inf:
+            msg = f"{self.name}'s deadline is {deadline!r}: give it deadline_s, the seconds the route has to answer, above 0"
+            raise ServiceError(msg)
+        _check_response(self)
+        object.__setattr__(self, "errors", _declared_errors(self.name, self.errors))
         for path, asked in _asked_within(handler, (), set()):
             msg = (
                 f"{self.name}'s dependency {' -> '.join(path)} asks for {asked}: ask for it in {self.name}'s own parameters,"
@@ -114,6 +181,8 @@ class Route:
                 raise ServiceError(msg)
         object.__setattr__(self, "asks", asks)
         object.__setattr__(self, "writes", _written(self, asks))
+        object.__setattr__(self, "answers", (*self.errors, *_met(asks)))
+        object.__setattr__(self, "reads", strict.shape(self.path, handler, self.name))
 
     @property
     def shape(self) -> tuple[Method, str]:
@@ -122,16 +191,73 @@ class Route:
 
 
 class _Declare(Protocol):
-    def __call__(self, path: str, handler: FunctionType, *, status: int = HTTPStatus.OK) -> Route: ...
+    def __call__(  # noqa: PLR0913 -- what a route declares, each by keyword
+        self, path: str, handler: FunctionType, *, deadline_s: float, response: object, errors: Sequence[type[Error]], status: int = HTTPStatus.OK
+    ) -> Route: ...
 
 
 def _route(method: Method) -> _Declare:
-    def declare(path: str, handler: FunctionType, *, status: int = HTTPStatus.OK) -> Route:
-        return Route(method, path, handler, status)
+    def declare(path: str, handler: FunctionType, *, deadline_s: float, response: object, errors: Sequence[type[Error]], status: int = HTTPStatus.OK) -> Route:  # noqa: PLR0913 -- by keyword
+        return Route(method, path, handler, deadline_s, response, errors, status)
 
     declare.__name__ = declare.__qualname__ = method.lower()
-    declare.__doc__ = f"A route that answers {method} requests to `path` with `handler`, and `status` when it succeeds."
+    declare.__doc__ = (
+        f"A route that answers {method} requests to `path` with `handler`: within `deadline_s` seconds, with `response` and `status` when it succeeds, and with one of `errors` when it fails."
+    )
     return declare
+
+
+def _check_response(route: Route) -> None:
+    """That the route declares its response as its handler's return annotation, and None exactly when it answers 204."""
+    returns = inspect.signature(route.handler, eval_str=True).return_annotation
+    declared = route.response
+    if returns is inspect.Signature.empty:
+        msg = f"{route.name} has no return annotation: annotate it `-> {_named(declared)}`, the response its route declares"
+        raise ServiceError(msg)
+    if returns != declared:
+        msg = f"{route.name} returns {_named(returns)}, and its route declares response={_named(declared)}: declare the one it returns"
+        raise ServiceError(msg)
+    if (declared is None) != (route.status == HTTPStatus.NO_CONTENT):
+        fix = "give it status=HTTPStatus.NO_CONTENT" if declared is None else "declare the response it has, or response=None with no content"
+        msg = f"{route.name} answers {route.status} with response={_named(declared)}: a route answers no body exactly when its status is 204, so {fix}"
+        raise ServiceError(msg)
+
+
+def _declared_errors(name: str, declared: object) -> tuple[type[Error], ...]:
+    if isinstance(declared, str | bytes) or not isinstance(declared, Sequence):
+        msg = f"{name}'s errors are {declared!r}: give errors=[...], each api.Error its handler may raise, or errors=[] for none"
+        raise ServiceError(msg)
+    found: list[type[Error]] = []
+    for error in declared:
+        if not (isinstance(error, type) and issubclass(error, Error)):
+            msg = f"{name} declares {error!r} among its errors: give each api.Error subclass its handler may raise"
+            raise ServiceError(msg)
+        if error in BASIS_ERRORS:
+            msg = f"{name} declares {error.__qualname__}, which basis raises itself and adds to each route that can meet it: remove it from errors=[...]"
+            raise ServiceError(msg)
+        if vars(error).get("_abstract", False):
+            msg = f"{name} declares {error.__qualname__}, a base that is never raised itself: declare each of its subclasses the handler raises"
+            raise ServiceError(msg)
+        if error in found:
+            msg = f"{name} declares {error.__qualname__} twice: declare each error once"
+            raise ServiceError(msg)
+        found.append(error)
+    return tuple(found)
+
+
+def _met(asks: Sequence[Ask]) -> Iterator[type[Error]]:
+    """The errors of basis's own that a route which asks for `asks` can meet."""
+    given = [ask.given for ask in asks if not isinstance(ask.given, type)]
+    if any(not isinstance(found, ClockResource | IdsResource) for found in given):
+        yield DeadlineExceededError
+    if any(isinstance(found, HttpResource) for found in given):
+        yield CallFailedError
+
+
+def _named(annotation: object) -> str:
+    if annotation is None:
+        return "None"
+    return annotation.__qualname__ if isinstance(annotation, type) else repr(annotation)
 
 
 get, post, put, patch, delete = _route("GET"), _route("POST"), _route("PUT"), _route("PATCH"), _route("DELETE")
@@ -151,10 +277,17 @@ class Service:
     """`api.User`, or the service's subclass of it with the claims it needs, for a service whose requests' bearer
     tokens are verified, which the settings' `identity` configures: see `basis.api.identity`. None for a service
     that verifies no tokens, whose requests are all anonymous."""
+    fakes: str | None = None
+    """Where its fakes for `basis dev` and `basis call --fake` are made: `module:function`, a function that takes
+    nothing and returns a fake for each database and other service it declares, by resource, as `api.build` takes them.
+    None for a service that has none yet."""
 
     def __post_init__(self) -> None:
         if not NAME.fullmatch(self.name):
             msg = f"service name {self.name!r}: a service's name is lower-case letters, digits and hyphens, starting with a letter"
+            raise ServiceError(msg)
+        if self.fakes is not None and not _REFERENCE.fullmatch(self.fakes):
+            msg = f"service {self.name}'s fakes are {self.fakes!r}: give fakes='module:function', the function that makes them, as 'accruals.dev:fakes'"
             raise ServiceError(msg)
         if not (isinstance(self.settings, type) and issubclass(self.settings, Settings)):
             msg = f"service {self.name}'s settings are {self.settings!r}, not a subclass of api.Settings: declare `class Settings(api.Settings)`, or pass api.Settings itself"
@@ -172,6 +305,8 @@ class Service:
                 msg = f"service {self.name} has a {type(route).__name__} among its routes: declare each with api.get(path, handler) or api.post, api.put, api.patch, api.delete"
                 raise ServiceError(msg)
             for ask in route.asks:
+                if isinstance(ask.given, ComputeFunction):
+                    continue  # a function, which the service runs and never configures
                 if isinstance(ask.given, type) and issubclass(ask.given, Settings) and not issubclass(self.settings, ask.given):
                     msg = f"{route.name} asks for {ask.given.__qualname__}, which service {self.name} does not give: its settings are {self.settings.__qualname__}"
                     raise ServiceError(msg)
@@ -228,6 +363,14 @@ class _GivenResource:
 
 
 @dataclass(frozen=True)
+class _GivenCompute:
+    declared: ComputeFunction[..., object]
+
+    async def __call__(self, request: Request) -> object:
+        return _runtime(request).resources.compute(self.declared)
+
+
+@dataclass(frozen=True)
 class _GivenDatabase:
     """A request's transaction in a database, which ends when the handler has returned and FastAPI has validated its
     response, before the response is sent: FastAPI ends a dependency of scope `function` there, and throws into it
@@ -251,21 +394,24 @@ class _GivenDatabase:
         await session.end(commit=True)
 
 
-def given(kind: type[Settings | User] | Resource) -> params.Depends:
+def given(kind: type[Settings | User] | Resource | ComputeFunction[..., object]) -> params.Depends:
     """What basis gives a handler, as the metadata of its parameter's type: `Annotated[Settings, api.given(Settings)]`,
     the service's settings; `Annotated[User | None, api.given(User)]`, the request's user, or None when it is
-    anonymous; or one of its resources, as `Annotated[api.Reader, api.given(WAREHOUSE)]`."""
+    anonymous; one of its resources, as `Annotated[api.Reader, api.given(WAREHOUSE)]`; or a compute function, as
+    `Annotated[api.Compute[[Bond, Decimal], Decimal], api.given(SOLVE)]`."""
     if isinstance(kind, type) and issubclass(kind, Settings):
         return params.Depends(_Given(kind))
     if isinstance(kind, type) and issubclass(kind, User):
         return params.Depends(GivenUser(kind))
+    if isinstance(kind, ComputeFunction):
+        return params.Depends(_GivenCompute(kind))
     if isinstance(kind, DatabaseResource):
         return params.Depends(_GivenDatabase(kind), scope="function")
     if isinstance(kind, HttpResource | CacheResource | ClockResource | IdsResource):
         return params.Depends(_GivenResource(kind))
     msg = (
-        f"api.given({kind!r}): basis gives a handler its service's settings, a subclass of api.Settings,"
-        " the request's user, a subclass of api.User, or one of its resources, as api.database(...) declares"
+        f"api.given({kind!r}): basis gives a handler its service's settings, a subclass of api.Settings, the request's user,"
+        " a subclass of api.User, one of its resources, as api.database(...) declares, or a compute function, as api.compute(...) declares"
     )
     raise ServiceError(msg)
 
@@ -281,12 +427,14 @@ def _asks_for(handler: FunctionType) -> Iterator[Ask]:
                 yield Ask(parameter.name, base, marker.dependency.kind)
             elif isinstance(marker, params.Depends) and isinstance(marker.dependency, (_GivenDatabase, _GivenResource)):
                 yield Ask(parameter.name, base, marker.dependency.resource)
+            elif isinstance(marker, params.Depends) and isinstance(marker.dependency, _GivenCompute):
+                yield Ask(parameter.name, base, marker.dependency.declared)
 
 
 def _asked_within(call: object, path: tuple[str, ...], seen: set[int]) -> Iterator[tuple[tuple[str, ...], str]]:
-    """Each resource, by name, or the user, that a dependency of `call`'s, at any depth, asks for, with the dependencies
-    that lead to it: `call`'s own parameters ask for theirs where `path` is empty. The user is refused there as a
-    resource is, so that a route's own parameters show it reads the user, and the 401 it may answer."""
+    """Each resource or compute function, by name, or the user, that a dependency of `call`'s, at any depth, asks for,
+    with the dependencies that lead to it: `call`'s own parameters ask for theirs where `path` is empty. The user is
+    refused there as a resource is, so that a route's own parameters show it reads the user, and the 401 it may answer."""
     if id(call) in seen:
         return
     seen.add(id(call))
@@ -307,6 +455,9 @@ def _asked_within(call: object, path: tuple[str, ...], seen: set[int]) -> Iterat
             elif isinstance(dependency, GivenUser):
                 if path:
                     yield (*path, parameter.name), "the user"
+            elif isinstance(dependency, _GivenCompute):
+                if path:
+                    yield (*path, parameter.name), dependency.declared.name
             elif not isinstance(dependency, _Given) and callable(dependency):
                 yield from _asked_within(dependency, (*path, getattr(dependency, "__name__", type(dependency).__name__)), seen)
 
@@ -319,6 +470,9 @@ def _written(route: Route, asks: Sequence[Ask]) -> DatabaseResource | None:
     written: list[DatabaseResource] = []
     for ask in asks:
         if isinstance(ask.given, type):
+            continue
+        if isinstance(ask.given, ComputeFunction):
+            _check_compute(route, ask, ask.given)
             continue
         resource = ask.given
         if resource.name in seen:
@@ -340,6 +494,35 @@ def _written(route: Route, asks: Sequence[Ask]) -> DatabaseResource | None:
         msg = f"{route.name} writes {' and '.join(found.name for found in written)}, and a request commits one transaction: write one database per route"
         raise ServiceError(msg)
     return written[0] if written else None
+
+
+_HANDLES = (Reader, Writer, Session, Client, Clock, Ids, Opened)
+"""What a handler gets for a resource, which a compute function never takes, as it reaches no resource."""
+
+
+def _check_compute(route: Route, ask: Ask, declared: ComputeFunction[..., object]) -> None:
+    """That `route` asks for the compute function `declared` as an `api.Compute` of its parameters and its result,
+    from an `async def`, and that the function takes no resource."""
+    for parameter in declared.parameters:
+        kind = get_args(parameter)[0] if get_origin(parameter) is Annotated else parameter
+        if kind in _HANDLES or get_origin(kind) is Cache or (isinstance(kind, type) and issubclass(kind, Settings)):
+            msg = f"compute function {declared.name} takes {_named(kind)}, and a compute function reaches no resource or setting: give it the values it computes from"
+            raise ServiceError(msg)
+    expected = f"api.Compute[[{', '.join(_named(parameter) for parameter in declared.parameters)}], {_named(declared.result)}]"
+    if (
+        get_origin(ask.annotation) is not Compute
+        or [_bare(found) for found in get_args(ask.annotation)[0]] != [_bare(found) for found in declared.parameters]
+        or _bare(get_args(ask.annotation)[1]) != _bare(declared.result)
+    ):
+        msg = f"{route.name}'s parameter {ask.parameter} asks for the compute function {declared.name}: annotate it Annotated[{expected}, api.given(...)], its parameters and its result"
+        raise ServiceError(msg)
+    if not inspect.iscoroutinefunction(route.handler):
+        msg = f"{route.name} asks for the compute function {declared.name}, whose calls are awaited: declare it `async def {route.name}`"
+        raise ServiceError(msg)
+
+
+def _bare(annotation: object) -> object:
+    return get_args(annotation)[0] if get_origin(annotation) is Annotated else annotation
 
 
 def _annotated_as_given(resource: Resource, annotation: object) -> bool:
