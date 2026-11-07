@@ -506,7 +506,9 @@ Each fact was checked on 2026-11-06 against the source named, unless it says sec
 ## Not yet verified
 
 Each item but the last two is a spike in [Phase 0 of the roadmap](roadmap.md#phase-0-spikes), and the last two are
-**(work)** questions for the firm; each needs a written yes or no before the step that depends on it:
+**(work)** questions for the firm; each needs a written yes or no before the step that depends on it, but for the four
+about Datadog, SQL Server's `json` type, Kerberos and the lake (spikes 0.5 to 0.8), whose steps build to their desk
+research's best guesses, which the pilot then confirms at the firm:
 
 - that uv installs on a Citrix desktop without admin rights, on Windows and in WSL, and reaches the Azure Artifacts feed
   from both;

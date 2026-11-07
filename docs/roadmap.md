@@ -21,9 +21,10 @@ Actions.
 
 The critical path runs through lanes A and B: the namespace spike, the workspace, etl-framework's move, `basis-core`'s
 extraction, the `basis` command, the repo files, the desktop gates, then the API, its resources' move into `basis-core`
-(step 5.1), and the pilot, which also waits for the Datadog spike. Steps 5.2 to 5.7 are off it, and run at once after
-5.1. Optim is off the critical path, and runs alongside phase 2. Its design is provisional until the maintainer meets
-the firm's quant team, and nothing in lanes A and B may depend on it (see [the design](design.md#the-packages)).
+(step 5.1), and the pilot, which confirms spikes 0.5 to 0.8 at the firm; no step waits for those spikes. Steps 5.2 to
+5.7 are off it, and run at once after 5.1. Optim is off the critical path, and runs alongside phase 2. Its design is
+provisional until the maintainer meets the firm's quant team, and nothing in lanes A and B may depend on it (see [the
+design](design.md#the-packages)).
 
 ```mermaid
 flowchart TD
@@ -31,10 +32,10 @@ flowchart TD
   s02[0.2 namespaces] --> r1[1.1 workspace]
   s03[0.3 eval] --> a8[2.8 pilot]
   s04[0.4 ingress, work] --> a5[2.5 UI contract]
-  s05[0.5 Datadog, work] --> a8
-  s06[0.6 SQL Server JSON, work] --> c5[5.5 Mongo and SQL Server JSON]
-  s07[0.7 Kerberos, work] --> c6[5.6 environments]
-  s08[0.8 Data Lake, work] --> c7[5.7 Data Lake]
+  s05[0.5 Datadog, work] -. confirm .-> a8
+  s06[0.6 SQL Server JSON, work] -. confirm .-> a8
+  s07[0.7 Kerberos, work] -. confirm .-> a8
+  s08[0.8 Data Lake, work] -. confirm .-> a8
   r1 --> r2[1.2 move etl-framework] --> r3[1.3 extract core]
   r3 --> r4[1.4 run store]
   r3 --> r5[1.5 basis command] --> r6[1.6 repo files and sync] --> r7[1.7 desktop gates]
@@ -54,8 +55,8 @@ flowchart TD
   c1 --> c2[5.2 calendars]
   c1 --> c3[5.3 messages]
   c1 --> c4[5.4 folders and Excel]
-  c1 --> c5
-  c1 --> c6 --> c7
+  c1 --> c5[5.5 Mongo and SQL Server JSON]
+  c1 --> c6[5.6 environments] --> c7[5.7 Data Lake]
 ```
 
 ## Rules for working in parallel
@@ -72,7 +73,9 @@ flowchart TD
 ## Phase 0: spikes
 
 Every spike runs at once. Each writes `docs/spikes/NAME.md` with the versions it used, a yes or no for each question,
-and the fallback for each no.
+and the fallback for each no. Spikes 0.5 to 0.8 are the exception: little in them is particular to the firm, so each
+starts as desk research, whose best guesses its phase 5 step builds to, and its questions become a short checklist that
+the pilot (2.8) confirms at the firm, fixing there whatever is wrong.
 
 1. **0.1 uv and the feed (work).** On a Citrix desktop, on Windows and in WSL: install uv without admin rights; set a
    user-level `uv.toml` that makes the Azure Artifacts feed the default index, with keyring or token authentication;
@@ -90,15 +93,18 @@ and the fallback for each no.
    seeing its paths without `/api`, as its `openapi.json` gives them, or whether APIs need their allowed origins
    declared.
 5. **0.5 Datadog (work).** On the AKS cluster: does the Datadog Agent accept OTLP, and on which host and port? Does it
-   collect containers' logs? Which format of trace id links a log record to its trace? Done when the result gives the
-   Agent's address, and says whether Datadog needs a trace-id field of its own in the logs, for the pilot (2.8).
+   collect containers' logs? Which format of trace id links a log record to its trace? Done when
+   `docs/spikes/datadog.md` gives a best guess for each, for step 5.1, and its checklist for the pilot.
 6. **0.6 SQL Server JSON (work).** Does mssql-python handle SQL Server's native `json` type, in reads, writes and
-   `CREATE TABLE`? Done when the result says so, for step 5.5.
+   `CREATE TABLE`? Done when `docs/spikes/sqlserver-json.md` gives a best guess, for step 5.5, and its checklist for the
+   pilot.
 7. **0.7 Kerberos (work).** Do Kerberos logins work with mssql-python, in WSL and in a pod, and with oracledb, whose
-   thin mode may not support Kerberos? Done when the result says which logins work, for step 5.6's `basis doctor`.
+   thin mode may not support Kerberos? Done when `docs/spikes/kerberos.md` gives a best guess for each, for step 5.6,
+   and its checklist for the pilot.
 8. **0.8 Data Lake (work).** Does `pyarrow.fs.AzureFileSystem` sign in to the firm's storage account with workload
    identity in a pod, and with the Azure CLI on a desktop? Does the account have the hierarchical namespace, so a rename
-   is atomic? Done when the result says so, for step 5.7.
+   is atomic? Done when `docs/spikes/data-lake.md` gives a best guess for each, for step 5.7, and its checklist for the
+   pilot.
 
 ## Phase 1: the repo and basis-core
 
@@ -199,9 +205,10 @@ Lane B. Needs step 1.3. Steps 2.3 and 2.4 run at once, and so do 2.5 and 2.9.
    check --full`, and its image serves the API and runs the job.
 8. **2.8 Pilot (work).** Create a pilot API repo with `uvx basis-api new app pilot`, beside basis-ui's pilot UI repo,
    from the internal feed. Deploy both to QA through their generated pipelines, behind one host if spike 0.4 allows it.
-   Lane D adds API tasks to the eval and runs them against the pilot. Needs 2.7, 1.8, 5.1 and spikes 0.3 and 0.5, so it
-   reports to Datadog from its first day. Done when `new app` reaches QA in one pipeline run and the loop time is
-   recorded against the hook's one-minute budget.
+   Lane D adds API tasks to the eval and runs them against the pilot. Needs 2.7, 1.8, 5.1 and spike 0.3, so it reports
+   to Datadog from its first day, and it confirms the checklists of spikes 0.5 to 0.8, fixing whatever they find wrong.
+   Done when `new app` reaches QA in one pipeline run and the loop time is recorded against the hook's one-minute
+   budget.
 9. **2.9 After-commit calls.** Add the outbox, as the design has it: a state-changing call an `api.Client` sends with
    an idempotency key, written as a row of the outbox table in the route's transaction and made once after the commit,
    within the route's deadline, with `Idempotency-Key`; the relay, a scheduled basis job, which retries each row with
@@ -269,8 +276,7 @@ reasons are in [the design](design.md#what-jobs-and-apis-share).
    Needs 2.5 merged, and no spike: it exports to the OTLP endpoint its settings name, and its tests run against an
    OpenTelemetry collector container or an in-process exporter. Steps 2.6 and 2.7 build on it. Done when a job's run and
    an API's request each make one trace, with a span for each SQL statement and HTTP call, and each of their log records
-   carries OpenTelemetry's trace and span ids. Spike 0.5 confirms the format Datadog links them by; a trace-id field of
-   Datadog's own, if it needs one, is a small follow-up.
+   carries its trace's and span's ids, in the format `docs/spikes/datadog.md` gives, which the pilot confirms.
 2. **5.2 Calendars.** Ship `sifma-us`, with its full and early closes, and `target2` in `basis.core`, as data built from
    SIFMA's and the ECB's published schedules, with no pandas. Each states the last date it covers. A job names its
    calendar, which says whether a date is a business day, adds business days, and gives the previous business day and a
@@ -285,9 +291,9 @@ reasons are in [the design](design.md#what-jobs-and-apis-share).
    of the folder never sees a half-written file.
 5. **5.5 Mongo and SQL Server JSON.** Add Mongo, in an optional extra, `basis-core[mongo]`: reads, and writes as upserts
    by a declared key, with no transactions and no ledger. Make SQL Server's native `json` columns work in reads,
-   publishing and `basis ddl`. Needs 5.1 and spike 0.6. Done when a job that reads Mongo and publishes to a `json`
-   column passes against a Mongo container and a SQL Server one whose version has the type, and a second upsert of the
-   same documents changes nothing in Mongo.
+   publishing and `basis ddl`. Needs 5.1, and builds to `docs/spikes/sqlserver-json.md`. Done when a job that reads
+   Mongo and publishes to a `json` column passes against a Mongo container and a SQL Server one whose version has the
+   type, and a second upsert of the same documents changes nothing in Mongo.
 6. **5.6 Environments.** Every command that touches the firm's systems takes `--env dev|qa|prod`, or `BASIS_ENV`, with
    no default. A desktop reads the user's file for that environment, `basis/ENV.env` in their own configuration folder
    (`~/.config/basis/ENV.env`, or `%APPDATA%\basis\ENV.env` on Windows), which holds its hosts, paths and secrets, and
@@ -301,18 +307,18 @@ reasons are in [the design](design.md#what-jobs-and-apis-share).
    In prod, a run whose plan publishes or writes anything is refused at the start, with one `ERROR` line, unless the
    deployment sets one flag. That stops accidents, not malice, and the docs say the real control is a read-only prod
    login for desktops. Desktops write in dev and QA. Database logins stay as the settings have them. `basis doctor --env
-   ENV` checks that each login works and each folder is reachable. Needs 5.1 and spike 0.7. Done when a command that
-   touches the firm's systems with no environment is refused with its fix, a prod run that would write is refused
-   without the flag, and `basis doctor --env qa` reports on each login and folder.
+   ENV` checks that each login works and each folder is reachable. Needs 5.1, and builds to `docs/spikes/kerberos.md`.
+   Done when a command that touches the firm's systems with no environment is refused with its fix, a prod run that
+   would write is refused without the flag, and `basis doctor --env qa` reports on each login and folder.
 7. **5.7 Azure Data Lake.** Add a lake destination: a job publishes an output as Parquet to a declared ADLS Gen2 path,
    partitioned by its run's interval, such as `CONTAINER/TABLE/date=2026-11-07/`, through `pyarrow.fs`. The
    environment's settings declare how it signs in: an account key or a SAS token, as a secret, or Entra ID, through
    workload identity in a pod and `az login` on a desktop. Each partition goes to a temporary path and is renamed into
    place, and the archive is done only when its files read back with the row count written. The job's database ledger
-   records it like any publish, with the interval, the path, the row count and the files' hashes. Needs 5.1, 5.6 and
-   spike 0.8, and runs alongside the other steps. Done when an interval's archive is in the lake with its row count
-   checked and its ledger row written, a retry archives nothing, and `resume` and `--again` work on it as they do on a
-   table.
+   records it like any publish, with the interval, the path, the row count and the files' hashes. Needs 5.1 and 5.6,
+   builds to `docs/spikes/data-lake.md`, and runs alongside the other steps. Done when an interval's archive is in the
+   lake with its row count checked and its ledger row written, a retry archives nothing, and `resume` and `--again` work
+   on it as they do on a table.
 
 Later, and not yet stepped:
 
