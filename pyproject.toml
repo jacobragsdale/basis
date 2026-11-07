@@ -5,7 +5,7 @@
 name = "basis-workspace"
 version = "0.0.0"
 requires-python = ">=3.14"
-dependencies = ["basis-core", "basis-job"]
+dependencies = ["basis-api", "basis-core", "basis-job"]
 
 [tool.uv]
 package = false
@@ -15,11 +15,13 @@ required-version = ">=0.13.6"
 members = ["packages/*"]
 
 [tool.uv.sources]
+basis-api = { workspace = true }
 basis-core = { workspace = true }
 basis-job = { workspace = true }
 
 [dependency-groups]
 dev = [
+    "httpx2>=2.16.0",
     "import-linter>=2.16",
     "pre-commit>=4.7.0",
     "pytest>=9.2.0",
@@ -95,7 +97,7 @@ error-on-warning = true
 # importlib mode: members' tests share file names (spike 0.2), which pytest's default mode cannot collect. The
 # templates are a generated repo's files, whose tests run in that repo.
 addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration' --ignore=packages/job/src/basis/job/templates"
-testpaths = ["packages/core/tests", "packages/job/tests", "packages/job/src/basis/job/example"]
+testpaths = ["packages/core/tests", "packages/job/tests", "packages/job/src/basis/job/example", "packages/api/tests", "packages/api/src/basis/api/example"]
 pythonpath = ["packages/job/tests"]  # basis-job's test modules share its `builders`
 xfail_strict = true  # An xfail that starts passing is a failure, not a silent pass.
 filterwarnings = [
@@ -109,7 +111,7 @@ markers = [
 
 [tool.coverage.run]
 branch = true  # Statement coverage hides the untaken half of every condition.
-source = ["packages/core/src/basis", "packages/job/src/basis"]  # each package's portion, not its tests
+source = ["packages/core/src/basis", "packages/job/src/basis", "packages/api/src/basis"]  # each package's portion, not its tests
 omit = ["*/src/basis/*/templates/*"]  # a generated repo's files, which run in that repo
 
 [tool.coverage.report]
@@ -120,7 +122,7 @@ exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "@overload"]
 
 # The import contracts, for every member.
 [tool.importlinter]
-root_packages = ["basis.core", "basis.job"]  # portions of one namespace, each named (spike 0.2)
+root_packages = ["basis.core", "basis.job", "basis.api"]  # portions of one namespace, each named (spike 0.2)
 include_external_packages = true  # so a contract can forbid a database driver
 exclude_type_checking_imports = true
 
@@ -128,7 +130,12 @@ exclude_type_checking_imports = true
 name = "basis-core imports no part: every part builds on it, and none ships with another"
 type = "forbidden"
 source_modules = ["basis.core"]
-forbidden_modules = ["basis.job"]
+forbidden_modules = ["basis.job", "basis.api"]
+
+[[tool.importlinter.contracts]]
+name = "Parts import basis-core and never each other, so a change to one cannot break another"
+type = "independence"
+modules = ["basis.job", "basis.api"]
 
 [[tool.importlinter.contracts]]
 name = "Job code and the checks it runs through do no I/O: the run loop loads, saves and publishes"
@@ -146,4 +153,17 @@ forbidden_modules = [
 ]
 ignore_imports = [
     "basis.job -> basis.job.api",  # `etl.run` and `etl.replay` load on first use, which job code never makes
+]
+
+[[tool.importlinter.contracts]]
+name = "A service's declarations, and the example's, load no server, exporter or database: basis builds and serves the app"
+type = "forbidden"
+source_modules = ["basis.api.service", "basis.api.errors", "basis.api.settings", "basis.api.example.service"]
+forbidden_modules = [
+    "basis.api.app", "basis.api.requests", "basis.api.server", "basis.api.traces", "uvicorn",
+    "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "mssql_python", "oracledb",
+]
+ignore_imports = [
+    "basis.api -> basis.api.app",  # `api.build` loads on first use, which a service's modules never make
+    "basis.api -> basis.api.server",  # as does `api.serve`
 ]

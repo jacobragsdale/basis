@@ -12,6 +12,9 @@ Keys that clash with `LogRecord` attributes (`name`, `module`, `filename`, ...) 
 platforms split long lines, so bulk data belongs in the run's snapshot, which the logs point to. To time a block, use
 `timed`.
 
+Work that shares its process with other work, such as an API's request, adds its fields with `fields(request_id=...)`
+instead of `bind`: they hold in its own context alone, so two requests served at once each log their own.
+
 A run binds its id and its job first, with `bind(run_id=..., job=...)`, so every record carries them and filtering on
 `run_id` finds a whole run. A job logs with `logging.getLogger(__name__)`; `include` gives its package's loggers the
 configured level, as basis's have.
@@ -27,6 +30,7 @@ import time
 import traceback
 from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
@@ -37,10 +41,11 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _FRAMEWORK = "basis"  # the namespace every basis package is a portion of, whose logger is each one's parent
-_PARTS = ("basis.job",)  # the parts whose frames an error's `where` names, as basis-core's; each joins as it arrives
+_PARTS = ("basis.job", "basis.api")  # the parts whose frames an error's `where` names, as basis-core's; each joins as it arrives
 _PREFIX = "BASIS_LOG_"
 _STANDARD = {*vars(logging.makeLogRecord({})), "message", "asctime"}  # LogRecord's own attributes, not `extra` fields
 _bound: dict[str, object] = {}  # fields on every record this process logs; see `bind`
+_scoped: ContextVar[Mapping[str, object]] = ContextVar("basis.core.logs.fields")  # fields in one context; see `fields`
 _included: list[str] = []  # packages besides basis whose loggers log at the configured level; see `include`
 
 
@@ -89,20 +94,20 @@ def include(package: str) -> None:
 
 def bind(**fields: object) -> None:
     """Add `fields` to every record this process logs from now on."""
-    # process-wide, as the CLI runs one job per process; concurrent runs in one process need a contextvar
+    # process-wide, as the CLI runs one job per process; concurrent work in one process adds its fields with `fields`
     _bound.update(fields)
 
 
 @contextmanager
 def fields(**added: object) -> Generator[None]:
-    """Add `added` to every record logged in the block."""
-    before = dict(_bound)
-    _bound.update(added)
+    """Add `added` to every record logged in the block, in this context alone, so that two requests served at once each
+    log their own. A task the block starts carries them, as does a worker thread that copies the context, as anyio's
+    do; a plain `threading.Thread` does not."""
+    token = _scoped.set({**_scoped.get({}), **added})
     try:
         yield
     finally:
-        _bound.clear()
-        _bound.update(before)
+        _scoped.reset(token)
 
 
 @contextmanager
@@ -182,7 +187,7 @@ _JSON = TypeAdapter(object, config=ConfigDict(ser_json_inf_nan="null"))  # NaN i
 
 
 def _extras(record: logging.LogRecord) -> dict[str, object]:
-    return _bound | {key: value for key, value in vars(record).items() if key not in _STANDARD}
+    return _bound | dict(_scoped.get({})) | {key: value for key, value in vars(record).items() if key not in _STANDARD}
 
 
 def _fallback(value: object) -> object:

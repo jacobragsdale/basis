@@ -1,8 +1,13 @@
+import asyncio
 import importlib.util
+import io
+import json
+import logging
 from pathlib import Path
 
 import pytest
 
+from basis.core import logs
 from basis.core.interval import Interval
 from basis.core.logs import describe
 
@@ -29,3 +34,36 @@ def test_a_basis_folder_that_is_no_basis_package_is_not_framework_code(tmp_path:
     with pytest.raises(RuntimeError, match="local") as raised:
         module.fail()
     assert describe(raised.value)["where"] is None
+
+
+def test_fields_hold_in_their_own_context_alone() -> None:
+    """Two tasks each log inside their own `fields` block while the other's is open, as two requests served at once do."""
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logs.JsonFormatter())
+    logger = logging.getLogger("basis.core.tests")
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+    async def main() -> None:
+        both_open = asyncio.Barrier(3)
+
+        async def task(request_id: str) -> None:
+            with logs.fields(request_id=request_id):
+                await both_open.wait()
+                logger.info(request_id)
+                await both_open.wait()
+
+        async with asyncio.TaskGroup() as group:
+            group.create_task(task("a"))
+            group.create_task(task("b"))
+            await both_open.wait()
+            await both_open.wait()
+
+    try:
+        asyncio.run(main())
+        logger.info("outside")
+    finally:
+        logger.removeHandler(handler)
+    records = [json.loads(line) for line in stream.getvalue().splitlines()]
+    assert sorted((record["message"], record.get("request_id")) for record in records) == [("a", "a"), ("b", "b"), ("outside", None)]

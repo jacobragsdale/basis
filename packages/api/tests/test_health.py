@@ -1,0 +1,59 @@
+from http import HTTPStatus
+
+import pytest
+from fastapi.testclient import TestClient
+
+from basis import api
+
+
+def quote(security: str) -> dict[str, str]:
+    return {"security": security}
+
+
+SERVICE = api.Service(name="quotes", settings=api.Settings, routes=[api.get("/quotes/{security}", quote)])
+
+
+def _readiness(client: TestClient) -> tuple[int, str | None]:
+    response = client.get("/health/ready")
+    body = response.json()
+    return response.status_code, body.get("detail") if response.status_code != HTTPStatus.OK else body["status"]
+
+
+def test_ready_only_between_startup_and_shutdown() -> None:
+    app = api.build(SERVICE, settings=api.Settings.given())
+    client = TestClient(app.asgi)
+    assert _readiness(client) == (HTTPStatus.SERVICE_UNAVAILABLE, "the service is starting")
+    with client:
+        assert _readiness(client) == (HTTPStatus.OK, "ready")
+        app.lifecycle.drain()
+        assert _readiness(client) == (HTTPStatus.SERVICE_UNAVAILABLE, "the service is draining")
+        assert client.get("/quotes/US912810TM64").status_code == HTTPStatus.OK  # still serving while the cluster stops routing to it
+    assert _readiness(client) == (HTTPStatus.SERVICE_UNAVAILABLE, "the service is stopped")
+
+
+def test_alive_whatever_the_readiness() -> None:
+    app = api.build(SERVICE, settings=api.Settings.given())
+    client = TestClient(app.asgi)
+    assert client.get("/health/live").json() == {"status": "live"}
+    with client:
+        app.lifecycle.drain()
+        assert client.get("/health/live").json() == {"status": "live"}
+
+
+def test_not_ready_is_a_problem() -> None:
+    response = TestClient(api.build(SERVICE, settings=api.Settings.given()).asgi).get("/health/ready")
+    assert response.headers["content-type"] == "application/problem+json"
+    assert (response.json()["type"], response.json()["title"]) == ("not-ready", "The service is not ready")
+
+
+def test_an_app_starts_once() -> None:
+    app = api.build(SERVICE, settings=api.Settings.given())
+    with TestClient(app.asgi):
+        pass
+    with pytest.raises(api.ServiceError, match="has started once already"), TestClient(app.asgi):
+        pass
+
+
+def test_the_health_endpoints_are_no_part_of_the_api_contract() -> None:
+    document = TestClient(api.build(SERVICE, settings=api.Settings.given()).asgi).get("/openapi.json").json()
+    assert sorted(document["paths"]) == ["/quotes/{security}"]
