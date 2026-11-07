@@ -1,0 +1,5 @@
+# Paths that must be as the task began; test.sh compares them with the tag eval-base. The [tool] tables of
+# pyproject.toml are always compared too.
+tests/test_agent_files.py
+jobs/positions/tests/test_contract.py
+.agents
