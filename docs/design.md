@@ -66,13 +66,14 @@ same verbs (`check`, `dev`, `test`, `sync`, `doctor`, `docs`) through Vite+'s ow
 | `basis check --full` | `check`, plus `regress` where the run store is reachable, and the QA tier where QA settings exist | Every part |
 | `basis review` | Writes a pull request's summary: what `regress` changed, the API contract's diff, the versions, and the commit that was checked | Every part |
 | `basis replay RUN`, `basis regress` | Rerun one saved run or recorded request with today's code; rerun recent ones and list what changed | Every part |
-| `basis new PART NAME` | Adds an API, a job or a model to the repo | Every part |
+| `basis new PART NAME` | Adds an API, a job or, provisionally, a model to the repo | Every part |
 | `basis sync`, `basis upgrade` | Rewrite the framework's files from the installed version; relock basis, sync, check and regress in one step | Every part |
 | `basis doctor`, `basis docs` | Check the desktop's setup and print the fix for each problem; print the docs for the installed version | Every part |
 | `basis dev`, `basis serve`, `basis call ROUTE` | Run the API on fakes; run the API; run one route in-process and print its response | An API |
 | `basis records export` | Write chosen recorded requests and responses as JSON, for a UI's fixture mode | An API |
-| `basis run NAME`, `basis resume RUN`, `basis describe NAME` | Run a job or a model, and with `--publish` write its outputs or orders; finish a publish that failed partway; print its params, inputs and outputs | Jobs or models |
-| `basis ddl NAME`, `basis sweep RUN DIR` | Print a job's `CREATE TABLE` statements; decide a model's saved run once per params file | Jobs; models |
+| `basis run NAME`, `basis resume RUN`, `basis describe NAME` | Run a job, and with `--publish` write its outputs; finish a publish that failed partway; print its params, inputs and outputs | Jobs, and models (provisional) |
+| `basis ddl NAME` | Print a job's `CREATE TABLE` statements | Jobs, and models (provisional) |
+| `basis sweep RUN DIR` | Decide a model's saved run once per params file | Models (provisional) |
 
 The rest of the black box is how basis fails. Every file `basis sync` writes opens with a line saying that basis manages
 it, and the drift check fails when someone edits one, so the fix for a framework file is a framework release. Every
@@ -87,32 +88,44 @@ the fix for each problem it finds.
 | `basis-core` | Internal: database sources for Oracle and SQL Server, settings, JSON logs, storage, the run store, snapshots, publishing with a ledger, the machinery of `replay`, `regress`, `new` and `sync`, contract-test helpers, and the `basis` command | Nothing |
 | `basis-job` | Batch jobs: etl-framework's job contract | `basis-core` |
 | `basis-api` | HTTP APIs on FastAPI | `basis-core` |
-| `optim` | Portfolio optimizers: portfolio-optim's model contract and engine | `basis-core` |
+| `optim` | Portfolio optimizers: portfolio-optim's model contract and engine. Provisional, and not yet released | `basis-core` |
 
-Every package is published to the internal PyPI feed. `basis-core` is internal: no repo depends on it by name, no user
+Every package but optim is published to the internal PyPI feed; optim stays in this repo, built and tested with the rest,
+and is not published until its design is settled. `basis-core` is internal: no repo depends on it by name, no user
 code imports it, and no user doc mentions it. It arrives as a dependency of the packages a repo does depend on, and
 brings the `basis` command with it. Each kind of part adds its own verbs to that command through entry points, so a job
 author's docs, skills and commands are complete without a word about the core underneath.
 
 The packages import as `basis.job` and `basis.api`, with the core as `basis.core`, one namespace that each distribution
 adds to. An import contract in this repo's checks keeps the layers apart: `basis.core` imports none of the others, and
-`basis.job`, `basis.api` and `optim` import `basis.core` and never each other.
+`basis.job`, `basis.api` and `optim` import `basis.core` and never each other. optim's side of it is in its own
+`pyproject.toml`, so the rest holds without it.
 
-`basis.core` is the one place basis shares code rather than only formats, and the reason is the code itself. optim and
-etl-framework each carry their own Oracle and SQL Server sources, settings, logs, storage and snapshots, and the copies
-have already drifted. While building etl-framework, a defect was found and fixed in how its SQL Server reads begin a
-snapshot transaction; portfolio-optim's `sources/mssql.py` reads the same way, and likely has the defect still. An API
-framework would have been a third copy. The packages above `basis.core` share nothing with each other, so a change to
-jobs cannot break an optimizer.
+`basis.core` is the one place basis shares code rather than only formats, and the reason is the code itself. Jobs and
+APIs both read and write Oracle and SQL Server, read settings, log, and keep what they did; etl-framework carries all of
+that, and an API framework would have been a second copy. Copies drift: portfolio-optim carries a third, and while
+building etl-framework, a defect was found and fixed in how its SQL Server reads begin a snapshot transaction, which
+portfolio-optim's `sources/mssql.py` likely has still. The packages above `basis.core` share nothing with each other, so
+a change to jobs cannot break an API or an optimizer.
 
-optim stays separate in its code: its own package, with its own model repos, generator, skills and docs, because
+**Provisional until the maintainer meets the firm's quant team.** optim stays separate in its code: its own package, with its own model repos, generator, skills and docs, because
 optimizers are a distinct kind of code with its own workflow (sweeps, trials, research from an IDE) and quants as its
 main authors. It gives its plumbing to `basis.core` and keeps its contract, its engine, `optim.cvxpy`, rounding and
 acceptance, `reserve` and `order`, `sweep` and `trial`, the shared holdings and securities datasets, and pandas. Its
 verbs come under `basis` like every other part's, and `optim` stays as an alias for the same command. Its orders are
 written through `basis.core`'s publishing, with a ledger row in the same transaction, so a failed or retried run never
 writes an order twice and `resume` finishes one that stopped partway. No repo depends on optim yet, so it moves with
-nothing to migrate.
+nothing to migrate. Its own design is in [packages/optim/docs/design.md](../packages/optim/docs/design.md), and is
+provisional too.
+
+optim's design may change after that meeting, or optim may go, so nothing outside `packages/optim` depends on it:
+basis-core, basis-job and basis-api, their release, and the contract a UI relies on stay as they are whatever optim
+does. A mechanism in core that only one part uses must be one a job could use as it stands, and core names no part: it
+finds each through its `basis.verbs` entry point, relocks each installed part's package, and owns a skill by the marker
+in its front matter, not by its name. `scripts/without_optim.py` checks the rest on every pull request: it lists each
+line outside `packages/optim` that names optim, but a few that must, then removes `packages/optim`, relocks, fails when
+a remaining package's version moves, and runs every hook and unit test. What it cannot see is a mechanism shaped by
+optim, which the rule above leaves to review.
 
 ## One repo, one version
 
@@ -120,19 +133,22 @@ Every package lives in this repo, a uv workspace, so a change that crosses packa
 `basis.core` and its use in `basis.api`, is one pull request. This repo's own CI runs on GitHub Actions, with SQL Server
 and Oracle service containers for the integration tests, and runs only the jobs whose paths changed.
 
-Every package is released together, under one version and one tag, such as `v0.7.0`. Each package depends on
-`basis-core` at exactly its own version, so a repo's lock can only hold basis packages from a single release, and an
-owner never has to work out which versions go together. Some releases change nothing in some packages; their notes say
+basis-core, basis-job and basis-api are released together, under one version and one tag, such as `v0.7.0`. Each
+package depends on `basis-core` at exactly its own version, so a repo's lock can only hold basis packages from a single
+release, and an owner never has to work out which versions go together. optim keeps that version in this repo, and
+depends on `basis-core` at exactly it, so it builds and tests with every release, but it is not published until its
+design is settled. Some releases change nothing in some packages; their notes say
 so. basis stays at 0.x until a real repo runs it in production, as portfolio-optim's own policy was.
 
 A developer starts a repo with `uvx`, which fetches a package from the internal feed and runs its command from a cached
 environment, installing nothing into a project: `uvx basis-api new app positions`, `uvx basis-job new repo
-nightly-loads`, or `uvx optim new repo sma income` (the repo and its first model). uv installs per user, with no admin
+nightly-loads`, or, once optim is released, `uvx optim new repo sma income` (the repo and its first model). uv installs per user, with no admin
 rights. Each developer's user-level `uv.toml` names the internal feed as the default index, not an extra one: under uv's
-default first-index strategy, a name the feed holds is then never looked up on public PyPI, where an unrelated `optim`
-exists. The feed proxies public PyPI for everything else.
+default first-index strategy, a name the feed holds is then never looked up on public PyPI, where a package of the same
+name can be another's entirely, as public PyPI's `optim` is. The feed proxies public PyPI for everything else.
 
-Repos pull new versions; nothing pushes them. `basis upgrade` relocks the basis packages with uv, runs `basis sync`,
+Repos pull new versions; nothing pushes them. `basis upgrade` relocks basis-core and each installed part's package with
+uv, runs `basis sync`,
 runs `basis check --full`, and prints what changed, so taking a release is one command whose result says whether the
 repo still behaves the same.
 
@@ -146,7 +162,7 @@ has. A product can span several repos, and its UI is always one of its own.
 |---|---|
 | `api/` | The API, on `basis-api` |
 | `jobs/JOB/` | One folder per job, on `basis-job` |
-| `models/MODEL/` | One folder per optimizer model, on `optim` |
+| `models/MODEL/` | One folder per optimizer model, on `optim` (provisional) |
 | `openapi.json` | The API's OpenAPI document, committed |
 | `fixtures/` | Synthetic data and its manifests, which the tests read |
 | `Dockerfile`, `azure-pipelines.yml` | One image for the repo, and the deploy pipeline that calls the maintainer's team's templates |
@@ -195,8 +211,8 @@ A resource is anything a handler reaches outside the process: a database, anothe
 ids. Each is declared by name, and the core opens it in the app's lifespan, puts a deadline on every call that can wait,
 traces every call, and provides a fake of it for tests. The clock and new ids never wait, so they have no deadline, and
 their spans record each value, so that a recorded request replays them. Handler code reaches the outside only through
-its resources, and the import contract that keeps optim's models pure keeps handlers away from database drivers, HTTP
-clients and environment variables. "Pure" cannot mean "no I/O" for a handler that reads, decides, and reads again; it
+its resources, and an import contract, as basis-job's keeps job code pure, keeps handlers away from database drivers,
+HTTP clients and environment variables. "Pure" cannot mean "no I/O" for a handler that reads, decides, and reads again; it
 means "I/O only through the core", which lets the core bound, observe and record every call.
 
 Request bodies and settings are strict models: an unknown key is refused and no value is coerced, so a misspelled field
@@ -264,7 +280,8 @@ becomes `basis run`), and its jobs can live in a repo beside an API.
 
 Every package writes its run data in one format. A run, a request or a decision is a manifest, a JSON file at
 `runs/PACKAGE/NAME/RUN_ID.json`, that names the run's datasets by the hash of their content, and each dataset is one
-Parquet file at `objects/HASH.parquet`. The morning's holdings, loaded by twenty optimizer runs, is then stored once.
+Parquet file at `objects/HASH.parquet`. A reference table that each of a day's hourly runs of a job loads unchanged is
+then stored once.
 There is one store per environment, a path or URL read through `pyarrow.fs` as optim's and etl-framework's snapshot
 roots are, and DuckDB reads the manifests and the Parquet directly when someone wants to query across runs.
 
@@ -292,7 +309,7 @@ Client data never goes in git. A test that needs real data names a run by id and
 and basis has no tool for scrubbing client data out of a snapshot, because a generic scrubber is where leaks come from.
 
 `basis.core` hands each package its data as Arrow. `basis.job` works in polars, which keeps nullable integers, decimals
-at their scale and zone-aware datetimes exact. optim works in pandas. `basis.api` works in pydantic models, and in
+at their scale and zone-aware datetimes exact. optim, provisionally, works in pandas. `basis.api` works in pydantic models, and in
 pyarrow for its Arrow responses.
 
 ## Agents
@@ -384,6 +401,7 @@ Python is 3.14, as optim and etl-framework require, set up with uv only.
 | MCP servers | Every agent reads MCP settings from a different file. |
 | Shared datasets across packages | They matter to optim, so they stay optim's. |
 | Code shared between `basis.job`, `basis.api` and `optim` | Each depends on `basis.core` only, so one cannot break another. |
+| Core code shaped by one part | A part's design can change, or the part can go, and core's must not change with it; a mechanism only one part uses is one a job could use as it stands. |
 | Lint and format rules in prose | An agent eventually breaks a rule nobody checks. |
 | DVC or Git LFS for run data | Each adds a tool and storage credentials to every desktop, and the packages already own their storage. |
 | A tool that scrubs client data from snapshots | A generic scrubber is where leaks come from; fixtures are generated instead. |

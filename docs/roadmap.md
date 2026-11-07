@@ -16,12 +16,13 @@ Actions.
 |---|---|---|
 | A. Core and jobs | `basis-core`, `basis-job` | 1, 4 |
 | B. APIs | `basis-api` | 2 |
-| C. Optim | `optim` | 3 |
+| C. Optim (provisional) | `optim` | 3 |
 | D. Eval | `evals/` | 0, then every phase |
 
 The critical path runs through lanes A and B: the namespace spike, the workspace, etl-framework's move, `basis-core`'s
 extraction, the `basis` command, the repo files, the desktop gates, then the API and the pilot. Optim is off the
-critical path, and runs alongside phase 2.
+critical path, and runs alongside phase 2. Its design is provisional until the maintainer meets the firm's quant team,
+and nothing in lanes A and B may depend on it (see [the design](design.md#the-packages)).
 
 ```mermaid
 flowchart TD
@@ -41,7 +42,7 @@ flowchart TD
   r8 --> a8
   r4 --> o2[3.2 move optim]
   r6 --> o2
-  o1[3.1 oracle snapshot] --> o2 --> o3[3.3 port the plumbing] --> o4[3.4 orders through the ledger] --> o6[3.6 proof and release]
+  o1[3.1 oracle snapshot] --> o2 --> o3[3.3 port the plumbing] --> o4[3.4 orders through the ledger] --> o6[3.6 proof and release, on hold]
   a2 --> o3
   o3 --> o5[3.5 verbs, sync and docs] --> o6
   a8 --> g[4 records and upkeep]
@@ -138,8 +139,9 @@ Lane A. Needs spike 0.2.
 
    Needs 1.4 and 1.6. Done when a generated repo's push hook runs `regress` against a local store and the QA tier
    against the SQL Server container standing in for QA, and `basis review` prints both.
-8. **1.8 Releases.** One tag releases every package at one version, each depending on `basis-core` at exactly that
-   version, and attaches the wheels to a GitHub release. **(work)** Publish to the internal feed through Azure DevOps,
+8. **1.8 Releases.** One tag releases basis-core, basis-job and basis-api at one version, each depending on
+   `basis-core` at exactly that version, and attaches their wheels to a GitHub release. optim keeps the same version in
+   the repo, built and green with the rest, but is not published until step 3.6. **(work)** Publish to the internal feed through Azure DevOps,
    with spike 0.1's steps. Point etl-framework's README at basis; archiving that repo is the maintainer's call. Needs
    1.7. Done when `v0.1.0` is tagged, and installs from git here and from the internal feed at the firm.
 
@@ -189,7 +191,10 @@ Lane B. Needs step 1.3. Steps 2.3 and 2.4 run at once, and so do 2.5 and 2.9.
 ## Phase 3: optim on basis-core
 
 Lane C. Needs steps 1.4 and 1.6. Its plumbing port waits for step 2.2's changes to `basis-core` to merge, so that
-`basis-core` isn't reshaped under it. It runs alongside phase 2.
+`basis-core` isn't reshaped under it. It runs alongside phase 2. Steps 3.1 to 3.5 are done; optim's design is
+provisional until the maintainer meets the firm's quant team, so step 3.6 is on hold until then, and what optim becomes
+may replace it. Whatever it becomes, nothing outside `packages/optim` may depend on it, which CI's `without-optim` job
+checks.
 
 1. **3.1 Oracle snapshot.** With optim 0.2.0 as it is, run the example model on its fixture, and keep the snapshot and
    its decisions as the oracle for step 3.6. It can run at any time before 3.2.
@@ -203,9 +208,9 @@ Lane C. Needs steps 1.4 and 1.6. Its plumbing port waits for step 2.2's changes 
 5. **3.5 Verbs, sync and docs.** optim's verbs (`run`, `replay`, `sweep`, `describe`, `regress`, `new model`) come under
    `basis`, with `optim` as an alias. Its `sync`, `new` and docs printing move onto `basis.core`'s machinery, while its
    templates, skills and docs stay its own. `uvx optim new repo` works from the feed. Needs 3.3, and runs alongside 3.4.
-6. **3.6 Proof and release.** Done when the example model's decisions on its fixture match step 3.1's exactly (`basis
+6. **3.6 Proof and release (on hold).** Done when the example model's decisions on its fixture match step 3.1's exactly (`basis
    regress` against its snapshot), and a generated model repo with a second model passes its checks. optim then releases
-   with the next basis version. Needs 3.4 and 3.5.
+   with the next basis version. Needs 3.4 and 3.5, and the maintainer's meeting with the quant team.
 
 ## Phase 4: records and upkeep
 

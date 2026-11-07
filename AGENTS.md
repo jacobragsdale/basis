@@ -67,12 +67,12 @@ docs, and builds that repo's image and publishes its job to SQL Server.
 `basis` is basis-core's console script, and each part adds its verbs to it; `packages/core/src/basis/core/verbs.py`
 holds the interface, and its docstring is the reference.
 
-- A part lists one entry point in the `basis.verbs` group, named after the part (`job`, `api`, `optim`), that
+- A part lists one entry point in the `basis.verbs` group, named after the part, such as `job` or `api`, that
   points at a callable returning its `Part`: its own `verbs`, each a `Verb` with a name, a one-line help, a function
   that adds its arguments to an argparse parser, and a handler that returns the exit code; and the fields core's verbs
   use, `files` (`sync`, `check`; read only when used), `docs` (`docs`), `new` (`new KIND NAME`), `runs` (`run`,
-  `describe`, `resume`, `replay`, `regress` and `ddl`, which jobs and models both have, and `regressions`, for
-  `check --full`), `qa` (the QA tier), `contract` (`review`; `basis.api`'s, later), and `renamed`, which refuses the
+  `describe`, `resume`, `replay`, `regress` and `ddl`, which every part that runs things by name has, and
+  `regressions`, for `check --full`), `qa` (the QA tier), `contract` (`review`; `basis.api`'s, later), and `renamed`, which refuses the
   variables an earlier version of the part read, before any verb runs, as `basis` refuses `ETL_*`.
 - A repo declares its parts in its `pyproject.toml`, as `[tool.basis] parts = ["job"]`, and basis never infers one
   from a folder. `basis` loads only those parts, and `basis --help` lists their verbs and each core verb one of them
@@ -80,8 +80,9 @@ holds the interface, and its docstring is the reference.
 - No two declared parts add the same verb, no part adds one twice, and none adds one of core's. A verb that several
   kinds of part share belongs in core, reaching each part through a field of `Part`, as the verbs of `runs` do: core
   parses NAME, and RUN_ID for `resume` and `replay`, and the `Shared` of the part that runs NAME adds and reads the
-  rest, so a job's `run` takes `--interval` and a model's `--portfolios`. Where several declared parts have the verb,
-  NAME comes first, and a name two of them run is refused.
+  rest, so a job's `run` takes `--interval`, and another part's `run` takes options of its own. Where several declared
+  parts have the verb, NAME comes first, and a name two of them run is refused. Nothing in core is for one part alone:
+  a mechanism only one part uses must be one a job could use as it stands, and core names no part.
 - Every command's stderr ends with one log record, `finished VERB`, with its `verb`, `exit_code` and `ms`, whatever
   the outcome, and then, for each failure, one line, `ERROR: REASON: FIX`: so a failure's ERROR line is the last line,
   and the only one starting `ERROR`. The other stderr lines are JSON log records, for machines. A handler returns
@@ -92,11 +93,13 @@ holds the interface, and its docstring is the reference.
   caller reads are JSON on stdout.
 - `basis sync` owns the framework files (`basis.core.sync.REPO_FILES`: the Dockerfile, `azure-pipelines.yml`, the
   hooks in `.githooks/` and `.gitattributes`, from `packages/core/src/basis/core/templates/sync/`), basis's own block
-  of `AGENTS.md` and each part's, `CLAUDE.md`, each `.agents/skills/PART-*` folder and its copy in `.claude/skills/`,
-  the deny rules in `.claude/settings.json`, and each file whose first lines carry `basis.core.sync.MARKER`. It writes
-  them with LF line endings, removes those nothing writes now, and `basis check` reports any that differ, byte for
-  byte. A part adds its lines of the Dockerfile as its `AgentFiles.image`, and a repo its Debian packages as
-  `[tool.basis] apt-packages`. `sync.plan` works this out once per call.
+  of `AGENTS.md` and each part's, `CLAUDE.md`, the deny rules in `.claude/settings.json`, and each file whose first
+  lines carry `basis.core.sync.MARKER`: each skill in `.agents/skills/` and its copy in `.claude/skills/` among them,
+  whose front matter's `metadata` starts with the marker (`sync.SKILL_KEY`), so a skill is basis's whatever its name
+  and whether or not the part that wrote it is still installed. It writes them with LF line endings, removes those
+  nothing writes now, and `basis check` reports any that differ, byte for byte. A part adds its lines of the
+  Dockerfile as its `AgentFiles.image`, and a repo its Debian packages as `[tool.basis] apt-packages`. `sync.plan`
+  works this out once per call.
 - A file of the repo's own at a path basis writes (one without the marker, a `CLAUDE.md` holding anything else, or
   settings with none of basis's rules) is left alone, and a file basis cannot read, such as settings that are not
   JSON, is one `ERROR` line; every other file is still checked and written. `basis sync --adopt` saves each file of
@@ -113,14 +116,14 @@ holds the interface, and its docstring is the reference.
   worktrees share (`basis/checks/PREFIX/COMMIT.json`), when the repo's folder has nothing uncommitted. The push hook
   checks a commit that is not a clean HEAD in a worktree of its own, with `--settings-from` naming the clone's folder,
   where the untracked QA settings are.
-- The QA tier (`basis.core.qa`) keeps optim's end-to-end safeguards, all declared in `[tool.basis.qa]`: `settings`, the
+- The QA tier (`basis.core.qa`) keeps the end-to-end safeguards, all declared in `[tool.basis.qa]`: `settings`, the
   one file it reads, never the environment; `marker`, which every database those settings configure must carry, in a
   SQL Server connection string's one server or database, or an Oracle DSN; `stores`, one of which
   `BASIS_SNAPSHOT_ROOT` must be; and `writes`, the tables it may write, by database, ledgers included. While any
   setting or any part's plan is refused, nothing runs, and the databases a part gets refuse other tables as they
   write. A part's own runs are its `[tool.basis.qa.PART]` table, such as basis-job's `[tool.basis.qa.job]`.
 - `basis doctor` (`basis.core.doctor`) runs in a repo or outside one, and checks uv, git, the hooks, the feed (the
-  user's `uv.toml` default index) and the settings; `basis upgrade` (`basis.core.upgrade`) relocks basis's packages,
-  then runs `basis sync` and `basis check --full` through `uv run`, so the new version does them.
+  user's `uv.toml` default index) and the settings; `basis upgrade` (`basis.core.upgrade`) relocks basis-core and the
+  package of each installed part, then runs `basis sync` and `basis check --full` through `uv run`, so the new version does them.
 - A command that runs before a repo exists, such as `basis-job new repo NAME`, is a `standalone` command in
   `basis.core.command`, with the same failures.
