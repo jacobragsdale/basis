@@ -24,6 +24,13 @@ repos:
 
   - repo: local
     hooks:
+      - id: release-check   # every member at the root's one version, pinning basis-core at it, and saying whether a release publishes it
+        name: release check
+        entry: uv run scripts/release.py check
+        language: system
+        files: (^|/)pyproject\.toml$|^uv\.lock$|^scripts/release\.py$
+        pass_filenames: false
+
       - id: ty   # ty-pre-commit's hook found no Python files at this virtual workspace root and checked nothing
         name: ty
         entry: uv run ty check

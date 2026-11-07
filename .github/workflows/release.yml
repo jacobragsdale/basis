@@ -1,0 +1,218 @@
+name: release
+
+# A `v*` tag releases basis: it builds each package that says a release publishes it, installs them in clean
+# environments from those files alone, makes job repos from them, and creates the GitHub release with the files
+# attached. A pull request that touches a release file, and a run by hand, do all of that but the release, and also
+# set the next version in its one place and run every unit test at it; they publish nothing. docs/releasing.md says
+# how to cut a release, and what this proves.
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/release.py
+      - scripts/tests/**
+      - pyproject.toml
+      - packages/*/pyproject.toml
+      - uv.lock
+      - packages/core/src/basis/core/new.py  # where a generated repo takes its basis packages from
+      - packages/*/src/**/templates/repo/pyproject.toml.in  # the version of them it takes
+  workflow_dispatch:
+
+permissions:
+  contents: read  # the release job alone may write, and only on a tag
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      packages: ${{ steps.check.outputs.packages }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.13.7"
+      - name: Check that every member is at one version, pinning basis-core at it, and on a tag that the tag names it
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" = push ]; then uv run scripts/release.py check --tag "$GITHUB_REF_NAME"; else uv run scripts/release.py check; fi
+          echo "version=$(uv version --short --frozen)" >> "$GITHUB_OUTPUT"
+          echo "packages=$(uv run scripts/release.py packages | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+      - name: Build each package a release publishes, its wheel and its sdist, as a stranger's install would build it
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
+          PACKAGES: ${{ steps.check.outputs.packages }}
+        run: |
+          for name in $PACKAGES; do
+            uv build --no-sources --package "$name" --out-dir dist
+            test -f "dist/${name//-/_}-$VERSION-py3-none-any.whl" && test -f "dist/${name//-/_}-$VERSION.tar.gz"
+          done
+          test "$(ls dist | wc -l)" = "$((2 * $(echo $PACKAGES | wc -w)))"  # nothing else, such as a package no release publishes
+          cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7  # the release keeps the files; a dry run's are only for its own jobs
+
+  verify:
+    # The release's files alone, with no checkout of the workspace: each package from its wheel and from its sdist in
+    # an environment of its own, and job repos made from the basis-job wheel and from a feed that holds the files.
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      PACKAGES: ${{ needs.build.outputs.packages }}
+      DIST: ${{ github.workspace }}/dist
+      FEED: http://127.0.0.1:8761/simple
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - uses: actions/checkout@v5  # scripts/release.py alone, for the feed
+        with:
+          path: source
+          sparse-checkout: scripts/release.py
+          sparse-checkout-cone-mode: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.13.7"
+      - name: Install every package from its wheel, then from its sdist, each in a clean environment, and run basis there
+        working-directory: ${{ runner.temp }}
+        run: |
+          for kind in whl tar.gz; do
+            uv venv --quiet --python 3.14 "env-$kind"
+            uv pip install --quiet --python "env-$kind" "$DIST"/*."$kind"
+            "env-$kind/bin/basis" --version 2> /dev/null | tee "versions-$kind"
+            for name in $PACKAGES; do grep --quiet "$name $VERSION" "versions-$kind"; done
+            # a repo that declares every part installed, by its basis.verbs entry point, so --help loads each one
+            parts=$("env-$kind/bin/python" -c 'from importlib.metadata import entry_points; print(", ".join(sorted(repr(e.name) for e in entry_points(group="basis.verbs"))))')
+            mkdir "parts-$kind" && printf '[project]\nname = "parts"\n\n[tool.basis]\nparts = [%s]\n' "$parts" > "parts-$kind/pyproject.toml"
+            (cd "parts-$kind" && "../env-$kind/bin/basis" --help)
+          done
+      - name: Serve the files as a feed that proxies PyPI, as the firm's does
+        run: |
+          uv run source/scripts/release.py feed "$DIST" --port 8761 > "$RUNNER_TEMP/feed.log" 2>&1 &
+          for attempt in $(seq 30); do curl --silent --fail --output /dev/null "$FEED/basis-core/" && break; sleep 1; done
+          curl --silent --fail "$FEED/basis-core/"
+      - name: Make a job repo with uvx from the basis-job wheel, taking basis from the feed, and run its checks
+        working-directory: ${{ runner.temp }}
+        run: |
+          uvx --from "$DIST/basis_job-$VERSION-py3-none-any.whl" --with "$DIST/basis_core-$VERSION-py3-none-any.whl" basis-job new repo from-wheel --index "$FEED"
+          cd from-wheel
+          python3 - <<'PY'  # the lock holds the release's basis packages, from the feed
+          import os, tomllib
+          locked = {package["name"]: package for package in tomllib.load(open("uv.lock", "rb"))["package"]}
+          for name in ("basis-job", "basis-core"):
+              assert (locked[name]["version"], locked[name]["source"]) == (os.environ["VERSION"], {"registry": os.environ["FEED"]}), locked[name]
+          PY
+          uv run basis check
+      - name: Make one as a developer does, with uvx from the feed, which refuses without --index, since uv does not record it
+        working-directory: ${{ runner.temp }}
+        run: |
+          if uvx --default-index "$FEED" basis-job new repo refused 2> refused.log; then echo "a repo was made with no --index" >&2; exit 1; fi
+          tail -n 1 refused.log | grep --quiet "^ERROR: basis-job came from an index.*: pass --index with the feed's URL"
+          uvx --default-index "$FEED" basis-job new repo from-feed --index "$FEED"
+          cd from-feed && uv run basis check
+      - name: Show the feed's log
+        if: always()
+        run: cat "$RUNNER_TEMP/feed.log"
+
+  from-git:
+    # A job repo made from the release's tag depends on that tag. On a tag, from this repository on GitHub, as the
+    # roadmap's done-when line has it; otherwise from a scratch clone of this commit, tagged there alone.
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # uv cannot fetch from a shallow clone
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.13.7"
+      - name: Say where the tag is
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = push ]; then
+            echo "url=https://github.com/$GITHUB_REPOSITORY" >> "$GITHUB_OUTPUT"
+          else
+            git init --quiet --bare "$RUNNER_TEMP/basis.git"
+            git push --quiet "$RUNNER_TEMP/basis.git" HEAD:refs/heads/candidate
+            git -C "$RUNNER_TEMP/basis.git" tag "v$VERSION" candidate  # in the scratch clone alone; this job's token only reads
+            echo "url=file://$RUNNER_TEMP/basis.git" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Make a job repo with uvx from the tag, and run its checks
+        working-directory: ${{ runner.temp }}
+        env:
+          URL: ${{ steps.tag.outputs.url }}
+        run: |
+          uvx --from "git+$URL@v$VERSION#subdirectory=packages/job" basis-job new repo from-tag
+          cd from-tag
+          grep --quiet "^basis-job = { git = \"$URL\", subdirectory = \"packages/job\", tag = \"v$VERSION\" }$" pyproject.toml
+          uv run basis check
+      - uses: actions/download-artifact@v4
+        if: github.event_name == 'push'
+        with:
+          name: dist
+          path: ${{ runner.temp }}/dist
+      - name: On a tag, make one with uvx from the basis-job wheel, without --index, which takes the release's tag on GitHub
+        if: github.event_name == 'push'
+        working-directory: ${{ runner.temp }}
+        run: |
+          uvx --from "dist/basis_job-$VERSION-py3-none-any.whl" --with "dist/basis_core-$VERSION-py3-none-any.whl" basis-job new repo from-wheel
+          grep --quiet "^basis-job = { git = \"https://github.com/jacobragsdale/basis\", subdirectory = \"packages/job\", tag = \"v$VERSION\" }$" from-wheel/pyproject.toml
+          cd from-wheel && uv run basis check
+
+  one-version:
+    # Not on a tag: the version moves in one place, and every unit test passes at the next one.
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.13.7"
+      - run: uv sync --locked --all-packages
+      - name: The release script's own tests
+        run: uv run pytest -o pythonpath=scripts scripts/tests
+      - name: Set the next minor version, which every member, each basis-core pin and the lock follow, and run every unit test at it
+        run: |
+          uv run scripts/release.py version minor
+          git diff --stat
+          uv sync --locked --all-packages
+          uv run scripts/release.py check
+          uv run pytest
+
+  release:
+    needs: [build, verify, from-git]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      PACKAGES: ${{ needs.build.outputs.packages }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Create the GitHub release, with each file attached
+        run: |
+          python3 - <<'PY' > notes.md  # GitHub's generated notes, the pull requests merged since the last release, follow
+          import os
+          version, packages, repository = os.environ["VERSION"], os.environ["PACKAGES"].split(), os.environ["GITHUB_REPOSITORY"]
+          print(f"basis {version}: {', '.join(packages)}, each at {version} and depending on basis-core=={version}. Make a job repo from it with")
+          print(f"\n```sh\nuvx --from 'git+https://github.com/{repository}@v{version}#subdirectory=packages/job' basis-job new repo NAME\n```\n")
+          print("or, from a feed that holds these files, with `uvx basis-job new repo NAME --index URL`. `SHA256SUMS` holds each file's hash.")
+          PY
+          cat notes.md
+          gh release create "v$VERSION" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "basis $VERSION" --notes-file notes.md --generate-notes

@@ -62,6 +62,11 @@ A repo whose image builds needs basis from git rather than a checkout: push the 
 which takes basis from the commit uvx installed. CI runs all of this on every pull request that changes more than
 docs, and builds that repo's image and publishes its job to SQL Server.
 
+A release is a `v*` tag. The root `pyproject.toml`'s `[project] version` is every package's, which
+`uv run scripts/release.py version X.Y.Z` sets, and each package says in its own `pyproject.toml` whether a release
+publishes it (`[tool.basis-release] publish`). [docs/releasing.md](docs/releasing.md) says how to cut a release, and
+what the release workflow's dry run proves on each pull request that touches a release file.
+
 ## The basis command
 
 `basis` is basis-core's console script, and each part adds its verbs to it; `packages/core/src/basis/core/verbs.py`

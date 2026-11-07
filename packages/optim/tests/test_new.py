@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 import optim
-from basis.core.new import NewError, NoReleaseError
+from basis.core.new import UNRELEASED, NewError, NoReleaseError
 from optim import models, new, sync
 from optim.models import listed
 from optim.testing import check_fixture, check_imports, check_params
@@ -64,8 +64,9 @@ def test_a_new_repo_takes_optim_from_the_internal_index_or_a_checkout_of_basis(t
     assert checked_out["tool"]["uv"]["sources"] == {"optim": {"path": (CHECKOUT / "packages" / "optim").resolve().as_posix(), "editable": True}}
 
 
-def test_a_new_repo_from_an_unreleased_optim_with_no_source_says_how_to_take_it_from_git(tmp_path: Path) -> None:
+def test_a_new_repo_from_an_unreleased_optim_with_no_source_says_how_to_take_it_from_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """optim installed from the workspace, as here, came from no commit uv recorded, and 0.0.0 has no tag."""
+    monkeypatch.setattr(optim, "__version__", UNRELEASED)
     with pytest.raises(NoReleaseError, match=r"uvx --from 'git\+https://github.com/jacobragsdale/basis#subdirectory=packages/optim' optim new repo NAME"):
         new.repo(tmp_path / "sma", "income", index=None, framework_path=None, install=False)
 

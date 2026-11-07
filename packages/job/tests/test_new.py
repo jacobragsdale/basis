@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from basis.core.new import NoReleaseError
+from basis.core.new import UNRELEASED, NoReleaseError
 from basis.job import new, sync
 
 CHECKOUT = Path(__file__).parents[3]
@@ -63,7 +63,8 @@ def test_a_repos_first_sync_removes_what_etl_framework_wrote_without_a_marker_an
     assert sync.stale(repo) == []
 
 
-def test_without_a_release_a_repo_needs_a_checkout_or_an_index(tmp_path: Path) -> None:
+def test_without_a_release_a_repo_needs_a_checkout_or_an_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(new, "VERSION", UNRELEASED)  # basis-job as installed from this checkout, before any release
     with pytest.raises(NoReleaseError, match="pass --framework-path"):
         new.repo(tmp_path / "pricing-etl", "prices", index=None, framework_path=None, install=False)
     assert not (tmp_path / "pricing-etl").exists()

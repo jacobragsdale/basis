@@ -23,13 +23,17 @@ def transform(inputs: Inputs, params: Params) -> Outputs: ...
 
 You need [uv](https://docs.astral.sh/uv/) and git.
 
-basis has no release yet, so a job repo takes basis-job from the commit of basis that `uvx` installs from GitHub:
+A job repo takes basis-job from the git ref `uvx` installs it from. Name a release's tag, and the repo depends on that
+release:
 
 ```sh
-uvx --from 'git+https://github.com/jacobragsdale/basis#subdirectory=packages/job' basis-job new repo pricing-etl prices
+uvx --from 'git+https://github.com/jacobragsdale/basis@TAG#subdirectory=packages/job' basis-job new repo pricing-etl prices
 cd pricing-etl
 uv run basis check
 ```
+
+`TAG` is one of [basis's releases](https://github.com/jacobragsdale/basis/releases), such as `v0.1.0`. Before basis's
+first release, leave out `@TAG`: the repo then depends on the commit of `main` that uvx installed.
 
 To work on basis itself, make a repo from a checkout instead, which it installs editable:
 `uv run --project basis basis-job new repo pricing-etl prices --framework-path basis`.

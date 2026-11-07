@@ -1,15 +1,16 @@
 import json
 import os
 from datetime import UTC, datetime
-from importlib.metadata import entry_points
+from importlib.metadata import entry_points, version
 from pathlib import Path
 
 import pytest
 
 from basis.core import command, snapshots
+from basis.core.new import UNRELEASED
 from basis.core.snapshots import RunRecord
 from basis.core.storage import Root
-from basis.job import cli, runs
+from basis.job import cli, new, runs
 from basis.job.diff import OperationDiff
 from basis.job.example import job
 
@@ -266,7 +267,8 @@ def test_a_fix_carries_again_where_the_next_attempt_needs_it(fields: dict[str, o
     assert runs.failure_of(RunRecord.model_validate(RECORD | fields), publish=True) == failure
 
 
-def test_a_repo_made_before_basis_has_a_release_fails_with_one_error_line_that_names_the_fix(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_a_repo_made_before_basis_has_a_release_fails_with_one_error_line_that_names_the_fix(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(new, "VERSION", UNRELEASED)  # basis-job as installed from this checkout, before any release
     assert cli.scaffold(["new", "repo", "pricing-etl", "--dir", str(tmp_path)]) == 1
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -280,5 +282,5 @@ def test_basis_job_names_every_installed_parts_version(capsys: pytest.CaptureFix
     assert cli.scaffold(["--version"]) == 0
     core, *parts = capsys.readouterr().out.rstrip("\n").split(", ")  # the parts in the order their packages are found
     installed = {f"{entry.dist.name} {entry.dist.version}" for entry in entry_points(group=command.GROUP) if entry.dist is not None}
-    assert (core, sorted(parts)) == ("basis-core 0.0.0", sorted(installed))
-    assert "basis-job 0.0.0" in installed
+    assert (core, sorted(parts)) == (f"basis-core {version('basis-core')}", sorted(installed))
+    assert f"basis-job {version('basis-core')}" in installed  # at basis-core's version, as every basis package is
