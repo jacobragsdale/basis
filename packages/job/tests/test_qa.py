@@ -62,7 +62,7 @@ NO_WRITE = {"warehouse": {key: value for key, value in WAREHOUSE.items() if key 
         ({"prices": {"params": "params.json", "publish": True}}, None, None, "[tool.basis.qa.job] prices is not valid: publish: Extra inputs are not permitted"),
         (DECLARED, {"warehouse": frozenset({"etl.publishes"})}, None, "prices writes prices to prices in warehouse, which [tool.basis.qa] writes does not list"),
         (DECLARED, None, {}, "prices writes prices to database 'warehouse', which the QA settings do not configure"),
-        (DECLARED, None, NO_WRITE, "prices writes prices to database 'warehouse', which the QA settings give no write block"),
+        (DECLARED, None, NO_WRITE, "prices writes prices to database 'warehouse', which in the QA settings has no write settings"),
     ],
     ids=["undeclared", "unknown", "a-bad-interval", "no-params-file", "a-key-basis-run-does-not-take", "a-table-not-allowed", "no-database", "no-write-block"],
 )

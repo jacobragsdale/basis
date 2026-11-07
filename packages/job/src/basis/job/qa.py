@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from basis.core import invalid
 from basis.core.interval import Interval
 from basis.core.model import Model
+from basis.core.settings import publish_refusal
 from basis.core.snapshots import RunRecord
 from basis.core.sync import Problem
 from basis.core.verbs import Qa, QaPlan, QaRun
@@ -105,8 +106,8 @@ def _planned(qa: Qa, name: str, declared: Declared, load: Callable[[str], jobs.J
         target = table.target
         if target.database not in configured:
             problems.append((f"{name} writes {output} to database {target.database!r}, which the QA settings do not configure", f"set BASIS_DATABASES__{target.database.upper()}__* to QA's"))
-        elif configured[target.database].write is None:
-            problems.append((f"{name} writes {output} to database {target.database!r}, which the QA settings give no write block", f"set BASIS_DATABASES__{target.database.upper()}__WRITE__* to QA's"))
+        elif (refusal := publish_refusal(target.database, configured[target.database])) is not None:
+            problems.append((f"{name} writes {output} to database {target.database!r}, which in the QA settings {refusal[0]}", f"{refusal[1]}, to QA's"))
         if not qa.may_write(target.database, target.table):
             reason = f"{name} writes {output} to {target.table} in {target.database}, which [tool.basis.qa] writes does not list, so the QA tier will not run it"
             problems.append((reason, f"add {target.table} to writes.{target.database} if it is QA's table"))

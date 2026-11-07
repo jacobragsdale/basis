@@ -4,10 +4,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import polars as pl
+import pyarrow as pa
 import pytest
 
 from basis.core import qa
-from basis.core.databases import Counts, LedgerEntry, Reader, Writer
+from basis.core.databases import Bind, Counts, LedgerEntry, Reader, Statements, Writer
 from basis.core.destination import TableSpec
 from basis.core.errors import BasisError
 from basis.core.interval import Interval
@@ -205,6 +206,22 @@ class FakeDatabase:
     def writing(self) -> Generator[Writer]:
         yield self.writer
 
+    @contextmanager
+    def statements(self, *, writes: bool) -> Generator[Statements]:
+        self.writer.applied.append(f"statements, writes={writes}")
+        yield FakeStatements()
+
+
+class FakeStatements:
+    def query(self, sql: str, binds: Mapping[str, Bind], *, timeout_s: float) -> pa.Table:
+        raise NotImplementedError
+
+    def execute(self, sql: str, binds: Mapping[str, Bind], *, timeout_s: float) -> int:
+        raise NotImplementedError
+
+    def commit(self) -> None:
+        raise NotImplementedError
+
 
 @dataclass(frozen=True)
 class Table:
@@ -228,6 +245,20 @@ def test_the_tiers_databases_refuse_a_table_writes_does_not_list_before_writing_
         with pytest.raises(qa.QaError, match=r"the QA tier refused to write positions in warehouse, which \[tool\.basis\.qa\] writes does not list"):
             opened.apply(Table("positions"), Changes(), spec)
     assert writer.applied == ["PRICES"]
+
+
+def test_the_tiers_databases_refuse_statements_of_a_parts_own_through_the_write_login() -> None:
+    writer = FakeWriter()
+    guarded = qa._Guarded(FakeDatabase(writer), frozenset({"prices"}))  # noqa: SLF001 -- as above
+    with pytest.raises(qa.QaError, match="the QA tier refused statements of the part's own through warehouse's write login"):
+        guarded.statements(writes=True)
+    with guarded.statements(writes=False):
+        pass
+    assert writer.applied == ["statements, writes=False"]
+
+
+def test_a_write_block_with_no_ledger_needs_none_listed(declared: qa.Declared) -> None:
+    assert problems(settings(warehouse={key: value for key, value in mssql().items() if key != "write"} | {"write": {"connection_string": QA}}), declared) == []
 
 
 def planned(*problems: tuple[str, str]) -> tuple[list[Qa], Part]:

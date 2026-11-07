@@ -22,7 +22,8 @@ A setting carries the marker when what it points at has a name that contains it,
 Every database the settings configure must carry it, whether a run uses it or not, and each that has a `WRITE` block
 must have its ledger in `writes`, since every publish writes the ledger. Each part's plan then says what its runs
 would write, and while anything is refused, no part runs. The databases the parts get refuse, at the moment of
-writing, a table `writes` does not list. A connection string's login can still reach another database by a
+writing, a table `writes` does not list, and refuse statements of a part's own through a write login outright, since
+which tables those write cannot be told. A connection string's login can still reach another database by a
 three-part name in a query, which no check of its settings can see: give QA's logins access to QA alone."""
 
 import tomllib
@@ -36,7 +37,7 @@ import polars as pl
 from pydantic import ConfigDict, Field, ValidationError
 
 from basis.core import invalid
-from basis.core.databases import Counts, Database, LedgerEntry, Reader, Writer, open_database
+from basis.core.databases import Counts, Database, LedgerEntry, Reader, Statements, Writer, open_database
 from basis.core.destination import TableSpec
 from basis.core.errors import BasisError
 from basis.core.interval import Interval
@@ -224,7 +225,7 @@ def problems(settings: Settings, declared: Declared, *, source: Path) -> list[Pr
         found.append((f"BASIS_SNAPSHOT_ROOT {where} is {settings.snapshot_root}, which {_SECTION} stores does not list", f"set it to one of {', '.join(stores)}, or list it there if it is QA's"))
     tables = declared.tables()
     for name, database in sorted(settings.databases.items()):
-        if database.write is not None and database.write.ledger.lower() not in tables.get(name, frozenset()):
+        if database.write is not None and database.write.ledger is not None and database.write.ledger.lower() not in tables.get(name, frozenset()):
             variable = f"BASIS_DATABASES__{name.upper()}__WRITE__LEDGER"
             reason = f"{variable} {where} is {database.write.ledger}, which {_SECTION} writes does not list for {name}, and every publish writes it"
             found.append((reason, f"add it to writes.{name} if it is QA's ledger"))
@@ -303,7 +304,8 @@ def _safely(  # noqa: PLR0913 -- what the tier found, by keyword
 
 @dataclass(frozen=True)
 class _Guarded:
-    """A database whose writer refuses, before it writes, a table `tables` does not list."""
+    """A database whose writer refuses, before it writes, a table `tables` does not list, and which refuses statements
+    of a part's own through the write login, since no table a statement writes can be told from it."""
 
     database: Database
     tables: frozenset[str]
@@ -323,6 +325,12 @@ class _Guarded:
     def writing(self) -> Generator[Writer]:
         with self.database.writing() as writer:
             yield _GuardedWriter(writer, self.name, self.tables)
+
+    def statements(self, *, writes: bool) -> AbstractContextManager[Statements]:
+        if writes:
+            msg = f"the QA tier refused statements of the part's own through {self.name}'s write login, since it cannot tell which tables they write: write through the part's declared outputs"
+            raise QaError(msg)
+        return self.database.statements(writes=False)
 
 
 @dataclass(frozen=True)
