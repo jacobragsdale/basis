@@ -92,12 +92,13 @@ def test_oracle_in_thick_mode_loads_its_client_libraries_from_the_folder_given(t
 
 @pytest.mark.parametrize(
     ("platform", "encoding", "utf8"),
-    [("linux", "UTF-8", True), ("linux", "ISO-8859-1", False), ("win32", "cp1252", False), ("win32", "utf-8", False)],
-    ids=["linux-utf8", "linux-latin1", "windows", "windows-utf8"],
+    [("linux", "UTF-8", True), ("linux", "ANSI_X3.4-1968", True), ("linux", "ISO-8859-1", False), ("linux", "x-unknown", False), ("win32", "cp1252", False), ("win32", "utf-8", False)],
+    ids=["linux-utf8", "linux-c-locale", "linux-latin1", "linux-unknown", "windows", "windows-utf8"],
 )
 def test_sql_server_char_data_is_fetched_as_utf8_only_where_the_driver_sends_it_so(platform: str, encoding: str, utf8: bool) -> None:  # noqa: FBT001 -- a parameter of the table
-    """The driver sends char data in the locale's charset off Windows, and in the ANSI code page on Windows, where the
-    UTF-8 fetch is unverified (docs/spikes/sqlserver-json.md): there each connection keeps the driver's default."""
+    """The driver sends char data in the locale's charset off Windows, or UTF-8 for one it does not convert to, such as
+    the C locale's ASCII, and in the ANSI code page on Windows, where the UTF-8 fetch is unverified
+    (docs/spikes/sqlserver-json.md): there, and under any other charset, each connection keeps the driver's default."""
     assert fetches_char_as_utf8(platform, encoding) is utf8
 
 

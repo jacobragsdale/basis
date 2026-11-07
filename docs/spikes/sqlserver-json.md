@@ -138,9 +138,20 @@ character that straddles the driver's chunks of 4,095 UTF-16 units in a `varchar
 `varchar(max)` or `nvarchar(max)` column beside it. The UTF-8 char fetch read each exactly, and code page 1252 `varchar`
 and `nvarchar` text as well. Under an ISO-8859-1 locale on Linux it does not: Arrow raises `UnicodeDecodeError`, and
 `fetchall` returns `bytes`, with each character Latin-1 lacks replaced. So basis-core sets it on each connection off
-Windows, where the locale is UTF-8 (`fetches_char_as_utf8` in `packages/core/src/basis/core/databases/mssql.py`), and
-keeps the driver's default on Windows and under any other locale. `packages/job/tests/integration/test_text.py` reads
-and publishes such text.
+Windows, where the locale is UTF-8 or C (`fetches_char_as_utf8` in `packages/core/src/basis/core/databases/mssql.py`),
+and keeps the driver's default on Windows and under any other locale. `packages/job/tests/integration/test_text.py`
+reads and publishes such text.
+
+**In basis's image.** A job repo's image, built from the managed Dockerfile on `python:3.14-slim` and run under its
+own environment, has `LANG=C.UTF-8` from that base, so its connections fetch char data as UTF-8, and read `["😀"]`
+exactly. With `LANG` unset, or `LANG=C`, Python's locale coercion (PEP 538) sets `LC_CTYPE=C.UTF-8`, with the same
+result. `LC_ALL=C`, `LC_ALL=POSIX` or `PYTHONCOERCECLOCALE=0` leaves the C locale, whose charset is ASCII
+(`ANSI_X3.4-1968`). The driver does not convert to ASCII, and sends UTF-8 instead: its programming guidelines for
+Linux and macOS say that for a locale whose charset is not in its list, "it defaults to UTF-8" (from docs, read
+2026-11-07). The UTF-8 char fetch read exactly there too, in the image, so the rule takes ASCII as well. With it, each
+of these six environments read the emoji exactly through basis in the image; under a rule of UTF-8 alone, the last
+three lost it. CI's job-image reads one from a `varchar(max)` through basis in the image, under the image's own locale,
+and fails if it is lost.
 
 ## 3. Writing
 
@@ -202,10 +213,6 @@ primary key is refused: "is of a type that is invalid for use as a key column in
   value binds as SQL NULL, never as the text `null`, which the type refuses. polars' `struct.json_encode()` writes the
   text `null` for a null struct, so the null has to be kept explicitly.
 - The write path stays as it is: no bulk copy, no table-valued parameters, no change to staging.
-- **Found by the fix, after the spike.** In a call with a string longer than 4,000 UTF-16 units, `executemany` inserts
-  every row and sets `rowcount` to 1, so basis's count check fails the publish: "the insert into T wrote 1 rows, and
-  the run computed 5: nothing is committed". A `json` document is often that long, so step 5.5 needs basis's writes to
-  count such rows another way.
 - The check of a plan refuses a `json` column as an upsert key, or in a delete by values, before anything connects.
 - basis turns errors 13609, 1007, 13645 and 13646 into one ERROR line naming the table and the column. One bad row fails
   its whole `executemany` call, so the server's error cannot name the row; basis's encoder checks the limits that can
@@ -380,8 +387,7 @@ print(tuple(cursor.fetchone()))  # ('["😀"]', '["😀"]')
 ```
 
 Found by basis-core's fix, after the spike, with the same versions against SQL Server 2022: `fetchone` loses a 4-byte
-character too, where it straddles the driver's chunks of 4,095 UTF-16 units; and `executemany`'s `rowcount` is 1 for a
-call with a string longer than 4,000 UTF-16 units, though it inserts every row.
+character too, where it straddles the driver's chunks of 4,095 UTF-16 units.
 
 ```python
 connection.cursor().execute("CREATE TABLE t2 (id int PRIMARY KEY, v varchar(max) COLLATE Latin1_General_100_BIN2_UTF8)")
@@ -389,8 +395,6 @@ connection.cursor().execute("INSERT INTO t2 VALUES (1, ?)", ("a" * 4094 + "\U000
 cursor = connection.cursor()
 cursor.execute("SELECT v FROM t2")
 print(repr(cursor.fetchone()[0][4090:]))  # 'aaaab'
-cursor.executemany("INSERT INTO t2 VALUES (?, ?)", [(2, "x"), (3, "x" * 4001), (4, "x")])
-print(cursor.rowcount)  # 1, and the table holds all three
 ```
 
 ## The probe

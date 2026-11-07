@@ -310,6 +310,23 @@ jobs:
           for script in ("tables.sql", "ledger.sql"):
               cursor.execute((Path(os.environ["RUNNER_TEMP"]) / script).read_text(encoding="utf-8"))
           PY
+      - name: Read an emoji from a varchar(max) through basis in the image, under the image's own locale
+        # The driver's default drops it (docs/spikes/sqlserver-json.md); basis-core fetches char data as UTF-8 where the
+        # locale makes that exact, which the image's must.
+        run: |
+          docker run --rm -i --network host --env "DATABASE=$SERVER;Database=loads" --entrypoint python loads - <<'PY'
+          import locale, os, sys
+          from basis.core.databases import open_database
+          from basis.core.databases.mssql import fetches_char_as_utf8
+          from basis.core.settings import GivenSettings
+          text = '["\U0001f600"] Zoë 日本 \U00020000'
+          database = {"kind": "mssql", "connection_string": os.environ["DATABASE"], "isolation": "read_committed", "timeout_s": 60, "max_rows": 10}
+          with open_database(GivenSettings(databases={"loads": database}), "loads").reading() as reader:
+              read = reader.fetch(f"SELECT CAST(N'{text}' COLLATE Latin1_General_100_CI_AS_SC_UTF8 AS varchar(max)) AS v", None, what="the check").item()
+          where = {"LC_CTYPE": locale.setlocale(locale.LC_CTYPE), "encoding": locale.getencoding(), "utf8": fetches_char_as_utf8(sys.platform, locale.getencoding())}
+          assert read == text, (where, read)
+          print(where, ascii(read))
+          PY
       - name: Run the example job in the image, and publish it
         run: |
           cd "$RUNNER_TEMP"
