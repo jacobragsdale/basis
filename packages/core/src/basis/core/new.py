@@ -4,12 +4,14 @@ basis packages come from, so a new repo matches the basis version that made it. 
 import json
 import re
 import subprocess
+import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from basis.core import hooks
 from basis.core.errors import BasisError
@@ -37,6 +39,10 @@ class NoReleaseError(BasisError, LookupError):
     """A repo made with neither an index nor a checkout, by a basis that has no release to take its packages from."""
 
 
+class NotInstalledError(BasisError, LookupError):
+    """A distribution that is not installed, so where it came from cannot be read."""
+
+
 @dataclass(frozen=True)
 class Commit:
     """The commit of a git repository holding basis that a part's package was installed from, as `uvx --from
@@ -53,7 +59,8 @@ class Installed(Enum):
     """Where a part's package was installed from, when not from a git commit."""
 
     INDEX = "an index"
-    """As `uvx NAME` installs it. uv records no direct URL for a package from an index (PEP 610), so not which index."""
+    """As `uvx NAME` installs it, or from a `--find-links` folder: uv records no direct URL for either (PEP 610), so not
+    which."""
     FILES = "a folder or an archive"
     """Such as a checkout's member, installed editable, a wheel's file, or another version control system's checkout."""
 
@@ -62,8 +69,9 @@ def installed_from(name: str) -> Commit | Installed:
     """The commit the installed distribution `name` came from, or else whether it came from an index."""
     try:
         recorded = distribution(name).read_text("direct_url.json")
-    except PackageNotFoundError:
-        return Installed.FILES
+    except PackageNotFoundError as error:
+        msg = f"{name} is not installed here, so where its new repo's basis packages come from cannot be read: reinstall {name}, or give --index or --framework-path"
+        raise NotInstalledError(msg) from error
     if recorded is None:
         return Installed.INDEX
     commit = commit_of(recorded, name)
@@ -121,9 +129,10 @@ def sources(distributions: Mapping[str, str], *, version: str, index: str | None
     """The `pyproject.toml` lines that say where a repo's basis packages come from: `index`; a checkout of basis at
     `checkout`, installed editable; or, with neither, where the part was installed from, which `installed` reads only
     then. From git, that is the release's tag when uvx was given `version`'s tag, and otherwise the commit, since a
-    branch or another tag moves on, and a new repo matches what made it. From a folder or an archive, it is basis's
-    GitHub repository at `version`'s tag, which needs a release. From an index it is refused: uv does not record which
-    index, and a new repo would take its basis packages from somewhere other than that feed, such as public GitHub.
+    branch or another tag moves on, and a new repo matches what made it; `install` checks that the tag still names that
+    commit. From a folder or an archive, it is basis's GitHub repository at `version`'s tag, which needs a release.
+    From an index or a `--find-links` folder it is refused: uv does not record which, and a new repo would take its
+    basis packages from somewhere other than that feed, such as public GitHub.
     `distributions` are the part's packages, by name, each with its folder in a checkout. basis-core is not among them:
     no repo depends on it by name, and each part's own workspace source brings it from the same checkout or commit, so
     a source for it would go unused.
@@ -146,10 +155,12 @@ def sources(distributions: Mapping[str, str], *, version: str, index: str | None
         ref = f'tag = "v{version}"' if origin.revision == f"v{version}" else f'rev = "{origin.commit}"'
         lines = [f'{name} = {{ git = "{origin.url}", subdirectory = "{folder}", {ref} }}' for name, folder in distributions.items()]
     elif origin is Installed.INDEX:
-        name = next(iter(distributions))
+        name, folder = next(iter(distributions.items()))
+        ref = "" if version == UNRELEASED else f"@v{version}"
         msg = (
-            f"{name} came from an index, and uv does not record which, so the new repo cannot take its basis packages from the same feed:"
-            f" pass --index with the feed's URL, as `uvx {name} new repo NAME --index URL` does"
+            f"{name} was installed from an index or a --find-links folder, which uv does not record, so the new repo cannot take its basis packages"
+            f" from the same place: rerun the same command with `--index URL`, naming the feed, or install {name} from git,"
+            f" as `uvx --from 'git+{GIT}{ref}#subdirectory={folder}'` does"
         )
         raise NewError(msg)
     elif version == UNRELEASED:
@@ -183,11 +194,41 @@ def render(text: str, values: Mapping[str, str]) -> str:
 
 
 def install(repo: Path) -> None:
-    """Initialise git, point it at the repo's hooks, and install a new repo's dependencies; its first commit is the
-    author's."""
+    """Initialise git, point it at the repo's hooks, install a new repo's dependencies, and check that each tag its
+    basis packages come from names the commit that made it (`check_tags`); its first commit is the author's."""
     run(["git", "init", "--quiet", "--initial-branch=main"], repo)
     hooks.ensure(repo)
     run(["uv", "sync", "--quiet"], repo)
+    check_tags(repo)
+
+
+def check_tags(repo: Path, installed: Callable[[str], Commit | Installed] = installed_from) -> None:
+    """Refuse a new repo whose uv.lock takes a package from a git tag at another commit than the one that package was
+    installed from here, to make the repo: a tag moved since, or a fork's tag of the same name. A package from no tag,
+    or not installed from git here, is not checked."""
+    packages: object = tomllib.loads((repo / "uv.lock").read_text(encoding="utf-8")).get("package")
+    for entry in packages if isinstance(packages, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        name, source = entry.get("name"), entry.get("source")
+        git = source.get("git") if isinstance(source, dict) else None
+        if not isinstance(name, str) or not isinstance(git, str):
+            continue
+        url, _, locked = git.partition("#")  # URL?subdirectory=FOLDER&tag=TAG#COMMIT, as uv locks a git source
+        tags = parse_qs(urlsplit(url).query).get("tag", [])
+        if not tags:
+            continue
+        try:
+            origin = installed(name)
+        except NotInstalledError:
+            continue
+        if isinstance(origin, Commit) and origin.commit != locked:
+            msg = (
+                f"the new repo's uv.lock takes {name} from tag {tags[0]} at commit {locked}, and the {name} installed here, which made it, came from commit {origin.commit},"
+                f" so the tag has moved since, or names another repository's commit: delete {repo}, and make it again with `@{origin.commit}`"
+                f" in place of `@{tags[0]}` in the same command, or find out where the tag points"
+            )
+            raise NewError(msg)
 
 
 def run(argv: list[str], cwd: Path) -> None:
