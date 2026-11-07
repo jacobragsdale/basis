@@ -12,7 +12,7 @@ _PACKAGE = Path(__file__).parent
 
 def agent_files() -> AgentFiles:
     block = (_PACKAGE / "templates" / "agents.md").read_text(encoding="utf-8").replace("{version}", VERSION)
-    return AgentFiles("basis-job", "etl", block, core_sync.skills(_PACKAGE / "skills"))
+    return AgentFiles("basis-job", "etl", block, core_sync.skills(_PACKAGE / "skills"), formerly=("etl-framework",))
 
 
 def stale(repo: Path) -> list[Path]:

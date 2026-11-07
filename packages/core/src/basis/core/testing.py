@@ -14,10 +14,12 @@ FORBIDDEN = (
     "basis.core.databases", "basis.core.new", "basis.core.publish", "basis.core.runs", "basis.core.settings",
     "basis.core.snapshots", "basis.core.storage", "basis.core.sync", "basis.core.testing", "mssql_python", "oracledb",
     "pyodbc", "pymssql", "cx_Oracle", "sqlalchemy", "psycopg", "psycopg2", "snowflake", "httpx", "requests", "urllib3",
-    "aiohttp", "pyarrow.fs", "boto3", "azure",
+    "aiohttp", "pyarrow", "boto3", "azure",
 )  # fmt: skip
 """What a part's pure code may not reach through its imports: basis-core's I/O, a database driver, an HTTP client, or
-storage. Each part adds its own run loop."""
+storage. Each part adds its own run loop. An installed package is named whole, since an import graph records only an
+external package's top-level name: `pyarrow`, whose `fs` reads and writes files, rather than `pyarrow.fs`, which no
+graph holds. Pure code needs no pyarrow of its own: its part hands it frames, such as basis-job's polars."""
 
 
 class ContractError(AssertionError):
@@ -28,8 +30,8 @@ def import_chains(module: str, *, packages: Iterable[str], forbidden: Iterable[s
     """Every shortest chain of imports from `module` to what `forbidden` lists, in a graph of `module`'s package and
     `packages`, built on each check, so it is never stale. basis's packages are portions of one namespace, which a graph
     of installed packages collapses to `basis`, so each is named. `lazy` lists imports that load on first use, which
-    the code checked never makes."""
-    graph = grimp.build_graph(*dict.fromkeys([package_of(module), *packages]), include_external_packages=True, exclude_type_checking_imports=True)
+    the code checked never makes. grimp's cache stays off, so no `.grimp_cache` folder appears in a repo."""
+    graph = grimp.build_graph(*dict.fromkeys([package_of(module), *packages]), include_external_packages=True, exclude_type_checking_imports=True, cache_dir=None)
     for importer, imported in lazy:
         if graph.direct_import_exists(importer=importer, imported=imported):
             graph.remove_import(importer=importer, imported=imported)

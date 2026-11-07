@@ -21,6 +21,8 @@ its docs.
 - A step marked **(work)** needs the firm's environment. Hand it to the maintainer as the commands to run and what to
   send back.
 - Write "the firm", never a firm's real name, and use placeholder names in examples. This repo is public.
+- grimp's and import-linter's caches stay off (`cache_dir=None`, `lint-imports --no-cache`), here and in generated
+  repos: their folders clutter every checkout, and the graphs build fresh in well under a second.
 
 ## Checks
 

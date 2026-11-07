@@ -19,6 +19,8 @@ class AgentFiles:
     """The part's block of `AGENTS.md`, without its markers."""
     skills: dict[str, str]
     """Each skill's `SKILL.md`, by its folder's name."""
+    formerly: tuple[str, ...] = ()
+    """Names the part's block had before, such as `etl-framework`, whose blocks `sync` replaces."""
 
     @property
     def begin(self) -> str:
@@ -42,15 +44,33 @@ def expected(repo: Path, files: AgentFiles) -> dict[Path, str]:
     """Each agent file's path in `repo`, and what it should hold."""
     agents = repo / "AGENTS.md"
     current = agents.read_text(encoding="utf-8") if agents.exists() else "# Agent guide\n\n"
-    if files.begin in current and files.end in current:
-        before, _, rest = current.partition(files.begin)
-        _, _, after = rest.partition(files.end)
-        updated = before + files.marked().rstrip("\n") + after
-    else:
-        updated = current.rstrip("\n") + "\n\n" + files.marked()
-    found = {agents: updated}
+    found = {agents: _agents(current, files)}
     found |= {repo / ".agents" / "skills" / name / "SKILL.md": text for name, text in files.skills.items()}
     return found
+
+
+def _agents(current: str, files: AgentFiles) -> str:
+    """`AGENTS.md` with the part's block current: in place of its own block if it has one, else of a block under a
+    former name; added at the end if it has neither. Any other block under a former name is removed."""
+    spans = [span for name in (files.part, *files.formerly) if (span := _span(current, name)) is not None]
+    if not spans:
+        return current.rstrip("\n") + "\n\n" + files.marked()
+    kept, *dropped = spans
+    updated = current
+    for start, end in sorted([kept, *dropped], reverse=True):  # from the end, so earlier spans keep their places
+        if (start, end) == kept:
+            updated = updated[:start] + files.marked().rstrip("\n") + updated[end:]
+        else:
+            before, after = updated[:start], updated[end:].lstrip("\n")
+            updated = before + after if after else before.rstrip("\n") + "\n"
+    return updated
+
+
+def _span(text: str, name: str) -> tuple[int, int] | None:
+    """Where the block named `name` starts and ends in `text`, from its begin marker through its end marker."""
+    start = text.find(f"<!-- {name}:begin")
+    end = text.find(f"<!-- {name}:end -->", start) if start >= 0 else -1
+    return (start, end + len(f"<!-- {name}:end -->")) if end >= 0 else None
 
 
 def stale(repo: Path, files: AgentFiles) -> list[Path]:

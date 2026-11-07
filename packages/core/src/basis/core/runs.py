@@ -87,7 +87,7 @@ def replaying[P](source: Snapshot, *, name: str, module: str, params: Path | Non
 
 
 def resume(  # noqa: PLR0913 -- the part says what it is and writes, by keyword
-    source: Snapshot, record: RunRecord, *, name: str, targets: Mapping[str, Target], open_database: Callable[[str], Database], version: str, clock: Callable[[], datetime]
+    source: Snapshot, record: RunRecord, *, name: str, targets: Mapping[str, Target], databases: Callable[[str], Database], version: str, clock: Callable[[], datetime]
 ) -> RunRecord:
     """Finish publishing `record`, a run of `name` that committed to some of its databases and failed on another, from
     its snapshot, and save its record. `targets` are where the part writes each output now, which must be where the
@@ -101,7 +101,7 @@ def resume(  # noqa: PLR0913 -- the part says what it is and writes, by keyword
             msg = f"{output_name} is written to {now} now, and the run wrote ({output.database}, {output.table}): resume with the code the run ran"
             raise ValueError(msg)
     publication = publish.Publication(record.run_id, name, record.parsed_interval(), version, False, clock)  # noqa: FBT003 -- a dataclass field, by position
-    publishes = record.publishes | publish.publish(publication, targets, source.changes(), open_database)
+    publishes = record.publishes | publish.publish(publication, targets, source.changes(), databases)
     final = RunRecord.model_validate(record.model_dump() | {"publishes": publishes, "status": status_of(publishes, len({output.database for output in record.outputs.values()}))})
     source.save_record(final)
     return final
@@ -119,7 +119,7 @@ class Regression[D]:
 def regress[D](root: Root, name: str, *, last: int, labels: Mapping[str, str], replay: Callable[[Snapshot], tuple[RunRecord, list[D]]]) -> list[Regression[D]]:
     """Replay `name`'s last `last` published runs whose labels include `labels`, with `replay`, the part's own, and how
     each one's outputs differ. Writes nothing."""
-    chosen = [snapshot for snapshot in snapshots.runs_of(root, name) if (found := snapshot.record()).status == "published" and labels.items() <= found.labels.items()][:last]
+    chosen = [snapshot for snapshot in snapshots.runs_of(root, name) if (record := snapshot.record()).status == "published" and labels.items() <= record.labels.items()][:last]
     start = time.perf_counter()
     found: list[Regression[D]] = []
     for snapshot in chosen:

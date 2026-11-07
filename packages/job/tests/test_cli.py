@@ -52,3 +52,13 @@ def test_the_ledger_ddl_prints_without_a_job(capsys: pytest.CaptureFixture[str])
 
 def test_an_unknown_job_exits_nonzero() -> None:
     assert main(["describe", "no_such_job"]) == 1
+
+
+def test_a_repo_made_before_basis_has_a_release_fails_with_one_error_line_that_names_the_fix(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["new", "repo", "pricing-etl", "prices", "--dir", str(tmp_path)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("ERROR: basis has no release yet")
+    assert captured.err.rstrip("\n").endswith("pass --framework-path with the clone's folder")
+    assert captured.err.count("\n") == 1
+    assert not (tmp_path / "pricing-etl").exists()

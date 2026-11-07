@@ -20,9 +20,9 @@ _FOLDER = "packages/job"
 
 def repo(path: Path, job_name: str, *, index: str | None, framework_path: Path | None, install: bool = True) -> Path:
     """A new repo at `path` with one job, its dependencies installed and git initialised; the first commit is the
-    author's. basis-job and basis-core come from `index`, from a checkout of basis at `framework_path` installed
-    editable, or, with neither, from basis's GitHub repository at this version's tag. `install=False` leaves out
-    `git init` and `uv sync`."""
+    author's. basis-job, and basis-core through it, come from `index`, from a checkout of basis at `framework_path`
+    installed editable, or, with neither, from basis's GitHub repository at this version's tag, which needs a release
+    (see `basis.core.new.sources`). `install=False` leaves out `git init` and `uv sync`."""
     _check_job_name(job_name)
     _, minor, *_ = VERSION.split(".")
     values = {"repo": path.name, "job": job_name, "version": VERSION, "next_minor": str(int(minor) + 1)}

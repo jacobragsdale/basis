@@ -23,16 +23,19 @@ def transform(inputs: Inputs, params: Params) -> Outputs: ...
 
 You need [uv](https://docs.astral.sh/uv/) and git.
 
+basis has no release yet, so a job repo takes basis-job from a checkout of basis:
+
 ```sh
-uvx --from 'git+https://github.com/jacobragsdale/basis@v0.1.0#subdirectory=packages/job' etl new repo pricing-etl prices
+git clone https://github.com/jacobragsdale/basis
+uv run --project basis etl new repo pricing-etl prices --framework-path basis
 cd pricing-etl
 uv run pytest
 ```
 
 The repo holds one job, `jobs/prices/`, copied from the package's example: daily positions from trades. Around it are
 a README that maps each kind of change to the file it goes in, a `Dockerfile`, a `.env.example`, and the agent files
-`etl sync` keeps current. `uv run etl new job NAME` adds a job. To take basis's packages from an internal package index
-instead of GitHub, pass `--index URL`.
+`etl sync` keeps current. `uv run etl new job NAME` adds a job. To take every package from an internal package index
+instead, pass `--index URL`: it replaces PyPI for the whole repo, so it must proxy PyPI.
 
 ## Documentation
 

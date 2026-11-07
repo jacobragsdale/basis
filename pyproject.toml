@@ -109,7 +109,8 @@ markers = [
 
 [tool.coverage.run]
 branch = true  # Statement coverage hides the untaken half of every condition.
-source = ["packages"]
+source = ["packages/core/src/basis", "packages/job/src/basis"]  # each package's portion, not its tests
+omit = ["*/src/basis/*/templates/*"]  # a generated repo's files, which run in that repo
 
 [tool.coverage.report]
 show_missing = true

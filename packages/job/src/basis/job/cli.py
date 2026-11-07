@@ -17,6 +17,7 @@ from typing import Literal
 from basis.core import logs, snapshots
 from basis.core.destination import Dialect
 from basis.core.interval import Interval
+from basis.core.new import NoReleaseError
 from basis.core.settings import Settings
 from basis.core.storage import Root
 from basis.core.tables import Column
@@ -169,6 +170,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     }
     try:
         return handlers[command](namespace)
+    except NoReleaseError as error:  # the caller's to fix, not a defect: one line with the fix, and no traceback
+        sys.stderr.write(f"ERROR: {error}\n")
+        return 1
     except Exception:
         log.exception("etl %s failed", command)
         return 1

@@ -155,7 +155,7 @@ without one.
 | `etl list` | Prints the jobs the installed packages list, by name. |
 | `etl ddl JOB --dialect mssql\|oracle` | Prints `CREATE TABLE` for each of the job's tables. |
 | `etl ddl --ledger TABLE --dialect mssql\|oracle` | Prints `CREATE TABLE` and `CREATE INDEX` for the ledger. |
-| `etl new repo REPO JOB [--dir DIR] [--index URL \| --framework-path PATH]` | Makes a job repo with one job, runs `git init` and `uv sync`. `PATH` is a checkout of basis, the folder that holds `packages/`. Without either option, basis's packages come from its GitHub tag. |
+| `etl new repo REPO JOB [--dir DIR] [--index URL \| --framework-path PATH]` | Makes a job repo with one job, runs `git init` and `uv sync`. `PATH` is a checkout of basis, the folder that holds `packages/`, installed editable. `URL` replaces PyPI for the whole repo, so it must proxy PyPI. Without either option, basis-job comes from basis's GitHub tag for this version, which needs a release: until basis has one, `etl new repo` fails and says to pass `--framework-path`. |
 | `etl new job NAME` | Adds a job to the repo in the working directory. |
 | `etl sync` | Rewrites `AGENTS.md`'s basis-job block and `.agents/skills/etl-*` from the installed version. |
 | `etl docs [PAGE]` | Lists the docs, or prints one. |

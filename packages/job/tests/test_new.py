@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from basis.core.new import NoReleaseError
 from basis.job import new, sync
 
 CHECKOUT = Path(__file__).parents[3]
@@ -25,12 +26,27 @@ def test_a_new_job_is_listed_beside_the_first(tmp_path: Path) -> None:
 
 
 def test_an_edited_block_is_stale_until_synced(tmp_path: Path) -> None:
-    repo = new.repo(tmp_path / "pricing-etl", "prices", index=None, framework_path=None, install=False)
+    repo = new.repo(tmp_path / "pricing-etl", "prices", index=None, framework_path=CHECKOUT, install=False)
     agents = repo / "AGENTS.md"
     agents.write_text(agents.read_text(encoding="utf-8").replace("Rules to keep", "Rules"), encoding="utf-8")
     assert sync.stale(repo) == [agents]
     assert sync.write(repo) == [agents]
     assert sync.stale(repo) == []
+
+
+def test_a_block_that_etl_framework_wrote_is_replaced_not_joined_by_a_second(tmp_path: Path) -> None:
+    repo = new.repo(tmp_path / "pricing-etl", "prices", index=None, framework_path=CHECKOUT, install=False)
+    agents = repo / "AGENTS.md"
+    synced = agents.read_text(encoding="utf-8")
+    agents.write_text(synced.replace("<!-- basis-job:", "<!-- etl-framework:").replace("on basis-job 0.", "on etl-framework 0."), encoding="utf-8")
+    assert sync.write(repo) == [agents]
+    assert agents.read_text(encoding="utf-8") == synced
+
+
+def test_without_a_release_a_repo_needs_a_checkout_or_an_index(tmp_path: Path) -> None:
+    with pytest.raises(NoReleaseError, match="pass --framework-path"):
+        new.repo(tmp_path / "pricing-etl", "prices", index=None, framework_path=None, install=False)
+    assert not (tmp_path / "pricing-etl").exists()
 
 
 @pytest.mark.parametrize("name", ["Prices", "1prices", "_prices", "pri-ces"])

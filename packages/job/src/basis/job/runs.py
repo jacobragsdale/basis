@@ -285,7 +285,7 @@ def resume(job: Job, source: Snapshot, settings: Settings, *, clock: Callable[[]
     if record.status == "published":
         log.info("already published")
         return record
-    final = core_runs.resume(source, record, name=job.name, targets=targets_of(job), open_database=core_runs.opener(settings), version=VERSION, clock=clock)
+    final = core_runs.resume(source, record, name=job.name, targets=targets_of(job), databases=core_runs.opener(settings), version=VERSION, clock=clock)
     _summary(final)
     return final
 

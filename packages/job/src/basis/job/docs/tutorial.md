@@ -7,10 +7,12 @@ Before you start, you need [uv](https://docs.astral.sh/uv/) 0.13 or later, git, 
 
 ## Make a job repo
 
-Make a repo named `pricing-etl` whose first job is `prices`:
+basis has no release yet, so a job repo takes basis-job from a checkout of basis. Clone it, and make a repo named
+`pricing-etl` whose first job is `prices`, beside the clone:
 
 ```sh
-uvx --from 'git+https://github.com/jacobragsdale/basis@v0.1.0#subdirectory=packages/job' etl new repo pricing-etl prices
+git clone https://github.com/jacobragsdale/basis
+uv run --project basis etl new repo pricing-etl prices --framework-path basis
 cd pricing-etl
 ```
 

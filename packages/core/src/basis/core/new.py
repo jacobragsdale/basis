@@ -10,10 +10,16 @@ GIT = "https://github.com/jacobragsdale/basis"
 """Where a repo's basis packages come from when neither an index nor a checkout is given, at the version's tag."""
 FOLDER = "packages/core"
 """basis-core's folder in a checkout of basis."""
+UNRELEASED = "0.0.0"
+"""The version basis carries until its first release, which no tag names."""
 TEMPLATES = Path(__file__).parent / "templates" / "repo"
 """The files every part's repo holds."""
 _DOTTED = {"gitignore", "dockerignore", "env.example", "python-version", "pre-commit-config.yaml"}
 _REPO = re.compile(r"^[a-z0-9][a-z0-9._-]{0,99}$")
+
+
+class NoReleaseError(LookupError):
+    """A repo made with neither an index nor a checkout, by a basis that has no release to take its packages from."""
 
 
 def repo(  # noqa: PLR0913 -- the part says what it adds and where its packages come from, by keyword
@@ -35,25 +41,30 @@ def repo(  # noqa: PLR0913 -- the part says what it adds and where its packages 
 
 def sources(distributions: Mapping[str, str], *, version: str, index: str | None, checkout: Path | None) -> str:
     """The `pyproject.toml` lines that say where a repo's basis packages come from: `index`; a checkout of basis at
-    `checkout`, installed editable; or, with neither, basis's GitHub repository at `version`'s tag. `distributions` are
-    the part's, by name, each with its folder in a checkout, and basis-core, which every part depends on, joins them.
+    `checkout`, installed editable; or, with neither, basis's GitHub repository at `version`'s tag, which needs a
+    release. `distributions` are the part's packages, by name, each with its folder in a checkout. basis-core is not
+    among them: no repo depends on it by name, and each part's own workspace source brings it from the same checkout or
+    commit, so a source for it would go unused.
 
-    An index is not `explicit`, because uv pins only a repo's own dependencies to an explicit index, and basis-core
-    arrives through the part's. uv then takes every package the index holds from it, and only the rest from PyPI."""
+    The index replaces PyPI for the whole repo (`default = true`), so a name the index lacks fails rather than being
+    taken from PyPI, where anyone may publish it; the firm's feed proxies PyPI for every other package."""
     if index is not None and checkout is not None:
         msg = "give --index or --framework-path, not both"
         raise ValueError(msg)
-    folders = {**distributions, "basis-core": FOLDER}
     if index is not None:
-        return f'# basis\'s packages come from this index, as does every other package it holds; the rest come from PyPI.\n[[tool.uv.index]]\nname = "internal"\nurl = "{index}"\n'
+        comment = "# Every package comes from this index, which proxies PyPI; a name it lacks fails, rather than coming from PyPI."
+        return f'{comment}\n[[tool.uv.index]]\nname = "internal"\nurl = "{index}"\ndefault = true\n'
     if checkout is not None:
         root = checkout.resolve()
-        if missing := [folder for folder in folders.values() if not (root / folder / "pyproject.toml").exists()]:
+        if missing := [folder for folder in (*distributions.values(), FOLDER) if not (root / folder / "pyproject.toml").exists()]:
             msg = f"{checkout} is not a checkout of basis: it has no {', '.join(missing)}; give the folder that holds packages/"
             raise FileNotFoundError(msg)
-        lines = [f'{name} = {{ path = "{(root / folder).as_posix()}", editable = true }}' for name, folder in folders.items()]
+        lines = [f'{name} = {{ path = "{(root / folder).as_posix()}", editable = true }}' for name, folder in distributions.items()]
+    elif version == UNRELEASED:
+        msg = f"basis has no release yet, so no tag holds its packages: clone {GIT} and pass --framework-path with the clone's folder"
+        raise NoReleaseError(msg)
     else:
-        lines = [f'{name} = {{ git = "{GIT}", subdirectory = "{folder}", tag = "v{version}" }}' for name, folder in folders.items()]
+        lines = [f'{name} = {{ git = "{GIT}", subdirectory = "{folder}", tag = "v{version}" }}' for name, folder in distributions.items()]
     return "[tool.uv.sources]\n" + "\n".join(lines) + "\n"
 
 

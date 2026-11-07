@@ -28,6 +28,7 @@ import traceback
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from functools import cache
 from pathlib import Path
 from typing import Literal, override
 
@@ -36,6 +37,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _FRAMEWORK = "basis"  # the namespace every basis package is a portion of, whose logger is each one's parent
+_PARTS = ("basis.job",)  # the parts whose frames an error's `where` names, as basis-core's; each joins as it arrives
 _STANDARD = {*vars(logging.makeLogRecord({})), "message", "asctime"}  # LogRecord's own attributes, not `extra` fields
 _bound: dict[str, object] = {}  # fields on every record this process logs; see `bind`
 _included: list[str] = []  # packages besides basis whose loggers log at the configured level; see `include`
@@ -199,10 +201,21 @@ def _headline(error: BaseException) -> str:
 
 def _where(error: BaseException) -> str | None:
     """The deepest frame of `error` in basis, in whichever of its packages, as `basis/job/module.py:line in function`."""
-    spec = importlib.util.find_spec(_FRAMEWORK)
-    folders = [Path(folder) for folder in spec.submodule_search_locations or ()] if spec is not None else []
-    ours = [(frame, folder) for frame in traceback.extract_tb(error.__traceback__) for folder in folders if Path(frame.filename).is_relative_to(folder)]
+    folders = _folders()
+    ours = [(frame, path, folder) for frame in traceback.extract_tb(error.__traceback__) for folder in folders if (path := Path(frame.filename).resolve()).is_relative_to(folder)]
     if not ours:
         return None
-    frame, folder = ours[-1]
-    return f"{Path(frame.filename).relative_to(folder.parent)}:{frame.lineno} in {frame.name}"
+    frame, path, folder = ours[-1]
+    return f"{path.relative_to(folder.parents[1])}:{frame.lineno} in {frame.name}"
+
+
+@cache
+def _folders() -> tuple[Path, ...]:
+    """The folder of each installed basis package, such as `.../basis/core`: the packages themselves, rather than
+    every `basis` folder on the path, which the namespace holds, the working directory's among them."""
+    found = [Path(__file__).resolve().parent]
+    for name in _PARTS:
+        spec = importlib.util.find_spec(name)  # finds the package without importing it, so basis-core imports no part
+        if spec is not None and spec.submodule_search_locations is not None:
+            found.extend(Path(folder).resolve() for folder in spec.submodule_search_locations)
+    return tuple(found)
