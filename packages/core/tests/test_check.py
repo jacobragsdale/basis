@@ -72,6 +72,41 @@ def test_agent_files_that_differ_from_what_the_parts_write_fail_and_say_to_sync(
     assert errors(capsys) == ["ERROR: AGENTS.md, .agents/skills/report-gone do not match what the installed basis writes: run `uv run basis sync`, which rewrites or removes each"]
 
 
+def test_a_file_a_part_makes_that_is_out_of_date_fails_and_says_to_sync(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    def document(version: str) -> str:
+        return f'{{\n  "x-basis": "{sync.MARKER}",\n  "openapi": "{version}"\n}}\n'
+
+    sync.write(repo, [AgentFiles("basis-alpha", "the alpha block\n", {}, made={"openapi.json": lambda: document("3.1.0")})])
+    _, run = runner()
+    assert check(repo, [AgentFiles("basis-alpha", "the alpha block\n", {}, made={"openapi.json": lambda: document("3.2.0")})], run=run) == 1
+    assert errors(capsys) == ["ERROR: openapi.json does not match what the installed basis writes: run `uv run basis sync`, which rewrites or removes each"]
+
+
+def test_a_file_a_part_cannot_make_fails_and_every_other_step_still_runs(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    def fails() -> str:
+        msg = "service accruals does not import"
+        raise sync.SyncError(msg, "fix it")
+
+    ran, run = runner()
+    assert check(repo, [AgentFiles("basis-alpha", "the alpha block\n", {}, made={"openapi.json": fails})], run=run) == 1
+    assert len(ran) == 5
+    assert errors(capsys) == ["ERROR: service accruals does not import: fix it"]
+
+
+def test_a_file_whose_maker_raises_an_import_error_fails_and_every_other_step_still_runs(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    def fails() -> str:
+        msg = "No module named 'accruals'"
+        raise ImportError(msg)
+
+    ran, run = runner()
+    assert check(repo, [AgentFiles("basis-alpha", "the alpha block\n", {}, made={"openapi.json": fails})], run=run) == 1
+    assert len(ran) == 5
+    lines = capsys.readouterr().err.splitlines()  # the traceback's record first, where logging is set up
+    assert [line for line in lines if line.startswith("ERROR")] == [
+        "ERROR: openapi.json could not be made, ImportError: No module named 'accruals': a defect; the log record above holds its traceback"
+    ]
+
+
 def test_claude_settings_basis_cannot_read_fail_and_every_other_step_still_runs(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (repo / ".claude/settings.json").write_text("{", encoding="utf-8")
     ran, run = runner()

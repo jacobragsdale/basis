@@ -77,6 +77,8 @@ holds the interface, and its docstring is the reference.
 - A repo declares its parts in its `pyproject.toml`, as `[tool.basis] parts = ["job"]`, and basis never infers one
   from a folder. `basis` loads only those parts, and `basis --help` lists their verbs and each core verb one of them
   gives something to do. A declared part that is not installed, or a verb of one that is not declared, is refused.
+  What the repo declares to a part beyond that is the part's own table, `[tool.basis.PART]`, which the part reads with
+  `basis.core.verbs.table` and checks strictly; the table of a part the repo does not declare is refused.
 - No two declared parts add the same verb, no part adds one twice, and none adds one of core's. A verb that several
   kinds of part share belongs in core, reaching each part through a field of `Part`, as the verbs of `runs` do: core
   parses NAME, and RUN_ID for `resume` and `replay`, and the `Shared` of the part that runs NAME adds and reads the
@@ -96,10 +98,13 @@ holds the interface, and its docstring is the reference.
   of `AGENTS.md` and each part's, `CLAUDE.md`, the deny rules in `.claude/settings.json`, and each file whose first
   lines carry `basis.core.sync.MARKER`: each skill in `.agents/skills/` and its copy in `.claude/skills/` among them,
   whose front matter's `metadata` starts with the marker (`sync.SKILL_KEY`), so a skill is basis's whatever its name
-  and whether or not the part that wrote it is still installed. It writes them with LF line endings, removes those
-  nothing writes now, and `basis check` reports any that differ, byte for byte. A part adds its lines of the
-  Dockerfile as its `AgentFiles.image`, and a repo its Debian packages as `[tool.basis] apt-packages`. `sync.plan`
-  works this out once per call.
+  and whether or not the part that wrote it is still installed, and each file a part makes from the repo's own code
+  (`AgentFiles.made`), such as an API's `openapi.json`, whose first key is the marker. It writes them with LF line
+  endings, removes those nothing writes now, and `basis check` reports any that differ, byte for byte. A part makes a
+  file only at a path relative to the repo, outside the folders basis never reads, that neither basis nor another part
+  writes, and a file it cannot make is one `ERROR` line. A part adds its lines of the Dockerfile as its
+  `AgentFiles.image`, and a repo its Debian packages as `[tool.basis] apt-packages`. `sync.plan` works this out once
+  per call.
 - A file of the repo's own at a path basis writes (one without the marker, a skill's `SKILL.md` among them, a
   `CLAUDE.md` holding anything else, or settings with none of basis's rules) is left alone, and a file basis cannot
   read, such as settings that are not JSON, is one `ERROR` line; every other file is still checked and written.

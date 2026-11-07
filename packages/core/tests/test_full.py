@@ -256,9 +256,9 @@ def test_a_qa_tier_that_refuses_or_a_qa_run_that_fails_fails_the_check(declared:
 def test_review_prints_what_regress_and_the_qa_tier_found_on_the_commit_checked(declared: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", str(declared))
     _, runs = regressing(CHANGED, SAME)
-    part = Part(runs=runs, qa=qa_part().qa, contract=lambda _: "- `GET /prices`: `price` is now a decimal")
+    part = Part(runs=runs, qa=qa_part().qa, contract=lambda _: "Changed since v0.1.0, compatibly.\n\n- `GET /prices`: `price` is now a decimal")
     assert checked(declared, part) == 0
-    capsys.readouterr()
+    assert "basis check --full: the alpha part's contract: Changed since v0.1.0, compatibly, as `uv run basis review` shows" in capsys.readouterr().err
     assert review.review(declared, "HEAD") == 0
     head = clone.of(declared)
     assert head is not None
@@ -267,7 +267,7 @@ def test_review_prints_what_regress_and_the_qa_tier_found_on_the_commit_checked(
     assert f"`basis check --full` passed on commit `{commit}`, on 2026-11-07 14:02 UTC, with basis-core {version('basis-core')}" in printed
     assert "| prices | `R1` | prices: upsert: 1 changed (price 1) |" in printed
     assert "| alpha | prices | `Q1` | published: prices (3 inserted) |" in printed
-    assert "### The alpha contract\n\n- `GET /prices`: `price` is now a decimal" in printed
+    assert "### The alpha contract\n\nChanged since v0.1.0, compatibly.\n\n- `GET /prices`: `price` is now a decimal" in printed
     assert f"\n- basis-core {version('basis-core')}\n" in printed
 
 
@@ -292,3 +292,19 @@ def test_a_record_is_kept_where_every_worktree_of_the_clone_finds_it(repo: Path,
     git(repo, "worktree", "add", "--quiet", "--detach", str(tmp_path / "other"), "HEAD")
     assert checked(tmp_path / "other", Part()) == 0
     assert record(repo).commit == git(repo, "rev-parse", "HEAD").strip()
+
+
+@pytest.mark.parametrize(
+    ("diff", "line"),
+    [
+        ("No earlier release to compare with.", "No earlier release to compare with"),
+        ("## Changed since v0.1.0\n\n- `GET /prices`: added", "Changed since v0.1.0"),
+        ("- `GET /prices`: `price` is now a decimal", "`GET /prices`: `price` is now a decimal"),
+        ("\n\n- `GET /prices`: added", "changed"),
+        ("", "changed"),
+    ],
+    ids=["a-sentence", "a-heading", "a-list-item", "a-blank-first-line", "empty"],
+)
+def test_the_contract_line_is_its_diffs_plain_first_line(declared: Path, capsys: pytest.CaptureFixture[str], diff: str, line: str) -> None:
+    assert checked(declared, Part(contract=lambda _: diff)) == 0
+    assert f"basis check --full: the alpha part's contract: {line}, as `uv run basis review` shows" in capsys.readouterr().err

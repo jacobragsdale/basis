@@ -25,7 +25,6 @@ import logging
 import os
 import sys
 import time
-import tomllib
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property, partial
@@ -39,7 +38,7 @@ from basis.core import check, ddl, doctor, full, hooks, invalid, logs, qa, revie
 from basis.core.destination import Dialect
 from basis.core.errors import BasisError
 from basis.core.logs import utc_now
-from basis.core.verbs import GROUP, Part, Runs, Shared, Verb, error_line, fail, holding
+from basis.core.verbs import GROUP, Part, ProjectError, Runs, Shared, Verb, basis_table, error_line, fail, holding, not_a_table
 
 CORE = ("check", "review", "new", "sync", "upgrade", "doctor", "docs")
 """Core's verbs, which no part may add: in the order `basis --help` lists them. `check`, `review`, `sync`, `upgrade`
@@ -199,21 +198,24 @@ def find(cwd: Path, installed: Installed) -> Repo:
 
 
 def declared(pyproject: Path) -> list[str]:
-    """The parts `pyproject` declares, as `[tool.basis] parts = ["job"]`. A part is never inferred from a folder."""
+    """The parts `pyproject` declares, as `[tool.basis] parts = ["job"]`. A part is never inferred from a folder. A
+    declared part may have a table of its own, `[tool.basis.PART]`, which the part reads (`verbs.table`); one for a
+    part the repo does not declare is refused."""
     try:
-        data: object = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    except tomllib.TOMLDecodeError as error:
-        msg = f"{pyproject} is not TOML: {error}: fix it"
-        raise CommandError(msg) from error
+        table = basis_table(pyproject)
+    except ProjectError as error:
+        raise CommandError(str(error)) from error
     example = '[tool.basis] parts = ["job"], naming each part the repo has, such as job or api'
-    table = _table(_table(data, "tool"), "basis")
     if table is None:
         msg = f"{pyproject} declares no basis parts: add {example}"
         raise CommandError(msg)
-    if unknown := sorted(set(table) - {"parts", sync.APT, qa.KEY}):
-        msg = f"{pyproject}'s [tool.basis] has {', '.join(unknown)}, which basis does not read: remove it; basis reads parts, as {example}, {sync.APT} and {qa.KEY}"
-        raise CommandError(msg)
     names = table.get("parts")
+    listed = {str(name) for name in names} if isinstance(names, list) else set[str]()
+    unknown = sorted(set(table) - {"parts", sync.APT, qa.KEY} - listed)
+    if unread := [key for key in unknown if not isinstance(table[key], dict)]:
+        reads = f"parts, as {example}, {sync.APT}, {qa.KEY}, and a table of each declared part's own, as [tool.basis.job]"
+        msg = f"{pyproject}'s [tool.basis] has {', '.join(unread)}, which basis does not read: remove it; basis reads {reads}"
+        raise CommandError(msg)
     if not isinstance(names, list) or not names or not all(isinstance(name, str) for name in names):
         msg = f"{pyproject}'s [tool.basis] parts is not a list of part names: give {example}"
         raise CommandError(msg)
@@ -221,14 +223,14 @@ def declared(pyproject: Path) -> list[str]:
     if len(set(found)) != len(found):
         msg = f"{pyproject}'s [tool.basis] parts names a part twice: name each once"
         raise CommandError(msg)
+    if unknown:  # tables, since a key that is no table was refused above: each a part's, for a part the repo does not declare
+        part = unknown[0]
+        msg = f"{pyproject} has [tool.basis.{part}], a part's own table, and its [tool.basis] parts does not declare the {part} part: add {part!r} to its parts, or remove the table"
+        raise CommandError(msg)
+    for part in found:
+        if part in table and not isinstance(table[part], dict):
+            raise CommandError(not_a_table(pyproject, part))
     return found
-
-
-def _table(value: object, key: str) -> dict[str, object] | None:
-    if not isinstance(value, dict):
-        return None
-    found = {str(name): entry for name, entry in value.items()}.get(key)
-    return {str(name): entry for name, entry in found.items()} if isinstance(found, dict) else None
 
 
 def _load(entry: EntryPoint) -> Part:
@@ -567,10 +569,10 @@ def _for_doctor(cwd: Path, installed: Installed) -> tuple[Repo | None, str | Non
         return find(cwd, installed), None
     except CommandError as error:
         try:
-            data: object = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-        except tomllib.TOMLDecodeError:
+            declares = basis_table(pyproject) is not None
+        except ProjectError:
             return None, str(error)
-        return None, str(error) if _table(_table(data, "tool"), "basis") is not None else None
+        return None, str(error) if declares else None
 
 
 def _doctor_outside(argv: Sequence[str], unread: str | None) -> int:
