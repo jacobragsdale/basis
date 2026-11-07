@@ -66,8 +66,8 @@ are under `src/optim/`.
   models read it.
 - A source is a module in `sources/` with a settings model and a `fetch(query, params)` and `read_only()`, a name in
   `SourceName`, a field in `Settings`, a line in `open_context`, and a line in `qa_problems` in `pytest_plugin.py`, so
-  the e2e suite checks it for the QA marker. Add its module, and its driver, to the import contract in `pyproject.toml`
-  and to `FORBIDDEN` in `testing.py`. Bound every call with a deadline and `max_rows`.
+  the e2e suite checks it for the QA marker. Add its module, and its driver, to optim's import contract in the basis
+  workspace's root `pyproject.toml` and to `FORBIDDEN` in `testing.py`. Bound every call with a deadline and `max_rows`.
 - A solver is a reader in `optim.cvxpy._READERS` and a name in `SolveSettings.solver`.
 - A command is a handler in `cli.py`, registered with `_command`; its Python twin, if it has one, is in `api.py`.
 - A docs page is a Markdown file in `docs/`, and a link from the README.

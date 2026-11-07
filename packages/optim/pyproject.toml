@@ -85,25 +85,6 @@ max-complexity = 15
 docstring-code-format = true
 skip-magic-trailing-comma = true
 
-[tool.ty.rules]
-blanket-ignore-comment = "error"
-missing-override-decorator = "error"
-missing-type-argument = "error"
-possibly-unresolved-reference = "warn"
-unsound-return-statement = "error"
-unsound-yield = "error"
-unsupported-dynamic-base = "warn"
-
-[tool.ty.environment]
-extra-paths = ["tests"]  # as pytest's `pythonpath`, so test modules can import `builders`
-
-[tool.ty.analysis]
-respect-type-ignore-comments = false  # Require a specific `# ty: ignore[rule]` suppression.
-strict-generic-narrowing = true
-
-[tool.ty.terminal]
-error-on-warning = true
-
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration'"
 testpaths = ["tests", "src/optim/example"]
@@ -131,22 +112,3 @@ exclude_also = [
     "@overload",
 ]
 # Deliberately no fail_under: coverage is a diagnostic here, not a CI gate.
-
-[tool.importlinter]
-root_package = "optim"
-include_external_packages = true  # so a contract can forbid a database driver or an HTTP client
-exclude_type_checking_imports = true  # a hook's type annotation imports nothing at runtime
-
-[[tool.importlinter.contracts]]
-name = "Model code and what workers run do no I/O: the parent loads and saves"
-type = "forbidden"
-source_modules = [
-    "optim.contract", "optim.cvxpy", "optim.models", "optim.decide", "optim.engine", "optim.acceptance", "optim.datasets",
-    "optim.example.model", "optim.data.dataset", "optim.data.frames", "optim.schema",
-]
-forbidden_modules = [
-    "optim.data.loader", "optim.data.cache", "optim.sources.sql", "optim.sources.oracle", "optim.sources.mssql",
-    "optim.sources.rest", "optim.sources.file", "optim.storage", "optim.context", "optim.settings", "optim.snapshots",
-    "optim.runs", "optim.api", "optim.orders", "optim.cli", "httpx", "oracledb", "mssql_python",
-]
-ignore_imports = ["optim -> optim.api"]  # `optim.run` and friends load on first use, which model code never makes

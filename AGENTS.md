@@ -30,8 +30,9 @@ its docs.
 uv sync
 uv run pre-commit install           # once per clone: the commit hook runs the checks below
 uv run pre-commit run --all-files   # ruff, ty with every rule an error, the lockfile, the import contracts, file hygiene
-uv run pytest                       # every package's unit tests, from the root
+uv run pytest                       # basis-core's and basis-job's unit tests, from the root
 uv run pytest -m integration        # real SQL Server and Oracle: packages/job/tests/integration/README.md
+(cd packages/optim && uv run pytest)   # optim's tests, with its own pytest settings until step 3.3 ports it
 ```
 
 To check what `basis-job new repo` generates, from the root:
@@ -42,6 +43,9 @@ cd SCRATCH/pricing-etl && uv run basis new job rates
 uv run basis check                  # the framework files, the hooks, the lockfile, ruff, ty and pytest
 git add --all && git commit -m "First commit"   # the commit hook fixes, formats and runs basis check
 ```
+
+To check what `optim new repo` generates, follow the Checks section of [packages/optim/AGENTS.md](packages/optim/AGENTS.md)
+from `packages/optim`, whose `--optim-path .` is that folder.
 
 A repo whose image builds needs basis from git rather than a checkout: push the branch, and make one with
 `uvx --from 'git+https://github.com/jacobragsdale/basis@BRANCH#subdirectory=packages/job' basis-job new repo loads`,

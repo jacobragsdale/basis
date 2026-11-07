@@ -227,3 +227,46 @@ jobs:
           head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
           assert (run["status"], run["git_sha"]) == ("published", head), (run["status"], run["git_sha"], head)
           PY
+
+  optim-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.13.7"
+      - run: uv sync --locked
+      - run: uv run pytest   # optim's own pytest settings, until step 3.3 ports it
+        working-directory: packages/optim
+
+  optim-generated-repo:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/optim
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.13.7"
+      - run: uv sync --locked
+      - name: Make a model repo from this checkout, with a second model, and run its checks
+        run: |
+          uv run optim new repo sma income --dir "$RUNNER_TEMP" --optim-path .
+          cd "$RUNNER_TEMP/sma"
+          uv run optim new model ladder
+          uv run pytest
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run ty check
+      - name: Run the second model on its fixture, from Python and from the command line
+        working-directory: ${{ runner.temp }}/sma
+        run: |
+          cp .env.example .env
+          uv run python -c 'from optim import run; from models.ladder import model; run(model, data="tests/fixture")'
+          uv run --env-file .env optim run ladder --params models/ladder/params/default.json --data models/ladder/tests/fixture
+      - name: Run it from its main.py, which reads live data and stops, naming the settings to set
+        working-directory: ${{ runner.temp }}/sma
+        run: |
+          if uv run python models/ladder/main.py 2> "$RUNNER_TEMP/live.log"; then echo "main.py ran with no source configured" >&2; exit 1; fi
+          grep --quiet "set OPTIM_MSSQL__" "$RUNNER_TEMP/live.log" || { cat "$RUNNER_TEMP/live.log" >&2; exit 1; }

@@ -1,11 +1,12 @@
 # The basis workspace: every basis package is a member under packages/, and this root is not a package itself. The tool
-# settings here apply to every member.
+# settings here apply to every member, but for optim's ruff, pytest and coverage settings, which came with it and stay in
+# packages/optim/pyproject.toml for now (roadmap step 3.2).
 
 [project]
 name = "basis-workspace"
 version = "0.0.0"
 requires-python = ">=3.14"
-dependencies = ["basis-api", "basis-core", "basis-job"]
+dependencies = ["basis-api", "basis-core", "basis-job", "optim"]
 
 [tool.uv]
 package = false
@@ -18,6 +19,7 @@ members = ["packages/*"]
 basis-api = { workspace = true }
 basis-core = { workspace = true }
 basis-job = { workspace = true }
+optim = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -29,6 +31,10 @@ dev = [
     "pytest-randomly>=5.0.0",
     "ruff==0.17.4",
     "ty==0.0.99",
+    # What ty needs to check optim from here: the COPT solver its reader imports, and the stubs of pandas and scipy.
+    "coptpy>=8.0.7",
+    "pandas-stubs>=3.0.5.260914",
+    "scipy-stubs>=1.18.1.1",
 ]
 
 [tool.ruff]
@@ -83,7 +89,20 @@ skip-magic-trailing-comma = true  # Collapse comma-forced multiline constructs w
 all = "error"  # Every rule is an error, including those ty leaves off by default. Opt out one rule at a time, with a reason.
 
 [tool.ty.environment]
-extra-paths = ["packages/job/tests"]  # as pytest's `pythonpath`, so basis-job's tests can import `builders`
+# basis-job's tests import `builders` from their folder, as pytest's `pythonpath` lets them, and optim's tests import a
+# `builders` of their own. ty resolves a name one way per run, so optim's tests are checked in a run of their own
+# (`ty check --extra-search-path packages/optim/tests packages/optim/tests`, a hook of its own), whose search path
+# finds theirs before this first-party root finds basis-job's.
+root = [".", "packages/job/tests"]
+
+[tool.ty.src]
+exclude = ["packages/optim/tests"]  # checked in a run of their own: see `root` above
+
+[[tool.ty.overrides]]
+# optim's code as portfolio-optim's ty settings left it, which did not turn these rules on. Each goes when optim's code
+# meets it, from its port (roadmap step 3.3) on.
+include = ["packages/optim/**"]
+rules = { truthiness-test-of-none-union = "ignore", unsound-assignment = "ignore" }
 
 [tool.ty.analysis]
 respect-type-ignore-comments = false  # Require a specific `# ty: ignore[rule]` suppression.
@@ -122,7 +141,7 @@ exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "@overload"]
 
 # The import contracts, for every member.
 [tool.importlinter]
-root_packages = ["basis.core", "basis.job", "basis.api"]  # portions of one namespace, each named (spike 0.2)
+root_packages = ["basis.core", "basis.job", "basis.api", "optim"]  # portions of one namespace, each named (spike 0.2)
 include_external_packages = true  # so a contract can forbid a database driver
 exclude_type_checking_imports = true
 
@@ -130,12 +149,12 @@ exclude_type_checking_imports = true
 name = "basis-core imports no part: every part builds on it, and none ships with another"
 type = "forbidden"
 source_modules = ["basis.core"]
-forbidden_modules = ["basis.job", "basis.api"]
+forbidden_modules = ["basis.job", "basis.api", "optim"]
 
 [[tool.importlinter.contracts]]
 name = "Parts import basis-core and never each other, so a change to one cannot break another"
 type = "independence"
-modules = ["basis.job", "basis.api"]
+modules = ["basis.job", "basis.api", "optim"]
 
 [[tool.importlinter.contracts]]
 name = "Job code and the checks it runs through do no I/O: the run loop loads, saves and publishes"
@@ -168,3 +187,18 @@ ignore_imports = [
     "basis.api -> basis.api.app",  # `api.build` loads on first use, which a service's modules never make
     "basis.api -> basis.api.server",  # as does `api.serve`
 ]
+
+# optim's contract, moved here with it unchanged (roadmap step 3.2).
+[[tool.importlinter.contracts]]
+name = "Model code and what workers run do no I/O: the parent loads and saves"
+type = "forbidden"
+source_modules = [
+    "optim.contract", "optim.cvxpy", "optim.models", "optim.decide", "optim.engine", "optim.acceptance", "optim.datasets",
+    "optim.example.model", "optim.data.dataset", "optim.data.frames", "optim.schema",
+]
+forbidden_modules = [
+    "optim.data.loader", "optim.data.cache", "optim.sources.sql", "optim.sources.oracle", "optim.sources.mssql",
+    "optim.sources.rest", "optim.sources.file", "optim.storage", "optim.context", "optim.settings", "optim.snapshots",
+    "optim.runs", "optim.api", "optim.orders", "optim.cli", "httpx", "oracledb", "mssql_python",
+]
+ignore_imports = ["optim -> optim.api"]  # `optim.run` and friends load on first use, which model code never makes

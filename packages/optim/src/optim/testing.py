@@ -119,7 +119,7 @@ def check_imports(model: LoadedModel) -> None:
 
 def _graph(package: str) -> grimp.ImportGraph:
     """The package's import graph, with optim's: built on each check, which takes milliseconds, so it is never stale."""
-    graph = grimp.build_graph(package, "optim", include_external_packages=True, exclude_type_checking_imports=True)
+    graph = grimp.build_graph(package, "optim", include_external_packages=True, exclude_type_checking_imports=True, cache_dir=None)
     if graph.direct_import_exists(importer="optim", imported="optim.api"):
         graph.remove_import(importer="optim", imported="optim.api")  # `optim.run` and friends load on first use, which model code never makes
     return graph
