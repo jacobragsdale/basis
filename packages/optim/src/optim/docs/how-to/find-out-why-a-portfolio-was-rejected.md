@@ -9,7 +9,7 @@ Prerequisites:
 - The run's id, the first line of what the run printed, such as `run 01a169a8-29f0-7511-b24d-c60bc4ad6051`, and the
   portfolio's id.
 - Read access to the run's snapshot. A run from `main.py` saves it in the repo's `snapshots/`. A production run saves
-  it under production's snapshot root: set that root as `OPTIM_SNAPSHOT_ROOT` in your `.env.prod`, with read-only
+  it under production's snapshot root: set that root as `BASIS_SNAPSHOT_ROOT` in your `.env.prod`, with read-only
   access (see [how to run a model on live data](run-on-live-data.md)).
 
 To find out why a portfolio was rejected:
@@ -24,7 +24,7 @@ To find out why a portfolio was rejected:
    P1: not solved: infeasible
    ```
 
-   The same reasons are in `results.reasons`, from a run in `main.py`, and in the snapshot's `reasons.parquet`, one
+   The same reasons are in `results.reasons`, from a run in `main.py`, and in the snapshot's `results/reasons`, one
    row per reason. The table below says what each of the core's reasons means; any other reason is the model's own,
    from its `check`.
 2. Decide the portfolio again. In the model's `main.py`, import `replay` instead of `run`, and replace the call with
@@ -40,7 +40,7 @@ To find out why a portfolio was rejected:
    ```
 
    Run the file. The replay finds the run in the repo's `snapshots/`, or else under the settings file's
-   `OPTIM_SNAPSHOT_ROOT`, decides P1 again with the run's params and the code you have now, prints what the run printed
+   `BASIS_SNAPSHOT_ROOT`, decides P1 again with the run's params and the code you have now, prints what the run printed
    for it, and saves itself as a new run in the repo's `snapshots/`:
 
    ```text
@@ -53,8 +53,8 @@ To find out why a portfolio was rejected:
    For a model that decides portfolios in turn, the portfolios before P1 in its order decide again too, since what they
    reserve is what P1 sees. In place of an id, `run` may be a snapshot's absolute path or its URL.
 3. Look inside. Set a breakpoint on the line a reason names, or in the rule or optimizer code you suspect, and debug
-   `main.py`. The replay decides in this process, where the debugger stops, unless `OPTIM_WORKERS` is above 1; pass
-   `workers=1` to be sure.
+   `main.py`. The replay decides in this process, where the debugger stops, unless `BASIS_OPTIM__WORKERS` is above 1;
+   pass `workers=1` to be sure.
 4. Optional: to see what the portfolio was decided on without a breakpoint, decide it from Python with
    `optim.research.trial`, which hands back the portfolio as `prepare_portfolio` returned it, the market, the cvxpy
    problem and the outcome. Run it from the repo's root:
@@ -62,9 +62,8 @@ To find out why a portfolio was rejected:
    ```python
    from optim.research import trial
    from optim.runs import open_snapshot
-   from optim.storage import Root
 
-   found = trial(open_snapshot(Root.at("snapshots/01a169a8-29f0-7511-b24d-c60bc4ad6051")), "P1")
+   found = trial(open_snapshot("01a169a8-29f0-7511-b24d-c60bc4ad6051"), "P1")
    print(found.outcome.reasons, found.problem.status)
    print(found.portfolio.universe[["security_id", "held", "buyable", "sellable"]])
    ```
@@ -79,9 +78,10 @@ To find out why a portfolio was rejected:
    4           E       0.0    False     False
    ```
 
-5. Tell the data from the model. The snapshot's `inputs/` holds every dataset as the run loaded it, one Parquet file
-   each, such as `inputs/holdings.parquet` and `inputs/controls.parquet`; `run.json` holds the params the run decided
-   with. Compare the portfolio's rows with what the model assumed.
+5. Tell the data from the model. `open_snapshot(...).data` holds every dataset as the run loaded it, such as
+   `.holdings` and `.controls`, and the run's manifest, `snapshots/runs/optim/MODEL/RUN_ID.json`, the params it decided
+   with and, under `datasets`, the Parquet file in `snapshots/objects/` that holds each dataset, such as
+   `inputs/holdings`. Compare the portfolio's rows with what the model assumed.
 6. Try a fix. Replay with other params, `params="params/wider.json"`, or with a change to the model's code, and run the
    file again. In the example above, P1's params capped turnover at 1%, while selling B under its 5% cap needs about
    4%; with `params="params/default.json"`, the replay accepts P1.

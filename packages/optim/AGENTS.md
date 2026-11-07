@@ -17,19 +17,18 @@ are under `src/optim/`.
 | `__init__.py` | The model contract's names, and `optim.run`, `optim.replay` and `optim.sweep`, which load `api.py` on first use. |
 | `api.py` | `run`, `replay` and `sweep`, as a model's `main.py` calls them: paths from the model's folder, a settings file set for the call alone, snapshots in the repo's `snapshots/`, and no orders. |
 | `cli.py` | Every `optim` command, one handler each; `run` exits 0 only when every portfolio was accepted, and is the only thing that writes orders. |
-| `settings.py`, `context.py` | `OPTIM_*` environment variables, and the only place sources, the cache and the orders table open. |
+| `settings.py`, `context.py` | basis-core's `BASIS_*` settings with optim's block, `BASIS_OPTIM__*`, the refusal of optim 0.2.0's `OPTIM_*`, and the only place sources, the cache and the orders table open. |
 | `models.py` | Finding a model by its `optim.models` entry point or module path, and reading its hooks. |
 | `contract.py` | `optim.Params` (strict), `optim.Datasets` (typed dataset attributes, `portfolios` among them), `optim.Decision`, `optim.Metrics`. |
 | `datasets/` | The shared datasets every model reads, `HOLDINGS` and `SECURITIES`, with their SQL. |
 | `data/` | `dataset.py` declares a dataset and `frames.py` validates rows, with no I/O; `loader.py` loads a model's datasets, its portfolios listing first, in batches and read-only transactions, and `cache.py` caches them in files. |
-| `sources/` | Oracle (thin or thick), SQL Server, REST and files: bounded fetches, read-only transactions. |
-| `storage.py` | The snapshot and cache roots, a path or URL each, through `pyarrow.fs`, with atomic writes. |
+| `sources/` | Databases, through basis-core's dialects (`database.py`, which binds a batch's ids as JSON), REST and files: bounded fetches, transactions that only read. |
 | `runs.py` | `run_model`, `replay_run` and `open_snapshot`, which the command line and `api.py` share, and `Run`, a run's result with its tables. |
 | `decide.py` | `decide_all`, which calls a model's hooks for every portfolio, at once or in turn when the model reserves; a hook's error rejects its portfolio with a reason that names the model's line. |
 | `engine.py` | One piece of work per portfolio, in this process or a `spawn` process pool. |
 | `acceptance.py` | Rounding each decision to its securities' increments, and the core's checks of whether it may trade, rounding that moved a trade among them. |
 | `cvxpy.py` | `optim.cvxpy`: solving a model's cvxpy problem the same way everywhere, and reading it as a `Decision`. |
-| `snapshots.py` | The snapshot: `run.json` (`RunInfo`), each dataset as loaded, and the result tables. |
+| `snapshots.py` | Runs in basis-core's run store: the manifest, `runs/optim/MODEL/RUN_ID.json`, with the run's record (`RunInfo`) and the hash of each dataset as loaded and each result table. |
 | `orders.py` | Writing accepted portfolios' orders to the orders table, where the environment configures one. |
 | `research.py` | `sweep`, `regress`, `describe`, and `trial`, which decides one portfolio of a snapshot from Python. |
 | `testing.py` | What a model repo's tests use: `ContractTests`, which each model's `tests/test_contract.py` subclasses, the import check's `FORBIDDEN`, `check_agent_files`, and builders. |
@@ -54,7 +53,8 @@ are under `src/optim/`.
 - Every value is a float; rounding to each security's trading increment makes trades exact.
 - `optim` defines no kind of constraint: a model writes its constraints and objective in cvxpy, in its `optimizer/`,
   and takes their limits from its params and data, as the example shows.
-- A field added to `RunInfo` gets a default, so snapshots from older versions still load.
+- A field added to `RunInfo` gets a default, so runs saved by older versions still load. optim 0.2.0's snapshots, a
+  folder per run with `run.json`, are not read.
 - The example, templates and skills are what every new model repo starts from: after changing one, generate a repo
   and run its own checks (see Checks).
 - Say "portfolio", never "account", except in SQL Server's own table and column names.
@@ -64,19 +64,23 @@ are under `src/optim/`.
 
 - A shared dataset is a row model and a `Dataset` in `datasets/`, with its SQL in `datasets/sql/`. Add one only when two
   models read it.
-- A source is a module in `sources/` with a settings model and a `fetch(query, params)` and `read_only()`, a name in
-  `SourceName`, a field in `Settings`, a line in `open_context`, and a line in `qa_problems` in `pytest_plugin.py`, so
-  the e2e suite checks it for the QA marker. Add its module, and its driver, to optim's import contract in the basis
-  workspace's root `pyproject.toml` and to `FORBIDDEN` in `testing.py`. Bound every call with a deadline and `max_rows`.
+- A database is basis-core's: a dataset names it, and it reads through `sources/database.py`. A source of another kind
+  is a module in `sources/` with a settings model and a `fetch(query, params)` and `read_only()`, a name in `OWN`, a
+  field in `OptimSettings`, a line in `open_context`, and a line in `qa_problems` in `pytest_plugin.py`, so the e2e
+  suite checks it for the QA marker. Add its module, and its client, to optim's import contract in the basis
+  workspace's root `pyproject.toml` and to `FORBIDDEN` in `testing.py`. Bound every call with a deadline and
+  `max_rows`. Plumbing another basis part needs too belongs in basis-core, in a pull request of its own.
 - A solver is a reader in `optim.cvxpy._READERS` and a name in `SolveSettings.solver`.
 - A command is a handler in `cli.py`, registered with `_command`; its Python twin, if it has one, is in `api.py`.
 - A docs page is a Markdown file in `docs/`, and a link from the README.
 
 ## Checks
 
+From the basis workspace's root:
+
 ```sh
 uv run pre-commit run --all-files   # ruff, ty, lockfile, import contracts
-uv run pytest                        # the core's tests and the example's
+uv run pytest                        # every package's tests, optim's and its example's among them
 ```
 
 To check what `optim new` generates, make a repo in a scratch directory that takes `optim` from this checkout, add a
@@ -93,5 +97,5 @@ uv run python models/ladder/main.py   # live data: stops, naming the settings to
 uv run --env-file .env optim run ladder --params models/ladder/params/default.json --data models/ladder/tests/fixture
 ```
 
-`SCRATCH_MODEL` is the first model's name, such as `income`. `snapshots/` is not in git, and a snapshot written before
-a schema change may not load.
+`SCRATCH_MODEL` is the first model's name, such as `income`. `snapshots/` is not in git, and a run saved before a
+schema change may not load.

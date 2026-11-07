@@ -1,5 +1,5 @@
 # The basis workspace: every basis package is a member under packages/, and this root is not a package itself. The tool
-# settings here apply to every member, but for optim's ruff, pytest and coverage settings, which came with it and stay in
+# settings here apply to every member, but for optim's ruff settings, which came with it and stay in
 # packages/optim/pyproject.toml for now (roadmap step 3.2).
 
 [project]
@@ -90,20 +90,9 @@ skip-magic-trailing-comma = true  # Collapse comma-forced multiline constructs w
 all = "error"  # Every rule is an error, including those ty leaves off by default. Opt out one rule at a time, with a reason.
 
 [tool.ty.environment]
-# basis-job's tests import `builders` from their folder, as pytest's `pythonpath` lets them, and optim's tests import a
-# `builders` of their own. ty resolves a name one way per run, so optim's tests are checked in a run of their own
-# (`ty check --extra-search-path packages/optim/tests packages/optim/tests`, a hook of its own), whose search path
-# finds theirs before this first-party root finds basis-job's.
-root = [".", "packages/job/tests"]
-
-[tool.ty.src]
-exclude = ["packages/optim/tests"]  # checked in a run of their own: see `root` above
-
-[[tool.ty.overrides]]
-# optim's code as portfolio-optim's ty settings left it, which did not turn these rules on. Each goes when optim's code
-# meets it, from its port (roadmap step 3.3) on.
-include = ["packages/optim/**"]
-rules = { truthiness-test-of-none-union = "ignore", unsound-assignment = "ignore" }
+# As pytest's `pythonpath`, so basis-job's tests can import `builders`, and optim's `fakes` and `toys`. Their names
+# differ, since ty, like Python, resolves a name one way per run.
+extra-paths = ["packages/job/tests", "packages/optim/tests"]
 
 [tool.ty.analysis]
 respect-type-ignore-comments = false  # Require a specific `# ty: ignore[rule]` suppression.
@@ -116,9 +105,13 @@ error-on-warning = true
 [tool.pytest.ini_options]
 # importlib mode: members' tests share file names (spike 0.2), which pytest's default mode cannot collect. The
 # templates are a generated repo's files, whose tests run in that repo.
-addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration' --ignore=packages/job/src/basis/job/templates"
-testpaths = ["packages/core/tests", "packages/job/tests", "packages/job/src/basis/job/example", "packages/api/tests", "packages/api/src/basis/api/example"]
-pythonpath = ["packages/job/tests"]  # basis-job's test modules share its `builders`
+# pytester runs pytest itself, in the throwaway model repos optim's tests make; a conftest below the root cannot load it.
+addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration' --ignore=packages/job/src/basis/job/templates --ignore=packages/optim/src/optim/templates -p pytester"
+testpaths = [
+    "packages/core/tests", "packages/job/tests", "packages/job/src/basis/job/example", "packages/api/tests", "packages/api/src/basis/api/example",
+    "packages/optim/tests", "packages/optim/src/optim/example",
+]
+pythonpath = ["packages/job/tests", "packages/optim/tests"]  # basis-job's test modules share its `builders`, and optim's its `fakes` and `toys`
 xfail_strict = true  # An xfail that starts passing is a failure, not a silent pass.
 filterwarnings = [
     "error",  # A warning is a defect until someone decides otherwise.
@@ -131,8 +124,8 @@ markers = [
 
 [tool.coverage.run]
 branch = true  # Statement coverage hides the untaken half of every condition.
-source = ["packages/core/src/basis", "packages/job/src/basis", "packages/api/src/basis"]  # each package's portion, not its tests
-omit = ["*/src/basis/*/templates/*"]  # a generated repo's files, which run in that repo
+source = ["packages/core/src/basis", "packages/job/src/basis", "packages/api/src/basis", "packages/optim/src/optim"]  # each package's code, not its tests
+omit = ["*/src/basis/*/templates/*", "*/src/optim/templates/*"]  # a generated repo's files, which run in that repo
 
 [tool.coverage.report]
 show_missing = true
@@ -190,7 +183,8 @@ ignore_imports = [
     "basis.api -> basis.api.server",  # as does `api.serve`
 ]
 
-# optim's contract, moved here with it unchanged (roadmap step 3.2).
+# optim's contract (roadmap step 3.2), with basis-core's I/O forbidden beside optim's own since optim's plumbing became
+# basis-core's (step 3.3).
 [[tool.importlinter.contracts]]
 name = "Model code and what workers run do no I/O: the parent loads and saves"
 type = "forbidden"
@@ -199,8 +193,11 @@ source_modules = [
     "optim.example.model", "optim.data.dataset", "optim.data.frames", "optim.schema",
 ]
 forbidden_modules = [
-    "optim.data.loader", "optim.data.cache", "optim.sources.sql", "optim.sources.oracle", "optim.sources.mssql",
-    "optim.sources.rest", "optim.sources.file", "optim.storage", "optim.context", "optim.settings", "optim.snapshots",
-    "optim.runs", "optim.api", "optim.orders", "optim.cli", "httpx", "oracledb", "mssql_python",
+    "optim.data.loader", "optim.data.cache", "optim.sources.database", "optim.sources.rest", "optim.sources.file",
+    "optim.context", "optim.settings", "optim.snapshots", "optim.runs", "optim.api", "optim.orders", "optim.research",
+    "optim.cli", "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.storage",
+    "basis.core.settings", "basis.core.new", "basis.core.sync", "basis.core.testing", "basis.core.command",
+    "basis.core.check", "basis.core.verbs", "basis.core.hooks", "basis.core.hygiene", "httpx", "oracledb", "mssql_python",
+    "pyarrow",
 ]
 ignore_imports = ["optim -> optim.api"]  # `optim.run` and friends load on first use, which model code never makes

@@ -171,23 +171,23 @@ if __name__ == "__main__":
 - A run from Python saves its snapshot in the repo's `snapshots/`, whichever settings file it reads, and never writes
   orders. `snapshots=` saves elsewhere.
 - `optim.replay(model, run, ...)` reads the run from the repo's `snapshots/` or the settings file's
-  `OPTIM_SNAPSHOT_ROOT`, such as production's in `.env.prod`, or from a path, decides it again with the code you have
+  `BASIS_SNAPSHOT_ROOT`, such as production's in `.env.prod`, or from a path, decides it again with the code you have
   now, and saves the replay in `snapshots/`. `optim.sweep(model, run, params=[...])` returns the comparison table.
-- `workers` defaults to `OPTIM_WORKERS`, or 1, which decides in this process, where a breakpoint stops.
+- `workers` defaults to `BASIS_OPTIM__WORKERS`, or 1, which decides in this process, where a breakpoint stops.
 - A hook's error rejects only its portfolio, and its reason names the line of model code that raised, as in
   `KeyError: 'sector', at models/income/rules/screens.py:14 in exclude_sectors`; the log holds the full traceback.
 
 ## Production
 
 `optim run MODEL --params FILE [--portfolios ...] [--as-of DATE] [--data DIR]` reads the process's environment, saves
-the snapshot under `OPTIM_SNAPSHOT_ROOT`, which it requires, and writes accepted portfolios' orders where
-`OPTIM_ORDERS__*` configures a table. It is the only thing that writes orders. Its paths are the working directory's,
-as any command's are. It and `optim.run` share everything from loading to saving.
+the snapshot under `BASIS_SNAPSHOT_ROOT`, which it requires, and writes accepted portfolios' orders where
+`BASIS_OPTIM__ORDERS__*` configures a table. It is the only thing that writes orders. Its paths are the working
+directory's, as any command's are. It and `optim.run` share everything from loading to saving.
 
 ## Settings files
 
 `.env`, `.env.qa` and `.env.prod` sit at the repo's root, and git ignores all of them but `.env.example`. `main.py`
-picks one with `env=`. `OPTIM_SNAPSHOT_ROOT` is where `optim run` saves and where a replay looks for a run id; a run
+picks one with `env=`. `BASIS_SNAPSHOT_ROOT` is where `optim run` saves and where a replay looks for a run id; a run
 from Python does not need it. A dataset's source that a settings file does not configure fails its load, naming the
 variables to set. No run ever falls back from a source to the fixture.
 

@@ -18,9 +18,10 @@ from datetime import date
 from pathlib import Path
 from types import ModuleType
 
-import grimp
 import pandas as pd
 
+from basis.core import testing as core
+from basis.core.testing import ContractError
 from optim import models, sync
 from optim.contract import LISTING, Datasets, declared
 from optim.data.dataset import Dataset
@@ -32,17 +33,12 @@ from optim.runs import from_dir, portfolios_in, read_params
 from optim.sources.file import FileSource
 
 FORBIDDEN = (
-    "optim.sources.sql", "optim.sources.oracle", "optim.sources.mssql", "optim.sources.rest", "optim.sources.file",
-    "optim.data.loader", "optim.data.cache", "optim.storage", "optim.snapshots", "optim.orders", "optim.runs",
-    "optim.api", "optim.research", "optim.context", "optim.settings", "optim.cli", "oracledb", "mssql_python", "pyodbc",
-    "pymssql", "cx_Oracle", "sqlalchemy", "psycopg", "psycopg2", "snowflake", "httpx", "requests", "urllib3", "aiohttp",
+    "optim.sources.database", "optim.sources.rest", "optim.sources.file", "optim.data.loader", "optim.data.cache",
+    "optim.snapshots", "optim.orders", "optim.runs", "optim.api", "optim.research", "optim.context", "optim.settings",
+    "optim.cli", *core.FORBIDDEN,
 )  # fmt: skip
-"""What a model's code may not reach through its imports: a source, the loader, the cache, outputs, a database driver or
-an HTTP client."""
-
-
-class ContractError(AssertionError):
-    """A model breaks the contract; the message says how, and what to do."""
+"""What a model's code may not reach through its imports: a source, the loader, the cache, outputs, basis-core's I/O,
+a database driver, an HTTP client or storage."""
 
 
 class ContractTests:
@@ -110,19 +106,10 @@ def check_imports(model: LoadedModel) -> None:
     """No module the model's `model.py` imports, directly or not, can reach what `FORBIDDEN` lists. Its `main.py` and
     its tests are not model code: workers never import them."""
     __tracebackhide__ = True
-    graph = _graph(model.module.partition(".")[0])
-    chains = [chain for forbidden in FORBIDDEN if forbidden in graph.modules for chain in graph.find_shortest_chains(importer=model.module, imported=forbidden, as_packages=True)]
-    if chains:
+    # `optim.run` and friends load on first use, which model code never makes
+    if chains := core.import_chains(model.module, packages=["optim", "basis.core"], forbidden=FORBIDDEN, lazy=[("optim", "optim.api")]):
         msg = f"{model.name} can reach I/O through its imports, which model code must not do: data arrives in its Data.\n" + "\n".join(" -> ".join(chain) for chain in sorted(chains))
         raise ContractError(msg)
-
-
-def _graph(package: str) -> grimp.ImportGraph:
-    """The package's import graph, with optim's: built on each check, which takes milliseconds, so it is never stale."""
-    graph = grimp.build_graph(package, "optim", include_external_packages=True, exclude_type_checking_imports=True, cache_dir=None)
-    if graph.direct_import_exists(importer="optim", imported="optim.api"):
-        graph.remove_import(importer="optim", imported="optim.api")  # `optim.run` and friends load on first use, which model code never makes
-    return graph
 
 
 def check_agent_files(repo: Path) -> None:
@@ -185,8 +172,9 @@ def frame(dataset: Dataset, *rows: Mapping[str, object], default: Mapping[str, o
 def data[D: Datasets](cls: type[D], frames: Mapping[str, pd.DataFrame] | None = None, /, *, as_of_date: date = AS_OF, portfolio_id: str | None = None, **more: pd.DataFrame) -> D:
     """A model's `Data` from frames by attribute name, in a mapping or as keywords, such as `holdings=...`; a dataset
     not given has no rows."""
-    frames, datasets = {**(frames or {}), **more}, declared(cls)
-    if unknown := sorted(set(frames) - set(datasets)):
+    given: dict[str, pd.DataFrame] = {**(frames if frames is not None else {}), **more}
+    datasets = declared(cls)
+    if unknown := sorted(set(given) - set(datasets)):
         msg = f"{cls.__qualname__} reads no datasets named {unknown}; it reads {sorted(datasets)}"
         raise TypeError(msg)
-    return cls({dataset.name: frames[name] if name in frames else empty_frame(dataset.row) for name, dataset in datasets.items()}, as_of_date=as_of_date, portfolio_id=portfolio_id)
+    return cls({dataset.name: given[name] if name in given else empty_frame(dataset.row) for name, dataset in datasets.items()}, as_of_date=as_of_date, portfolio_id=portfolio_id)

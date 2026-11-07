@@ -11,22 +11,22 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from fakes import saved
 
 import optim
+from basis.core.storage import Root
 from optim.new import new_model, new_repo
-from optim.snapshots import read_info
-from optim.storage import Root
 
 
 @pytest.fixture
 def environ() -> Generator[None]:
-    """The process's environment, restored after the test, with no `OPTIM_*` variable set."""
-    saved = dict(os.environ)
-    for name in [name for name in os.environ if name.startswith("OPTIM_")]:
+    """The process's environment, restored after the test, with no `BASIS_*` or `OPTIM_*` variable set."""
+    before = dict(os.environ)
+    for name in [name for name in os.environ if name.startswith(("BASIS_", "OPTIM_"))]:
         del os.environ[name]
     yield
     os.environ.clear()
-    os.environ.update(saved)
+    os.environ.update(before)
 
 
 @pytest.fixture
@@ -50,7 +50,7 @@ def test_a_run_reads_paths_from_the_models_folder_and_saves_in_the_repos_snapsho
     assert results.ok
     assert results.decisions["portfolio_id"].tolist() == ["P1", "P2"]  # every portfolio the fixture lists
     assert set(results.trades["portfolio_id"]) == {"P1", "P2"}
-    info = read_info(Root.at(repo / "snapshots") / results.run_id)
+    info = saved(Root.at(repo / "snapshots"), results.run_id).info
     assert str(info.as_of_date) == "2026-10-16"  # the fixture's date
     assert info.params_file.path == str(repo / "models" / "income" / "params" / "default.json")
     assert not (repo.parent / "elsewhere" / "snapshots").exists()
@@ -63,13 +63,24 @@ def test_a_run_that_needs_a_source_and_has_no_settings_file_says_to_copy_env_exa
 
 def test_the_settings_file_above_the_models_folder_is_set_for_the_run_alone_and_writes_no_orders(repo: Path) -> None:
     """The settings file configures an orders table, which a run that wrote orders would fail to reach."""
-    (repo / ".env").write_text("OPTIM_WORKERS=2\nOPTIM_ORDERS__CONNECTION_STRING=Server=nowhere.invalid\nOPTIM_ORDERS__TABLE=trading.orders\n")
+    database = "BASIS_DATABASES__TRADING__"
+    (repo / ".env").write_text(
+        f"BASIS_OPTIM__WORKERS=2\n{database}KIND=mssql\n{database}CONNECTION_STRING=Server=nowhere.invalid\n{database}ISOLATION=snapshot\n{database}TIMEOUT_S=1\n"
+        f"{database}MAX_ROWS=1\n{database}WRITE__CONNECTION_STRING=Server=nowhere.invalid\nBASIS_OPTIM__ORDERS__DATABASE=trading\nBASIS_OPTIM__ORDERS__TABLE=trading.orders\n"
+    )
 
     results = optim.run(income(), data="tests/fixture")
 
     assert results.ok
-    assert read_info(Root.at(repo / "snapshots") / results.run_id).workers == 2
-    assert not [name for name in os.environ if name.startswith("OPTIM_") and name != "OPTIM_LOG_FORMAT"]
+    assert saved(Root.at(repo / "snapshots"), results.run_id).info.workers == 2
+    assert not [name for name in os.environ if name.startswith("BASIS_")]
+
+
+def test_a_settings_file_of_optim_0_2_0_is_refused_naming_each_variables_new_name(repo: Path) -> None:
+    (repo / ".env").write_text("OPTIM_WORKERS=2\n")
+
+    with pytest.raises(ValueError, match="rename OPTIM_WORKERS to BASIS_OPTIM__WORKERS"):
+        optim.run(income(), data="tests/fixture")
 
 
 def test_a_replay_finds_its_run_in_the_repos_snapshots_and_refuses_another_models(repo: Path) -> None:
@@ -107,4 +118,4 @@ def test_main_py_runs_the_model_when_run_as_a_file_from_anywhere_in_worker_proce
     assert ran.returncode == 0, ran.stderr[-3000:]
     assert ran.stdout.splitlines()[0].startswith("run ")
     assert ran.stdout.count("accepted") == 2
-    assert len(list((repo / "snapshots").iterdir())) == 1
+    assert len(list((repo / "snapshots" / "runs" / "optim").glob("*/*.json"))) == 1  # under its entry point's name, or its module's

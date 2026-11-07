@@ -7,7 +7,7 @@ lifetime, and the model reads it as a typed attribute of its `Data`.
 Prerequisites:
 
 - A model repo, with the model's tests passing.
-- The query, and, for a run on live data, read access to the source and its `OPTIM_*` settings in `.env` (see
+- The query, and, for a run on live data, read access to the source and its `BASIS_*` settings in `.env` (see
   [how to run on live data](run-on-live-data.md)). The fixture lets you develop without them.
 
 To add a dataset:
@@ -49,9 +49,11 @@ To add a dataset:
    A field is a `float`, `int`, `str`, `bool`, `date` or `Literal[...]`, or any of them `| None` where a value may be
    missing. Every number is a float or an int: a driver's `Decimal` becomes a float as rows are validated.
    `optim.schema` has field types such as `Id`, `Cusip`, `Rating` and `Weight`.
-3. Declare where it comes from in the `Dataset`. `source` is `"oracle"`, `"mssql"`, `"rest"`, whose `query` is the
-   API's path, such as `"/v1/expected-returns"`, or `"file"`, whose `query` is a file's path or URL, in which
-   `{as_of_date}` is replaced by the business date, as in `"//share/signals/{as_of_date}.parquet"`. The `key` columns
+3. Declare where it comes from in the `Dataset`. `source` is a database's name, as its settings give it, such as
+   `"oracle"` for the database `BASIS_DATABASES__ORACLE__*` configures, whose `query` is a SQL file in that database's
+   dialect; `"rest"`, whose `query` is the API's path, such as `"/v1/expected-returns"`; or `"file"`, whose `query` is a
+   file's path or URL, in which `{as_of_date}` is replaced by the business date, as in
+   `"//share/signals/{as_of_date}.parquet"`. The `key` columns
    must be unique. Leave out `cache` to read the dataset live on every run: one that changes during the day, or is read
    per portfolio, should not be cached. `check=` takes a function of the frame that raises `ValueError` for rules
    across rows, such as weights that must sum to 1.
@@ -123,8 +125,8 @@ To add a dataset:
 
 To confirm it worked, run `uv run pytest`: the contract test loads the new file through the row model and decides every
 portfolio of the fixture with it. `uv run optim describe MODEL` then lists `issuer_scores` under `datasets`, with its
-source and columns. A snapshot saved before the dataset existed has no file for it, so it cannot be replayed with the
-new code.
+source and columns. A run saved before the dataset existed did not save it, so it cannot be replayed with the new
+code.
 
 A dataset declared as `portfolios` is special: its query takes only the business date, it lists the portfolios the
 model manages, one row each, and a run given no portfolios decides every one it lists. The example's

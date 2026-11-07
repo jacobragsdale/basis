@@ -13,12 +13,12 @@ from pydantic import JsonValue
 
 import optim
 import optim.cvxpy
+from basis.core.storage import Root
 from optim.contract import LISTING, Decision, Params, declared
 from optim.decide import Outcome, State, decide_all, finish, prepare_one, turn_of
 from optim.models import HOOKS, LoadedModel
-from optim.runs import Snapshot, open_snapshot, read_params
-from optim.snapshots import read_info, read_results
-from optim.storage import Root
+from optim.runs import Snapshot, read_params, read_snapshot
+from optim.snapshots import Saved, runs_of
 
 
 def sweep(snapshot: Snapshot, variants: Sequence[Path], *, workers: int = 1) -> pd.DataFrame:
@@ -50,14 +50,15 @@ def _row(outcome: Outcome) -> dict[str, object]:
     }
 
 
-def regress(model: LoadedModel, snapshots: Root, *, last: int = 20, labels: dict[str, str] | None = None, workers: int = 1) -> pd.DataFrame:
-    """Replay the model's `last` most recent runs under `snapshots`, replays aside, with the code you have now and each
-    run's own params, and list every change: a portfolio whose acceptance changed, and every trade whose rounded
-    quantity did, with `limit` true where either decision stopped at a time limit, which may stop elsewhere on
+def regress(model: LoadedModel, snapshots: Root | str | Path, *, last: int = 20, labels: dict[str, str] | None = None, workers: int = 1) -> pd.DataFrame:
+    """Replay the model's `last` most recent runs in the run store at `snapshots`, a path or URL, replays aside, with
+    the code you have now and each run's own params, and list every change: a portfolio whose acceptance changed, and
+    every trade whose rounded quantity did, with `limit` true where either decision stopped at a time limit, which may stop elsewhere on
     another machine. `labels` keeps only the runs labelled so, such as `purpose=production`."""
     rows: list[dict[str, object]] = []
-    for root in _recent(model, snapshots, last=last, labels=labels or {}):
-        saved, before = open_snapshot(root), read_results(root)
+    store = snapshots if isinstance(snapshots, Root) else Root.at(snapshots)
+    for run in _recent(model, store, last=last, labels=labels or {}):
+        saved, before = read_snapshot(run), run.results()
         status = dict(zip(before["decisions"]["portfolio_id"], before["decisions"]["status"], strict=True))
         stops = dict(zip(before["decisions"]["portfolio_id"], before["decisions"]["stop"], strict=True))
         trades: dict[str, dict[tuple[str, str], float]] = {}
@@ -73,17 +74,15 @@ def regress(model: LoadedModel, snapshots: Root, *, last: int = 20, labels: dict
     return pd.DataFrame(rows, columns=pd.Index(["run_id", "portfolio_id", "status_before", "status_after", "limit", "security_id", "side", "before", "after"]))
 
 
-def _recent(model: LoadedModel, snapshots: Root, *, last: int, labels: dict[str, str]) -> list[Root]:
-    """The model's runs, replays aside, newest first: run ids are UUIDv7s, which sort by when their runs started."""
+def _recent(model: LoadedModel, snapshots: Root, *, last: int, labels: dict[str, str]) -> list[Saved]:
+    """The model's runs, replays aside, newest first, under its name or its module path, whichever the run gave."""
     found = []
-    for root in reversed(snapshots.children()):
+    for saved in runs_of(snapshots, [model.name, model.module]):
         if len(found) == last:
             break
-        if not (root / "run.json").exists():  # a snapshot still being written, or not a snapshot
-            continue
-        info = read_info(root)
+        info = saved.info
         if (model.module == info.model.module or model.name == info.model.name) and info.replay is None and labels.items() <= info.labels.items():
-            found.append(root)
+            found.append(saved)
     return found
 
 
@@ -136,7 +135,7 @@ def describe(model: LoadedModel) -> dict[str, JsonValue]:
             "source": dataset.source,
             "per_portfolio": dataset.per_portfolio and attribute != LISTING,  # read in batches of portfolios
             "key": list(dataset.key),
-            "cache_seconds": dataset.cache.total_seconds() if dataset.cache else None,
+            "cache_seconds": dataset.cache.total_seconds() if dataset.cache is not None else None,
             "columns": dataset.row.model_json_schema()["properties"],
         }
         for attribute, dataset in declared(model.data).items()

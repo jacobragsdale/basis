@@ -8,7 +8,8 @@
     uv run oracles/optim-0.2.0/record.py compare SNAPSHOT
 
 SNAPSHOT is a run's folder as optim 0.2.0 saves it: `run.json` beside `decisions.parquet`, `trades.parquet`,
-`reasons.parquet` and `metrics.parquet`. `record` writes `OUT/decisions.json` and `OUT/details.json`. `compare` records
+`reasons.parquet` and `metrics.parquet`; or a run of the ported optim, by its manifest in the run store,
+`ROOT/runs/optim/MODEL/RUN_ID.json`. `record` writes `OUT/decisions.json` and `OUT/details.json`. `compare` records
 SNAPSHOT and compares it with the two files beside this script; it exits 1, naming each difference, unless they match. A
 run saved in another layout, such as the ported optim's, needs only a `load` of its own.
 
@@ -50,11 +51,25 @@ class Tables:
 
 
 def load(snapshot: Path) -> Tables:
+    if snapshot.suffix == ".json":
+        return load_manifest(snapshot)
     info = _json(json.loads((snapshot / "run.json").read_bytes()))
     if not isinstance(info, dict) or not isinstance(as_of_date := info.get("as_of_date"), str):
         msg = f"{snapshot / 'run.json'} has no as_of_date: it is not a snapshot of optim 0.2.0"
         raise TypeError(msg)
     tables = {name: [_row(row) for row in pq.read_table(snapshot / f"{name}.parquet").to_pylist()] for name in ("decisions", "trades", "reasons", "metrics")}
+    return Tables(as_of_date=as_of_date, **tables)
+
+
+def load_manifest(manifest: Path) -> Tables:
+    """A run of the ported optim, as basis-core's run store keeps it: its manifest, `ROOT/runs/optim/MODEL/RUN_ID.json`,
+    which names each result table by the hash of its object, `ROOT/objects/HASH.parquet`."""
+    info = _json(json.loads(manifest.read_bytes()))
+    if not isinstance(info, dict) or not isinstance(as_of_date := info.get("as_of_date"), str) or not isinstance(datasets := info.get("datasets"), dict):
+        msg = f"{manifest} has no as_of_date or no datasets: it is not a manifest of the ported optim's"
+        raise TypeError(msg)
+    objects = manifest.parents[3] / "objects"
+    tables = {name: [_row(row) for row in pq.read_table(objects / f"{_text(datasets[f'results/{name}'])}.parquet").to_pylist()] for name in ("decisions", "trades", "reasons", "metrics")}
     return Tables(as_of_date=as_of_date, **tables)
 
 

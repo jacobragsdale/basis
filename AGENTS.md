@@ -30,9 +30,8 @@ its docs.
 uv sync
 uv run pre-commit install           # once per clone: the commit hook runs the checks below
 uv run pre-commit run --all-files   # ruff, ty with every rule an error, the lockfile, the import contracts, file hygiene
-uv run pytest                       # basis-core's and basis-job's unit tests, from the root
-uv run pytest -m integration        # real SQL Server and Oracle: packages/job/tests/integration/README.md
-(cd packages/optim && uv run pytest)   # optim's tests, with its own pytest settings until step 3.3 ports it
+uv run pytest                       # every package's unit tests, optim's among them, from the root
+uv run pytest -m integration        # real SQL Server and Oracle, every package's: packages/job/tests/integration/README.md
 ```
 
 To check what `basis-job new repo` generates, from the root:

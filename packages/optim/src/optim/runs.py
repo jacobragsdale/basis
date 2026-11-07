@@ -20,15 +20,18 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 import optim
-from optim import logs, models
+from basis.core import logs
+from basis.core.storage import Root
+from optim import models
 from optim.contract import LISTING, Datasets, Params, declared
 from optim.data.dataset import Dataset
 from optim.data.loader import Loader, load_data
 from optim.decide import Outcome, decide_all
 from optim.models import LoadedModel
 from optim.orders import Orders
-from optim.snapshots import Code, ModelInfo, ParamsFile, Replayed, RunInfo, checkout, read_info, read_inputs, result_frames, save
-from optim.storage import Root
+from optim.snapshots import Code, ModelInfo, ParamsFile, Replayed, RunInfo, Saved, checkout, result_frames, save
+from optim.snapshots import find as find_run
+from optim.snapshots import read as read_run
 
 log = logging.getLogger(__name__)
 NO_LABELS: Mapping[str, str] = MappingProxyType({})
@@ -154,7 +157,7 @@ def run_model(
         started_at=started_at,
         loaded_at=loaded_at,
         finished_at=clock(),
-        datasets=reads,
+        reads=reads,
         order=decided.order,
         replay=None,
     )
@@ -169,7 +172,8 @@ def run_model(
 class Snapshot:
     """A saved run, opened with the code you have now: its record, its model, the params it ran with, and its data."""
 
-    root: Root
+    saved: Saved
+    """The run as the store keeps it: its manifest, and its result tables."""
     info: RunInfo
     model: LoadedModel
     params: Params
@@ -180,23 +184,30 @@ class Snapshot:
     def portfolios(self, only: Sequence[str] | None = None) -> list[str] | None:
         """`only`, checked against the run's portfolios; without it, those a replay of a subset decided, or None for
         every portfolio of the run."""
-        chosen = list(only) if only else self.info.replay.portfolios if self.info.replay else None
+        chosen = list(only) if only is not None and len(only) > 0 else self.info.replay.portfolios if self.info.replay is not None else None
         if missing := sorted(set(chosen or ()) - set(self.info.portfolios)):
-            msg = f"{len(missing)} portfolios are not in {self.root.location}, e.g. {missing[:5]}"
+            msg = f"{len(missing)} portfolios are not in run {self.info.run_id}, e.g. {missing[:5]}"
             raise LookupError(msg)
         return chosen
 
 
-def open_snapshot(root: Root) -> Snapshot:
-    """A snapshot, read alone: its model by the name the run used if it is installed, else by its module path."""
-    info = read_info(root)
+def open_snapshot(run: str, *, snapshots: str | Path = "snapshots") -> Snapshot:
+    """A saved run, read alone, as `optim.research.trial` takes it: `run` is its id, in the run store at `snapshots`, a
+    path relative to the working directory or a URL, which is the repo's `snapshots/` from the repo's root; or the path
+    or URL of its manifest."""
+    return read_snapshot(read_run(Root.at(run)) if "/" in run or "\\" in run else find_run([Root.at(snapshots)], run))
+
+
+def read_snapshot(saved: Saved) -> Snapshot:
+    """A saved run, opened: its model by the name the run used if it is installed, else by its module path."""
+    info = saved.info
     model = models.load(info.model.name if info.model.name in models.installed() else info.model.module)
     params = model.params.model_validate_json(json.dumps(info.params))
-    return Snapshot(root, info, model, params, model.data(read_inputs(root, declared(model.data)), as_of_date=info.as_of_date))
+    return Snapshot(saved, info, model, params, model.data(saved.inputs(declared(model.data)), as_of_date=info.as_of_date))
 
 
 def replay_run(
-    snapshot: Root,
+    snapshot: Saved,
     snapshot_root: Root,
     *,
     params_file: Path | None = None,
@@ -209,7 +220,7 @@ def replay_run(
     params, and save it as a new run under `snapshot_root`. A replay of a subset of portfolios replays that subset; for a
     model that reserves, the portfolios before them in its order decide again too."""
     started_at = clock()
-    saved = open_snapshot(snapshot)
+    saved = read_snapshot(snapshot)
     model, run_id = saved.model, str(uuid.uuid7())
     logs.bind(run_id=run_id, model=model.name)
     log.info("starting replay", extra={"optim_version": optim.__version__, "of": saved.info.run_id, "params": str(params_file) if params_file else "as saved"})
@@ -231,7 +242,7 @@ def replay_run(
         started_at=started_at,
         loaded_at=loaded_at,
         finished_at=clock(),
-        datasets=None,
+        reads=None,
         order=decided.order,
         replay=Replayed(of=saved.info.run_id, portfolios=only),
     )

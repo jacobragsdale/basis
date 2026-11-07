@@ -15,6 +15,7 @@ from typing import Protocol, Self, overload
 
 import pandas as pd
 
+from basis.core.tables import IDENTIFIER
 from optim.data.frames import validate_columns
 from optim.schema import Row
 from optim.sources import Columns, SourceName
@@ -33,14 +34,21 @@ class Dataset:
     """Names its frame and its snapshot file: unique among a model's datasets."""
     row: type[Row]
     source: SourceName
+    """A database's name, as `BASIS_DATABASES__NAME__*` configures it, or `rest` or `file`."""
     query: str | Path
-    """A SQL file for a database, a path for a REST API, or a file's path or URL for `file`."""
+    """A SQL file, in the database's own dialect, for a database; a path for a REST API; or a file's path or URL for
+    `file`."""
     key: tuple[str, ...]
     """Columns whose values no two rows share."""
     cache: timedelta | None = None
     """How long a cache entry stays fresh; None reads it live on every load. `optim warm` fills every cached dataset."""
     check: Callable[[pd.DataFrame], None] | None = None
     """Rules across rows, which raise `ValueError` on rows that disagree."""
+
+    def __post_init__(self) -> None:
+        if not IDENTIFIER.match(self.source):
+            msg = f"dataset {self.name} reads from {self.source!r}: a source is rest, file, or a database's name, of lower-case letters, digits and underscores"
+            raise ValueError(msg)
 
     @overload
     def __get__(self, instance: None, owner: type) -> Self: ...

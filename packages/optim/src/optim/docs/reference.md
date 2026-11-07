@@ -115,10 +115,10 @@ Dataset(name, row, source, query, key, cache=None, check=None)
 
 | Field | Type | Description |
 |---|---|---|
-| `name` | `str` | Names its frame, its fixture file and its snapshot file. |
+| `name` | `str` | Names its frame, its fixture file and its dataset in a run's snapshot. |
 | `row` | `type[optim.Row]` | The row model. Field names are column names; each field's annotation sets its dtype and holds its rules. A row model with a `@field_validator` or `@model_validator` is refused. |
-| `source` | `"oracle"`, `"mssql"`, `"rest"` or `"file"` | Where rows come from. |
-| `query` | `str \| Path` | A SQL file for `oracle` and `mssql`, a URL path for `rest`, a Parquet or CSV file's path or URL for `file`. `{as_of_date}` in a file's path becomes the run's date. |
+| `source` | `str` | Where rows come from: a database, by the name its settings give, such as `"mssql"` for `BASIS_DATABASES__MSSQL__*`; or `"rest"` or `"file"`, which no database may be named. A database's name is lower-case letters, digits and underscores. |
+| `query` | `str \| Path` | A SQL file in the database's own dialect for a database, a URL path for `rest`, a Parquet or CSV file's path or URL for `file`. `{as_of_date}` in a file's path becomes the run's date. |
 | `key` | `tuple[str, ...]` | Columns whose values no two rows share; a duplicate fails the load. |
 | `cache` | `timedelta \| None` | How long a cache entry stays fresh; `None` reads the dataset live on every load. |
 | `check` | `Callable[[DataFrame], None] \| None` | Rules across rows, which raise `ValueError` on rows that disagree. |
@@ -126,13 +126,14 @@ Dataset(name, row, source, query, key, cache=None, check=None)
 `per_portfolio` is true when `row` has a `portfolio_id` field. `file(path)` returns the same dataset read from a file,
 uncached.
 
-Every query binds the business date as `as_of_date` (`:as_of_date` for Oracle, `%(as_of_date)s` for SQL Server, a query
-parameter for REST). A per-portfolio dataset other than `portfolios` also binds `portfolios`, a JSON array of up to
-1,000 ids per query, which SQL Server unpacks with `OPENJSON(%(portfolios)s) WITH (id VARCHAR(64) '$')` and Oracle with
-`JSON_TABLE`. Oracle refuses a bind its SQL does not use. A file source filters a per-portfolio file to the batch's
-`portfolio_id`s; a CSV's values are read as text and validated into the row model's types, and an empty field is null.
-Field types for rows are in `optim.schema`: `Id`, `Cusip`, `Isin`, `Currency`, `Price`, `Quantity`, `Weight` and
-`Rating`, an ordered category best first. A `Literal` field becomes an ordered category in its declared order.
+Every query binds the business date as `as_of_date` (`:as_of_date` for an Oracle database, `%(as_of_date)s` for a SQL
+Server one, a query parameter for REST), and reads in a transaction that only reads, at the database's `ISOLATION`. A
+per-portfolio dataset other than `portfolios` also binds `portfolios`, a JSON array of up to 1,000 ids per query, which
+SQL Server unpacks with `OPENJSON(%(portfolios)s) WITH (id VARCHAR(64) '$')` and Oracle with `JSON_TABLE`. Oracle
+refuses a bind its SQL does not use. A file source filters a per-portfolio file to the batch's `portfolio_id`s; a CSV's
+values are read as text and validated into the row model's types, and an empty field is null. Field types for rows are
+in `optim.schema`: `Id`, `Cusip`, `Isin`, `Currency`, `Price`, `Quantity`, `Weight` and `Rating`, an ordered category
+best first. A `Literal` field becomes an ordered category in its declared order.
 
 ## Shared datasets
 
@@ -249,9 +250,9 @@ They run as `optim run`, `optim replay` and `optim sweep` do, through the same c
 |---|---|---|
 | Relative paths | The model's folder's, wherever the process runs | The working directory's |
 | Settings | The settings file `env` names, set in the process for the call alone and restored after it, over the process's environment | The process's environment |
-| Snapshots saved | In the repo's `snapshots/`: the folder beside the nearest `pyproject.toml` above the model's, or `snapshots/` in the working directory without one | Under `OPTIM_SNAPSHOT_ROOT`, which it requires |
-| Orders | Never written | Written where `OPTIM_ORDERS__*` configures a table |
-| Logs | Text, unless `OPTIM_LOG_FORMAT` says otherwise | JSON lines, unless it says otherwise |
+| Snapshots saved | In the repo's `snapshots/`: the folder beside the nearest `pyproject.toml` above the model's, or `snapshots/` in the working directory without one | Under `BASIS_SNAPSHOT_ROOT`, which it requires |
+| Orders | Never written | Written where `BASIS_OPTIM__ORDERS__*` configures a table |
+| Logs | Text, unless `BASIS_LOG_FORMAT` says otherwise | JSON lines, unless it says otherwise |
 | Errors | Raise, with their traceback | Logged once, and exit 1 |
 
 `env` is found in the model's folder or the nearest folder above it that has it, up to the repo's root. A run whose
@@ -273,10 +274,10 @@ Decides portfolios with the model, saves the run, prints what `optim run` prints
 | `as_of` | the fixture's date with `data`, or today in New York | A `date`, or `YYYY-MM-DD`. The fixture's date is `fixture.json`'s, where `data` has one. |
 | `env` | `".env"` | The settings file, which says where each dataset's source is; `None` reads the process's environment alone. |
 | `data` | none | A folder whose files, `NAME.csv` or `NAME.parquet`, replace those datasets' sources, such as `"tests/fixture"`; every other dataset is read from its source. |
-| `workers` | `OPTIM_WORKERS`, or 1 | Processes that decide; 1 decides in this process, where a breakpoint stops. |
-| `labels` | none | Recorded in `run.json`, as `--label` records them. |
-| `snapshots` | the repo's `snapshots/` | Where to save the run: a path, relative to the model's folder, or a URL. |
-| `cache` | on | Reads cached datasets from `OPTIM_CACHE_ROOT`, where it is set; off reads every dataset live. |
+| `workers` | `BASIS_OPTIM__WORKERS`, or 1 | Processes that decide; 1 decides in this process, where a breakpoint stops. |
+| `labels` | none | Recorded in the run's manifest, as `--label` records them. |
+| `snapshots` | the repo's `snapshots/` | The run store to save the run in: a path, relative to the model's folder, or a URL. |
+| `cache` | on | Reads cached datasets from `BASIS_OPTIM__CACHE_ROOT`, where it is set; off reads every dataset live. |
 
 ### `optim.replay`
 
@@ -286,10 +287,10 @@ replay(model, run, *, params=None, portfolios=None, env=".env", workers=None, la
 
 Decides a saved run of the model again, with the code you have now and other params if given, saves it as a new run,
 prints what `optim replay` prints, and returns it. `run` is a run's id, found in the repo's `snapshots/`, then under the
-settings file's `OPTIM_SNAPSHOT_ROOT`, such as production's in `.env.prod`; or a snapshot's path, relative to the model's
-folder, or URL. A run of another model is refused. `params` defaults to the params the run used. `portfolios` decides
-those alone; for a model that reserves, the portfolios before them in its order decide again too. It reads no source
-and writes no orders.
+settings file's `BASIS_SNAPSHOT_ROOT`, such as production's in `.env.prod`; or the path of its manifest, relative to the
+model's folder, or its URL. A run of another model is refused. `params` defaults to the params the run used.
+`portfolios` decides those alone; for a model that reserves, the portfolios before them in its order decide again too.
+It reads no source and writes no orders.
 
 ### `optim.sweep`
 
@@ -299,18 +300,18 @@ sweep(model, run, *, params, env=".env", workers=None, snapshots=None) -> DataFr
 
 Decides a saved run of the model once per params file in `params`, each relative to the model's folder, every file
 validated before any decides, saves nothing, and returns the [sweep table](#optim-sweep). `run` is found as `replay`
-finds it. `workers` defaults to `OPTIM_WORKERS`, or 1.
+finds it. `workers` defaults to `BASIS_OPTIM__WORKERS`, or 1.
 
 ### `Run`
 
 | Attribute | Description |
 |---|---|
-| `run_id` | The run's id, which names its snapshot. |
+| `run_id` | The run's id, which names its manifest. |
 | `ok` | Every portfolio was accepted. |
-| `decisions` | A row per portfolio, as `decisions.parquet`. |
-| `trades` | A row per trade, as `trades.parquet`. |
-| `reasons` | A row per reason a portfolio was rejected, as `reasons.parquet`. |
-| `metrics` | A row per portfolio and metric, as `metrics.parquet`. |
+| `decisions` | A row per portfolio, as the snapshot's `results/decisions`. |
+| `trades` | A row per trade, as `results/trades`. |
+| `reasons` | A row per reason a portfolio was rejected, as `results/reasons`. |
+| `metrics` | A row per portfolio and metric, as `results/metrics`. |
 | `outcomes` | Each portfolio's `Outcome`: `portfolio_id`, `decision` (rounded), `decided` (as the model decided it), `reasons`, `numbers` (`value`, `cash`, `turnover`), `seconds` and `accepted`. |
 | `summary()` | What `optim run` prints: `run RUN_ID`, a row per portfolio, and each reason. |
 
@@ -325,9 +326,9 @@ JSON lines on stderr, and exits 1 on an error, logged once with its root cause. 
 optim run MODEL --params FILE [--as-of DATE] [--portfolios ID ...] [--data DIR] [--label KEY=VALUE] [--workers N] [--no-cache]
 ```
 
-Validates the params, loads the model's data, decides each portfolio, saves the snapshot under `OPTIM_SNAPSHOT_ROOT`,
-which it requires, and writes accepted orders where `OPTIM_ORDERS__*` configures a table. It is the only thing that
-writes orders. Prints `run RUN_ID`, a row per portfolio, and each reason. Exits 0 only when every portfolio was
+Validates the params, loads the model's data, decides each portfolio, saves the snapshot under `BASIS_SNAPSHOT_ROOT`,
+which it requires, and writes accepted orders where `BASIS_OPTIM__ORDERS__*` configures a table. It is the only thing
+that writes orders. Prints `run RUN_ID`, a row per portfolio, and each reason. Exits 0 only when every portfolio was
 accepted.
 
 | Option | Default | Description |
@@ -336,8 +337,8 @@ accepted.
 | `--as-of` | the fixture's date with `--data`, or today in New York | The business date, `YYYY-MM-DD`. The fixture's date is `fixture.json`'s, where `--data`'s folder has one, as for `optim.run`. |
 | `--portfolios` | every portfolio the model lists, or with `--data`, every one in its holdings | Portfolio ids, or `@FILE` with one per line. |
 | `--data` | none | Reads each dataset that has a file in the directory, `NAME.parquet` or `NAME.csv`, instead of its source. |
-| `--label` | none | `KEY=VALUE`, recorded in `run.json`; repeat for more. |
-| `--workers` | `OPTIM_WORKERS`, or 1 | Worker processes. |
+| `--label` | none | `KEY=VALUE`, recorded in the run's manifest; repeat for more. |
+| `--workers` | `BASIS_OPTIM__WORKERS`, or 1 | Worker processes. |
 | `--no-cache` | off | Reads every dataset live. |
 
 ### `optim replay`
@@ -347,9 +348,9 @@ optim replay RUN [--params FILE] [--portfolios ID ...] [--label KEY=VALUE] [--wo
 ```
 
 Decides a saved run again with the code installed now, and other params if given, and saves it as a new run under
-`OPTIM_SNAPSHOT_ROOT`. `RUN` is a run id under `OPTIM_SNAPSHOT_ROOT`, or a snapshot's path or URL. Reads no source and
-writes no orders. A replay of a subset decides that subset; for a model that reserves, the portfolios before them in
-its order decide again too. A replay of a replay of a subset replays that subset. Exit status as `run`.
+`BASIS_SNAPSHOT_ROOT`. `RUN` is a run id under `BASIS_SNAPSHOT_ROOT`, or the path or URL of its manifest. Reads no
+source and writes no orders. A replay of a subset decides that subset; for a model that reserves, the portfolios before
+them in its order decide again too. A replay of a replay of a subset replays that subset. Exit status as `run`.
 
 ### `optim sweep`
 
@@ -368,7 +369,7 @@ defaults to 1. Columns: `variant` (the file's stem), `portfolio_id`, `accepted`,
 optim regress MODEL [--snapshots ROOT] [--last N] [--label KEY=VALUE] [--out FILE] [--workers N]
 ```
 
-Replays the model's `--last` (default 20) most recent runs under `--snapshots` (default `OPTIM_SNAPSHOT_ROOT`), replays
+Replays the model's `--last` (default 20) most recent runs under `--snapshots` (default `BASIS_SNAPSHOT_ROOT`), replays
 aside and only those with every `--label` given, with each run's own params, and writes a row per change: `run_id`,
 `portfolio_id`, `status_before`, `status_after`, `limit` (either decision stopped at a time limit), and for a changed
 trade `security_id`, `side`, `before` and `after`, the rounded quantities. Exits 1 if anything changed.
@@ -407,46 +408,61 @@ leaves `uv sync` out.
 copies the `optim-*` skills into `.agents/skills/`, deleting copies of skills `optim` no longer ships; it prints each
 path it wrote. `optim docs [PAGE]` prints a page of these docs, such as `how-to/add-a-dataset`, or lists them.
 `optim warm MODEL ... [--as-of DATE]` reads every cached dataset the models read whole, the `portfolios` dataset
-included, live, and overwrites its cache entry; it needs `OPTIM_CACHE_ROOT` and exits 1 if any load failed.
+included, live, and overwrites its cache entry; it needs `BASIS_OPTIM__CACHE_ROOT` and exits 1 if any load failed.
 
 ## Settings
 
-Settings come only from `OPTIM_*` environment variables: on the command line, the process's; from Python, the settings
-file `env` names, over the process's. Nested fields take a double underscore, as in `OPTIM_ORACLE__DSN`. A source that
-is not set cannot be read: a dataset that reads from it fails its load, naming the variables to set.
+Settings come only from `BASIS_*` environment variables: on the command line, the process's; from Python, the settings
+file `env` names, over the process's. Nested fields take a double underscore, as in `BASIS_DATABASES__ORACLE__DSN`.
+A database a dataset names is read once its block, `BASIS_DATABASES__NAME__*`, and its limit,
+`BASIS_OPTIM__DATABASES__NAME__MAX_CONCURRENT`, are set; a source that is not set cannot be read, and a dataset that
+reads from it fails its load, naming the variables to set. A variable optim 0.2.0 read, under `OPTIM_`, is refused,
+naming the variable that replaced it.
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPTIM_SNAPSHOT_ROOT` | none | Where `optim run` saves snapshots, and where a replay finds a run by its id: a path, or a URL `pyarrow.fs` opens, such as `abfs://...`. Required by `optim run`, `optim replay`, and `optim sweep` and `optim regress` given a run id; a run from Python saves in the repo's `snapshots/` instead. |
-| `OPTIM_CACHE_ROOT` | none | The dataset cache, a path or URL; without it nothing is cached. |
-| `OPTIM_WORKERS` | `1` | Worker processes per run, at least 1; `1` decides in the calling process. |
-| `OPTIM_ORACLE__DSN`, `__USER`, `__PASSWORD`, `__MODE` | required with Oracle | `MODE` is `thin` (no client libraries) or `thick`, which loads Oracle Instant Client. |
-| `OPTIM_ORACLE__CLIENT_LIB_DIR` | none | Thick mode: where Oracle Instant Client is, if not on the library path. |
-| `OPTIM_MSSQL__CONNECTION_STRING` | required with SQL Server | The primary, not a readable secondary: holdings must include the trades just booked. The database must allow snapshot isolation. |
-| `OPTIM_REST__URL` | required with REST | The base URL of a JSON API that answers a GET with a list of records. |
-| `OPTIM_<SOURCE>__MAX_CONCURRENT`, `__TIMEOUT_S`, `__MAX_ROWS` | required with the source | Calls open at once, seconds per call, and the most rows a call may return; each at least 1. `TIMEOUT_S` bounds every query, round trip or request, and a database's login too, which never waits more than 30 seconds. `<SOURCE>` is `ORACLE`, `MSSQL` or `REST`. |
-| `OPTIM_ORDERS__CONNECTION_STRING`, `__TABLE` | none | Production only: a login that may insert, and the table accepted orders are inserted into, as `run_id, portfolio_id, security_id, side, quantity`. `TABLE` is `schema.table`. Only `optim run` writes to it. |
-| `OPTIM_ORDERS__TIMEOUT_S` | `60` | Seconds for the orders write. |
-| `OPTIM_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR`, for `optim`'s and models' loggers. |
-| `OPTIM_LOG_FORMAT` | `json`; `text` from Python | `json` lines, or `text` for a person. |
-| `OPTIM_GIT_SHA`, `OPTIM_IMAGE` | none | Set in an image: the commit and image a run records. |
+| `BASIS_SNAPSHOT_ROOT` | none | The run store where `optim run` saves its runs, and where a replay finds a run by its id: a path, or a URL `pyarrow.fs` opens, such as `abfs://...`. Required by `optim run`, `optim replay`, and `optim sweep` and `optim regress` given a run id; a run from Python saves in the repo's `snapshots/` instead. |
+| `BASIS_DATABASES__NAME__KIND` | required with the database | `mssql` or `oracle`. `NAME` is the name a dataset's `source` gives, upper-cased: optim's shared holdings read `mssql`, and its securities `oracle`. |
+| `BASIS_DATABASES__NAME__CONNECTION_STRING` | required with SQL Server | A login that may read. The primary, not a readable secondary: holdings must include the trades just booked. |
+| `BASIS_DATABASES__NAME__DSN`, `__USER`, `__PASSWORD`, `__MODE` | required with Oracle | `MODE` is `thin` (no client libraries) or `thick`, which loads Oracle Instant Client. |
+| `BASIS_DATABASES__NAME__CLIENT_LIB_DIR` | none | Oracle in thick mode: where Oracle Instant Client is, if not on the library path. |
+| `BASIS_DATABASES__NAME__ISOLATION` | required with the database | How a run's reads see it: all at one moment, `snapshot` for SQL Server, which the database must allow, or `read_only` for Oracle; or each query at its own, `read_committed`. |
+| `BASIS_DATABASES__NAME__TIMEOUT_S`, `__MAX_ROWS` | required with the database | Seconds each statement may take, the login included, which never waits more than 30, and the most rows a query may return; each at least 1. |
+| `BASIS_DATABASES__NAME__WRITE__CONNECTION_STRING` | none | The orders database's write login, apart from the one that reads: a login that may insert into the orders table. |
+| `BASIS_OPTIM__DATABASES__NAME__MAX_CONCURRENT` | required with the database | Reads a run has open to the database at once, each a transaction of its own; at least 1. |
+| `BASIS_OPTIM__REST__URL`, `__MAX_CONCURRENT`, `__TIMEOUT_S`, `__MAX_ROWS` | required with REST | The base URL of a JSON API that answers a GET with a list of records; calls open at once, seconds per call, and the most records a call may return, each at least 1. |
+| `BASIS_OPTIM__CACHE_ROOT` | none | The dataset cache, a path or URL; without it nothing is cached. |
+| `BASIS_OPTIM__WORKERS` | `1` | Worker processes per run, at least 1; `1` decides in the calling process. |
+| `BASIS_OPTIM__ORDERS__DATABASE`, `__TABLE` | none | Production only: the database whose write login inserts the orders, and the table they are inserted into, as `run_id, portfolio_id, security_id, side, quantity`. `TABLE` is `schema.table`. Only `optim run` writes to it, each insert bounded by the database's `TIMEOUT_S`. |
+| `BASIS_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR`, for `optim`'s and models' loggers. |
+| `BASIS_LOG_FORMAT` | `json`; `text` from Python | `json` lines, or `text` for a person. |
+| `BASIS_GIT_SHA`, `BASIS_IMAGE` | none | Set in an image: the commit and image a run records. |
 
 ## Snapshots
 
-`ROOT/RUN_ID/` appears only once it is complete, and nothing changes it afterwards. `ROOT` is `OPTIM_SNAPSHOT_ROOT` for
-`optim run` and `optim replay`, and the repo's `snapshots/` for a run from Python.
+Every run is kept in a run store, `ROOT`: `BASIS_SNAPSHOT_ROOT` for `optim run` and `optim replay`, and the repo's
+`snapshots/` for a run from Python. A run is a manifest, a JSON file that holds its record and names each dataset it
+saved by the SHA-256 of its object, a Parquet file the store holds once however many runs save it, so the morning's
+holdings that twenty runs load are stored once. The objects are written first and the manifest last, each under a
+hidden name renamed into place, so a reader never sees half a run.
 
 ```text
-RUN_ID/
-  run.json
-  inputs/<dataset>.parquet   each dataset as loaded, validated on read by the model's row models
-  decisions.parquet          a row per portfolio
-  trades.parquet             a row per trade
-  reasons.parquet            a row per reason a decision was rejected
-  metrics.parquet            a row per portfolio and metric
+ROOT/
+  runs/optim/MODEL/RUN_ID.json   each run's manifest, under the model's name as the run gave it
+  objects/HASH.parquet           each dataset, once
 ```
 
-`run.json`:
+A manifest's `datasets` names its objects:
+
+```text
+inputs/<dataset>     each dataset as loaded, validated on read by the model's row models
+results/decisions    a row per portfolio
+results/trades       a row per trade
+results/reasons      a row per reason a decision was rejected
+results/metrics      a row per portfolio and metric
+```
+
+The manifest's record:
 
 | Key | Value |
 |---|---|
@@ -461,15 +477,16 @@ RUN_ID/
 | `code` | `git_sha`, `image` and `dirty` of the model's code. |
 | `workers` | Worker processes. |
 | `started_at`, `loaded_at`, `finished_at` | UTC times: before loading, once loaded, after the last decision. |
-| `datasets` | Per dataset, its `source`, `read` (`live`, `hit`, `miss` or `refresh`) and `fetched_at`; null for a replay. |
+| `reads` | Per dataset, its `source`, `read` (`live`, `hit`, `miss` or `refresh`) and `fetched_at`; null for a replay. |
 | `order` | For a model that reserves, the order its portfolios decided in; otherwise null. |
 | `replay` | For a replay, `of`, the run it replayed, and `portfolios`, the subset it decided; otherwise null. |
+| `datasets` | Each dataset above, by its object's hash. |
 
-`decisions.parquet` columns: `portfolio_id`, `status` (`accepted` or `rejected`), `trades`, `value` (before trading),
+`results/decisions` columns: `portfolio_id`, `status` (`accepted` or `rejected`), `trades`, `value` (before trading),
 `cash` (after trading), `turnover`, `solved`, `objective`, `solver`, `solver_status`, `stop`, `gap`, `nodes`,
-`iterations`, `solve_seconds` and `seconds`. `trades.parquet`: `portfolio_id`, `security_id`, `side`, `quantity`
-(rounded; 0 where rounding left nothing) and `decided` (as the model decided it). `reasons.parquet`: `portfolio_id`,
-`reason`. `metrics.parquet`: `portfolio_id`, `metric`, `value`.
+`iterations`, `solve_seconds` and `seconds`. `results/trades`: `portfolio_id`, `security_id`, `side`, `quantity`
+(rounded; 0 where rounding left nothing) and `decided` (as the model decided it). `results/reasons`: `portfolio_id`,
+`reason`. `results/metrics`: `portfolio_id`, `metric`, `value`.
 
 ## `optim.testing`
 
@@ -517,14 +534,13 @@ and `MARKET`.
 
 | Function | Returns |
 |---|---|
-| `open_snapshot(root)` (from `optim.runs`) | A `Snapshot`: its `root`, `info` (`run.json`), `model`, `params` and `data`, read with the code you have now. |
+| `open_snapshot(run, *, snapshots="snapshots")` (from `optim.runs`) | A `Snapshot`, read with the code you have now: its `info` (the manifest's record), `model`, `params` and `data`. `run` is a run's id in the run store at `snapshots`, a path relative to the working directory or a URL; or the path or URL of its manifest. |
 | `trial(snapshot, portfolio_id, params=None)` | A `Trial`, deciding one portfolio in this process: `portfolio_id`, `portfolio` (what `prepare_portfolio` returned), `market` (after the reservations of the portfolios before it), `problem` (the cvxpy problem `optim.cvxpy` solved, or `None`) and `outcome`. |
 | `sweep(snapshot, variants, *, workers=1)` | The sweep table, for params files' paths. |
-| `regress(model, snapshots, *, last=20, labels=None, workers=1)` | The regression table, for a loaded model and a `Root`. |
+| `regress(model, snapshots, *, last=20, labels=None, workers=1)` | The regression table, for a loaded model and the run store at `snapshots`, a path or URL. |
 | `describe(model)` | The `optim describe` JSON, for a loaded model. |
 
-`optim.storage.Root.at(location)` opens a path or URL as a `Root`, and `optim.models.load(name)` loads a model by name or
-module path.
+`optim.models.load(name)` loads a model by name or module path.
 
 ## The pytest plugin
 

@@ -13,9 +13,9 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from basis.core.storage import Root
 from optim.data.frames import to_columns
 from optim.sources import Columns, Param
-from optim.storage import Root
 
 
 @dataclass(frozen=True)

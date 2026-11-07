@@ -22,8 +22,8 @@ with a hundred variants of its params without touching production data.
 `optim` is one package that each model repo depends on, rather than a template copied into each repo, because hundreds
 of copies of an engine drift apart. Everything that must stay the same across repos ships in the package and upgrades
 with it: the loop, the shared datasets, the contract tests and the import check, the e2e safeguards, the example the
-generator copies, and the agent guidance `optim sync` writes. A repo depends on a version range, and every `run.json`
-and every run's first log line records the version it ran, so production snapshots show which model runs which
+generator copies, and the agent guidance `optim sync` writes. A repo depends on a version range, and every run's
+manifest and first log line records the version it ran, so production snapshots show which model runs which
 version. The package stays at 0.x until real models run on it in production, since a minor release may still break
 the contract, as 0.2 broke 0.1's.
 
@@ -141,14 +141,18 @@ Every query takes only the as-of date and the portfolio ids, and params never ch
 depends on params, such as which benchmark to track, selects rows after loading. That rule is what makes sweeps
 possible: if a variant's params could change a query, the snapshot would not hold the data that variant needs, and the
 sweep would have to touch production. A run's id is a UUIDv7 the core creates, so ids sort by when their runs started,
-and `run.json` is the record of the run; there is no runs table.
+and the run's manifest is the record of the run; there is no runs table.
 
-The snapshot root is a path or URL read and written through `pyarrow.fs`: the repo's `snapshots/` for a run from
-Python, and `OPTIM_SNAPSHOT_ROOT`, shared storage, in production, so quants and agents can replay production runs by
-id. Moving to Azure Data Lake changes the URL alone. A snapshot is written under a hidden name and renamed whole, so a
-reader never sees half of one, which needs a filesystem that renames: local disk, SMB and NFS mounts, and Data Lake with
-a hierarchical namespace do. Snapshots never go in git, because they hold client holdings, and nothing prunes a repo's
-`snapshots/`: deleting it is the analyst's choice, and safe at any time.
+Runs are kept in a run store, the same one every basis part writes: each run a manifest that names its datasets by the
+hash of their content, and each dataset a Parquet file stored once, however many runs load it, so the morning's
+holdings that twenty runs load take the space of one. The store is a path or URL read and written through
+`pyarrow.fs`: the repo's `snapshots/` for a run from Python, and `BASIS_SNAPSHOT_ROOT`, shared storage, in production,
+so quants and agents can replay production runs by id, and DuckDB can read the manifests and datasets directly to
+query across runs. Moving to Azure Data Lake changes the URL alone. Every file is written under a hidden name and
+renamed into place, a run's datasets before the manifest that names them, so a reader never sees half a run, which
+needs a filesystem that renames: local disk, SMB and NFS mounts, and Data Lake with a hierarchical namespace do.
+Snapshots never go in git, because they hold client holdings, and nothing prunes a repo's `snapshots/`: deleting it is
+the analyst's choice, and safe at any time.
 
 ## The portfolios a model manages
 
@@ -162,25 +166,27 @@ does not list is rejected rather than decided, since an id the model does not ma
 
 ## Loading at the pace of each source
 
-In production a query can take minutes, so a run asks for everything it needs at the start and lets each source set
-the pace. Datasets read whole load concurrently with every batch of per-portfolio datasets, a thousand portfolios a
-batch. Each source has a limit, `OPTIM_<SOURCE>__MAX_CONCURRENT`, which the loader holds as a semaphore around the
-source call alone, so cache hits and validation never wait for a slot. A run then takes about as long as its slowest
-source, not the sum of its queries.
+In production a query can take minutes, so a run asks for everything it needs at the start and lets each source set the
+pace. Datasets read whole load concurrently with every batch of per-portfolio datasets, a thousand portfolios a batch.
+Each source has a limit, `MAX_CONCURRENT` (`BASIS_OPTIM__DATABASES__NAME__MAX_CONCURRENT` for a database), which the
+loader holds as a semaphore around the source call alone, so cache hits and validation never wait for a slot. A run then
+takes about as long as its slowest source, not the sum of its queries.
 
 Reads that depend on each other share a read-only transaction. A portfolio's holdings and its controls are only
 consistent if they come from one moment: a trade booked between the two reads would count a sale but not the control
-that came with it. So each batch's per-portfolio datasets from one source are read in one read-only transaction
-(snapshot isolation on SQL Server, `SET TRANSACTION READ ONLY` on Oracle), which holds one of the source's slots
-throughout and is rolled back at the end. Consistency matters within a portfolio, not across portfolios, so batches
-still load concurrently.
+that came with it. So each batch's per-portfolio datasets from one database are read in one transaction that only reads,
+at the isolation its settings give (snapshot isolation on SQL Server, `SET TRANSACTION READ ONLY` on Oracle), which
+holds one of the database's slots throughout and is rolled back at the end. The databases are read through basis's own
+dialects, the ones its jobs and APIs read through too, so a fix to how one of them begins a transaction reaches every
+part at once. Consistency matters within a portfolio, not across portfolios, so batches still load concurrently.
 
-Every fetch is bounded: rows arrive ten thousand at a time, and a query that returns more than
-`OPTIM_<SOURCE>__MAX_ROWS` fails as soon as it passes the limit, so a query that lost its filter fails fast instead of
-filling the run's memory. The first failed load stops the rest. Batched queries bind a list of ids as one JSON array,
-which the SQL unpacks with `OPENJSON` or `JSON_TABLE`: one bind per batch, no `IN`-list limits, and no SQL built from
-strings. A source the settings do not configure fails its first load, naming the variables to set; no run ever falls
-back from a source to a fixture, because a real-money run must never decide on test data without saying so.
+Every fetch is bounded: each statement by its database's `TIMEOUT_S`, rows arrive ten thousand at a time, and a query
+that returns more than its database's `MAX_ROWS` fails as soon as it passes the limit, so a query that lost its filter
+fails fast instead of filling the run's memory. The first failed load stops the rest. Batched queries bind a list of ids
+as one JSON array, which the SQL unpacks with `OPENJSON` or `JSON_TABLE`: one bind per batch, no `IN`-list limits, and
+no SQL built from strings. A source the settings do not configure fails its first load, naming the variables to set; no
+run ever falls back from a source to a fixture, because a real-money run must never decide on test data without saying
+so.
 
 Rows are validated column by column, one pydantic `TypeAdapter(list[T])` per field, which is about five times faster
 than a model per row. The constraint is that field rules must live in the annotation, so a row model with a
@@ -190,11 +196,11 @@ rule can write `rating <= "A-"`.
 ## The file cache
 
 A dataset that may be cached declares how long an entry stays fresh. The cache is a Parquet file per entry under
-`OPTIM_CACHE_ROOT`, written through `pyarrow.fs` as snapshots are, with the time its source was read in the file. A
-laptop points the root at a local folder and production at shared storage, so every run shares the entries, and
-`optim warm` fills them before the day's first run. Without the setting, nothing is cached. Redis, which the engine
-used before, would be infrastructure in every environment, bounded by memory, and awkward on Windows laptops; the
-cache sits behind a small interface, so another backend can be added if files prove too slow for some dataset.
+`BASIS_OPTIM__CACHE_ROOT`, written through `pyarrow.fs` as the run store is, with the time its source was read in the
+file. A laptop points the root at a local folder and production at shared storage, so every run shares the entries, and
+`optim warm` fills them before the day's first run. Without the setting, nothing is cached. Redis, which the engine used
+before, would be infrastructure in every environment, bounded by memory, and awkward on Windows laptops; the cache sits
+behind a small interface, so another backend can be added if files prove too slow for some dataset.
 
 A run never fails because of the cache, since the cache only saves time. An entry it cannot read is a miss, and the
 live read replaces it. A write goes to a temporary file that is renamed into place, so a concurrent run never reads
@@ -242,7 +248,7 @@ Each decision covers one portfolio; there are no joint solves across portfolios.
 buy universe, such as a new issue or a scarce bond, a model defines `reserve`, and its portfolios decide one at a time,
 each seeing the market the earlier ones left. Only an accepted decision reserves, so a rejected portfolio leaves its
 supply to the next one. Who gets a scarce bond is a client-fairness decision, so the order is always explicit: the
-model's `order`, or the run's order, recorded in `run.json`. Replaying one portfolio of such a run decides the
+model's `order`, or the run's order, recorded in the run's manifest. Replaying one portfolio of such a run decides the
 portfolios before it again, since what they reserved is what it saw.
 
 Allocating the supply up front in `prepare_market`, pro rata or by rotation, is the other way to handle competition.
@@ -258,13 +264,14 @@ and starts none, which is also where a breakpoint stops. A spawned worker import
 is why `main.py` keeps its call under `if __name__ == "__main__":`. Workers share the cores, so each gets a one-thread
 BLAS.
 
-Settings come only from `OPTIM_*` variables, the same for every model, so no model repo holds a connection string in
-its code and moving storage is one deployment change. A laptop keeps them in its settings files, which git ignores.
+Settings come only from `BASIS_*` variables, the same for every model, so no model repo holds a connection string in
+its code and moving storage is one deployment change: basis's own, which name each database and the run store, and
+optim's block, `BASIS_OPTIM__*`, beside them. A laptop keeps them in its settings files, which git ignores.
 
 ## Logs are written for agents
 
 Every record from the command line is one JSON object per line on stderr, because the main reader is an agent, and log
-platforms parse the same lines; a run from Python logs text, for the person at the editor, unless `OPTIM_LOG_FORMAT`
+platforms parse the same lines; a run from Python logs text, for the person at the editor, unless `BASIS_LOG_FORMAT`
 says otherwise. Models log with `logging.getLogger(__name__)`, and the core's handler adds the run id, the model and the
 portfolio id to every record, worker processes' records included, so one filter on `run_id` finds the whole run, even
 one that died before writing its snapshot. Records stay small: bulk data goes in the snapshot. An exception is logged

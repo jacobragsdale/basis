@@ -1,5 +1,7 @@
-"""Helpers for the core's tests: a source serving rows from memory, which records what it was asked, and a clock that
-moves a second at each reading, so a test can run a model end to end, snapshot included, with no database."""
+"""Fakes for optim's tests: a source serving rows from memory, which records what it was asked, and a clock that moves
+a second at each reading, so a test can run a model end to end, snapshot included, with no database; and `saved`, a
+run by its id in a store. Named apart from basis-job's `builders`, since the root's pytest run puts both packages'
+tests folders on the path."""
 
 from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
@@ -8,9 +10,12 @@ from pathlib import Path
 
 import pandas as pd
 
+from basis.core.storage import Root
+from optim import snapshots
 from optim.data.dataset import Dataset
 from optim.data.frames import to_columns
 from optim.data.loader import Loader
+from optim.snapshots import Saved
 from optim.sources import Columns, Param
 from optim.sources.file import FileSource
 
@@ -52,3 +57,8 @@ class Clock:
 
     def __call__(self) -> datetime:
         return datetime(2026, 10, 16, 13, tzinfo=UTC) + timedelta(seconds=next(self._ticks))
+
+
+def saved(root: Root, run_id: str) -> Saved:
+    """The run `run_id` in the store at `root`."""
+    return snapshots.find([root], run_id)

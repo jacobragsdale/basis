@@ -20,7 +20,7 @@ jobs:
       - run: uv run pytest
 
   job-integration:
-    # Every package's integration tier, basis-job's and basis-api's, against SQL Server and Oracle.
+    # Every package's integration tier, basis-job's, basis-api's and optim's, against SQL Server and Oracle.
     runs-on: ubuntu-latest
     services:
       mssql:
@@ -229,17 +229,6 @@ jobs:
           assert (run["status"], run["git_sha"]) == ("published", head), (run["status"], run["git_sha"], head)
           PY
 
-  optim-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v7
-        with:
-          version: "0.13.7"
-      - run: uv sync --locked
-      - run: uv run pytest   # optim's own pytest settings, until step 3.3 ports it
-        working-directory: packages/optim
-
   optim-generated-repo:
     runs-on: ubuntu-latest
     defaults:
@@ -270,4 +259,4 @@ jobs:
         working-directory: ${{ runner.temp }}/sma
         run: |
           if uv run python models/ladder/main.py 2> "$RUNNER_TEMP/live.log"; then echo "main.py ran with no source configured" >&2; exit 1; fi
-          grep --quiet "set OPTIM_MSSQL__" "$RUNNER_TEMP/live.log" || { cat "$RUNNER_TEMP/live.log" >&2; exit 1; }
+          grep --quiet "set BASIS_DATABASES__MSSQL__" "$RUNNER_TEMP/live.log" || { cat "$RUNNER_TEMP/live.log" >&2; exit 1; }

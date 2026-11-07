@@ -11,7 +11,7 @@ Follow the triage section of `uv run optim docs how-to/run-the-qa-suite`. In sho
    `optim_e2e_writes`. Fix the environment, never the safeguard.
 2. **The run failed**: read its JSON logs, filtered on its `run_id`; the failing record names the root cause and
    where it surfaced. A source that timed out or refused a login is a QA outage.
-3. **A portfolio was rejected**: its reasons are in the snapshot's `reasons.parquet`, and a hook's error names the line
+3. **A portfolio was rejected**: its reasons are in the snapshot's `results/reasons`, and a hook's error names the line
    of model code that raised. Follow the `optim-why-rejected` skill to replay it and tell the data from the model.
 4. **The replay differs**: a solve that stopped at its time limit may stop elsewhere; any other difference means
    the model depends on something outside its snapshot.

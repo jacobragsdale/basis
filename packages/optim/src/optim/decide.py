@@ -18,7 +18,8 @@ import numpy as np
 from numpy.typing import ArrayLike
 from pydantic import Field
 
-from optim import engine, logs, models
+from basis.core import logs
+from optim import engine, models
 from optim.acceptance import review, round_decision
 from optim.contract import LISTING, Datasets, Decision, Params, declared
 from optim.models import LoadedModel

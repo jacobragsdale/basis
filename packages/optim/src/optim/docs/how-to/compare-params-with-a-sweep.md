@@ -7,7 +7,7 @@ try a hundred variants on production's data from your machine.
 Prerequisites:
 
 - A saved run of the model to sweep: its id, in the repo's `snapshots/` or under the settings file's
-  `OPTIM_SNAPSHOT_ROOT`, such as production's in `.env.prod`. Any run works, a replay included; a replay of some
+  `BASIS_SNAPSHOT_ROOT`, such as production's in `.env.prod`. Any run works, a replay included; a replay of some
   portfolios sweeps those alone.
 - The model's params, which `uv run optim describe MODEL` prints as a JSON schema, with each field's description.
 
@@ -76,8 +76,8 @@ pipeline. Put the variants in a folder of their own, such as `models/income/para
 uv run --env-file .env optim sweep RUN_ID models/income/params/sweep --out sweep.csv
 ```
 
-`RUN_ID` is a run under `OPTIM_SNAPSHOT_ROOT`, which `.env.example` sets to the repo's `snapshots/`, or a snapshot's
-path. Without `--out`, the table is printed as CSV; `--out` writes a `.csv` or `.parquet` file, by its suffix.
+`RUN_ID` is a run under `BASIS_SNAPSHOT_ROOT`, which `.env.example` sets to the repo's `snapshots/`, or the path of its
+manifest. Without `--out`, the table is printed as CSV; `--out` writes a `.csv` or `.parquet` file, by its suffix.
 
 To look inside one portfolio of one variant, replay it with that variant, as
 [how to find out why a portfolio was rejected](find-out-why-a-portfolio-was-rejected.md) shows.

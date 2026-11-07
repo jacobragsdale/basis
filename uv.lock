@@ -1228,13 +1228,11 @@ name = "optim"
 version = "0.2.0"
 source = { editable = "packages/optim" }
 dependencies = [
+    { name = "basis-core" },
     { name = "cvxpy" },
-    { name = "grimp" },
     { name = "highspy" },
     { name = "httpx" },
-    { name = "mssql-python" },
     { name = "numpy" },
-    { name = "oracledb" },
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "pydantic" },
@@ -1248,29 +1246,14 @@ copt = [
     { name = "coptpy" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "coptpy" },
-    { name = "import-linter" },
-    { name = "pandas-stubs" },
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-randomly" },
-    { name = "ruff" },
-    { name = "scipy-stubs" },
-    { name = "ty" },
-]
-
 [package.metadata]
 requires-dist = [
+    { name = "basis-core", editable = "packages/core" },
     { name = "coptpy", marker = "extra == 'copt'", specifier = ">=8.0.7" },
     { name = "cvxpy", specifier = ">=1.9.3" },
-    { name = "grimp", specifier = ">=3.17" },
     { name = "highspy", specifier = ">=1.15.1" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "mssql-python", specifier = ">=1.16.0" },
     { name = "numpy", specifier = ">=2.5.4" },
-    { name = "oracledb", specifier = ">=26.0.1" },
     { name = "pandas", specifier = ">=3.0.6" },
     { name = "pyarrow", specifier = ">=26.0.0" },
     { name = "pydantic", specifier = ">=2.14.1" },
@@ -1279,19 +1262,6 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.18.1" },
 ]
 provides-extras = ["copt"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "coptpy", specifier = ">=8.0.7" },
-    { name = "import-linter", specifier = ">=2.15" },
-    { name = "pandas-stubs", specifier = ">=3.0.5.260914" },
-    { name = "pre-commit", specifier = ">=4.7.0" },
-    { name = "pytest", specifier = ">=9.1.1" },
-    { name = "pytest-randomly", specifier = ">=5.0.0" },
-    { name = "ruff", specifier = ">=0.17.1" },
-    { name = "scipy-stubs", specifier = ">=1.18.1.1" },
-    { name = "ty", specifier = ">=0.0.89" },
-]
 
 [[package]]
 name = "optype"

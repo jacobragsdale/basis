@@ -6,13 +6,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from builders import Clock, Rows
+from fakes import Clock, Rows
 from pandas.testing import assert_frame_equal
 
+from basis.core.storage import Root
 from optim.data.cache import FileCache
 from optim.data.loader import Loader
 from optim.datasets import SECURITIES
-from optim.storage import Root
 from optim.testing import CASH, frame
 
 FETCHED_AT = datetime(2026, 10, 16, 13, 5, tzinfo=UTC)

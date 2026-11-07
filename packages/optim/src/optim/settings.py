@@ -1,51 +1,104 @@
-"""Process configuration, read once at startup from `OPTIM_*` environment variables and nothing else: the sources'
-hosts and credentials, the snapshot root, the cache root and the orders table are the same for every model, so no
-model repo holds a connection string. A source that is not configured cannot be read, so a run that reads files needs
-no settings. Each source owns its settings model; nested fields use a double underscore, as in `OPTIM_ORACLE__DSN`. A
+"""Process configuration, read once from `BASIS_*` environment variables and nothing else: no model repo holds a
+connection string. basis-core's settings name each database a dataset reads, as `BASIS_DATABASES__MSSQL__KIND=mssql`,
+and the snapshot root, `BASIS_SNAPSHOT_ROOT`; optim's own are its block, `BASIS_OPTIM__*`: the cache root, the worker
+processes, how many reads each database serves at once, the REST source and the orders table. Nested fields use a
+double underscore. A source that is not configured cannot be read, so a run that reads files needs no settings. A
 model's `main.py` names the file the settings come from, such as `.env.prod`; the command line reads the process's
-environment, as `uv run --env-file .env` sets it."""
+environment, as `uv run --env-file .env` sets it.
 
-from typing import Annotated
+optim 0.2.0 read `OPTIM_*` variables. Each of those is refused, naming the variable that replaced it, rather than
+ignored, so a settings file written for 0.2.0 cannot silently run with nothing configured."""
 
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from collections.abc import Mapping
+from typing import Annotated, Self
 
+from pydantic import Field, model_validator
+
+from basis.core import settings as core
+from basis.core.settings import SettingsError
 from optim.orders import OrdersSettings
-from optim.sources.mssql import MssqlSettings
-from optim.sources.oracle import OracleSettings
+from optim.schema import Model
+from optim.sources import OWN
 from optim.sources.rest import ApiSettings
-from optim.storage import Root
+
+PREFIX = "BASIS_OPTIM__"
+RENAMED = {
+    "OPTIM_SNAPSHOT_ROOT": "BASIS_SNAPSHOT_ROOT",
+    "OPTIM_CACHE_ROOT": f"{PREFIX}CACHE_ROOT",
+    "OPTIM_WORKERS": f"{PREFIX}WORKERS",
+    "OPTIM_LOG_": "BASIS_LOG_",
+    "OPTIM_GIT_SHA": "BASIS_GIT_SHA",
+    "OPTIM_IMAGE": "BASIS_IMAGE",
+    "OPTIM_REST__": f"{PREFIX}REST__",
+    "OPTIM_ORACLE__MAX_CONCURRENT": f"{PREFIX}DATABASES__ORACLE__MAX_CONCURRENT",
+    "OPTIM_MSSQL__MAX_CONCURRENT": f"{PREFIX}DATABASES__MSSQL__MAX_CONCURRENT",
+    "OPTIM_ORACLE__": "BASIS_DATABASES__ORACLE__",
+    "OPTIM_MSSQL__": "BASIS_DATABASES__MSSQL__",
+    "OPTIM_ORDERS__TABLE": f"{PREFIX}ORDERS__TABLE",
+    "OPTIM_ORDERS__CONNECTION_STRING": f"the orders database's BASIS_DATABASES__NAME__WRITE__CONNECTION_STRING, with {PREFIX}ORDERS__DATABASE=name",
+    "OPTIM_ORDERS__TIMEOUT_S": "the orders database's BASIS_DATABASES__NAME__TIMEOUT_S",
+}
+"""Each variable optim 0.2.0 read, by name or by a prefix ending in `_`, and what replaced it; a prefix's rest is kept.
+Only these are refused, since other tools may read variables of their own that start `OPTIM_`."""
 
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_prefix="OPTIM_",
-        env_nested_delimiter="__",
-        extra="forbid",
-        frozen=True,
-        validate_default=True,
-        revalidate_instances="always",
-        allow_inf_nan=False,
-        hide_input_in_errors=True,  # an error would otherwise print every secret beside the field it is missing
-    )
+def refuse_renamed(environ: Mapping[str, str]) -> None:
+    """Fail when `environ` sets a variable under the name optim 0.2.0 read, which optim now ignores."""
+    if old := sorted(name for name in environ if _renamed(name) is not None):
+        renames = "; ".join(f"{name} to {_renamed(name)}" for name in old)
+        msg = (
+            f"{', '.join(old)} {'is' if len(old) == 1 else 'are'} set, and optim reads only BASIS_ variables now: rename {renames}, where they are set and in"
+            " each .env file. A database's block also needs its KIND and ISOLATION, as .env.example shows"
+        )
+        raise SettingsError(msg)
 
-    snapshot_root: str | None = None
-    """Where `optim run` saves its snapshots, and where a replay finds a run by its id: a path, or a URL such as
-    `abfs://runs@account.dfs.core.windows.net/optim`. A run from Python saves in its repo's `snapshots/` instead."""
+
+def _renamed(name: str) -> str | None:
+    for old, new in RENAMED.items():
+        if name == old or (old.endswith("_") and name.startswith(old)):
+            return new + name.removeprefix(old) if old.endswith("_") else new
+    return None
+
+
+class DatabaseLimits(Model):
+    """How hard a run may press one database, beside basis-core's settings of it, which bound each read's time and rows."""
+
+    max_concurrent: Annotated[int, Field(ge=1)]
+    """Reads this process has open to the database at once, each a transaction of its own; the loader holds the rest."""
+
+
+class OptimSettings(Model):
+    """optim's own settings, the `BASIS_OPTIM__*` variables."""
+
     cache_root: str | None = None
     """Where the dataset cache is, a path or URL; without it, every dataset is read live."""
     workers: Annotated[int, Field(ge=1)] = 1
     """Worker processes per run; 1 decides in the calling process."""
-    oracle: OracleSettings | None = None
-    mssql: MssqlSettings | None = None
+    databases: dict[str, DatabaseLimits] = Field(default_factory=dict)
+    """Each database a dataset reads, by the name its `BASIS_DATABASES__NAME__*` block gives: a database without its
+    limits here is not read."""
     rest: ApiSettings | None = None
+    """The REST API that datasets with `source="rest"` read."""
     orders: OrdersSettings | None = None
     """The orders table accepted portfolios' orders are written to. Only production configures one, and only
     `optim run` writes to it."""
 
-    def snapshots(self) -> Root:
-        """The snapshot root, which `optim run` saves under and a replay by id reads from."""
-        if self.snapshot_root is None:
-            msg = "set OPTIM_SNAPSHOT_ROOT: where optim run saves its snapshots, and where a replay finds a run by its id"
+
+class Settings(core.Settings):
+    optim: OptimSettings = Field(default_factory=OptimSettings)
+
+    @model_validator(mode="after")
+    def _databases_are_configured(self) -> Self:
+        """Every database optim's block names is one basis-core's settings configure, and none takes a name of
+        optim's own sources."""
+        for name in self.optim.databases:
+            if name in OWN:
+                msg = f"{PREFIX}DATABASES__{name.upper()}__MAX_CONCURRENT is set, and {name} names optim's own source, never a database: give the database another name"
+                raise ValueError(msg)
+            if name not in self.databases:
+                msg = f"{PREFIX}DATABASES__{name.upper()}__MAX_CONCURRENT is set, and no database {name} is configured: set BASIS_DATABASES__{name.upper()}__KIND and the rest of its block"
+                raise ValueError(msg)
+        if (orders := self.optim.orders) is not None and orders.database not in self.databases:
+            msg = f"{PREFIX}ORDERS__DATABASE is {orders.database}, which is not configured: set BASIS_DATABASES__{orders.database.upper()}__KIND and the rest of its block, WRITE included"
             raise ValueError(msg)
-        return Root.at(self.snapshot_root)
+        return self

@@ -33,6 +33,6 @@ stages:
     jobs:
       - job: qa
         steps:
-          # - template: <the framework's QA environment template>, which writes the QA OPTIM_* settings to .env.qa
+          # - template: <the framework's QA environment template>, which writes the QA BASIS_* settings to .env.qa
           # pyproject.toml's optim_e2e_command runs the image built above, such as docker run --rm --env-file .env.qa IMAGE
           - script: uv run --env-file .env.qa pytest -m e2e  # refuses to run unless every source and destination is QA's

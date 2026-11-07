@@ -7,20 +7,22 @@ each source is.
 Prerequisites:
 
 - A model repo with `uv sync` run, and your editor's Python interpreter set to the repo's `.venv`.
-- Read access to every source the model reads. `uv run optim describe MODEL` lists each dataset with its `source`;
-  the income example reads `holdings`, `portfolios`, `controls` and `mandates` from SQL Server (`mssql`), `securities`
-  from Oracle (`oracle`) and `signals` from the signals API (`rest`).
+- Read access to every source the model reads. `uv run optim describe MODEL` lists each dataset with its `source`:
+  a database, by the name its settings give, or `rest` or `file`. The income example reads `holdings`, `portfolios`,
+  `controls` and `mandates` from the SQL Server database named `mssql`, `securities` from the Oracle database named
+  `oracle`, and `signals` from the signals API (`rest`).
 - The values of each source's variables, such as its connection string, from the environment's owner. The repo's
   `.env.example` lists every variable, and the [reference](../reference.md) describes each.
 
 To run a model on live data:
 
 1. Copy `.env.example`, at the repo's root, to `.env`, and in the copy uncomment the whole block of every source the
-   model reads and set its values: where it is, such as `OPTIM_MSSQL__CONNECTION_STRING`, and how hard a run may press
-   it, `MAX_CONCURRENT`, `TIMEOUT_S` and `MAX_ROWS`, which every source requires, as Oracle requires `MODE`. A block
-   set in part stops the run, naming the line it lacks, such as `mssql.max_concurrent Field required`. For QA's data
-   and production's, make `.env.qa` and `.env.prod` the same way, with each environment's read-only credentials. Git
-   ignores all three files.
+   model reads and set its values: where it is, such as `BASIS_DATABASES__MSSQL__CONNECTION_STRING`; how its reads see
+   it, `ISOLATION`; and how hard a run may press it, `TIMEOUT_S`, `MAX_ROWS` and
+   `BASIS_OPTIM__DATABASES__MSSQL__MAX_CONCURRENT`, which every database requires, as Oracle requires `MODE`. A block
+   set in part stops the run, naming the field it lacks, such as `databases.mssql.mssql.isolation Field required`. For
+   QA's data and production's, make `.env.qa` and `.env.prod` the same way, with each environment's read-only
+   credentials. Git ignores all three files.
 2. In `models/MODEL/main.py`, name the settings file with `env`, and the portfolios to decide:
 
    ```python
@@ -48,7 +50,7 @@ A source the settings file leaves out cannot be read, and the first dataset that
 to set:
 
 ```text
-LookupError: portfolios reads from mssql, which is not configured: set OPTIM_MSSQL__* (see .env.example)
+LookupError: portfolios reads from mssql, which is not configured: set BASIS_DATABASES__MSSQL__* and BASIS_OPTIM__DATABASES__MSSQL__MAX_CONCURRENT (see .env.example)
 ```
 
 A run never falls back from a source to the fixture: it reads the fixture only with `data="tests/fixture"`. A folder
@@ -60,14 +62,14 @@ the rest from their sources, which suits a what-if on one dataset.
 - A run from `main.py` saves its snapshot in the repo's `snapshots/`, whichever settings file it reads; git ignores
   the folder, and you may delete it whenever you like. `snapshots="PATH"` saves elsewhere, a path or a URL.
 - It never writes orders, even when the settings file configures an orders table.
-- It decides in `workers` processes: `OPTIM_WORKERS`, or 1 when neither says. With one, the run decides in this
+- It decides in `workers` processes: `BASIS_OPTIM__WORKERS`, or 1 when neither says. With one, the run decides in this
   process, where a breakpoint in a rule or a hook stops. A run of hundreds of portfolios is faster with more, such as
   `workers=8`.
-- A dataset with a cache age is read from the cache where `OPTIM_CACHE_ROOT` is set and the entry is fresh;
+- A dataset with a cache age is read from the cache where `BASIS_OPTIM__CACHE_ROOT` is set and the entry is fresh;
   `cache=False` reads every dataset live.
 
-To confirm it read live data, open the run's `snapshots/RUN_ID/run.json`: `datasets` records where each dataset came
-from, such as `"source": "mssql"` and `"read": "live"`, and `portfolios` the portfolios it decided.
+To confirm it read live data, open the run's manifest, `snapshots/runs/optim/MODEL/RUN_ID.json`: `reads` records where
+each dataset came from, such as `"source": "mssql"` and `"read": "live"`, and `portfolios` the portfolios it decided.
 
 ## Run it in production
 
@@ -80,14 +82,15 @@ optim run income --params models/income/params/default.json --as-of 2026-10-16
 
 `optim run` decides as a run from `main.py` does, through the same code, with these differences: it reads the process's
 environment, which `uv run --env-file .env optim run ...` sets on a machine; its paths are the working directory's; it
-saves its snapshot under `OPTIM_SNAPSHOT_ROOT`, which it requires; it writes the accepted portfolios' orders where
-`OPTIM_ORDERS__CONNECTION_STRING` and `OPTIM_ORDERS__TABLE` configure a table; and it exits 0 only when every portfolio
-was accepted. `--portfolios P1 P2`, or `--portfolios @FILE` with one id per line, names the portfolios; without it, it
-decides every portfolio the model lists.
+saves its snapshot under `BASIS_SNAPSHOT_ROOT`, which it requires; it writes the accepted portfolios' orders where
+`BASIS_OPTIM__ORDERS__DATABASE` and `BASIS_OPTIM__ORDERS__TABLE` configure a table, through that database's write login;
+and it exits 0 only when every portfolio was accepted. `--portfolios P1 P2`, or `--portfolios @FILE` with one id per
+line, names the portfolios; without it, it decides every portfolio the model lists.
 
 > [!WARNING]
-> `optim run` writes orders wherever its environment configures an orders table. Keep `OPTIM_ORDERS__*` out of the
-> settings files on your machine, `.env.prod` included, which hold read-only credentials alone.
+> `optim run` writes orders wherever its environment configures an orders table. Keep `BASIS_OPTIM__ORDERS__*`, and
+> every database's `WRITE` block, out of the settings files on your machine, `.env.prod` included, which hold read-only
+> credentials alone.
 
 For QA, see [how to run the QA suite](run-the-qa-suite.md). To find out why a live run rejected a portfolio, see
 [how to find out why a portfolio was rejected](find-out-why-a-portfolio-was-rejected.md).

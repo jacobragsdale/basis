@@ -99,8 +99,9 @@ portfolio_id   status  trades  solved  objective    stop  seconds
 
 Your run id and times will differ; keep the id, which this tutorial calls `FIRST_RUN`. Both portfolios are
 `accepted`: their trades may trade. The run decided every portfolio the fixture lists, as of the fixture's date,
-2026-10-16, and saved a snapshot in the repo's `snapshots/FIRST_RUN/`, holding every dataset as it was loaded and
-every decision. A run from `main.py` never writes orders.
+2026-10-16, and saved a snapshot in the repo's `snapshots/`, holding every dataset as it was loaded and every
+decision: its manifest, `snapshots/runs/optim/income/FIRST_RUN.json`, names each one's file in `snapshots/objects/`. A
+run from `main.py` never writes orders.
 
 ## Look at the results
 

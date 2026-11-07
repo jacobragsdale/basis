@@ -22,7 +22,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
 ARG GIT_SHA
-ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 OPTIM_GIT_SHA=$GIT_SHA
+ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 BASIS_GIT_SHA=$GIT_SHA
 USER 10001
 ENTRYPOINT ["tini", "--", "optim"]
 CMD ["--help"]
