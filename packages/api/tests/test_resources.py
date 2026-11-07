@@ -316,6 +316,9 @@ class Plain:
         (lambda: api.http("pricing-service", deadline_s=1), "lower-case letters, digits and underscores"),
         (lambda: api.database("warehouse", deadline_s=0, max_concurrent=4), "give it deadline_s, the seconds each call may take, above 0"),
         (lambda: api.http("pricing", deadline_s=float("nan")), "give it deadline_s"),
+        (lambda: api.http("pricing", deadline_s=True), "give it deadline_s"),
+        (lambda: api.clock("Clock"), "clock 'Clock': a resource's name is lower-case letters"),
+        (lambda: api.cache("Prices", Price, ttl_s=1, max_entries=1, deadline_s=1), "cache 'Prices': a resource's name"),
         (lambda: api.cache("prices", Price, ttl_s=0, max_entries=1, deadline_s=1), "give it ttl_s"),
         (lambda: api.cache("prices", Price, ttl_s=1, max_entries=0, deadline_s=1), "give it max_entries of 1 or more"),
         (lambda: api.database("warehouse", deadline_s=1, max_concurrent=0), "give it max_concurrent, a whole number of 1 or more"),
@@ -341,7 +344,7 @@ class Plain:
         (lambda: api.given("warehouse"), "one of its resources"),  # ty: ignore[invalid-argument-type] -- wrong on purpose
     ],
     ids=[
-        "name", "hyphen", "no-deadline", "nan-deadline", "no-ttl", "no-entries", "no-threads", "threads-as-a-bool", "mutable-value", "a-dict", "a-list",
+        "name", "hyphen", "no-deadline", "nan-deadline", "bool-deadline", "clock-name", "cache-name", "no-ttl", "no-entries", "no-threads", "threads-as-a-bool", "mutable-value", "a-dict", "a-list",
         "a-frozen-model-of-a-list", "an-unfrozen-dataclass", "a-plain-class", "in-a-dependency", "in-a-dependencys-dependency", "in-a-class-dependency", "writes-in-a-get", "wrong-kind",
         "another-cache", "sync-handler", "asked-twice", "two-written", "undeclared", "same-name", "not-a-resource", "given-a-name",
     ],

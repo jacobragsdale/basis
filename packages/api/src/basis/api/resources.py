@@ -44,7 +44,8 @@ import math
 import re
 import types
 import typing
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Generator, Iterable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -179,7 +180,8 @@ def check_outboxes(service: str, written: Iterable[tuple[str, float, DatabaseRes
 def http(name: str, *, deadline_s: float) -> HttpResource:
     """Another HTTP service, whose base URL is the setting `BASIS_HTTP__NAME__URL`, and which answers in JSON:
     basis-core's, as a job declares it too."""
-    return core.http(_named(name, "http"), deadline_s=_deadline(name, deadline_s))
+    with _declaring():
+        return core.http(name, deadline_s=deadline_s)
 
 
 def cache[V](name: str, value: type[V], *, ttl_s: float, max_entries: int, deadline_s: float) -> CacheResource[V]:
@@ -234,26 +236,34 @@ def _immutable_class(kind: type, within: frozenset[type]) -> bool:
 
 def clock(name: str) -> ClockResource:
     """The time, from the system's clock, or a fake's in a test: basis-core's."""
-    return core.clock(_named(name, "clock"))
+    with _declaring():
+        return core.clock(name)
 
 
 def ids(name: str) -> IdsResource:
     """New ids, each a UUIDv7, which sorts by when it was made: basis-core's."""
-    return core.ids(_named(name, "ids"))
+    with _declaring():
+        return core.ids(name)
 
 
 def _named(name: str, kind: str) -> str:
-    if not NAME.fullmatch(name):
-        msg = f"api.{kind}({name!r}): a resource's name is lower-case letters, digits and underscores, starting with a letter, so its settings are variables any shell sets"
-        raise ServiceError(msg)
-    return name
+    with _declaring():
+        return core.named(name, kind)
 
 
 def _deadline(name: str, deadline_s: float) -> float:
-    if not deadline_s > 0:  # NaN too
-        msg = f"{name}'s deadline is {deadline_s}s: give it deadline_s, the seconds each call may take, above 0"
-        raise ServiceError(msg)
-    return deadline_s
+    with _declaring():
+        return core.seconds(name, deadline_s)
+
+
+@contextmanager
+def _declaring() -> Generator[None]:
+    """basis-core's checks of a resource's declaration, whose failure is a service's: the one place their error becomes
+    a `ServiceError`, so the API and basis-core never disagree on what a name or a deadline is."""
+    try:
+        yield
+    except core.ResourceError as error:
+        raise ServiceError(str(error)) from None
 
 
 class Reader(Protocol):
