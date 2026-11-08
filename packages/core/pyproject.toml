@@ -20,6 +20,12 @@ dependencies = [
     "tzdata>=2025.2; sys_platform == 'win32'",  # zoneinfo has no time zone database of its own on Windows
 ]
 
+[project.optional-dependencies]
+excel = [  # basis.core.folders reads and writes workbooks with pandas, through these engines alone: a repo that does takes basis-core[excel]
+    "python-calamine>=0.9.1",  # read_excel's fastest engine, Rust's calamine, which reads .xlsx, .xlsm, .xlsb and .xls
+    "xlsxwriter>=3.3.1",  # to_excel's engine for .xlsx
+]
+
 [project.scripts]
 basis = "basis.core.command:main"  # every part's verbs, through the basis.verbs entry points
 

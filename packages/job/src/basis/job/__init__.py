@@ -12,8 +12,8 @@ from basis.core.calendars import Calendar, calendar
 from basis.core.interval import Interval
 from basis.core.messages import Mail
 from basis.core.tables import Changes, Delete, Range
-from basis.job.inputs import Clock, Fetch, File, Ids, Inputs, Query
-from basis.job.outputs import Append, Email, InsertNew, Manual, Outputs, Replace, ReplaceWhere, Slack, Table, Upsert
+from basis.job.inputs import Clock, Excel, Fetch, File, Ids, Inputs, Query
+from basis.job.outputs import Append, Email, ExcelReport, InsertNew, Manual, Outputs, Replace, ReplaceWhere, Slack, Table, Upsert
 from basis.job.params import Params
 from basis.job.rows import MaxLength, Row, Zone
 from basis.job.version import VERSION
@@ -29,6 +29,8 @@ __all__ = [
     "Clock",
     "Delete",
     "Email",
+    "Excel",
+    "ExcelReport",
     "Fetch",
     "File",
     "Ids",

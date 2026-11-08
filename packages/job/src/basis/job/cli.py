@@ -314,7 +314,8 @@ def describe(job: jobs.Job) -> dict[str, object]:
             }
             for name, table in job.outputs.declared().items()
         },
-        "messages": {name: {"destination": message.destination, "to": message.to, "ledger": message.ledger} for name, message in job.outputs.messages().items()},
+        "messages": {name: {"destination": message.destination, "to": message.to, "ledger": message.ledger} for name, message in job.outputs.declared_messages().items()},
+        "reports": {name: {"folder": report.folder, "path": report.path, "sheet": report.sheet, "columns": _columns(report.row.columns)} for name, report in job.outputs.declared_reports().items()},
         "check": job.check is not None,
     }
 

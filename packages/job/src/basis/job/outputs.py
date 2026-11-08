@@ -25,6 +25,7 @@ from typing import Self, overload, override
 import pandas as pd
 
 from basis.core import messages
+from basis.core.interval import Interval
 from basis.core.messages import Destination, EmailResource, Mail, SlackResource
 from basis.core.tables import IDENTIFIER, Changes, Column
 from basis.job.rows import Row
@@ -267,6 +268,75 @@ class Email(Message[Mail]):
         raise TypeError(msg)
 
 
+class ExcelReport:
+    """A workbook the job writes for people to a shared folder, as `BASIS_FOLDERS__FOLDER__PATH` gives it on each
+    machine: its value is a frame of `row`, written as the sheet `sheet` of the workbook at `path` inside the folder,
+    which may format the interval's ends, as `reports/{start:%Y-%m-%d}.xlsx`. Only `basis run --publish` writes it,
+    once every database has committed, to a temporary file renamed into place, so a reader never sees half of it, and
+    a rerun writes it again, whole. A repo that writes one takes `basis-core[excel]`."""
+
+    def __init__(self, row: type[Row], *, folder: str, path: str, sheet: str) -> None:
+        if not IDENTIFIER.match(folder):
+            msg = f"folder {folder!r}: a folder's name is lower-case letters, digits and underscores, as in BASIS_FOLDERS__{folder.upper()}__PATH"
+            raise ValueError(msg)
+        if not path.lower().endswith(".xlsx"):
+            msg = f"{path}: basis writes workbooks as .xlsx: name it so"
+            raise ValueError(msg)
+        if not sheet or len(sheet) > MAX_SHEET or any(character in sheet for character in "[]:*?/\\"):
+            msg = f"sheet {sheet!r}: a sheet's name is 1 to {MAX_SHEET} characters, none of []:*?/\\, as Excel allows"
+            raise ValueError(msg)
+        self.row = row
+        self.folder = folder
+        self.path = path
+        self.sheet = sheet
+        self._name: str | None = None
+
+    @property
+    def name(self) -> str:
+        if self._name is None:
+            msg = "a report is named by its attribute on a job's Outputs class; this one is not on one"
+            raise TypeError(msg)
+        return self._name
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        if not IDENTIFIER.match(name):
+            msg = f"{owner.__qualname__}.{name}: an output's name is lower-case letters, digits and underscores"
+            raise TypeError(msg)
+        if self._name not in {None, name}:
+            msg = f"{owner.__qualname__}.{name} is already declared as {self._name!r}: declare each output once per name"
+            raise TypeError(msg)
+        self._name = name
+
+    def location(self, interval: Interval | None) -> str:
+        """The workbook's path in its folder for a run, its interval's ends formatted in."""
+        if "{" not in self.path:
+            return self.path
+        if interval is None:
+            msg = f"{self.path} formats the interval, and this run has none: give it one"
+            raise ValueError(msg)
+        return self.path.format(start=interval.start, end=interval.end)
+
+    def describe(self) -> str:
+        return f"{self.folder}: {self.path} [{self.sheet}]"
+
+    @overload
+    def __get__(self, instance: None, owner: type) -> Self: ...
+    @overload
+    def __get__(self, instance: Outputs, owner: type) -> pd.DataFrame: ...
+    def __get__(self, instance: Outputs | None, owner: type) -> Self | pd.DataFrame:
+        if instance is None:
+            return self
+        value = instance.values[self.name]  # noqa: PD011 -- the outputs by name, no frame's values
+        if not isinstance(value, pd.DataFrame):
+            msg = f"{self.name} is a workbook, so its value is a DataFrame, not a {type(value).__name__}"
+            raise TypeError(msg)
+        return value
+
+
+MAX_SHEET = 31
+"""The longest sheet name Excel takes."""
+
+
 type OutputValue = pd.DataFrame | Changes | str | Mail | None
 """What the transform gives an output: a table's frame or `Changes`, or a message's text or mail, or None for none."""
 
@@ -277,13 +347,18 @@ class Outputs:
     `Outputs(positions=frame, alert=None)`."""
 
     def __init__(self, **values: OutputValue) -> None:
-        declared, sent = self.declared(), self.messages()
-        if missing := sorted((set(declared) | set(sent)) - set(values)):
+        declared, sent, reports = self.declared(), self.declared_messages(), self.declared_reports()
+        every = set(declared) | set(sent) | set(reports)
+        if missing := sorted(every - set(values)):
             msg = f"{type(self).__qualname__} is missing outputs {missing}: give every output it declares, None for a message it does not send"
             raise TypeError(msg)
-        if unknown := sorted(set(values) - set(declared) - set(sent)):
-            msg = f"{type(self).__qualname__} declares no outputs named {unknown}; it declares {sorted(set(declared) | set(sent))}"
+        if unknown := sorted(set(values) - every):
+            msg = f"{type(self).__qualname__} declares no outputs named {unknown}; it declares {sorted(every)}"
             raise TypeError(msg)
+        for name in reports:
+            if not isinstance(values[name], pd.DataFrame):
+                msg = f"{name} is a workbook, so its value is a DataFrame, not a {type(values[name]).__name__}"
+                raise TypeError(msg)
         for name, table in declared.items():
             expected = Changes if isinstance(table.target.write, Manual) else pd.DataFrame
             if not isinstance(values[name], expected):
@@ -293,20 +368,35 @@ class Outputs:
             message.checked(values[name])
         self.values: Mapping[str, OutputValue] = values
 
-    def table(self, name: str) -> pd.DataFrame | Changes:
-        """The frame or `Changes` the transform gave the table `name`."""
-        value = self.values[name]
-        if not isinstance(value, pd.DataFrame | Changes):
-            msg = f"{name} is a table, so its value is a DataFrame or Changes, not a {type(value).__name__}"
-            raise TypeError(msg)
-        return value
-
     @classmethod
     def declared(cls) -> dict[str, Table[pd.DataFrame] | Table[Changes]]:
         """Each table the job writes, by its output's name."""
         return {name: value for klass in reversed(cls.__mro__) for name, value in vars(klass).items() if isinstance(value, Table)}
 
     @classmethod
-    def messages(cls) -> dict[str, Slack | Email]:
+    def declared_reports(cls) -> dict[str, ExcelReport]:
+        """Each workbook the job writes, by its output's name."""
+        return {name: value for klass in reversed(cls.__mro__) for name, value in vars(klass).items() if isinstance(value, ExcelReport)}
+
+    @classmethod
+    def declared_messages(cls) -> dict[str, Slack | Email]:
         """Each message the job sends, by its output's name."""
         return {name: value for klass in reversed(cls.__mro__) for name, value in vars(klass).items() if isinstance(value, Slack | Email)}
+
+
+def table_value(outputs: Outputs, name: str) -> pd.DataFrame | Changes:
+    """The frame or `Changes` the transform gave the table `name`: a function, not a method, so no output's name hides it."""
+    value = outputs.values[name]  # noqa: PD011 -- the outputs by name, no frame's values
+    if not isinstance(value, pd.DataFrame | Changes):
+        msg = f"{name} is a table, so its value is a DataFrame or Changes, not a {type(value).__name__}"
+        raise TypeError(msg)
+    return value
+
+
+def report_value(outputs: Outputs, name: str) -> pd.DataFrame:
+    """The frame the transform gave the workbook `name`."""
+    value = outputs.values[name]  # noqa: PD011 -- the outputs by name, no frame's values
+    if not isinstance(value, pd.DataFrame):
+        msg = f"{name} is a workbook, so its value is a DataFrame, not a {type(value).__name__}"
+        raise TypeError(msg)
+    return value

@@ -19,7 +19,8 @@ A setting carries the marker when what it points at has a name that contains it,
 - a SQL Server database's connection string, and its `WRITE` block's: the one server it names (`Server`, `Data
   Source`, `Address`, `Addr` or `Network Address`), or the one database (`Database` or `Initial Catalog`);
 - an Oracle database's DSN, which both its logins use;
-- `BASIS_SNAPSHOT_ROOT`, which must be one of `stores`, as written, each of which must carry it.
+- `BASIS_SNAPSHOT_ROOT`, which must be one of `stores`, as written, each of which must carry it;
+- each folder's path, where a QA run writes its workbooks.
 
 Every database the settings configure must carry it, whether a run uses it or not, and each that has a `WRITE` block
 must have its ledger in `writes`, since every publish writes the ledger. Each part's plan then says what its runs
@@ -225,6 +226,10 @@ def problems(settings: Settings, declared: Declared, *, source: Path) -> list[Pr
             variable = f"BASIS_DATABASES__{name.upper()}__WRITE__LEDGER"
             reason = f"{variable} {where} is {database.write.ledger}, which {_SECTION} writes does not list for {name}, and every publish writes it"
             found.append((reason, f"add it to writes.{name} if it is QA's ledger"))
+    for name, shared in sorted(settings.folders.items()):
+        if not carries(shared.path, marker):
+            reason = f"BASIS_FOLDERS__{name.upper()}__PATH {where} is {shared.path}, which does not contain the QA marker {marker!r}, and a QA run writes its workbooks there"
+            found.append((reason, "point it at QA's folder, whose path contains the marker"))
     return found
 
 

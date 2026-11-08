@@ -273,3 +273,13 @@ def test_doctor_in_prod_says_whether_this_machine_may_write_and_whether_its_stor
 def test_doctor_takes_only_an_environment_basis_knows(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert command.run(["doctor", "--env", "production"], cwd=tmp_path, installed={}) == 2
     assert "invalid choice: 'production'" in capsys.readouterr().err
+
+
+def test_doctor_with_an_environment_checks_each_folder_is_reachable(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    feed(tmp_path)
+    (tmp_path / "pm").mkdir()
+    path = env_file(tmp_path, "dev", f"BASIS_FOLDERS__PM__PATH={tmp_path / 'pm'}\nBASIS_FOLDERS__RISK__PATH={tmp_path / 'risk'}\n")
+    assert doctor.doctor(None, {}, desktop(tmp_path), describe=command.one_line, env="dev", databases=Logins()) == 1
+    captured = capsys.readouterr()
+    assert f"ok: dev's folder pm: {tmp_path / 'pm'}" in captured.out.splitlines()
+    assert captured.err.splitlines() == [f"ERROR: dev's folder risk, at {tmp_path / 'risk'}, is not there or not reachable from here: mount it, or correct BASIS_FOLDERS__RISK__PATH in {path}"]

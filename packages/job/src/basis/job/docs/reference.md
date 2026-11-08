@@ -104,6 +104,16 @@ A `.csv` or `.parquet` file, by a path relative to the declaring file, or a URL 
 converted by the row; an empty field is null, and so is a blank line in a CSV of one column. A header that names a
 column twice is refused.
 
+### `etl.Excel(row, *, folder, path, sheet, empty)`
+
+A sheet of a workbook in a shared folder, such as where portfolio managers keep theirs. `folder` names the folder, as
+`BASIS_FOLDERS__FOLDER__PATH` gives it on each machine: `\\server\share\pm` on Windows, its mount path in WSL and in a
+pod. `path` is the workbook's inside it, `.xlsx`, `.xlsm`, `.xlsb` or `.xls`, which may format the interval's ends, as
+`positions/{start:%Y-%m-%d}.xlsx`, and never leaves the folder. The sheet's first row names its columns, and each cell
+is read as a CSV's text is, for the row to type, so nothing is inferred: a whole number as its digits, a date as
+`YYYY-MM-DD`, an empty cell null. A naive time is read in its column's `Zone`. A repo that reads or writes workbooks
+takes `basis-core[excel]` (python-calamine and xlsxwriter).
+
 ### A run on files
 
 A run given a folder of files (`--data DIR`, or `data=` from Python) reads each dataset that has `NAME.csv` or
@@ -175,6 +185,16 @@ the ledger has. A send is never made again on failure: the run ends `partial`, i
 `basis resume` sends it once it is fixed. In a test, `fakes.Slack()` and `fakes.Email()`, given by the channel's or
 the email's name, keep what is sent, in `posted` and `sent`, and fail on demand, as `channel.fails(Unavailable)`. A
 job's failure is no message of its own: Airflow and Datadog alert on that.
+
+### `etl.ExcelReport(row, *, folder, path, sheet)`
+
+A workbook the job writes for people to a shared folder, as `etl.Excel` names one: its value is a frame of `row`,
+written as the sheet `sheet`, 1 to 31 characters, of the `.xlsx` at `path`, which may format the interval's ends. Only
+`basis run --publish` writes it, once every database has committed and before any message is sent, to a temporary file
+beside it that is then renamed into place, so a reader of the folder never sees half of it, and a rerun writes it
+again, whole. A datetime is written as its wall clock in its column's `Zone`, since Excel has none. A write that fails
+leaves the run `partial`, its `written` naming the error, and `basis resume` writes it from the run's snapshot; a run
+writes no message while one of its workbooks is unwritten.
 
 ### `etl.Changes(delete=None, upsert=None, insert_new=None, insert=None)`
 
@@ -391,6 +411,7 @@ Settings are environment variables, which an environment's file holds, as `NAME=
 | `BASIS_HTTP__NAME__URL` | The base URL of the service a fetch names `NAME`. |
 | `BASIS_HTTP__NAME__CA_BUNDLE` | A PEM file of the certificate authorities the service's certificate chains to, in place of the system's. |
 | `BASIS_HTTP__NAME__PROXY` | The proxy the service's calls go through; without it, they go direct. `HTTP_PROXY` and `SSL_CERT_FILE` are never read. |
+| `BASIS_FOLDERS__NAME__PATH` | The absolute path on this machine of the shared folder an `etl.Excel` or `etl.ExcelReport` names `NAME`: `\\server\share\pm` on Windows, `/mnt/pm` in WSL and in a pod. |
 | `BASIS_SLACK__NAME__WEBHOOK` | The incoming-webhook URL of the Slack channel a message names `NAME`, a secret. `__CA_BUNDLE` and `__PROXY` as for a service. |
 | `BASIS_EMAIL__NAME__HOST`, `__PORT`, `__SECURITY`, `__SENDER`, `__TO` | The relay an email named `NAME` goes through, `none`, `starttls` or `tls`, its sender's address, and, as JSON, the addresses it goes to, `["desk@example.com"]`: each environment's own. `__USER` and `__PASSWORD` where the relay asks for a login. |
 | `BASIS_TRACES__EXPORTER` | `otlp`, to post each run's spans to `BASIS_TRACES__ENDPOINT`, or `console`, to write them to stderr. Without it, spans go nowhere. |

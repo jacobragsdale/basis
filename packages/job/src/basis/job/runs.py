@@ -35,7 +35,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Tracer
 from pydantic import ValidationError
 
-from basis.core import fakes, frames, logs, publish, sending, snapshots, traces
+from basis.core import fakes, folders, frames, logs, publish, sending, snapshots, traces
 from basis.core import runs as core_runs
 from basis.core.databases import Database
 from basis.core.destination import TableSpec, check_table, check_values
@@ -46,7 +46,7 @@ from basis.core.opened import SYSTEM_WAITS, Waits, client
 from basis.core.publish import refused_overlap
 from basis.core.runs import Regression
 from basis.core.settings import Settings, SettingsError, Traces, publish_refusal, variable
-from basis.core.snapshots import InputRecord, MessageRecord, PublishRecord, RunRecord, SendRecord, Snapshot, Status
+from basis.core.snapshots import InputRecord, MessageRecord, PublishRecord, ReportRecord, RunRecord, SendRecord, Snapshot, Status, WrittenRecord
 from basis.core.storage import Root
 from basis.core.tables import Changes
 from basis.job import handles
@@ -56,9 +56,10 @@ from basis.job.handles import Kept
 from basis.job.inputs import Clock, Fetch
 from basis.job.job import Job, JobError, repo_root
 from basis.job.loader import Reach, load
-from basis.job.outputs import Email, Slack, Target
+from basis.job.outputs import Email, Slack, Target, report_value
 from basis.job.outputs import Outputs as OutputsOf
 from basis.job.params import Params
+from basis.job.rows import SchemaError, conform
 from basis.job.version import VERSION
 
 log = logging.getLogger(__name__)
@@ -128,10 +129,11 @@ def run(  # noqa: PLR0913 -- what the run reads and where it saves, by keyword
     faked: Mapping[str, fakes.Fake] | None = None,
     provider: TracerProvider | None = None,
     environment: str | None = None,
+    open_folder: folders.Opener | None = None,
 ) -> Result:
     """Run `job` as `request` asks, reading and writing the databases `settings` configure, each opened by
-    `databases` when given, such as the QA tier's, which refuse a table it does not allow, and reaching the services
-    they configure. `faked` names the fakes of a test's own, by the name of what each fakes: a fetch's service, or a
+    `databases` when given, such as the QA tier's, which refuse a table it does not allow, and the folders they
+    configure, or those `open_folder` gives, and reaching the services they configure. `faked` names the fakes of a test's own, by the name of what each fakes: a fetch's service, or a
     clock or ids of the job's `Inputs`. The run is one trace, on `provider` where a test gives one, in `environment`,
     the one the settings are of, where there is one."""
     params, params_text = read_params(job, request.params)
@@ -140,7 +142,8 @@ def run(  # noqa: PLR0913 -- what the run reads and where it saves, by keyword
     logs.bind(run_id=run_id, job=job.name, service=job.name)
     attributes = {"basis.job": job.name, "basis.run_id": run_id}
     with traces.trace("run", service=job.name, settings=settings.traces, version=settings.git_sha, environment=environment, given=provider, **attributes) as (tracer, _):
-        return _run(job, settings, request, _Run(params, params_text, run_id, snapshot_root, clock, databases, given, tracer))
+        opened = open_folder if open_folder is not None else folders.opener(settings)
+        return _run(job, settings, request, _Run(params, params_text, run_id, snapshot_root, clock, databases, given, tracer, opened))
 
 
 @dataclass(frozen=True)
@@ -155,6 +158,7 @@ class _Run:
     databases: Callable[[str], Database] | None
     faked: Mapping[str, fakes.Fake]
     tracer: Tracer
+    open_folder: folders.Opener
 
 
 def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
@@ -170,11 +174,11 @@ def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
     )  # fmt: skip
     targets = targets_of(job)
     specs, reasons = _check_destinations(targets, settings, databases, publishing=request.publish)
-    reasons += _check_messages(job, settings, this.faked, publishing=request.publish)
+    reasons += _check_messages(job, settings, this.faked, publishing=request.publish) + _check_reports(job, settings, this.open_folder, publishing=request.publish)
     if reasons:
         return _summarized(_finish(record.done("failed", reasons=reasons, finished_at=clock()), snapshot_root, params_text, {}, {}))
     try:
-        loaded, inputs = load(job.inputs.declared(), request.interval, open_database=databases, reach=_reach(settings, this.faked), tracer=this.tracer, data=request.data)
+        loaded, inputs = load(job.inputs.declared(), request.interval, open_database=databases, reach=_reach(settings, this.faked), tracer=this.tracer, data=request.data, open_folder=this.open_folder)
         tables = {name: frames.to_arrow(frame) for name, frame in loaded.items()}
     except Exception as error:
         log.exception("could not load the inputs")
@@ -184,13 +188,14 @@ def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
     except Exception as error:  # a defect: the inputs' declarations are checked when their class is made
         log.exception("could not give the transform its clocks and ids")
         return _summarized(_finish(record.with_outputs({}, inputs).done("failed", error=_headline(error), finished_at=clock()), snapshot_root, params_text, tables, {}))
-    planned, reasons, planned_sends = _transform(job, params, tables, request.interval, kept)
+    made = _transform(job, params, tables, request.interval, kept)
+    planned, reasons, planned_sends = made.planned, made.reasons, made.messages
     for name, entry in planned.items():
         if (spec := specs.get(name)) is not None and entry.changes is not None:
             reasons.extend(f"{name}: {reason}" for reason in check_values(entry.target, spec, entry.changes))
     status: Status = "failed" if reasons else "checked"
-    record = record.with_outputs(planned, inputs).with_made(kept).with_messages(planned_sends)
-    result = _finish(record.done(status, reasons=reasons, finished_at=clock()), snapshot_root, params_text, tables, planned)
+    record = record.with_outputs(planned, inputs).with_made(kept).with_messages(planned_sends).with_reports(made.reports)
+    result = _finish(record.done(status, reasons=reasons, finished_at=clock()), snapshot_root, params_text, tables, planned, reports=made.frames)
     if reasons or not request.publish or result.snapshot is None:
         _summary(result.record)
         return result
@@ -198,12 +203,16 @@ def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
     publication = publish.Publication(run_id, job.name, request.interval, VERSION, request.again, clock)
     publishes = publish.publish(publication, targets, changes, databases, checked=specs)
     status = core_runs.status_of(publishes, len({target.database for target in targets.values()}))
+    written: dict[str, WrittenRecord] = {}
+    if status == "published" and made.reports:
+        written = write_reports(job, made.reports, made.frames, this.open_folder, clock)
+        status = "partial" if any(entry.status == "failed" for entry in written.values()) else status
     sent: dict[str, SendRecord] = {}
     if status == "published" and planned_sends:
         delivery = sending.Delivery(run_id, job.name, request.interval, VERSION, request.again, clock)
         sent = send(job, planned_sends, delivery, settings=settings, databases=databases, faked=this.faked, tracer=this.tracer)
         status = "partial" if any(entry.status == "failed" for entry in sent.values()) else status
-    final = record.done(status, reasons=[], finished_at=clock(), publishes=publishes, sent=sent)
+    final = record.done(status, reasons=[], finished_at=clock(), publishes=publishes, sent=sent, written=written)
     snapshot = result.snapshot.save_record(final)
     _summary(final)
     return Result(final, snapshot, tables, planned)
@@ -214,7 +223,7 @@ def _checked(job: Job, faked: Mapping[str, fakes.Fake]) -> dict[str, fakes.Fake]
     declare, by name, of its kind."""
     declared: dict[str, type[fakes.Fake]] = {dataset.http: fakes.Http for dataset in job.inputs.declared().values() if isinstance(dataset, Fetch)}
     declared |= {name: fakes.Clock if isinstance(given, Clock) else fakes.Ids for name, given in job.inputs.declared_resources().items()}
-    declared |= {message.to: fakes.Slack if isinstance(message, Slack) else fakes.Email for message in job.outputs.messages().values()}
+    declared |= {message.to: fakes.Slack if isinstance(message, Slack) else fakes.Email for message in job.outputs.declared_messages().values()}
     for name, fake in faked.items():
         if (kind := declared.get(name)) is None:
             msg = f"a fake is given for {name}, which {job.name} neither fetches from, declares nor sends to: fake its fetches' services, its clocks and ids, and its messages' channels and emails"
@@ -312,7 +321,19 @@ def fresh(tables: Mapping[str, pa.Table]) -> dict[str, pd.DataFrame]:
     return {name: frames.from_arrow(table) for name, table in tables.items()}
 
 
-def _transform(job: Job, params: Params, tables: Mapping[str, pa.Table], interval: Interval | None, kept: Kept) -> tuple[dict[str, Planned], list[str], dict[str, MessageRecord]]:
+@dataclass(frozen=True)
+class _Transformed:
+    """What a transform made: each table's changes, every reason not to write, each message and each workbook."""
+
+    planned: dict[str, Planned]
+    reasons: list[str]
+    messages: dict[str, MessageRecord] = field(default_factory=dict)
+    reports: dict[str, ReportRecord] = field(default_factory=dict)
+    frames: dict[str, pd.DataFrame] = field(default_factory=dict)
+    """Each workbook's rows, conformed to its row."""
+
+
+def _transform(job: Job, params: Params, tables: Mapping[str, pa.Table], interval: Interval | None, kept: Kept) -> _Transformed:
     """Each table's changes, and every reason not to write them. The transform and the check are each given frames of
     their own of the inputs, so neither sees what the other changed in them. A transform or check that raises is a
     reason that names the line of job code that raised; the log holds its traceback."""
@@ -322,9 +343,11 @@ def _transform(job: Job, params: Params, tables: Mapping[str, pa.Table], interva
             outputs = job.run_transform(inputs, params)
     except Exception as error:
         log.exception("the transform raised")
-        return {}, [f"the transform raised {_headline(error)}{_at(error, job.directory)}"], {}
+        return _Transformed({}, [f"the transform raised {_headline(error)}{_at(error, job.directory)}"])
     planned = plan(outputs, interval)
     reasons = [reason for entry in planned.values() for reason in entry.reasons]
+    reports, report_frames, refused = planned_reports(job, outputs, interval)
+    reasons.extend(refused)
     try:
         checked = job.inputs(fresh(tables), interval=interval, handles=kept.handles)
         reasons.extend(f"check: {reason}" for reason in job.run_check(checked, outputs, params))
@@ -333,13 +356,64 @@ def _transform(job: Job, params: Params, tables: Mapping[str, pa.Table], interva
         reasons.append(f"the job's check raised {_headline(error)}{_at(error, job.directory)}")
     for reason in reasons:
         log.warning("not writing: %s", reason)
-    return planned, reasons, planned_messages(job, outputs)
+    return _Transformed(planned, reasons, planned_messages(job, outputs), reports, report_frames)
+
+
+def planned_reports(job: Job, outputs: OutputsOf, interval: Interval | None) -> tuple[dict[str, ReportRecord], dict[str, pd.DataFrame], list[str]]:
+    """Each workbook the transform gave, by its output's name, its rows conformed to its row, and every reason it
+    cannot be written."""
+    records: dict[str, ReportRecord] = {}
+    frames_of: dict[str, pd.DataFrame] = {}
+    reasons: list[str] = []
+    for name, report in job.outputs.declared_reports().items():
+        try:
+            frame = conform(report_value(outputs, name), report.row, what=f"{name}'s rows", naive="reject")
+            location = report.location(interval)
+        except (SchemaError, ValueError) as error:
+            reasons.append(f"{name}: {error}")
+            continue
+        records[name] = ReportRecord(folder=report.folder, path=location, sheet=report.sheet, rows=len(frame))
+        frames_of[name] = frame
+    return records, frames_of, reasons
+
+
+def write_reports(job: Job, reports: Mapping[str, ReportRecord], frames_of: Mapping[str, pd.DataFrame], open_folder: folders.Opener, clock: Callable[[], datetime]) -> dict[str, WrittenRecord]:
+    """Write each workbook the run planned, in name order, each whole or not at all; one that fails is recorded as
+    failed, and the rest are still written."""
+    declared = job.outputs.declared_reports()
+    written: dict[str, WrittenRecord] = {}
+    for name in sorted(reports):
+        record = reports[name]
+        zones = {column.name: column.zone for column in declared[name].row.columns if column.zone is not None}
+        try:
+            done = open_folder(record.folder).write_workbook(record.path, {record.sheet: frames_of[name]}, zones=zones)
+        except Exception as error:
+            log.exception("could not write %s", name, extra={"output": name})
+            written[name] = WrittenRecord(status="failed", at=clock(), error=_headline(error))
+            continue
+        log.info("wrote %s to %s: %s", name, record.folder, record.path, extra={"output": name, "rows": record.rows, "sha256": done.sha256})
+        written[name] = WrittenRecord(status="written", at=clock(), size=done.size, sha256=done.sha256)
+    return written
+
+
+def _check_reports(job: Job, settings: Settings, open_folder: folders.Opener, *, publishing: bool) -> list[str]:
+    """Every reason a run that publishes cannot write a workbook the job declares: its folder is not configured."""
+    if not publishing:
+        return []
+    reasons: list[str] = []
+    for name, report in job.outputs.declared_reports().items():
+        try:
+            open_folder(report.folder)
+        except SettingsError as error:
+            reasons.append(f"{name}: {error}")
+    del settings
+    return reasons
 
 
 def planned_messages(job: Job, outputs: OutputsOf) -> dict[str, MessageRecord]:
     """Each message the transform gave, by its output's name, with its text's hash; a message it gave None is none."""
     found: dict[str, MessageRecord] = {}
-    for name, message in job.outputs.messages().items():
+    for name, message in job.outputs.declared_messages().items():
         if (value := message.checked(outputs.values[name])) is None:  # noqa: PD011 -- the outputs by name, no frame's values
             continue
         subject, text = (None, value) if isinstance(value, str) else (value.subject, value.text)
@@ -382,9 +456,13 @@ class _Record:
     clocks: dict[str, list[datetime]] = field(default_factory=dict)
     ids: dict[str, list[UUID]] = field(default_factory=dict)
     messages: dict[str, MessageRecord] = field(default_factory=dict)
+    reports: dict[str, ReportRecord] = field(default_factory=dict)
 
     def with_messages(self, messages: Mapping[str, MessageRecord]) -> _Record:
         return replace(self, messages=dict(messages))
+
+    def with_reports(self, reports: Mapping[str, ReportRecord]) -> _Record:
+        return replace(self, reports=dict(reports))
 
     def with_outputs(self, planned: Mapping[str, Planned], inputs: Mapping[str, InputRecord]) -> _Record:
         outputs = {name: snapshots.output_record(entry.target.database, entry.target.table, type(entry.target.write).__name__, entry.changes) for name, entry in planned.items()}
@@ -403,17 +481,21 @@ class _Record:
         error: str | None = None,
         publishes: dict[str, PublishRecord] | None = None,
         sent: dict[str, SendRecord] | None = None,
+        written: dict[str, WrittenRecord] | None = None,
     ) -> RunRecord:
         return RunRecord(
             run_id=self.run_id, job=self.job, module=self.module, version=self.version, git_sha=self.git_sha, started_at=self.started_at,
             finished_at=finished_at, interval=self.interval, params_path=self.params_path, params_sha256=self.params_sha256, labels=self.labels,
             data=self.data, replay_of=self.replay_of, again=self.again, status=status, inputs=self.inputs, outputs=self.outputs, reasons=reasons or [], error=error,
-            publishes=publishes or {}, messages=self.messages, sent=sent or {}, clocks=self.clocks, ids=self.ids,
+            publishes=publishes or {}, messages=self.messages, sent=sent or {}, reports=self.reports, written=written or {}, clocks=self.clocks, ids=self.ids,
         )  # fmt: skip
 
 
-def _finish(record: RunRecord, root: Root | None, params_text: str, tables: Mapping[str, pa.Table], planned: Mapping[str, Planned]) -> Result:
-    changes = {name: entry.changes for name, entry in planned.items() if entry.changes is not None}
+def _finish(  # noqa: PLR0913 -- what the run saves, by keyword
+    record: RunRecord, root: Root | None, params_text: str, tables: Mapping[str, pa.Table], planned: Mapping[str, Planned], *, reports: Mapping[str, pd.DataFrame] | None = None
+) -> Result:
+    """The run's result, its snapshot saved: its inputs, each table's changes and each workbook's rows, as an insert."""
+    changes = {name: entry.changes for name, entry in planned.items() if entry.changes is not None} | {name: Changes(insert=frame) for name, frame in (reports or {}).items()}
     snapshot = snapshots.write(root, record, params_text, tables, changes, package=PACKAGE) if root is not None else None
     if snapshot is not None:
         log.info("saved the snapshot", extra={"snapshot": snapshot.path.location})
@@ -481,9 +563,10 @@ def _replayed(job: Job, source: Snapshot, opened: core_runs.Replay[Params], *, s
     )  # fmt: skip
     tables = {name: opened.saved[name] for name in job.inputs.declared()}
     kept = handles.replayed(job.inputs, original, tracer)
-    planned, reasons, planned_sends = _transform(job, opened.params, tables, interval, kept)
-    record = record.with_outputs(planned, record.inputs).with_made(kept).with_messages(planned_sends)
-    result = _finish(record.done("failed" if reasons else "checked", reasons=reasons, finished_at=clock()), snapshot_root, opened.params_text, tables, planned)
+    made = _transform(job, opened.params, tables, interval, kept)
+    planned, reasons = made.planned, made.reasons
+    record = record.with_outputs(planned, record.inputs).with_made(kept).with_messages(made.messages).with_reports(made.reports)
+    result = _finish(record.done("failed" if reasons else "checked", reasons=reasons, finished_at=clock()), snapshot_root, opened.params_text, tables, planned, reports=made.frames)
     before = source.changes()
     targets = targets_of(job)
     diffs = [found for name in sorted(set(before) | set(planned)) if name in targets for found in diff(name, targets[name], before.get(name), result.changes(name))]
@@ -500,10 +583,12 @@ def resume(  # noqa: PLR0913 -- resume's, by keyword
     environment: str | None = None,
     databases: Callable[[str], Database] | None = None,
     faked: Mapping[str, fakes.Fake] | None = None,
+    open_folder: folders.Opener | None = None,
 ) -> RunRecord:
-    """Finish publishing a run that committed to some of its databases and failed on another, or could not send a
-    message, from its snapshot: told `again` as the run was, or as `again` says now. A message goes only once every
-    database has committed, and never twice: the ledger has each one sent. `databases` and `faked` are a test's."""
+    """Finish publishing a run that committed to some of its databases and failed on another, or could not write a
+    workbook or send a message, from its snapshot: told `again` as the run was, or as `again` says now. Workbooks and
+    messages go only once every database has committed, and a message never twice: the ledger has each one sent.
+    `databases`, `faked` and `open_folder` are a test's."""
     record = source.record()
     logs.bind(run_id=record.run_id, job=job.name, service=job.name)
     with traces.trace("resume", service=job.name, settings=settings.traces, version=settings.git_sha, environment=environment, **{"basis.job": job.name, "basis.run_id": record.run_id}) as (tracer, _):
@@ -511,20 +596,47 @@ def resume(  # noqa: PLR0913 -- resume's, by keyword
             log.info("already published")
             return record
         databases = databases if databases is not None else core_runs.opener(settings)
-        written = len({output.database for output in record.outputs.values()})
+        count = len({output.database for output in record.outputs.values()})
         final = record
-        if record.reasons or record.error is not None or not record.messages or core_runs.status_of(record.publishes, written) != "published":
+        if record.reasons or record.error is not None or not (record.messages or record.reports) or core_runs.status_of(record.publishes, count) != "published":
             final = core_runs.resume(source, record, name=job.name, targets=targets_of(job), databases=databases, version=VERSION, clock=clock, again=again)  # which refuses a run that never published
-        unsent = {name: message for name, message in record.messages.items() if (done := record.sent.get(name)) is None or done.status == "failed"}
-        if core_runs.status_of(final.publishes, written) == "published" and unsent:
-            told = record.again or again
-            delivery = sending.Delivery(record.run_id, job.name, record.parsed_interval(), VERSION, told, clock)
-            sent = record.sent | send(job, unsent, delivery, settings=settings, databases=databases, faked=_checked(job, faked or {}), tracer=tracer)
-            status: Status = "partial" if any(entry.status == "failed" for entry in sent.values()) else "published"
-            final = RunRecord.model_validate(final.model_dump() | {"sent": sent, "status": status, "again": told})
-            source.save_record(final)
+        if core_runs.status_of(final.publishes, count) == "published":
+            given, opened = _checked(job, faked or {}), open_folder or folders.opener(settings)
+            final = _finish_files(job, source, final, settings, again=again, clock=clock, databases=databases, faked=given, tracer=tracer, open_folder=opened)
         _summary(final)
         return final
+
+
+def _finish_files(  # noqa: PLR0913 -- the run, and how it reaches what it writes, by keyword
+    job: Job,
+    source: Snapshot,
+    record: RunRecord,
+    settings: Settings,
+    *,
+    again: bool,
+    clock: Callable[[], datetime],
+    databases: Callable[[str], Database],
+    faked: Mapping[str, fakes.Fake],
+    tracer: Tracer,
+    open_folder: folders.Opener,
+) -> RunRecord:
+    """`record`, once its databases have committed, with each workbook it had not written written from its snapshot,
+    and then, once every workbook is written, each message it had not sent sent, and saved."""
+    unwritten = {name: entry for name, entry in record.reports.items() if (done := record.written.get(name)) is None or done.status == "failed"}
+    unsent = {name: message for name, message in record.messages.items() if (done := record.sent.get(name)) is None or done.status == "failed"}
+    if not unwritten and not unsent:
+        return record
+    written = record.written | write_reports(job, unwritten, {name: source.dataset(f"outputs/{name}/insert") for name in unwritten}, open_folder, clock)
+    sent = record.sent
+    told = record.again or again
+    if unsent and all(entry.status == "written" for entry in written.values()):
+        delivery = sending.Delivery(record.run_id, job.name, record.parsed_interval(), VERSION, told, clock)
+        sent = sent | send(job, unsent, delivery, settings=settings, databases=databases, faked=faked, tracer=tracer)
+    failed = any(entry.status == "failed" for entry in written.values()) or any(entry.status == "failed" for entry in sent.values()) or len(sent) < len(record.messages)
+    status: Status = "partial" if failed else "published"
+    final = RunRecord.model_validate(record.model_dump() | {"written": written, "sent": sent, "status": status, "again": told})
+    source.save_record(final)
+    return final
 
 
 def send(  # noqa: PLR0913 -- what it sends and how it reaches them, by keyword
@@ -532,7 +644,7 @@ def send(  # noqa: PLR0913 -- what it sends and how it reaches them, by keyword
 ) -> dict[str, SendRecord]:
     """Send each message the run planned, in name order, each recorded in its ledger's database; one that fails is
     recorded as failed, and the rest are still sent."""
-    declared = job.outputs.messages()
+    declared = job.outputs.declared_messages()
     sent: dict[str, SendRecord] = {}
     for name in sorted(planned):
         message = planned[name]
@@ -562,7 +674,7 @@ def _check_messages(job: Job, settings: Settings, faked: Mapping[str, fakes.Fake
     if not publishing:
         return []
     reasons: list[str] = []
-    for name, message in job.outputs.messages().items():
+    for name, message in job.outputs.declared_messages().items():
         if (database := settings.databases.get(message.ledger)) is None:
             reasons.append(f"{name}: database {message.ledger!r}, whose ledger records it, is not configured: set BASIS_DATABASES__{message.ledger.upper()}__*")
         elif (refused := publish_refusal(message.ledger, database)) is not None:

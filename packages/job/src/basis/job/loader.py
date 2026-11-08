@@ -24,6 +24,7 @@ import httpx2
 import pandas as pd
 from opentelemetry.trace import Tracer
 
+from basis.core import folders
 from basis.core.databases import Database
 from basis.core.errors import BadReply
 from basis.core.interval import Interval
@@ -31,7 +32,7 @@ from basis.core.logs import ms_since
 from basis.core.opened import HttpClient, Waits
 from basis.core.snapshots import InputRecord
 from basis.core.storage import Root
-from basis.job.inputs import Dataset, Fetch, File, Query
+from basis.job.inputs import Dataset, Excel, Fetch, File, Query
 from basis.job.rows import Row, conform
 
 log = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ system's waits, or the fake's, which take no time."""
 
 
 def load(  # noqa: PLR0913 -- what the run reads, and how it reaches it, by keyword
-    datasets: Mapping[str, Dataset], interval: Interval | None, *, open_database: Callable[[str], Database], reach: Reach, tracer: Tracer, data: Path | None
+    datasets: Mapping[str, Dataset], interval: Interval | None, *, open_database: Callable[[str], Database], reach: Reach, tracer: Tracer, data: Path | None, open_folder: folders.Opener | None = None
 ) -> tuple[dict[str, pd.DataFrame], dict[str, InputRecord]]:
     """Every dataset's frame and where it came from, by name."""
     files = {name: found for name in datasets if data is not None and (found := _data_file(data, name)) is not None}
@@ -67,6 +68,11 @@ def load(  # noqa: PLR0913 -- what the run reads, and how it reaches it, by keyw
                 fetches[name] = dataset
             case File():
                 frames[name], records[name] = _read_file(dataset, dataset.location(interval), source=f"file: {dataset.path}")
+            case Excel():
+                if open_folder is None:
+                    msg = f"{name} reads a workbook in the folder {dataset.folder}, and the run was given no folders"
+                    raise TypeError(msg)
+                frames[name], records[name] = _read_sheet(dataset, open_folder(dataset.folder), dataset.location(interval))
             case _:
                 msg = f"{name} is a {type(dataset).__name__}, which nothing reads"
                 raise TypeError(msg)
@@ -196,6 +202,19 @@ def _read_file(dataset: Dataset, location: str, *, source: str) -> tuple[pd.Data
         raise
     record = InputRecord(source=source, rows=len(frame), read_ms=ms_since(start))
     log.info("loaded", extra={"dataset": dataset.name, "source": source, "rows": record.rows, "ms": record.read_ms})
+    return frame, record
+
+
+def _read_sheet(dataset: Excel, folder: folders.Folder, location: str) -> tuple[pd.DataFrame, InputRecord]:
+    start = time.perf_counter()
+    what = f"dataset {dataset.name} ({dataset.folder}: {location} [{dataset.sheet}])"
+    try:
+        frame = conform(folder.read_sheet(location, dataset.sheet), dataset.row, what=what, naive="in_zone")
+    except Exception as error:
+        error.add_note(f"while loading {what}")
+        raise
+    record = InputRecord(source=f"{dataset.folder}: {location} [{dataset.sheet}]", rows=len(frame), read_ms=ms_since(start))
+    log.info("loaded", extra={"dataset": dataset.name, "source": record.source, "rows": record.rows, "ms": record.read_ms})
     return frame, record
 
 

@@ -4,7 +4,7 @@ them, as `basis check` does), the feed, and the settings. It runs in a repo or o
 desktop has alone. Each check passed prints one line on stdout, and each problem one `ERROR` line on stderr that ends
 with its fix. It reads no database and no network, unless it is given an environment: `basis doctor --env qa` also
 checks where that environment's settings come from (`basis.core.environments`), that each database's logins answer
-a query, the write login's too, and that its run store is reachable.
+a query, the write login's too, and that each folder and its run store are reachable.
 
 The feed is the default index of the user's `uv.toml`: the design has each developer name the firm's feed there as
 the default index, not an extra one, so a name the feed holds is never looked up on public PyPI. uv reads
@@ -290,6 +290,14 @@ def _environment_of(given: str, repo: Path | None, desktop: Desktop, describe: D
         found.append(Found(f"prod {writes}", note=True))
     for name in sorted(configured.databases):
         found += _logins(env, name, configured, where, databases)
+    for name, shared in sorted(configured.folders.items()):
+        try:
+            reachable = Path(shared.path).is_dir()
+        except OSError:
+            reachable = False
+        fix = f"mount it, or correct BASIS_FOLDERS__{name.upper()}__PATH in {where}"
+        problem = (f"{env}'s folder {name}, at {shared.path}, is not there or not reachable from here", fix) if not reachable else None
+        found.append(Found(f"{env}'s folder {name}: {shared.path}", problem))
     if configured.snapshot_root is None:
         found.append(Found(f"{env} names no run store, BASIS_SNAPSHOT_ROOT, so `basis run --env {env}` cannot save its runs", note=True))
     else:

@@ -32,6 +32,8 @@ from basis.core.tables import IDENTIFIER
 from basis.job.rows import Row
 
 type Empty = Literal["fail", "allow"]
+WORKBOOKS = (".xlsx", ".xlsm", ".xlsb", ".xls")
+"""The workbooks an `Excel` dataset reads, as `basis.core.folders.EXCEL` lists them."""
 
 
 class Dataset:
@@ -171,6 +173,42 @@ class File(Dataset):
     @override
     def describe(self) -> str:
         return f"file: {self.path}"
+
+
+class Excel(Dataset):
+    """A sheet of a workbook in a shared folder, as `BASIS_FOLDERS__FOLDER__PATH` gives the folder on each machine:
+    `path` is the workbook's inside it, which may format the interval's ends, as `positions/{start:%Y-%m-%d}.xlsx`,
+    and `sheet` the sheet's name. Its first row names the columns; each cell is read as its text, as a CSV's is, so
+    the row types every value and nothing is inferred (`basis.core.folders`). A repo that reads one takes
+    `basis-core[excel]`."""
+
+    def __init__(self, row: type[Row], *, folder: str, path: str, sheet: str, empty: Empty) -> None:
+        super().__init__(row, empty=empty, base=_caller_folder())
+        if not IDENTIFIER.match(folder):
+            msg = f"folder {folder!r}: a folder's name is lower-case letters, digits and underscores, as in BASIS_FOLDERS__{folder.upper()}__PATH"
+            raise ValueError(msg)
+        if not path.lower().endswith(WORKBOOKS):
+            msg = f"{path}: an Excel dataset is a workbook, {', '.join(WORKBOOKS)}"
+            raise ValueError(msg)
+        if not sheet:
+            msg = f"{path}: an Excel dataset names its sheet, as sheet='Positions'"
+            raise ValueError(msg)
+        self.folder = folder
+        self.path = path
+        self.sheet = sheet
+
+    def location(self, interval: Interval | None) -> str:
+        """The workbook's path in its folder for a run, its interval's ends formatted in."""
+        if "{" not in self.path:
+            return self.path
+        if interval is None:
+            msg = f"{self.path} formats the interval, and this run has none: give it one"
+            raise ValueError(msg)
+        return self.path.format(start=interval.start, end=interval.end)
+
+    @override
+    def describe(self) -> str:
+        return f"{self.folder}: {self.path} [{self.sheet}]"
 
 
 def _caller_folder() -> Path:

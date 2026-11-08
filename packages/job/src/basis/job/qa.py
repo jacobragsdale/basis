@@ -123,7 +123,7 @@ def _headline(error: BaseException) -> str:
 def _run(qa: Qa, planned: _Planned) -> QaRun:
     job = planned.job
     try:
-        quiet: dict[str, fakes.Fake] = {message.to: fakes.Slack() if isinstance(message, Slack) else fakes.Email() for message in job.outputs.messages().values()}  # QA sends nothing
+        quiet: dict[str, fakes.Fake] = {message.to: fakes.Slack() if isinstance(message, Slack) else fakes.Email() for message in job.outputs.declared_messages().values()}  # QA sends nothing
         result = runs.run(job, qa.settings, planned.request, snapshot_root=qa.store, databases=qa.databases, faked=quiet)
     except Exception as error:
         log.exception("the QA run of %s failed", job.name)

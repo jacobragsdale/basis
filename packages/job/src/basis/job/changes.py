@@ -14,7 +14,7 @@ import pandas as pd
 
 from basis.core.interval import Interval
 from basis.core.tables import Changes, Delete, Range
-from basis.job.outputs import Append, InsertNew, Manual, Outputs, Replace, ReplaceWhere, Target, Upsert
+from basis.job.outputs import Append, InsertNew, Manual, Outputs, Replace, ReplaceWhere, Target, Upsert, table_value
 from basis.job.rows import SchemaError, conform, conform_columns, select
 
 
@@ -31,7 +31,7 @@ class Planned:
 
 def plan(outputs: Outputs, interval: Interval | None) -> dict[str, Planned]:
     """Every declared table's changes, by output name."""
-    return {name: _plan(name, table.target, outputs.table(name), interval) for name, table in outputs.declared().items()}
+    return {name: _plan(name, table.target, table_value(outputs, name), interval) for name, table in outputs.declared().items()}
 
 
 def _plan(name: str, target: Target, value: pd.DataFrame | Changes, interval: Interval | None) -> Planned:

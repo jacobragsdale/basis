@@ -121,6 +121,21 @@ class SlackChannel(Model):
     """The proxy each post goes through. Without it, posts go direct."""
 
 
+class FolderSettings(Model):
+    """A shared folder, as this machine reaches it: `\\\\server\\share\\pm` on Windows, and its mount path in WSL and in
+    a pod, such as `/mnt/pm`."""
+
+    path: str
+    """The folder's absolute path on this machine."""
+
+    @model_validator(mode="after")
+    def _absolute(self) -> Self:
+        if not Path(self.path).is_absolute():
+            msg = f"a folder's path is absolute on this machine, as \\\\server\\share on Windows or /mnt/share elsewhere, not {self.path!r}"
+            raise ValueError(msg)
+        return self
+
+
 EMAIL = r"^[^@\s<>,;]+@[^@\s<>,;]+$"
 """An address, `name@host`, with nothing around it."""
 
@@ -208,6 +223,8 @@ class Settings(BaseSettings):
     """Each database a job reads or writes, by the name its datasets and tables give."""
     http: dict[str, HttpService] = Field(default_factory=dict)
     """Each other service a part calls, by the name its declaration gives."""
+    folders: dict[str, FolderSettings] = Field(default_factory=dict)
+    """Each shared folder a part reads or writes files in, by the name its declaration gives."""
     slack: dict[str, SlackChannel] = Field(default_factory=dict)
     """Each Slack channel a part posts to, by the name its declaration gives."""
     email: dict[str, EmailRelay] = Field(default_factory=dict)

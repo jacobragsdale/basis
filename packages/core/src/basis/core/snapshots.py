@@ -91,6 +91,26 @@ class SendRecord(Model):
     error: str | None = None
 
 
+class ReportRecord(Model):
+    """A workbook a run planned to write: where, and how many rows."""
+
+    folder: str
+    path: str
+    """Its path inside the folder, the run's interval formatted in."""
+    sheet: str
+    rows: int
+
+
+class WrittenRecord(Model):
+    """What became of a workbook a run wrote: `written`, with its size and SHA-256, or `failed`, with the error."""
+
+    status: Literal["written", "failed"]
+    at: datetime
+    size: int | None = None
+    sha256: str | None = None
+    error: str | None = None
+
+
 class RunRecord(Model):
     run_id: str
     job: str
@@ -123,6 +143,10 @@ class RunRecord(Model):
     """Each message the run planned to send, by its output's name: only `--publish` sends them."""
     sent: dict[str, SendRecord] = Field(default_factory=dict)
     """What became of each message the run sent, by its output's name."""
+    reports: dict[str, ReportRecord] = Field(default_factory=dict)
+    """Each workbook the run planned to write, by its output's name: only `--publish` writes them."""
+    written: dict[str, WrittenRecord] = Field(default_factory=dict)
+    """What became of each workbook the run wrote, by its output's name."""
     clocks: dict[str, list[AwareDatetime]] = Field(default_factory=dict)
     """Each time each clock the run declares gave, by its name, in order, which a replay of the run is given again."""
     ids: dict[str, list[UUID]] = Field(default_factory=dict)
@@ -182,6 +206,10 @@ class Snapshot:
             within = Range(record.column, record.start, record.end) if record.column is not None and record.start is not None and record.end is not None else None
             delete = Delete(within, frame("delete_matching") if record.matching else None)
         return Changes(delete, frame("upsert"), frame("insert_new"), frame("insert"))
+
+    def dataset(self, key: str) -> pd.DataFrame:
+        """The frame the run saved as `key`, such as `outputs/NAME/insert`, a workbook's rows."""
+        return self._dataset(key)
 
     def _dataset(self, key: str) -> pd.DataFrame:
         return self._object(key).read_frame()
