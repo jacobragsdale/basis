@@ -24,7 +24,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from basis.core import hooks, qa, settings
+from basis.core import environments, hooks, qa, settings
 from basis.core.errors import BasisError
 from basis.core.settings import Settings
 from basis.core.storage import Root
@@ -229,7 +229,7 @@ def _index(url: str, where: str, wanted: str | None) -> Found:
 
 def _settings(repo: Path, parts: Mapping[str, Part], desktop: Desktop, describe: Describe) -> list[Found]:
     """The settings every command reads, from the process's environment, and the QA tier's, from its file."""
-    return [*_environment(repo, desktop, describe), *_qa(repo, parts, describe)]
+    return [*_environment(repo, desktop, describe), *_qa(repo, parts, desktop, describe)]
 
 
 def _environment(repo: Path, desktop: Desktop, describe: Describe) -> list[Found]:
@@ -252,16 +252,17 @@ def _environment(repo: Path, desktop: Desktop, describe: Describe) -> list[Found
     return found
 
 
-def _qa(repo: Path, parts: Mapping[str, Part], describe: Describe) -> list[Found]:
+def _qa(repo: Path, parts: Mapping[str, Part], desktop: Desktop, describe: Describe) -> list[Found]:
     try:
         declared = qa.declared(repo / "pyproject.toml", parts)
     except BasisError as error:
         return [Found("the QA tier", _split(describe(error)))]
     if declared is None:
         return [Found("the repo declares no QA tier, so the push hook runs none", note=True)]
-    source = declared.settings_file(repo)
+    source = environments.user_file("qa", desktop.environ, windows=desktop.system == "Windows", home=desktop.home)
     if not source.is_file():
-        return [Found("the QA tier", (f"the repo declares a QA tier, and this machine has no {source}, so the push hook skips it", "copy .env.example to it, and fill in QA's databases and store"))]
+        problem = (f"the repo declares a QA tier, and this machine has no {source}, so the push hook skips it", "write it with QA's databases and store, as the repo's .env.example lists")
+        return [Found("the QA tier", problem)]
     try:
         read = settings.read(source)
     except ValidationError as error:

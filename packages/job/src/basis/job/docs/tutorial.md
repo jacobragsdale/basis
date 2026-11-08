@@ -49,12 +49,13 @@ imports. You wrote none of them.
 
 ## Run the job on its fixture
 
-Copy the settings file, which says where snapshots go, then run the job on the fixture for one day. An interval
-includes its start and stops before its end, so `2026-11-05..2026-11-06` is the 5th alone:
+Write your settings for dev, which say where snapshots go, in your own `dev.env`, which every repo you work in shares
+(on Windows, `%APPDATA%\basis\dev.env`). Then run the job on the fixture for one day, in dev. An interval includes
+its start and stops before its end, so `2026-11-05..2026-11-06` is the 5th alone:
 
 ```sh
-cp .env.example .env
-uv run --env-file .env basis run prices --params jobs/prices/params/default.json --data jobs/prices/tests/fixture --interval 2026-11-05..2026-11-06
+mkdir -p ~/.config/basis && echo BASIS_SNAPSHOT_ROOT=snapshots >> ~/.config/basis/dev.env
+uv run basis run prices --env dev --params jobs/prices/params/default.json --data jobs/prices/tests/fixture --interval 2026-11-05..2026-11-06
 ```
 
 The log is JSON, one record per line. The last record is the run's summary:
@@ -114,7 +115,7 @@ echo '{"include_closed_accounts": true}' > jobs/prices/params/closed.json
 Replay the saved run with it. RUN_ID is the manifest's name under `snapshots/runs/job/prices/`, without `.json`:
 
 ```sh
-uv run --env-file .env basis replay prices RUN_ID --params jobs/prices/params/closed.json 2>/dev/null
+uv run basis replay prices RUN_ID --env dev --params jobs/prices/params/closed.json 2>/dev/null
 ```
 
 The replay prints what changed:
@@ -143,7 +144,7 @@ Break one trade in the fixture. In `jobs/prices/tests/fixture/trades.csv`, chang
 `T5,A3,XS0002,2026-11-05,BUY,...` to `T5,A3,XS0002,2026-11-05,BYU,...`. Then run the job again:
 
 ```sh
-uv run --env-file .env basis run prices --params jobs/prices/params/default.json --data jobs/prices/tests/fixture --interval 2026-11-05..2026-11-06
+uv run basis run prices --env dev --params jobs/prices/params/default.json --data jobs/prices/tests/fixture --interval 2026-11-05..2026-11-06
 echo $?
 ```
 

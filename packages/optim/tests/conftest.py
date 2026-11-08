@@ -15,6 +15,13 @@ from optim import cli
 pytest_plugins = ("pytester",)
 
 
+@pytest.fixture(autouse=True)
+def in_dev(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Commands act in dev, from the process's environment, as a pod's do: the user has no file of settings."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("BASIS_ENV", "dev")
+
+
 @pytest.fixture
 def on_path(monkeypatch: pytest.MonkeyPatch) -> Generator[list[str]]:
     """`sys.path`, restored after the test, with the modules imported from the paths the test added dropped: a generated

@@ -20,6 +20,7 @@ JOB = Path(job.__file__).parent
 def no_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for name in [name for name in os.environ if name.startswith(("BASIS_", "OPTIM_"))]:
         monkeypatch.delenv(name)
+    monkeypatch.setenv("BASIS_ENV", "dev")  # which deleting every BASIS_ variable dropped
     monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", str(tmp_path / "snapshots"))
 
 

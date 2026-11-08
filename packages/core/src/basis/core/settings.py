@@ -2,11 +2,12 @@
 string. Each database a job names is configured by that name, as `BASIS_DATABASES__WAREHOUSE__KIND=mssql`, with nested
 fields under a double underscore, and so is each other service a part calls, as `BASIS_HTTP__PRICING__URL`. A database
 without a `WRITE` block can be read, and never written: a laptop with read-only credentials runs a job, and writes
-nothing. Where spans go is `BASIS_TRACES__*` (`Traces`), and nowhere when it is not set. A job's `main.py` names the
-settings file it reads, such as `.env.prod`; the command line reads the process's environment, as `uv run --env-file
-.env` sets it."""
+nothing. Where spans go is `BASIS_TRACES__*` (`Traces`), and nowhere when it is not set. Which variables a command
+reads is its environment's (`basis.core.environments`): on a desktop, the user's file for it, such as `qa.env`, alone,
+and in a pod, the process's environment."""
 
 from collections.abc import Mapping, Sequence
+from contextvars import ContextVar
 from pathlib import Path
 from types import NoneType, UnionType
 from typing import Annotated, Literal, Self, TypeAliasType, Union, get_args, get_origin, override
@@ -157,6 +158,7 @@ class Settings(BaseSettings):
         revalidate_instances="always",
         allow_inf_nan=False,
         hide_input_in_errors=True,  # an error would otherwise print every secret beside the field it is missing
+        dotenv_filtering="only_existing",  # a file's variable that sets no setting is ignored, as the environment's is
     )
 
     snapshot_root: str | None = None
@@ -171,6 +173,20 @@ class Settings(BaseSettings):
     a desktop or a test needs no Agent."""
     git_sha: str | None = None
     """The repo's commit, which basis's Dockerfile sets in the image as `BASIS_GIT_SHA`: the version spans carry."""
+
+    @classmethod
+    @override
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        if _FILE_ALONE.get():
+            return (dotenv_settings,)
+        return super().settings_customise_sources(settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings)
 
     def snapshots(self) -> Root:
         if self.snapshot_root is None:
@@ -210,29 +226,29 @@ def locate(location: str, folder: Path) -> str:
     return location if "://" in location or Path(location).is_absolute() else (folder / location).as_posix()
 
 
+_FILE_ALONE = ContextVar("basis.core.settings.file_alone", default=False)
+"""Set by `read_file` while it validates, so that no source but its file is read."""
+
+
 class FileSettings(Settings):
-    """Settings from one settings file alone, never the process's environment: the QA tier's, so a variable set for
-    another environment never mixes in. As in the environment, a variable that sets no setting is ignored, such as
-    `BASIS_LOG_LEVEL`, and so is one under a name basis read before, such as `ETL_SNAPSHOT_ROOT`."""
-
-    model_config = SettingsConfigDict(dotenv_filtering="only_existing")
-
-    @classmethod
-    @override
-    def settings_customise_sources(
-        cls,
-        settings_cls: type[BaseSettings],
-        init_settings: PydanticBaseSettingsSource,
-        env_settings: PydanticBaseSettingsSource,
-        dotenv_settings: PydanticBaseSettingsSource,
-        file_secret_settings: PydanticBaseSettingsSource,
-    ) -> tuple[PydanticBaseSettingsSource, ...]:
-        return (dotenv_settings,)
+    """Settings from one settings file alone, never the process's environment: a user's file for an environment, such
+    as the QA tier's `qa.env`, so a variable set for another environment never mixes in. As in the environment, a
+    variable that sets no setting is ignored, such as `BASIS_LOG_LEVEL`, and so is one under a name basis read before,
+    such as `ETL_SNAPSHOT_ROOT`."""
 
 
 def read(path: Path) -> FileSettings:
     """The settings the file at `path` holds, and nothing else."""
-    return FileSettings(_env_file=path)
+    return read_file(FileSettings, path)
+
+
+def read_file[S: Settings](kind: type[S], path: Path) -> S:
+    """`kind`'s settings, a part's own subclass among them, from the file at `path` alone."""
+    token = _FILE_ALONE.set(True)
+    try:
+        return kind(_env_file=path)
+    finally:
+        _FILE_ALONE.reset(token)
 
 
 type _At = tuple[object, str | None]

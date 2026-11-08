@@ -21,6 +21,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from basis.core import environments
 from basis.core.databases.mssql import target_of
 from basis.core.settings import MssqlSettings
 from optim import models, snapshots
@@ -117,7 +118,7 @@ class QA:
         to it, as `models/MODEL/params/default.json`."""
         if "--publish" in args and (problems := qa_problems(self.settings, markers=self.markers, writes=self.writes, publishing=True)):
             pytest.fail("refusing to publish outside QA:\n" + "\n".join(problems), pytrace=False)
-        command = [*self.command, "run", model, "--params", params.as_posix(), "--portfolios", *portfolios, "--label", "purpose=e2e", *args]
+        command = [*self.command, "run", model, "--env", "qa", "--params", params.as_posix(), "--portfolios", *portfolios, "--label", "purpose=e2e", *args]
         ran = subprocess.run(command, cwd=self.root, capture_output=True, text=True, check=False)  # noqa: S603 -- the configured command
         if not (found := re.search(r"^run (\S+)$", ran.stdout, re.MULTILINE)):
             msg = f"basis run did not complete (exit {ran.returncode}):\n{ran.stderr[-4000:]}"
@@ -125,7 +126,7 @@ class QA:
         return E2ERun(found.group(1), ran.returncode, snapshots.find([self.settings.snapshots()], found.group(1)))
 
     def replay(self, run: E2ERun) -> E2ERun:
-        ran = subprocess.run([*self.command, "replay", run.run_id, "--label", "purpose=e2e"], cwd=self.root, capture_output=True, text=True, check=False)  # noqa: S603 -- the configured command
+        ran = subprocess.run([*self.command, "replay", run.run_id, "--env", "qa", "--label", "purpose=e2e"], cwd=self.root, capture_output=True, text=True, check=False)  # noqa: S603 -- the configured command
         if not (found := re.search(r"^run (\S+)$", ran.stdout, re.MULTILINE)):
             msg = f"basis replay did not complete (exit {ran.returncode}):\n{ran.stderr[-4000:]}"
             raise AssertionError(msg)
@@ -153,9 +154,10 @@ class QA:
 
 @pytest.fixture(scope="session")
 def optim_qa(pytestconfig: pytest.Config) -> QA:
-    """The QA environment, from `BASIS_*` settings, or a failure that says why it is not safe to run against."""
+    """The QA environment, from the user's `qa.env`, or else the process's `BASIS_*` settings, as every command given
+    `--env qa` reads them, or a failure that says why it is not safe to run against."""
     refuse_renamed(os.environ)
-    settings = Settings()
+    settings = environments.load("qa", Settings).settings
     markers, writes = pytestconfig.getini("optim_qa_markers"), pytestconfig.getini("optim_e2e_writes")
     if problems := qa_problems(settings, markers=markers, writes=writes):
         pytest.fail("refusing to run the e2e suite outside QA:\n" + "\n".join(problems), pytrace=False)

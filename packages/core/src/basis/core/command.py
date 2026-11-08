@@ -34,7 +34,7 @@ from typing import Literal, NoReturn, override
 
 from pydantic import ValidationError
 
-from basis.core import check, ddl, doctor, full, gates, hooks, invalid, logs, qa, review, settings, sync, upgrade
+from basis.core import check, ddl, doctor, environments, full, gates, hooks, invalid, logs, qa, review, settings, sync, upgrade
 from basis.core.destination import Dialect
 from basis.core.errors import BasisError
 from basis.core.logs import utc_now
@@ -57,6 +57,9 @@ class Spec:
     required: bool = False
     run_id: bool = False
     """Whether RUN_ID follows NAME."""
+    env: bool = False
+    """Whether the verb takes `--env`, since it reaches the firm's systems: the part reads its settings from the
+    environment it names (`basis.core.environments`)."""
     alone: Literal["refuse", "each", "ledger", "names"] = "refuse"
     """What the verb does without NAME, where more than one declared part has it: refuse; hand the arguments, which
     must be options every part takes, to each part in turn, and print what each part printed as JSON, by part; print
@@ -65,11 +68,11 @@ class Spec:
 
 
 SHARED = {
-    "run": Spec("the {noun}'s name, as the repo lists it{path}", required=True),
+    "run": Spec("the {noun}'s name, as the repo lists it{path}", required=True, env=True),
     "describe": Spec("the {noun} to describe{path}; without it, every one the repo lists, by name", alone="names"),
-    "resume": Spec("the {noun} whose run it is; without it, the run is found by its id", run_id=True),
-    "replay": Spec("the {noun} whose run it is; without it, the run is found by its id", run_id=True),
-    "regress": Spec("the {noun} whose runs to replay; without it, every one", alone="each"),
+    "resume": Spec("the {noun} whose run it is; without it, the run is found by its id", run_id=True, env=True),
+    "replay": Spec("the {noun} whose run it is; without it, the run is found by its id", run_id=True, env=True),
+    "regress": Spec("the {noun} whose runs to replay; without it, every one", alone="each", env=True),
     "ddl": Spec("the {noun} whose tables to print{path}", alone="ledger"),
 }
 """The verbs of the parts that run things by name, such as jobs, which are core's, in the order `basis --help` lists
@@ -126,6 +129,8 @@ def _run(argv: Sequence[str], *, cwd: Path, installed: Installed) -> int:
             if found is None:
                 return _doctor_outside(argv, unread)
             repo = found
+        elif list(argv[:1]) == ["docs"] and _for_doctor(cwd, installed) == (None, None):
+            return _docs_outside(argv, installed)  # outside a basis repo, such as a ctzd app, every installed part's docs, which write nothing
         else:
             settings.refuse_renamed(os.environ)
             repo = find(cwd, installed)
@@ -302,7 +307,7 @@ def _core(repo: Repo) -> list[Verb]:
         "doctor": Verb("doctor", DOCTOR, _no_arguments, lambda _: _diagnose(repo, None)),
         "new": Verb("new", f"add a {' or a '.join(kinds)} to the repo", partial(_new_arguments, kinds), lambda n: _new(repo, kinds[str(n.kind)], str(n.name))),
         "sync": Verb("sync", "rewrite the repo's framework and agent files from the installed version", _sync_arguments, run_sync),
-        "docs": Verb("docs", "list the docs of the installed parts, or print one", _docs_arguments, lambda n: _docs(_pages(repo), n.page)),
+        "docs": Verb("docs", "list the docs of the installed parts, or print one", _docs_arguments, lambda n: _docs(_pages(repo.parts), n.page)),
     }
     given = ALWAYS.union(*map(_gives, parts))
     return [offered[name] for name in CORE if name in given]
@@ -449,6 +454,8 @@ class _Sharing:
         parser.add_argument("name", metavar=metavar, nargs=None if self.spec.required else "?", help=self.spec.name.format(noun=runs.noun, path=path))
         if self.spec.run_id:
             parser.add_argument("run_id", metavar="RUN_ID")
+        if self.spec.env:
+            environment_argument(parser)
         side.arguments(parser)
         return parser
 
@@ -581,6 +588,13 @@ def _doctor_outside(argv: Sequence[str], unread: str | None) -> int:
     return _execute(_parser("basis", "Check this desktop's setup for basis.", [verb]), {"doctor": verb}, argv)
 
 
+def _docs_outside(argv: Sequence[str], installed: Installed) -> int:
+    """`basis docs` where there is no basis repo: the pages of every installed part, which parses as it does in one."""
+    pages = _pages({name: load() for name, load in installed.items()})
+    verb = Verb("docs", "list the docs of the installed parts, or print one", _docs_arguments, lambda n: _docs(pages, n.page))
+    return _execute(_parser("basis", "Read the docs of basis's installed parts.", [verb]), {"docs": verb}, argv)
+
+
 def _new(repo: Repo, make: Callable[[Path, str], Path], name: str) -> int:
     log.info("made %s", make(repo.root, name))
     hooks.ensure(repo.root)
@@ -616,9 +630,9 @@ def _sync(root: Path, files: Sequence[sync.AgentFiles], args: SyncArgs) -> int:
     return 1 if sum(fail(*problem) for problem in done.problems()) else 0
 
 
-def _pages(repo: Repo) -> dict[str, Path]:
-    """Every declared part's docs, by `PART/PAGE`."""
-    return {f"{name}/{path.relative_to(part.docs).with_suffix('').as_posix()}": path for name, part in repo.parts.items() if part.docs is not None for path in sorted(part.docs.rglob("*.md"))}
+def _pages(parts: Mapping[str, Part]) -> dict[str, Path]:
+    """Every part's docs, by `PART/PAGE`."""
+    return {f"{name}/{path.relative_to(part.docs).with_suffix('').as_posix()}": path for name, part in parts.items() if part.docs is not None for path in sorted(part.docs.rglob("*.md"))}
 
 
 def _docs(pages: Mapping[str, Path], page: str | None) -> int:
@@ -646,7 +660,7 @@ def _check_arguments(parser: argparse.ArgumentParser) -> None:
         "--settings-from",
         type=existing_folder,
         metavar="DIR",
-        help="with --full, read the QA settings file and a relative BASIS_SNAPSHOT_ROOT from DIR, the clone's own folder: for a commit the push hook checks in a worktree of its own",
+        help="with --full, read a relative BASIS_SNAPSHOT_ROOT from DIR, the clone's own folder: for a commit the push hook checks in a worktree of its own",
     )
     parser.add_argument("--no-qa", action="store_true", help="with --full, leave the QA tier to the push, as basis upgrade does for a relock not yet committed")
 
@@ -657,6 +671,13 @@ def _review_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _sync_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--adopt", action="store_true", help="replace each file of the repo's own at a path basis writes, after saving it as NAME.before-basis")
+
+
+def environment_argument(parser: argparse.ArgumentParser) -> None:
+    """`--env ENV`, which every verb that reaches the firm's systems takes, and gives its handler as `env`, or None for
+    `BASIS_ENV`'s (`basis.core.environments.load`)."""
+    names = ", ".join(environments.NAMES)
+    parser.add_argument("--env", metavar="ENV", choices=environments.NAMES, help=f"{names}: the environment to act in, whose settings it reads; without it, BASIS_ENV's, and there is none by default")
 
 
 def label(value: str) -> tuple[str, str]:

@@ -24,18 +24,20 @@ To publish a job:
 
    Have someone with DDL rights run both. One ledger serves every job that writes to that database.
 
-2. In the settings file the scheduler's container reads, configure each database the job names, with a `WRITE` block
-   for each one it writes, as `.env.example` shows. `BASIS_DATABASES__WAREHOUSE__WRITE__LEDGER` names the ledger from
-   step 1.
-3. Run the job once without publishing, against the real databases:
+2. In the settings prod's deployment gives the job's container, configure each database the job names, with a
+   `WRITE` block for each one it writes, as `.env.example` shows, and `BASIS_ENV=prod` and `BASIS_PROD_WRITES=1`.
+   `BASIS_DATABASES__WAREHOUSE__WRITE__LEDGER` names the ledger from step 1. Your own `prod.env` (see the reference's
+   [Environments](reference.md#environments)) holds the same databases with your read-only logins.
+3. Run the job once from your desktop without publishing, against prod's databases:
 
    ```sh
-   uv run --env-file .env.prod basis run prices --params jobs/prices/params/default.json --interval 2026-11-05..2026-11-06
+   uv run basis run prices --env prod --params jobs/prices/params/default.json --interval 2026-11-05..2026-11-06
    ```
 
    The run checks each destination table against its row before it loads anything. If the summary's `status` is
    `failed`, its `reasons` name each column that does not match, or each value that does not fit.
-4. Run it again with `--publish`. The exit code is 0 only when every database committed.
+4. Let its deployment run it with `--publish`, which a desktop's prod run is refused. The exit code is 0 only when
+   every database committed. In dev and QA, a desktop publishes with `--env dev --publish` or `--env qa --publish`.
 
 To confirm the publish, query the ledger: it has one row per table the run wrote, with the run's id and what the
 database counted.
@@ -43,10 +45,11 @@ database counted.
 ## Finish a run that published partly
 
 A run that writes to two databases commits each in its own transaction, so a failure after the first commit leaves
-`status` as `partial` in its manifest. Resume it, after fixing what failed:
+`status` as `partial` in its manifest. Resume it, after fixing what failed, where the run ran, since in prod only a
+deployment that sets `BASIS_PROD_WRITES=1` may write:
 
 ```sh
-uv run --env-file .env.prod basis resume prices RUN_ID
+basis resume prices RUN_ID --env prod
 ```
 
 `resume` writes the run's saved changes, the same rows, to each database whose ledger does not have the run, and
@@ -60,7 +63,7 @@ A table written with `Append()` refuses a second publish of an interval that ove
 since its rows would be inserted twice. If you mean to insert them twice, add `--again`:
 
 ```sh
-uv run --env-file .env.prod basis run prices --params jobs/prices/params/default.json --interval 2026-11-05..2026-11-06 --publish --again
+basis run prices --env prod --params jobs/prices/params/default.json --interval 2026-11-05..2026-11-06 --publish --again
 ```
 
 To rerun an interval without duplicating it, write the table with `ReplaceWhere(interval=COLUMN)` instead.
@@ -74,10 +77,11 @@ Every log record carries the run's `run_id`. The run's manifest is `BASIS_SNAPSH
 - A transform that raised appears in `reasons` with the line of job code that raised it; the log holds the traceback.
 - `publishes` has each database's outcome and error.
 
-To reproduce the run on a laptop with the code you have now, replay it from the production snapshot root:
+To reproduce the run on a desktop with the code you have now, replay it from prod's run store, which your `prod.env`
+names:
 
 ```sh
-uv run --env-file .env.prod basis replay prices RUN_ID
+uv run basis replay prices RUN_ID --env prod
 ```
 
 A replay reads only the snapshot and writes nothing to a database.
@@ -88,7 +92,7 @@ A replay reads only the snapshot and writes nothing to a database.
 differ. It exits 1 if anything changed, so a pipeline can gate a merge on it:
 
 ```sh
-uv run --env-file .env.prod basis regress prices --last 20 --label purpose=production
+uv run basis regress prices --env prod --last 20 --label purpose=production
 ```
 
 Each entry names the run, and each difference the output, the operation, and the rows added, removed and changed, by
@@ -96,17 +100,18 @@ column.
 
 ## Run every job against QA before it is pushed
 
-Declare the QA tier in `pyproject.toml`, as the reference's [QA tier](reference.md#qa-tier) shows: the settings file,
-the marker QA's names contain, QA's run stores, the tables each job may write there, and each job's params and
-interval. Then copy `.env.example` to that file, `.env.qa`, and fill in QA's databases and `BASIS_SNAPSHOT_ROOT`:
+Declare the QA tier in `pyproject.toml`, as the reference's [QA tier](reference.md#qa-tier) shows: the marker QA's
+names contain, QA's run stores, the tables each job may write there, and each job's params and interval. Then write
+your own `qa.env` (`~/.config/basis/qa.env`, or `%APPDATA%\basis\qa.env` on Windows), which every repo shares, with
+QA's databases and `BASIS_SNAPSHOT_ROOT`, as `.env.example` lists them:
 
 ```sh
-uv run basis doctor        # says whether .env.qa points only at QA, with the fix for anything that does not
+uv run basis doctor        # says whether qa.env points only at QA, with the fix for anything that does not
 uv run basis check --full  # what the push hook runs: check, regress, and each job published to QA
 ```
 
 A setting that points outside QA, or a table the declaration does not list, is one `ERROR` line, and nothing runs.
-On a machine without `.env.qa`, the push hook prints a `SKIPPED` line instead.
+On a machine without a `qa.env`, the push hook prints a `SKIPPED` line instead.
 
 ## Open a pull request with what the checks found
 

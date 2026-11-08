@@ -1,10 +1,12 @@
 """The QA tier, which `basis check --full` runs: each part's runs against the QA databases, from the desktop, the one
 place without Docker where a repo's code meets a real database before production. It keeps the safeguards of an
 end-to-end suite: it refuses to run unless every place its settings point carries the QA marker, and it writes only to the
-tables and the store the repo allows. All of it is declared in the repo's `pyproject.toml`, and nothing is inferred:
+tables and the store the repo allows. Its settings are the user's file for QA, `qa.env` in their own configuration
+folder (`basis.core.environments`), which every repo they work in shares, read alone: never the process's environment,
+so a variable set for production never mixes in. The rest is declared in the repo's `pyproject.toml`, and nothing is
+inferred:
 
     [tool.basis.qa]
-    settings = ".env.qa"   # the settings file the tier reads, alone: never the process's environment
     marker = "qa"          # what the name of each QA server or database, and of each QA store, contains
     stores = ["//files/runs-qa/pricing"]   # the stores the tier may save runs in; the settings name one of them
     writes = { warehouse = ["daily_positions", "etl.publishes"] }   # by database, the tables it may write: ledgers too
@@ -36,7 +38,7 @@ from typing import Annotated
 import pandas as pd
 from pydantic import ConfigDict, Field, ValidationError
 
-from basis.core import invalid
+from basis.core import environments, invalid
 from basis.core.databases import Counts, Database, LedgerEntry, Reader, Statements, Writer, open_database
 from basis.core.destination import TableSpec
 from basis.core.errors import BasisError
@@ -51,7 +53,7 @@ from basis.core.verbs import Part, Qa, QaPlan, QaRun
 KEY = "qa"
 """The `[tool.basis]` table that declares the tier."""
 _SECTION = f"[tool.basis.{KEY}]"
-_EXAMPLE = f'{_SECTION} settings = ".env.qa", marker = "qa", stores = ["//files/runs-qa/NAME"], writes = {{ warehouse = ["TABLE", "etl.publishes"] }}'
+_EXAMPLE = f'{_SECTION} marker = "qa", stores = ["//files/runs-qa/NAME"], writes = {{ warehouse = ["TABLE", "etl.publishes"] }}'
 _SERVER = ("server", "data source", "address", "addr", "network address")
 _DATABASE = ("database", "initial catalog")
 
@@ -65,8 +67,6 @@ class Declaration(Model):
 
     model_config = ConfigDict(title=f"pyproject.toml's {_SECTION}")
 
-    settings: Annotated[str, Field(min_length=1)]
-    """The settings file, relative to the repo, such as `.env.qa`."""
     marker: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]+$")]
     """What every QA name contains: two or more letters, digits, `_`, `.` or `-`, which no production name contains."""
     stores: Annotated[tuple[str, ...], Field(min_length=1)]
@@ -82,10 +82,6 @@ class Declared:
     declaration: Declaration
     parts: dict[str, dict[str, object]] = field(default_factory=dict[str, dict[str, object]])
     """Each part's own table, by the part's name."""
-
-    def settings_file(self, folder: Path) -> Path:
-        """The settings file, in `folder`: the repo's, or the clone's own folder for a check in another worktree."""
-        return folder / self.declaration.settings
 
     def tables(self) -> dict[str, frozenset[str]]:
         return {database: frozenset(table.lower() for table in tables) for database, tables in self.declaration.writes.items()}
@@ -273,17 +269,18 @@ class Outcome:
 
 
 def tier(repo: Path, parts: Mapping[str, Part], *, commit: str | None, folder: Path) -> Outcome:
-    """Run each part's QA runs, where `repo` declares the tier and its settings file is in `folder` (the repo, or the
-    clone's own folder for a check in another worktree), once every part's plan and every setting is safe."""
+    """Run each part's QA runs, where `repo` declares the tier and the user has a `qa.env`, once every part's plan and
+    every setting is safe. A relative run store is in `folder`: the repo, or the clone's own folder for a check in
+    another worktree."""
     found = declared(repo / "pyproject.toml", parts)
     if found is None:
         return Outcome(skipped=f"pyproject.toml declares no {_SECTION}: declare one to run the repo's parts against QA, as `uv run basis docs reference` shows")
     planning = {name: part.qa for name, part in parts.items() if part.qa is not None}
     if not planning:
         return Outcome(skipped=f"no part of this repo ({', '.join(parts)}) has QA runs")
-    source = found.settings_file(folder)
+    source = environments.user_file("qa")
     if not source.is_file():
-        return Outcome(skipped=f"this machine has no {source}, the settings file {_SECTION} names: copy .env.example to it, and fill in QA's databases and store")
+        return Outcome(skipped=f"this machine has no {source}, the user's QA settings, which the tier reads: write it with QA's databases and store, as the repo's .env.example lists")
     return _safely(found, read(source), planning, source=source, repo=repo, folder=folder, commit=commit)
 
 

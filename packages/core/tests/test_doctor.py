@@ -135,7 +135,7 @@ def test_in_wsl_a_repo_on_a_windows_drive_is_a_problem() -> None:
     assert entry.problem[1] == "clone the repo again in WSL's own filesystem, such as ~/repos, and work on it there"
 
 
-QA = '\n[tool.basis.qa]\nsettings = ".env.qa"\nmarker = "qa"\nstores = ["runs-qa"]\nwrites = {}\n'
+QA = '\n[tool.basis.qa]\nmarker = "qa"\nstores = ["runs-qa"]\nwrites = {}\n'
 
 
 def test_settings_that_do_not_validate_and_qa_settings_that_point_outside_qa_are_problems(repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -144,8 +144,10 @@ def test_settings_that_do_not_validate_and_qa_settings_that_point_outside_qa_are
     with (repo / "pyproject.toml").open("a", encoding="utf-8") as file:
         file.write(QA)
     _, _, problems = diagnosed(repo, desktop(tmp_path), capsys, parts)
-    assert problems == [f"ERROR: the repo declares a QA tier, and this machine has no {repo / '.env.qa'}, so the push hook skips it: copy .env.example to it, and fill in QA's databases and store"]
-    (repo / ".env.qa").write_text("BASIS_SNAPSHOT_ROOT=//files/runs\n", encoding="utf-8")
+    user = tmp_path / ".config" / "basis" / "qa.env"
+    assert problems == [f"ERROR: the repo declares a QA tier, and this machine has no {user}, so the push hook skips it: write it with QA's databases and store, as the repo's .env.example lists"]
+    user.parent.mkdir(parents=True)
+    user.write_text("BASIS_SNAPSHOT_ROOT=//files/runs\n", encoding="utf-8")
     monkeypatch.setenv("BASIS_DATABASES__WAREHOUSE__KIND", "mssql")
     _, _, problems = diagnosed(repo, desktop(tmp_path), capsys, parts)
     assert [line.split(" ")[1] for line in problems] == ["the", "BASIS_SNAPSHOT_ROOT"]

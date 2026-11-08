@@ -7,7 +7,7 @@ import pandas as pd
 import pyarrow as pa
 import pytest
 
-from basis.core import qa
+from basis.core import environments, qa
 from basis.core.databases import Bind, Counts, LedgerEntry, Reader, Statements, Writer
 from basis.core.destination import TableSpec
 from basis.core.errors import BasisError
@@ -23,7 +23,6 @@ DECLARED = """
 parts = ["alpha"]
 
 [tool.basis.qa]
-settings = ".env.qa"
 marker = "qa"
 stores = ["runs-qa", "//files/runs-qa"]
 writes = { warehouse = ["prices", "etl.Publishes"] }
@@ -147,13 +146,13 @@ def test_a_database_no_run_uses_must_carry_the_marker_too(declared: qa.Declared)
 @pytest.mark.parametrize(
     ("table", "problem"),
     [
-        ('settings = ".env.qa"\nmarker = "q"\nstores = ["qa"]\nwrites = {}\n', "marker: String should match pattern"),
-        ('settings = ".env.qa"\nmarker = "qa"\nstores = ["//files/runs"]\nwrites = {}\n', "stores has //files/runs, whose name does not contain the marker 'qa'"),
-        ('settings = ".env.qa"\nmarker = "qa"\nstores = ["qa"]\nwrites = {}\nbeta = {}\n', "has beta, which basis does not read"),
-        ('marker = "qa"\nstores = ["qa"]\nwrites = {}\n', "settings: Field required"),
-        ('settings = ".env.qa"\nmarker = "qa"\nstores = []\nwrites = {}\n', "stores: Tuple should have at least 1 item"),
+        ('marker = "q"\nstores = ["qa"]\nwrites = {}\n', "marker: String should match pattern"),
+        ('marker = "qa"\nstores = ["//files/runs"]\nwrites = {}\n', "stores has //files/runs, whose name does not contain the marker 'qa'"),
+        ('marker = "qa"\nstores = ["qa"]\nwrites = {}\nbeta = {}\n', "has beta, which basis does not read"),
+        ('settings = ".env.qa"\nmarker = "qa"\nstores = ["qa"]\nwrites = {}\n', "has settings, which basis does not read"),  # the user's qa.env took its place
+        ('marker = "qa"\nstores = []\nwrites = {}\n', "stores: Tuple should have at least 1 item"),
     ],
-    ids=["a-one-letter-marker", "an-unmarked-store", "an-unknown-key", "no-settings-file", "no-store"],
+    ids=["a-one-letter-marker", "an-unmarked-store", "an-unknown-key", "a-settings-file", "no-store"],
 )
 def test_a_declaration_that_is_not_explicit_and_safe_is_refused(tmp_path: Path, table: str, problem: str) -> None:
     (tmp_path / "pyproject.toml").write_text(f'[tool.basis]\nparts = ["alpha"]\n\n[tool.basis.qa]\n{table}', encoding="utf-8")
@@ -276,10 +275,24 @@ def planned(*problems: tuple[str, str]) -> tuple[list[Qa], Part]:
     return given, Part(qa=plan)
 
 
+@pytest.fixture(autouse=True)
+def user_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The user's own basis folder, which holds their qa.env: an empty one of the test's."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    return tmp_path / "config" / "basis"
+
+
+def qa_env(text: str) -> Path:
+    path = environments.user_file("qa")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
 def repo(tmp_path: Path, env: str | None) -> Path:
     (tmp_path / "pyproject.toml").write_text(DECLARED, encoding="utf-8")
     if env is not None:
-        (tmp_path / ".env.qa").write_text(env, encoding="utf-8")
+        qa_env(env)
     return tmp_path
 
 
@@ -291,7 +304,7 @@ def tier(folder: Path, parts: Mapping[str, Part], repo_folder: Path | None = Non
     return qa.tier(repo_folder or folder, parts, commit="C1", folder=folder)
 
 
-def test_the_tier_runs_each_part_against_the_settings_file_alone_and_the_store_it_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_tier_runs_each_part_against_the_user_s_qa_env_alone_and_the_store_it_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BASIS_DATABASES__PROD__KIND", "mssql")  # the process's own, which the tier never reads
     given, part = planned()
     outcome = tier(repo(tmp_path, SAFE), {"alpha": part})
@@ -303,7 +316,7 @@ def test_the_tier_runs_each_part_against_the_settings_file_alone_and_the_store_i
     assert not context.may_write("warehouse", "positions")
 
 
-def test_a_check_in_another_worktree_reads_the_settings_and_store_from_the_clones_own_folder(tmp_path: Path) -> None:
+def test_a_check_in_another_worktree_reads_a_relative_store_from_the_clones_own_folder(tmp_path: Path) -> None:
     given, part = planned()
     own, worktree = tmp_path / "own", tmp_path / "worktree"
     own.mkdir()
@@ -315,10 +328,11 @@ def test_a_check_in_another_worktree_reads_the_settings_and_store_from_the_clone
     assert given[0].repo == worktree
 
 
-def test_a_machine_without_the_settings_file_skips_the_tier_and_says_why(tmp_path: Path) -> None:
+def test_a_machine_without_the_user_s_qa_env_skips_the_tier_and_says_why(tmp_path: Path, user_folder: Path) -> None:
     given, part = planned()
+    (tmp_path / ".env.qa").write_text(SAFE, encoding="utf-8")  # a repo's own file, which the tier no longer reads
     outcome = tier(repo(tmp_path, None), {"alpha": part})
-    assert outcome.skipped == f"this machine has no {tmp_path / '.env.qa'}, the settings file [tool.basis.qa] names: copy .env.example to it, and fill in QA's databases and store"
+    assert outcome.skipped == f"this machine has no {user_folder / 'qa.env'}, the user's QA settings, which the tier reads: write it with QA's databases and store, as the repo's .env.example lists"
     assert given == []
 
 
@@ -331,7 +345,7 @@ def test_settings_that_point_outside_qa_run_nothing_and_never_reach_a_part(tmp_p
 
 def test_one_parts_refusal_stops_every_parts_runs(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text(DECLARED.replace('parts = ["alpha"]', 'parts = ["alpha", "beta"]'), encoding="utf-8")
-    (tmp_path / ".env.qa").write_text(SAFE, encoding="utf-8")
+    qa_env(SAFE)
     _, alpha = planned()
     _, beta = planned(("beta writes positions", "list it"))
     outcome = tier(tmp_path, {"alpha": alpha, "beta": beta})

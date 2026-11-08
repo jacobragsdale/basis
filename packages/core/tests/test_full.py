@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from basis.core import clone, command, full, hooks, review, sync
+from basis.core import clone, command, environments, full, hooks, review, sync
 from basis.core.errors import BasisError
 from basis.core.verbs import Difference, Part, Qa, QaPlan, QaRun, Regress, Regressed, Regressions, Runs, Shared
 
@@ -20,9 +20,17 @@ SAME = Regressed("prices", "R2", (), ())
 
 
 @pytest.fixture(autouse=True)
-def no_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+def no_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """No BASIS_ variable, and a user's own basis folder, outside the repo, with no qa.env yet."""
     for name in [name for name in os.environ if name.startswith("BASIS_")]:
         monkeypatch.delenv(name)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+
+
+def qa_env(text: str) -> None:
+    path = environments.user_file("qa")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
 
 
 @pytest.fixture
@@ -181,7 +189,6 @@ def test_a_folder_with_uncommitted_changes_is_checked_and_not_recorded(repo: Pat
 
 QA = """
 [tool.basis.qa]
-settings = ".env.qa"
 marker = "qa"
 stores = ["runs-qa"]
 writes = { warehouse = ["prices"] }
@@ -197,11 +204,10 @@ def qa_part(*problems: tuple[str, str], failure: tuple[str, str] | None = None) 
 
 @pytest.fixture
 def declared(repo: Path, git: Git) -> Path:
-    """`repo`, declaring a QA tier, with QA's settings file beside it, which git ignores."""
+    """`repo`, declaring a QA tier, with the user's qa.env."""
     with (repo / "pyproject.toml").open("a", encoding="utf-8") as file:
         file.write(QA)
-    (repo / ".gitignore").write_text(".env.qa\n", encoding="utf-8")
-    (repo / ".env.qa").write_text("BASIS_SNAPSHOT_ROOT=runs-qa\n", encoding="utf-8")
+    qa_env("BASIS_SNAPSHOT_ROOT=runs-qa\n")
     git(repo, "add", "--all")
     git(repo, "commit", "--quiet", "--no-verify", "--message", "Declare the QA tier")
     return repo
@@ -217,7 +223,7 @@ def redeclare(repo: Path, git: Git, store: str) -> None:
     """Make `store` the repo's one QA store, and the settings file's, and commit it."""
     text = (repo / "pyproject.toml").read_text(encoding="utf-8").replace('stores = ["runs-qa"]', f'stores = ["{store}"]')
     (repo / "pyproject.toml").write_text(text, encoding="utf-8")
-    (repo / ".env.qa").write_text(f"BASIS_SNAPSHOT_ROOT={store}\n", encoding="utf-8")
+    qa_env(f"BASIS_SNAPSHOT_ROOT={store}\n")
     git(repo, "commit", "--quiet", "--no-verify", "--all", "--message", "Another QA store")
 
 

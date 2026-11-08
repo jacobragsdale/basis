@@ -225,14 +225,14 @@ basis's.
 | Command | Does |
 |---|---|
 | `basis check [--staged]` | Checks that the framework and agent files are what the installed basis writes, byte for byte, with nothing left over that it no longer writes; that the clone runs the hooks in `.githooks/`, pointing it at them if it names no hooks folder; and that `uv.lock` matches `pyproject.toml`; then runs `ruff check`, `ruff format --check`, `ty check` and `pytest`, each through `uv run --locked`. It holds the tests to three gates: the unit tests cover at least `[tool.basis] coverage` percent of the code's lines and branches, as pytest-cov measures them with basis's settings, a repo without the floor failing; no test uses `unittest.mock` or pytest-mock, but in a file with a line `# basis: allow-mocks -- WHY`; and no unit test opens a network socket, which basis's pytest plugin fails, a test marked `integration` excepted. With `--staged`, it first checks each file staged for a commit, as git will commit it: none holds a private key, none is over 500 KB, and each YAML and TOML file parses. Every step runs, and each that fails prints its findings and then its `ERROR` line. Needs no network or database. The commit hook runs `basis check --staged` after ruff fixes and formats the staged Python files. |
-| `basis check --full [--settings-from DIR] [--no-qa]` | `basis check`, then `regress` (the last 10 published runs of every job, from `BASIS_SNAPSHOT_ROOT` in the environment, where it is set and reachable), then the QA tier (see [QA tier](#qa-tier)), where `pyproject.toml` declares one and this machine has its settings file, then, in WSL and on Linux, mutmut on each function of a module named `domain` that the change touches, which fails nothing. A piece that does not run prints one `SKIPPED:` line saying why; none runs when `basis check` fails. An output `regress` sees change prints and fails nothing; a failure to regress, a QA tier that refuses, or a QA run that fails exits 1. With nothing uncommitted, it records what it found for `basis review`. The push hook runs it on each commit pushed, in a temporary worktree when it is not a clean `HEAD`, with `--settings-from` naming the clone's folder, where the files git does not track are; `azure-pipelines.yml`'s check stage runs it too. `--no-qa` leaves the QA tier to the push, as `basis upgrade` does. A failure in one piece, whatever it raises, is its `ERROR` line, and the pieces after it still run and are recorded. |
+| `basis check --full [--settings-from DIR] [--no-qa]` | `basis check`, then `regress` (the last 10 published runs of every job, from `BASIS_SNAPSHOT_ROOT` in the environment, where it is set and reachable), then the QA tier (see [QA tier](#qa-tier)), where `pyproject.toml` declares one and the user has a `qa.env`, then, in WSL and on Linux, mutmut on each function of a module named `domain` that the change touches, which fails nothing. A piece that does not run prints one `SKIPPED:` line saying why; none runs when `basis check` fails. An output `regress` sees change prints and fails nothing; a failure to regress, a QA tier that refuses, or a QA run that fails exits 1. With nothing uncommitted, it records what it found for `basis review`. The push hook runs it on each commit pushed, in a temporary worktree when it is not a clean `HEAD`, with `--settings-from` naming the clone's folder, where a relative `BASIS_SNAPSHOT_ROOT` is; `azure-pipelines.yml`'s check stage runs it too. `--no-qa` leaves the QA tier to the push, as `basis upgrade` does. A failure in one piece, whatever it raises, is its `ERROR` line, and the pieces after it still run and are recorded. |
 | `basis review [--commit REF]` | Prints, as Markdown for a pull request's description, what the latest `basis check --full` of `REF` (default `HEAD`) found: the outputs `regress` saw change, the QA tier's runs, the mutants that survived, the basis versions, and the commit. Exits 1 when no check of the commit is recorded in this clone, or when it failed. |
-| `basis doctor` | Checks this desktop, on Windows and in WSL, in a repo or outside one: uv and its version, git, that the clone runs the repo's hooks, the feed (the default index of the user's `uv.toml`, which must be the repo's index where `pyproject.toml` names one), and the settings: the environment's, and the QA tier's file. Prints `ok:` for each check passed and one `ERROR` line, ending with its fix, for each problem. |
+| `basis doctor` | Checks this desktop, on Windows and in WSL, in a repo or outside one: uv and its version, git, that the clone runs the repo's hooks, the feed (the default index of the user's `uv.toml`, which must be the repo's index where `pyproject.toml` names one), and the settings: the process's, and the user's `qa.env` where the repo declares a QA tier. Prints `ok:` for each check passed and one `ERROR` line, ending with its fix, for each problem. |
 | `basis upgrade` | With nothing uncommitted, relocks basis's packages within what `pyproject.toml` allows, runs `basis sync` and `basis check --full --no-qa` with the newly locked version, and prints each package's version before and after and each file it changed. The QA tier runs when the upgrade is committed and pushed, so QA publishes it once, with a record for `basis review`. |
-| `basis run JOB --params FILE [--interval START..END] [--data DIR] [--label KEY=VALUE]... [--publish] [--again]` | Runs a job, saves its snapshot, and with `--publish` writes its changes. `--again` publishes an `Append()` table for an interval the ledger already has. |
-| `basis replay [JOB] RUN_ID [--params FILE]` | Runs a saved run's transform again on its inputs; prints the replay's status, reasons and differences as JSON. Without `JOB`, the run is found by its id alone. |
-| `basis resume [JOB] RUN_ID [--again]` | Writes a partly published run's changes to each database whose ledger lacks the run, told `--again` if the run was, or if given now. Without `JOB`, the run is found by its id alone. |
-| `basis regress [JOB] [--last N] [--label KEY=VALUE]... [--snapshots ROOT]` | Replays the last `N` (default 10) published runs of `JOB`, or of every job the repo lists, whose labels include every `--label`; prints each run's job, reasons and differences as JSON: rows added, removed and changed, by column, and each column added, removed or retyped, the rows comparing by the columns both runs hold alike. |
+| `basis run JOB --env ENV --params FILE [--interval START..END] [--data DIR] [--label KEY=VALUE]... [--publish] [--again]` | Runs a job in an environment (see [Environments](#environments)), saves its snapshot, and with `--publish` writes its changes, which prod refuses unless the deployment allows it. `--again` publishes an `Append()` table for an interval the ledger already has. |
+| `basis replay [JOB] RUN_ID --env ENV [--params FILE]` | Runs a saved run's transform again on its inputs; prints the replay's status, reasons and differences as JSON. Without `JOB`, the run is found by its id alone. |
+| `basis resume [JOB] RUN_ID --env ENV [--again]` | Writes a partly published run's changes to each database whose ledger lacks the run, told `--again` if the run was, or if given now. Without `JOB`, the run is found by its id alone. |
+| `basis regress [JOB] (--env ENV \| --snapshots ROOT) [--last N] [--label KEY=VALUE]...` | Replays the last `N` (default 10) published runs of `JOB`, or of every job the repo lists, whose labels include every `--label`, from the environment's run store or `ROOT`; prints each run's job, reasons and differences as JSON: rows added, removed and changed, by column, and each column added, removed or retyped, the rows comparing by the columns both runs hold alike. |
 | `basis describe [JOB]` | Prints the job's params schema, inputs and outputs as JSON; without `JOB`, every job the repo lists, with its module. |
 | `basis ddl JOB --dialect mssql\|oracle` | Prints `CREATE TABLE` for each of the job's tables. |
 | `basis ddl --ledger TABLE --dialect mssql\|oracle` | Prints `CREATE TABLE` and `CREATE INDEX` for the ledger. |
@@ -242,7 +242,8 @@ basis's.
 | `basis-job new repo NAME [JOB] [--dir DIR] [--index URL \| --framework-path PATH]` | Makes a job repo, `NAME`, whose first job, `JOB` (`positions` if not given), is a copy of the example, runs `git init`, points git at its hooks, and runs `uv sync`. `PATH` is a checkout of basis, the folder that holds `packages/`, installed editable. `URL` replaces PyPI for the whole repo, so it must proxy PyPI. Without either option, basis-job comes from git when `uvx --from 'git+https://github.com/jacobragsdale/basis@REF#subdirectory=packages/job'` installed it: at this version's tag when `REF` is that tag, such as `v0.7.0`, and otherwise at the commit `REF` named. A basis-job installed from an index or a `--find-links` folder refuses, since uv does not record which: rerun with `--index`, or install basis-job from git. A repo made from a tag is refused after `uv sync` when its lock takes another commit than the one `basis-job` came from, as a tag moved since would. One installed from a folder or a wheel takes basis's GitHub tag for this version, which needs a release. |
 
 `JOB` is a name the repo lists as an entry point, or a module path. `replay`, `resume` and `regress` find runs under
-`BASIS_SNAPSHOT_ROOT`. Every command ends its stderr with a log record, `finished VERB`, with its exit code and how
+the environment's `BASIS_SNAPSHOT_ROOT`. `--env` may be left out where `BASIS_ENV` names the environment, as a pod's
+deployment does. Every command ends its stderr with a log record, `finished VERB`, with its exit code and how
 long it took, and every failure then prints one line: `ERROR:`, the reason, and the fix, the last line. A result a
 caller reads, such as `describe`'s, is JSON on stdout.
 
@@ -255,11 +256,11 @@ caller reads, such as `describe`'s, is JSON on stdout.
 ## QA tier
 
 `basis check --full` runs each job against the QA databases, published, where the repo declares the tier in
-`pyproject.toml` and this machine has its settings file. Everything is declared; nothing is inferred:
+`pyproject.toml` and the user has a `qa.env` (see [Environments](#environments)), which the tier reads alone, never
+the process's environment. Everything else is declared; nothing is inferred:
 
 ```toml
 [tool.basis.qa]
-settings = ".env.qa"   # the settings file the tier reads, alone: never the process's environment
 marker = "qa"          # what each QA server or database name, and each QA store, contains
 stores = ["abfs://runs@qaaccount.dfs.core.windows.net/pricing-etl"]   # BASIS_SNAPSHOT_ROOT must be one of these
 writes = { warehouse = ["daily_positions", "account_activity", "etl.publishes"] }   # by database: ledgers too
@@ -270,7 +271,6 @@ positions = { params = "jobs/positions/params/default.json", interval = "2026-11
 
 | Key | Meaning |
 |---|---|
-| `settings` | The settings file, relative to the repo, which the tier reads and nothing else. |
 | `marker` | Two or more letters, digits, `_`, `.` or `-`, which every QA name contains, ignoring case, and no production name does. |
 | `stores` | The run stores the tier may save its runs in, as `BASIS_SNAPSHOT_ROOT` writes them; each must contain the marker. |
 | `writes` | By database, as the settings name it, the tables the tier may write, as the job names them, ignoring case. Each ledger the settings name must be here. |
@@ -278,30 +278,48 @@ positions = { params = "jobs/positions/params/default.json", interval = "2026-11
 
 A database's settings carry the marker when a SQL Server connection string, and its `WRITE` block's, names one server
 (`Server`, `Data Source`, `Address`, `Addr` or `Network Address`) or one database (`Database` or `Initial Catalog`)
-that contains it, or when an Oracle DSN contains it. The tier refuses to run, and runs nothing, while any database the
-file configures does not carry it, the store is not in `stores`, a ledger is not in `writes`, a job the repo lists is
-not declared, a job reads a database the file does not configure, or a job writes a table `writes` does not list.
+that contains it, or when an Oracle DSN contains it. The tier refuses to run, and runs nothing, while any database
+`qa.env` configures does not carry it, the store is not in `stores`, a ledger is not in `writes`, a job the repo lists is
+not declared, a job reads a database `qa.env` does not configure, or a job writes a table `writes` does not list.
 The databases a QA run writes refuse any other table inside the transaction, before writing it. Each QA run is
 labelled `purpose=qa` and records the commit checked. A login can still reach another database by name inside a
 query, which no setting shows: give QA's logins access to QA alone.
 
 ## Python API
 
-`etl.run(job, *, params, interval=None, env=".env", data=None, labels=None, snapshot_root=None)` runs a job module
+`etl.run(job, *, params, interval=None, env=None, data=None, labels=None, snapshot_root=None)` runs a job module
 without publishing and returns its result: `result.record` is its `RunRecord`, `result.inputs` frames of its inputs,
 made afresh on each access from `result.tables`, as the run loaded them, and `result.changes(NAME)` a table's
 `Changes`. `etl.replay(job, run_id, *, params=None, env=None, snapshot_root=None)` returns the replay's result and its
 differences.
 
-Paths are relative to the job's folder. `env` names a settings file, looked for in the job's folder and each folder
-above it up to the repo's root; its variables are set for the call alone, and the process's environment overrides them. Snapshots are saved in the repo's
-`snapshots/`. `replay` looks for the run there, then under the settings file's `BASIS_SNAPSHOT_ROOT`. Given `data` and
+Paths are relative to the job's folder. `env` names the environment whose settings the call reads, `"dev"`, `"qa"`
+or `"prod"`, as `--env` does; without it, the call reads no settings at all, so every dataset must come from `data`.
+Snapshots are saved in the repo's `snapshots/`. `replay` looks for the run there, then under the environment's
+`BASIS_SNAPSHOT_ROOT`. Given `data` and
 no `interval`, `run` uses the fixture's interval from `fixture.json`. Given `data`, whatever the interval, its clocks
 read the fixture's `now`, which a job with a clock needs, and its ids count up from 1.
 
+## Environments
+
+Every command that reaches the firm's systems, `run`, `replay`, `resume` and `regress`, acts in one environment, `dev`,
+`qa` or `prod`, which `--env` names, or else `BASIS_ENV`; there is no default, and a command that names none is
+refused, with the fix. `--env` and a `BASIS_ENV` that differ are refused too.
+
+- On a desktop, the settings are the user's file for the environment, read alone: `%APPDATA%\basis\ENV.env` on
+  Windows, and `$XDG_CONFIG_HOME/basis/ENV.env`, or `~/.config/basis/ENV.env`, in WSL and on Linux. Every repo the user
+  works in shares it; the repo's `.env.example` lists the names it needs.
+- In a pod, which has no such file, the settings are the process's environment, which its deployment sets, `BASIS_ENV`
+  among it.
+
+An environment with no file, whose process sets no `BASIS_` setting, is refused, naming the file to write. In prod, a
+run that publishes, `basis run --publish` or `basis resume`, is refused unless the process's environment sets
+`BASIS_PROD_WRITES=1`, which a deployment that writes sets, and a user's file cannot. That stops accidents, not
+malice: the real control is a read-only prod login for desktops. Desktops write in dev and QA.
+
 ## Settings
 
-Settings come only from environment variables, which a settings file can hold.
+Settings are environment variables, which an environment's file holds, as `NAME=VALUE` lines.
 
 | Variable | Description |
 |---|---|
@@ -323,6 +341,8 @@ Settings come only from environment variables, which a settings file can hold.
 | `BASIS_TRACES__EXPORTER` | `otlp`, to post each run's spans to `BASIS_TRACES__ENDPOINT`, or `console`, to write them to stderr. Without it, spans go nowhere. |
 | `BASIS_TRACES__ENDPOINT` | For `otlp`: the full URL spans are posted to, path and all, such as `http://$(HOST_IP):4318/v1/traces`, the Datadog Agent on the pod's node. |
 | `BASIS_TRACES__TIMEOUT_S` | Seconds each export may take, its retries included (default 5). An export that fails is logged and fails nothing. |
+| `BASIS_ENV` | The environment a command acts in where `--env` does not name one: `dev`, `qa` or `prod`. Never read from a file. |
+| `BASIS_PROD_WRITES` | `1` lets a prod run publish. Never read from a file. |
 | `BASIS_LOG_LEVEL` | `DEBUG`, `INFO` (default), `WARNING` or `ERROR`. |
 | `BASIS_LOG_FORMAT` | `json` (the commands' default) or `text` (the Python API's default). |
 | `BASIS_GIT_SHA` | The job repo's commit, which the run's manifest records, and its spans carry as their version; the generated `Dockerfile` sets it. |

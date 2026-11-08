@@ -192,7 +192,7 @@ def test_a_repo_without_tool_basis_still_tells_its_version_and_checks_its_deskto
     assert basis(folder, "--version") == 0
     capsys.readouterr()
     basis(folder, "doctor")
-    assert "declares no basis parts" not in capsys.readouterr().err  # `basis docs` should run here too: docs/roadmap.md, Later
+    assert "declares no basis parts" not in capsys.readouterr().err
 
 
 def test_a_folder_in_no_repo_says_how_to_make_one(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -356,7 +356,7 @@ def test_a_shared_verbs_help_after_a_name_gives_that_parts_options_before_its_ru
     folder = repo(tmp_path, BOTH)
     for verb in ("replay", "resume"):
         assert basis(folder, verb, "summary", "--help", installed=JOBS_AND_REPORTS) == 0
-        assert f"usage: basis {verb} [-h] [--regions REGIONS] [NAME] RUN_ID" in capsys.readouterr().out
+        assert f"usage: basis {verb} [-h] [--env ENV] [--regions REGIONS] [NAME] RUN_ID" in capsys.readouterr().out
 
 
 def test_a_shared_verb_reads_what_the_parts_run_once(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -395,13 +395,13 @@ def test_a_shared_verbs_help_gives_the_arguments_of_the_part_its_name_names(tmp_
         "`basis run NAME --help` gives the arguments of NAME's part.\n"
     )
     assert basis(folder, "run", "summary", "--help", installed=JOBS_AND_REPORTS) == 0
-    assert "usage: basis run [-h] [--regions REGIONS] NAME" in capsys.readouterr().out
+    assert "usage: basis run [-h] [--env ENV] [--regions REGIONS] NAME" in capsys.readouterr().out
 
 
 def test_where_one_part_has_a_shared_verb_its_help_names_what_the_part_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert basis(repo(tmp_path, '[tool.basis]\nparts = ["beta"]\n'), "replay", "--help") == 0
     out = capsys.readouterr().out
-    assert out.startswith("usage: basis replay [-h] [--interval INTERVAL] [JOB] RUN_ID\n\nreplay a job's run\n")
+    assert out.startswith("usage: basis replay [-h] [--env ENV] [--interval INTERVAL] [JOB] RUN_ID\n\nreplay a job's run\n")
     assert "the job whose run it is; without it, the run is found by its id" in " ".join(out.split())
 
 
@@ -462,6 +462,20 @@ def test_docs_lists_each_parts_pages_and_prints_one_by_its_name_where_one_part_h
     assert capsys.readouterr().out == "# alpha tutorial\n# beta reference\n"
     assert basis(folder, "docs", "reference", installed=installed) == 1
     assert error_line(capsys).endswith("more than one part has a page 'reference': give one of alpha/reference, beta/reference")
+
+
+@pytest.mark.parametrize("pyproject", ['[project]\nname = "app"\n', None], ids=["no-tool-basis", "no-pyproject"])
+def test_docs_outside_a_basis_repo_lists_every_installed_parts_pages(tmp_path: Path, capsys: pytest.CaptureFixture[str], pyproject: str | None) -> None:
+    """A ctzd app, whose pyproject.toml declares no basis parts, still reads basis's docs (design.md, "ctzd, a consumer")."""
+    (tmp_path / "docs" / "alpha").mkdir(parents=True)
+    (tmp_path / "docs" / "alpha" / "reference.md").write_text("# alpha reference\n", encoding="utf-8")
+    folder = repo(tmp_path, pyproject) if pyproject is not None else tmp_path / "nowhere"
+    folder.mkdir(exist_ok=True)
+    installed = {"alpha": partial(Part, docs=tmp_path / "docs" / "alpha"), "beta": Part}
+    assert basis(folder, "docs", installed=installed) == 0
+    assert capsys.readouterr().out.splitlines() == ["alpha/reference"]
+    assert basis(folder, "docs", "reference", installed=installed) == 0
+    assert capsys.readouterr().out == "# alpha reference\n"
 
 
 def test_sync_writes_each_declared_parts_agent_files(tmp_path: Path) -> None:

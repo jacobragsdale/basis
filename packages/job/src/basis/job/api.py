@@ -5,29 +5,27 @@
     from jobs.positions import job
 
     if __name__ == "__main__":
-        result = run(job, params="params/default.json", interval="2026-11-05..2026-11-06", env=".env")
+        result = run(job, params="params/default.json", interval="2026-11-05..2026-11-06", env="dev")
 
-Paths are the job folder's, wherever the IDE runs the file from. `env` names a settings file, found in the job's
-folder or a folder above it up to the repo's root. Its variables are set for this call alone and removed after it, so
-a call that reads `.env.qa` and one that reads `.env.prod` never mix, and the process's own environment wins over
-the file, as `uv run --env-file` does. A run from Python saves its snapshot in the repo's `snapshots/`, and never
+Paths are the job folder's, wherever the IDE runs the file from. `env` names the environment whose settings the call
+reads, as `basis run --env` does: the user's file for it, such as `~/.config/basis/dev.env`, alone, or in a pod the
+process's environment (`basis.core.environments`). There is no default environment: without `env`, the call reaches
+nothing, so every dataset comes from `data`. A run from Python saves its snapshot in the repo's `snapshots/`, and never
 publishes: only `basis run --publish` writes to a database."""
 
 import logging
-import os
-from collections.abc import Generator, Mapping
-from contextlib import contextmanager
+from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType
 
-from dotenv import dotenv_values
 from pydantic import AwareDatetime
 
-from basis.core import fakes, logs, settings
+from basis.core import environments, fakes, logs
 from basis.core import runs as core_runs
+from basis.core.environments import Env
 from basis.core.interval import Interval
 from basis.core.model import Model
-from basis.core.settings import Settings
+from basis.core.settings import GivenSettings, Settings
 from basis.core.storage import Root
 from basis.job import handles, runs
 from basis.job import job as jobs
@@ -41,14 +39,15 @@ def run(  # noqa: PLR0913 -- main.py writes every value out, by keyword
     *,
     params: str | Path,
     interval: str | None = None,
-    env: str | Path | None = ".env",
+    env: Env | None = None,
     data: str | Path | None = None,
     labels: Mapping[str, str] | None = None,
     snapshot_root: str | Path | None = None,
 ) -> runs.Result:
-    """Run a job without publishing. `data` names a folder of files, such as `tests/fixture`, that replace the datasets
-    they name: a run on a fixture, whose clocks read its `fixture.json`'s time and whose ids count up from 1, whatever
-    its interval, and, with no `interval`, whose interval is the fixture's."""
+    """Run a job without publishing, in `env`, or with no settings at all. `data` names a folder of files, such as
+    `tests/fixture`, that replace the datasets they name: a run on a fixture, whose clocks read its `fixture.json`'s
+    time and whose ids count up from 1, whatever its interval, and, with no `interval`, whose interval is the
+    fixture's."""
     found = jobs.read(job)
     _setup_logs(found)
     folder = data if data is None else found.directory / data
@@ -60,26 +59,25 @@ def run(  # noqa: PLR0913 -- main.py writes every value out, by keyword
         faked = fixture_fakes(found, fixture, folder)
     request = runs.Request(found.directory / params, Interval.parse(interval) if interval is not None else None, folder, dict(labels or {}))
     root = Root.at(found.directory / snapshot_root) if snapshot_root is not None else Root.at(jobs.repo_root(found.directory) / "snapshots")
-    with _environment(_settings_file(found.directory, env)):
-        result = runs.run(found, Settings(), request, snapshot_root=root, faked=faked)
+    settings, environment = _settings(env)
+    result = runs.run(found, settings, request, snapshot_root=root, faked=faked, environment=environment)
     _report(result)
     return result
 
 
-def replay(job: ModuleType, run_id: str, *, params: str | Path | None = None, env: str | Path | None = None, snapshot_root: str | Path | None = None) -> tuple[runs.Result, list[OperationDiff]]:
+def replay(job: ModuleType, run_id: str, *, params: str | Path | None = None, env: Env | None = None, snapshot_root: str | Path | None = None) -> tuple[runs.Result, list[OperationDiff]]:
     """Run a saved run's transform again on its inputs, with the code you have now, and with `params` if given. The run
-    is found in the repo's `snapshots/`, or `snapshot_root` if given, then under the `BASIS_SNAPSHOT_ROOT` the settings
-    file names, such as production's in `.env.prod`; the replay is saved in the first of those."""
+    is found in the repo's `snapshots/`, or `snapshot_root` if given, then under the `BASIS_SNAPSHOT_ROOT` of `env`'s
+    settings, such as prod's; the replay is saved in the first of those."""
     found = jobs.read(job)
     _setup_logs(found)
     local = Root.at(found.directory / snapshot_root) if snapshot_root is not None else Root.at(jobs.repo_root(found.directory) / "snapshots")
     roots = [local]
-    with _environment(_settings_file(found.directory, env)):
-        configured = Settings()
+    configured, environment = _settings(env)
     if configured.snapshot_root is not None:
         roots.append(Root.at(configured.snapshot_root))
     source = core_runs.find(roots, run_id, found.name)
-    result, diffs = runs.replay(found, source, params=found.directory / params if params is not None else None, snapshot_root=local, tracing=configured.traces)
+    result, diffs = runs.replay(found, source, params=found.directory / params if params is not None else None, snapshot_root=local, tracing=configured.traces, environment=environment)
     _report(result)
     for entry in diffs:
         log.info("differs", extra=vars(entry))
@@ -118,31 +116,12 @@ def fixture_fakes(job: jobs.Job, fixture: Fixture | None, folder: Path) -> dict[
     return handles.faked(job.inputs, fixture.now if fixture is not None else None, fix=fix)
 
 
-def _settings_file(directory: Path, env: str | Path | None) -> Path | None:
-    """The settings file `env` names, in the job's folder or one above it up to the repo's root."""
+def _settings(env: Env | None) -> tuple[Settings, Env | None]:
+    """The settings of `env`, as `--env` reads them, or none at all, never the process's environment, without one."""
     if env is None:
-        return None
-    for folder in (directory, *directory.parents):
-        if (candidate := folder / env).exists():
-            return candidate
-        if (folder / "pyproject.toml").exists():
-            break
-    log.info("no settings file %s: reading the process's environment alone; copy .env.example to %s to read databases", env, env)
-    return None
-
-
-@contextmanager
-def _environment(path: Path | None) -> Generator[None]:
-    """The settings file's variables, set for the block alone; a variable the process already has keeps its value.
-    A variable under a name basis no longer reads, `ETL_*`, is refused rather than ignored."""
-    added = {key: value for key, value in (dotenv_values(path) if path is not None else {}).items() if value is not None and key not in os.environ}
-    os.environ.update(added)
-    try:
-        settings.refuse_renamed(os.environ)
-        yield
-    finally:
-        for key in added:
-            os.environ.pop(key, None)
+        return GivenSettings(), None
+    environment = environments.load(env, Settings)
+    return environment.settings, environment.name
 
 
 def _setup_logs(job: jobs.Job) -> None:

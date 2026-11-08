@@ -90,6 +90,7 @@ def test_a_qa_run_given_publish_is_refused_before_it_runs_where_the_ledger_is_no
 
 
 def test_the_qa_fixture_refuses_to_run_outside_qa(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BASIS_ENV", "qa")
     monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", "//prod-share/optim/snapshots")
     pytester.makepyfile("def test_smoke(optim_qa) -> None:\n    raise AssertionError('ran outside QA')\n")
 
@@ -116,6 +117,7 @@ def test_the_smoke_case_runs_replays_and_compares_a_models_trades(tmp_path: Path
     frame(SECURITIES, CASH, {"security_id": "A"}).to_csv(data / "securities.csv", index=False)
     (params := tmp_path / "params.json").write_text("{}")
     root = tmp_path / "qa-snapshots"
+    monkeypatch.setenv("BASIS_ENV", "qa")
     monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", str(root))
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(Path(__file__).parent), *sys.path]))
     qa = QA(Settings(), [sys.executable, "-m", "optim"], tmp_path)

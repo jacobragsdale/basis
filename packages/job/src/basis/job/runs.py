@@ -125,16 +125,19 @@ def run(  # noqa: PLR0913 -- what the run reads and where it saves, by keyword
     databases: Callable[[str], Database] | None = None,
     faked: Mapping[str, fakes.Fake] | None = None,
     provider: TracerProvider | None = None,
+    environment: str | None = None,
 ) -> Result:
     """Run `job` as `request` asks, reading and writing the databases `settings` configure, each opened by
     `databases` when given, such as the QA tier's, which refuse a table it does not allow, and reaching the services
     they configure. `faked` names the fakes of a test's own, by the name of what each fakes: a fetch's service, or a
-    clock or ids of the job's `Inputs`. The run is one trace, on `provider` where a test gives one."""
+    clock or ids of the job's `Inputs`. The run is one trace, on `provider` where a test gives one, in `environment`,
+    the one the settings are of, where there is one."""
     params, params_text = read_params(job, request.params)
     given = _checked(job, faked or {})
     run_id = snapshots.new_run_id()
     logs.bind(run_id=run_id, job=job.name, service=job.name)
-    with traces.trace("run", service=job.name, settings=settings.traces, version=settings.git_sha, environment=None, given=provider, **{"basis.job": job.name, "basis.run_id": run_id}) as (tracer, _):
+    attributes = {"basis.job": job.name, "basis.run_id": run_id}
+    with traces.trace("run", service=job.name, settings=settings.traces, version=settings.git_sha, environment=environment, given=provider, **attributes) as (tracer, _):
         return _run(job, settings, request, _Run(params, params_text, run_id, snapshot_root, clock, databases, given, tracer))
 
 
@@ -409,13 +412,14 @@ def replay(  # noqa: PLR0913 -- what it replays, and where it saves and traces, 
     clock: Callable[[], datetime] = utc_now,
     tracing: Traces | None = None,
     provider: TracerProvider | None = None,
+    environment: str | None = None,
 ) -> tuple[Result, list[OperationDiff]]:
     """Run a saved run's transform again on its inputs, with the code of the day and, if given, other params, and how
     its changes differ from the run's: one trace, exported where `tracing` says, or on a test's `provider`. Reads no
     database and writes none, and gives the transform the times and ids the run kept."""
     with (
         logs.fields(job=job.name, service=job.name, replay_of=source.run_id),  # the replay's own, whatever an earlier run in the process bound, until it ends
-        traces.trace("replay", service=job.name, settings=tracing, version=None, environment=None, given=provider, **{"basis.job": job.name, "basis.replay_of": source.run_id}) as (tracer, _),
+        traces.trace("replay", service=job.name, settings=tracing, version=None, environment=environment, given=provider, **{"basis.job": job.name, "basis.replay_of": source.run_id}) as (tracer, _),
     ):
         return _replay(job, source, params=params, snapshot_root=snapshot_root, clock=clock, tracer=tracer)
 
@@ -445,12 +449,12 @@ def _replayed(job: Job, source: Snapshot, opened: core_runs.Replay[Params], *, s
     return result, diffs
 
 
-def resume(job: Job, source: Snapshot, settings: Settings, *, again: bool = False, clock: Callable[[], datetime] = utc_now) -> RunRecord:
+def resume(job: Job, source: Snapshot, settings: Settings, *, again: bool = False, clock: Callable[[], datetime] = utc_now, environment: str | None = None) -> RunRecord:  # noqa: PLR0913 -- resume's, by keyword
     """Finish publishing a run that committed to some of its databases and failed on another, from its snapshot: told
     `again` as the run was, or as `again` says now."""
     record = source.record()
     logs.bind(run_id=record.run_id, job=job.name, service=job.name)
-    with traces.trace("resume", service=job.name, settings=settings.traces, version=settings.git_sha, environment=None, **{"basis.job": job.name, "basis.run_id": record.run_id}):
+    with traces.trace("resume", service=job.name, settings=settings.traces, version=settings.git_sha, environment=environment, **{"basis.job": job.name, "basis.run_id": record.run_id}):
         if record.status == "published":
             log.info("already published")
             return record

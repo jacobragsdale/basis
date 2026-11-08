@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from basis.core import command, logs, snapshots
+from basis.core import command, environments, logs, snapshots
 from basis.core.destination import Dialect
 from basis.core.errors import BasisError, deliberate
 from basis.core.interval import Interval
@@ -43,6 +43,8 @@ class RunArgs:
     labels: dict[str, str]
     publish: bool
     again: bool
+    env: str | None = None
+    """The environment `--env` names, or None for `BASIS_ENV`'s."""
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,7 @@ class ReplayArgs:
     job: str | None
     run_id: str
     params: Path | None
+    env: str | None = None
 
 
 @dataclass(frozen=True)
@@ -58,6 +61,7 @@ class ResumeArgs:
     run_id: str
     again: bool
     """Whether to publish a plain insert for an interval the ledger has already, though the run was not told to."""
+    env: str | None = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +70,8 @@ class RegressArgs:
     last: int
     labels: dict[str, str]
     snapshots: str | None
+    """The run store to read, or None for the one the environment's settings name."""
+    env: str | None = None
 
 
 @dataclass(frozen=True)
@@ -103,8 +109,8 @@ def part() -> Part:
             jobs.listed,
             run=Shared("run a job, and with --publish write its changes to its databases", _run_from, _run_arguments),
             describe=Shared("print a job's params, inputs and outputs as JSON, or every job's name", lambda n: _describe(DescribeArgs(n.name))),
-            resume=Shared("finish publishing a run that failed partway, from its snapshot", lambda n: _resume(ResumeArgs(n.name, n.run_id, n.again)), _resume_arguments),
-            replay=Shared("rerun a saved run's transform with today's code, and print how its outputs differ", lambda n: _replay(ReplayArgs(n.name, n.run_id, n.params)), _replay_arguments),
+            resume=Shared("finish publishing a run that failed partway, from its snapshot", lambda n: _resume(ResumeArgs(n.name, n.run_id, n.again, n.env)), _resume_arguments),
+            replay=Shared("rerun a saved run's transform with today's code, and print how its outputs differ", lambda n: _replay(ReplayArgs(n.name, n.run_id, n.params, n.env)), _replay_arguments),
             regress=Shared("replay recent published runs with today's code, and list what changed", _regress_from, _regress_arguments),
             ddl=Shared("print CREATE TABLE statements for a job's tables, or for the ledger", lambda n: _ddl(DdlArgs(n.name, n.ledger, n.dialect)), _ddl_arguments),
             regressions=_regress_jobs,
@@ -119,7 +125,7 @@ def scaffold(argv: Sequence[str] | None = None) -> int:
 
 
 def _run_from(n: argparse.Namespace) -> int:
-    return _run(RunArgs(n.name, n.params, n.interval, n.data, dict(n.label), publish=n.publish, again=n.again))
+    return _run(RunArgs(n.name, n.params, n.interval, n.data, dict(n.label), publish=n.publish, again=n.again, env=n.env))
 
 
 def _run_arguments(parser: argparse.ArgumentParser) -> None:
@@ -149,7 +155,7 @@ def _replay_arguments(parser: argparse.ArgumentParser) -> None:
 def _regress_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--last", type=command.positive, default=10, help="how many published runs of each, newest first")
     parser.add_argument("--label", type=command.label, action="append", default=[], help="KEY=VALUE a run's labels must include; repeatable")
-    parser.add_argument("--snapshots", help="the snapshot root to read, instead of BASIS_SNAPSHOT_ROOT")
+    parser.add_argument("--snapshots", help="the snapshot root to read, instead of the environment's BASIS_SNAPSHOT_ROOT")
 
 
 def _ddl_arguments(parser: argparse.ArgumentParser) -> None:
@@ -173,9 +179,12 @@ def _new_from(namespace: argparse.Namespace) -> int:
 def _run(args: RunArgs) -> int:
     job = jobs.load(args.job)
     logs.include(job.module.partition(".")[0])
-    settings = Settings()
+    environment = environments.load(args.env, Settings)
+    if args.publish:
+        environment.refuse_writes(f"basis run {job.name} --publish")
+    settings = environment.settings
     request = runs.Request(args.params, args.interval, args.data, args.labels, publish=args.publish, again=args.again, git_sha=os.environ.get("BASIS_GIT_SHA"))
-    result = runs.run(job, settings, request, snapshot_root=settings.snapshots())
+    result = runs.run(job, settings, request, snapshot_root=settings.snapshots(), environment=environment.name)
     return fail(*found) if (found := runs.failure_of(result.record, publish=args.publish)) is not None else 0
 
 
@@ -194,11 +203,12 @@ def _saved(root: Root, run_id: str, name: str | None) -> tuple[Snapshot, jobs.Jo
 
 
 def _replay(args: ReplayArgs) -> int:
-    settings = Settings()
+    environment = environments.load(args.env, Settings)
+    settings = environment.settings
     root = settings.snapshots()
     source, job = _saved(root, args.run_id, args.job)
     with deliberate(ValueError):  # a run of another job, or one that did not save what the job reads now
-        result, diffs = runs.replay(job, source, params=args.params, snapshot_root=root, tracing=settings.traces)
+        result, diffs = runs.replay(job, source, params=args.params, snapshot_root=root, tracing=settings.traces, environment=environment.name)
     _print({"run_id": result.record.run_id, "replay_of": args.run_id, "status": result.record.status, "reasons": result.record.reasons, "differences": [vars(entry) for entry in diffs]})
     if result.ok:
         return 0
@@ -207,10 +217,12 @@ def _replay(args: ReplayArgs) -> int:
 
 
 def _resume(args: ResumeArgs) -> int:
-    settings = Settings()
+    environment = environments.load(args.env, Settings)
+    environment.refuse_writes(f"basis resume {args.run_id}")
+    settings = environment.settings
     source, job = _saved(settings.snapshots(), args.run_id, args.job)
     with deliberate(ValueError):  # a run that never published, or one whose tables the job writes elsewhere now
-        record = runs.resume(job, source, settings, again=args.again)
+        record = runs.resume(job, source, settings, again=args.again, environment=environment.name)
     if record.status == "published":
         return 0
     return fail(f"run {args.run_id} of {job.name} is still {record.status}", f"fix what its publishes record, then `{runs.resume_command(record)}` again")
@@ -219,7 +231,7 @@ def _resume(args: ResumeArgs) -> int:
 def _regress_from(n: argparse.Namespace) -> int:
     """`basis regress`: each run replayed, as JSON on stdout, and a line for each failure to replay a job; 1 when one
     failed, or when a run differs or would not write."""
-    found = regress_jobs(RegressArgs((n.name,) if n.name is not None else tuple(sorted(jobs.listed())), n.last, dict(n.label), n.snapshots))
+    found = regress_jobs(RegressArgs((n.name,) if n.name is not None else tuple(sorted(jobs.listed())), n.last, dict(n.label), n.snapshots, n.env))
     failed = sum(command.report(error) for error in found.failures)
     _print([{"job": entry.name, "run_id": entry.run_id, "reasons": list(entry.reasons), "differences": [dict(diff.detail) for diff in entry.differences]} for entry in found.replayed])
     if changed := [entry for entry in found.replayed if entry.changed]:
@@ -234,7 +246,7 @@ def _regress_jobs(args: Regress) -> Regressions:
 def regress_jobs(args: RegressArgs) -> Regressions:
     """`basis regress` for the jobs `args` names, which `basis` prints. Each job replays on its own: one that fails to
     load or to replay is a failure of its own, and the rest still replay."""
-    root = Root.at(args.snapshots) if args.snapshots is not None else Settings().snapshots()
+    root = Root.at(args.snapshots) if args.snapshots is not None else environments.load(args.env, Settings).settings.snapshots()
     replayed: list[Regressed] = []
     failures: list[Exception] = []
     for name in args.jobs:

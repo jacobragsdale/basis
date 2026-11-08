@@ -20,8 +20,11 @@ RUN = ["run", "basis.job.example.job", "--params", str(EXAMPLE / "params/default
 
 @pytest.fixture(autouse=True)
 def snapshot_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The process's environment as a pod's deployment sets it, in dev, where the user has no file of settings."""
     for name in [name for name in os.environ if name.startswith("BASIS_")]:
         monkeypatch.delenv(name)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("BASIS_ENV", "dev")
     monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", str(tmp_path / "snapshots"))
     return tmp_path / "snapshots"
 
@@ -76,6 +79,32 @@ def test_a_run_that_cannot_publish_exits_nonzero_with_the_reason_and_the_fix(rep
     line = error_line(capsys)
     assert "wrote nothing, because database 'warehouse' is not configured, and the run publishes to it: set BASIS_DATABASES__WAREHOUSE__*" in line
     assert line.endswith("fix it, and run the job again")
+
+
+def test_a_run_that_names_no_environment_is_refused_with_the_fix(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BASIS_ENV")
+    assert basis(repo, *RUN) == 1
+    assert error_line(capsys).endswith("names no environment, which basis never assumes: give --env dev|qa|prod, or set BASIS_ENV")
+
+
+def test_a_run_reads_the_user_s_file_for_the_environment_it_names(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BASIS_ENV")
+    (tmp_path / "config" / "basis").mkdir(parents=True)
+    (tmp_path / "config" / "basis" / "qa.env").write_text(f"BASIS_SNAPSHOT_ROOT={tmp_path / 'qa-runs'}\n", encoding="utf-8")
+    assert basis(repo, *RUN, "--env", "qa") == 0
+    assert len(list((tmp_path / "qa-runs").rglob("*.json"))) == 1  # the run's manifest, in qa's store, not the process's
+    assert not (tmp_path / "snapshots").exists()
+
+
+@pytest.mark.parametrize("verb", [[*RUN, "--publish"], ["resume", "basis.job.example.job", "0193f2d4-0000-7000-8000-000000000001"]], ids=["run --publish", "resume"])
+def test_a_run_that_would_write_to_prod_is_refused_unless_the_deployment_sets_the_flag(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, verb: list[str]) -> None:
+    monkeypatch.setenv("BASIS_ENV", "prod")
+    assert basis(repo, *verb) == 1
+    line = error_line(capsys)
+    assert "would write to prod, which basis refuses unless the process sets BASIS_PROD_WRITES=1" in line
+    monkeypatch.setenv("BASIS_PROD_WRITES", "1")
+    basis(repo, *verb)
+    assert "would write to prod" not in capsys.readouterr().err  # it gets as far as its database, which is not configured, or its run, which is not saved
 
 
 def test_a_run_whose_params_do_not_validate_names_the_field_and_the_file(repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

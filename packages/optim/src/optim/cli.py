@@ -36,7 +36,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from basis.core import command, logs
+from basis.core import command, environments, logs
 from basis.core.ddl import create_table, ledger
 from basis.core.destination import Dialect
 from basis.core.errors import BasisError, deliberate
@@ -71,6 +71,8 @@ class RunArgs:
     publish: bool
     again: bool
     """Publish even though another run of the model published orders for the as-of date."""
+    env: str | None = None
+    """The environment `--env` names, or None for `BASIS_ENV`'s."""
 
 
 @dataclass(frozen=True)
@@ -79,6 +81,7 @@ class ResumeArgs:
     run: str
     """A run's id, or the path or URL of its manifest."""
     again: bool
+    env: str | None = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +100,7 @@ class ReplayArgs:
     portfolios: tuple[str, ...] | None
     labels: dict[str, str]
     workers: int | None
+    env: str | None = None
 
 
 @dataclass(frozen=True)
@@ -116,6 +120,7 @@ class RegressArgs:
     labels: dict[str, str]
     out: Path | None
     workers: int
+    env: str | None = None
 
 
 @dataclass(frozen=True)
@@ -207,7 +212,7 @@ def _deciding(parser: argparse.ArgumentParser) -> None:
 
 
 def _run_from(n: argparse.Namespace) -> int:
-    return _run(RunArgs(n.name, n.params, _portfolios(n.portfolios), n.as_of, n.data, dict(n.labels), n.workers, cache=not n.no_cache, publish=n.publish, again=n.again))
+    return _run(RunArgs(n.name, n.params, _portfolios(n.portfolios), n.as_of, n.data, dict(n.labels), n.workers, cache=not n.no_cache, publish=n.publish, again=n.again, env=n.env))
 
 
 def _run(args: RunArgs) -> int:
@@ -216,7 +221,10 @@ def _run(args: RunArgs) -> int:
     out cannot go unnoticed."""
     if args.again and not args.publish:
         return fail("--again publishes a run's orders even though another run published the date's, and the run was not given --publish", "add --publish, or leave --again out")
-    settings, model = Settings(), _model(args.model)
+    environment = environments.load(args.env, Settings)
+    if args.publish:
+        environment.refuse_writes(f"basis run {args.model} --publish")
+    settings, model = environment.settings, _model(args.model)
     with open_context(settings, cache=args.cache, publish=args.publish) as ctx:
         as_of_date, workers = args.as_of or fixture_date(args.data) or today(), args.workers or settings.optim.workers
         ran = run_model(
@@ -243,13 +251,15 @@ def _resume_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _resume_from(n: argparse.Namespace) -> int:
-    return _resume(ResumeArgs(n.name, n.run_id, again=n.again))
+    return _resume(ResumeArgs(n.name, n.run_id, again=n.again, env=n.env))
 
 
 def _resume(args: ResumeArgs) -> int:
     """The other: a run's orders from the run, to the table it publishes to."""
-    settings = Settings()
-    saved = _snapshot(args.run, args.model)
+    environment = environments.load(args.env, Settings)
+    environment.refuse_writes(f"basis resume {args.run}")
+    settings = environment.settings
+    saved = _snapshot(args.run, args.model, settings)
     resumed = resume_run(saved, open_orders(settings), again=args.again)
     sys.stdout.write(published(resumed.records, earlier=resumed.earlier) or "orders: none to publish\n")
     if all(record.status == "committed" for record in resumed.records.values()):
@@ -292,14 +302,14 @@ def _replay_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _replay_from(n: argparse.Namespace) -> int:
-    return _replay(ReplayArgs(n.name, n.run_id, n.params, _portfolios(n.portfolios), dict(n.labels), n.workers))
+    return _replay(ReplayArgs(n.name, n.run_id, n.params, _portfolios(n.portfolios), dict(n.labels), n.workers, n.env))
 
 
 def _replay(args: ReplayArgs) -> int:
     """Reads a run and saves one: no sources or cache."""
-    settings = Settings()
+    settings = environments.load(args.env, Settings).settings
     workers = args.workers or settings.optim.workers
-    saved = _snapshot(args.run, args.model)
+    saved = _snapshot(args.run, args.model, settings)
     ran = replay_run(saved, settings.snapshots(), params_file=args.params, portfolio_ids=args.portfolios, workers=workers, labels=args.labels)
     return _report(ran, saved.info.model.name)
 
@@ -324,26 +334,26 @@ def _sweep(args: SweepArgs) -> int:
     """Reads a run alone, and writes only the table."""
     if not (variants := sorted(args.variants.glob("*.json"))):
         return fail(f"{args.variants} has no params files (*.json) to sweep", "add one per variant, such as a copy of the model's params/default.json with a value changed")
-    _write(research.sweep(read_snapshot(_snapshot(args.run, None)), variants, workers=args.workers), args.out)
+    _write(research.sweep(read_snapshot(_snapshot(args.run, None, Settings())), variants, workers=args.workers), args.out)
     return 0
 
 
 def _regress_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--snapshots", help="the run store to read, such as production's (default: BASIS_SNAPSHOT_ROOT)")
+    parser.add_argument("--snapshots", help="the run store to read, such as production's (default: the environment's BASIS_SNAPSHOT_ROOT)")
     parser.add_argument("--last", type=command.positive, default=20, help="how many of each model's most recent runs (default: 20)")
     parser.add_argument("--label", type=command.label, action="append", default=[], dest="labels", metavar="KEY=VALUE", help="only runs labelled so, such as purpose=production; repeatable")
     _tabled(parser)
 
 
 def _regress_from(n: argparse.Namespace) -> int:
-    return _regress(RegressArgs(n.name, n.snapshots, n.last, dict(n.labels), n.out, n.workers))
+    return _regress(RegressArgs(n.name, n.snapshots, n.last, dict(n.labels), n.out, n.workers, n.env))
 
 
 def _regress(args: RegressArgs) -> int:
     """A row per change, for the model named, as a table, CSV on stdout or `--out`; or for every model the repo
     lists, with a `model` column, as JSON on stdout, as every part's `regress` without a name prints, or `--out`.
     Exits 1 when anything changed."""
-    store = Root.at(args.snapshots) if args.snapshots is not None else Settings().snapshots()
+    store = Root.at(args.snapshots) if args.snapshots is not None else environments.load(args.env, Settings).settings.snapshots()
     if args.model is not None:
         changes = research.regress(_model(args.model), store, last=args.last, labels=args.labels, workers=args.workers)
         _write(changes, args.out)
@@ -410,11 +420,11 @@ def _model(name: str) -> models.LoadedModel:
         return models.load(name)
 
 
-def _snapshot(run: str, model: str | None) -> Saved:
-    """A run by the path or URL of its manifest, or by its id under `BASIS_SNAPSHOT_ROOT`: a run of `model`, where it
-    is given."""
+def _snapshot(run: str, model: str | None, settings: Settings) -> Saved:
+    """A run by the path or URL of its manifest, or by its id under the `BASIS_SNAPSHOT_ROOT` of `settings`: a run of
+    `model`, where it is given."""
     with deliberate(LookupError):  # no such run, or a manifest that is not optim's
-        saved = snapshots.read(Root.at(run)) if "/" in run or "\\" in run else snapshots.find([Settings().snapshots()], run)
+        saved = snapshots.read(Root.at(run)) if "/" in run or "\\" in run else snapshots.find([settings.snapshots()], run)
     if model is not None and model != saved.info.model.name and models.installed().get(model, model) not in {saved.info.model.name, saved.info.model.module}:
         msg = f"run {saved.info.run_id} is a run of {saved.info.model.name}, not {model}: give {saved.info.model.name}, or leave the model out"
         raise BasisError(msg)
