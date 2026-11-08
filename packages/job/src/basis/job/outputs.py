@@ -144,6 +144,16 @@ class Table[V: (pd.DataFrame, Changes)]:
         return value  # ty: ignore[invalid-return-type] -- the isinstance above is V's runtime check; ty cannot relate a constrained TypeVar to a class object
 
 
+def _validate_key(target: Target, where: str) -> None:
+    """A key's columns are neither JSON, which no database compares, nor nullable."""
+    if target.key is not None and (compared := [column.name for column in target.key_columns if column.json]):
+        msg = f"{where}: its key's columns may not be JSON, which no database compares, but {compared} are etl.Json()"
+        raise ValueError(msg)
+    if target.key is not None and (nullable := [column.name for column in target.key_columns if column.nullable]):
+        msg = f"{where}: its key's columns may not be null, but {nullable} are `| None`"
+        raise ValueError(msg)
+
+
 def _validate(target: Target) -> None:
     where = target.table
     if not TABLE_NAME.match(target.table):
@@ -159,9 +169,7 @@ def _validate(target: Target) -> None:
     if target.key is not None and (unknown := [name for name in target.key if name not in names]):
         msg = f"{where}: its key names columns its row does not have: {unknown}"
         raise ValueError(msg)
-    if target.key is not None and (nullable := [column.name for column in target.key_columns if column.nullable]):
-        msg = f"{where}: its key's columns may not be null, but {nullable} are `| None`"
-        raise ValueError(msg)
+    _validate_key(target, where)
     match target.write:
         case Upsert() | InsertNew() if target.key is None:
             msg = f"{where}: {type(target.write).__name__}() needs the table's key, as key=('id',)"
@@ -172,6 +180,9 @@ def _validate(target: Target) -> None:
                 raise ValueError(msg)
             if unknown := [name for name in matching if name not in names]:
                 msg = f"{where}: ReplaceWhere(matching=...) names columns its row does not have: {unknown}"
+                raise ValueError(msg)
+            if compared := [name for name in matching if target.row.column(name).json]:
+                msg = f"{where}: ReplaceWhere(matching=...) columns may not be JSON, which no database compares: {compared}"
                 raise ValueError(msg)
             if nullable := [name for name in matching if target.row.column(name).nullable]:
                 msg = f"{where}: ReplaceWhere(matching=...) columns may not be null, since null matches nothing: {nullable}"
@@ -333,6 +344,63 @@ class ExcelReport:
         return value
 
 
+class MongoUpsert:
+    """Documents the job upserts into a Mongo collection, as `BASIS_MONGO__MONGO__*` configures the database: its value
+    is a frame of `row`, each row a document of its columns, matched by `key`'s, whose fields it sets, inserting it
+    where none matches, so a rerun changes nothing that is already so. Only `basis run --publish` upserts, once every
+    database has committed; Mongo has no transaction and no ledger here (`basis.core.mongo`). A repo that writes Mongo
+    takes `basis-core[mongo]`."""
+
+    def __init__(self, row: type[Row], *, mongo: str, collection: str, key: tuple[str, ...]) -> None:
+        if not IDENTIFIER.match(mongo):
+            msg = f"mongo {mongo!r}: a Mongo database's name is lower-case letters, digits and underscores, as in BASIS_MONGO__{mongo.upper()}__URI"
+            raise ValueError(msg)
+        if not collection or "$" in collection:
+            msg = f"collection {collection!r}: name the collection, without $"
+            raise ValueError(msg)
+        names = row.names()
+        unknown = [name for name in key if name not in names]
+        if not key or unknown:
+            msg = f"{collection}: an upsert's key names columns of its row, at least one, as key=('id',), not {unknown or list(key)}"
+            raise ValueError(msg)
+        if bad := [column.name for column in row.columns if column.name in key and (column.nullable or column.json)]:
+            msg = f"{collection}: an upsert's key columns may be neither null nor JSON, but {bad} are"
+            raise ValueError(msg)
+        self.row = row
+        self.mongo = mongo
+        self.collection = collection
+        self.key = key
+        self._name: str | None = None
+
+    @property
+    def name(self) -> str:
+        if self._name is None:
+            msg = "an upsert is named by its attribute on a job's Outputs class; this one is not on one"
+            raise TypeError(msg)
+        return self._name
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        if not IDENTIFIER.match(name):
+            msg = f"{owner.__qualname__}.{name}: an output's name is lower-case letters, digits and underscores"
+            raise TypeError(msg)
+        if self._name not in {None, name}:
+            msg = f"{owner.__qualname__}.{name} is already declared as {self._name!r}: declare each output once per name"
+            raise TypeError(msg)
+        self._name = name
+
+    def describe(self) -> str:
+        return f"{self.mongo}: {self.collection}"
+
+    @overload
+    def __get__(self, instance: None, owner: type) -> Self: ...
+    @overload
+    def __get__(self, instance: Outputs, owner: type) -> pd.DataFrame: ...
+    def __get__(self, instance: Outputs | None, owner: type) -> Self | pd.DataFrame:
+        if instance is None:
+            return self
+        return report_value(instance, self.name)
+
+
 MAX_SHEET = 31
 """The longest sheet name Excel takes."""
 
@@ -347,17 +415,17 @@ class Outputs:
     `Outputs(positions=frame, alert=None)`."""
 
     def __init__(self, **values: OutputValue) -> None:
-        declared, sent, reports = self.declared(), self.declared_messages(), self.declared_reports()
-        every = set(declared) | set(sent) | set(reports)
+        declared, sent, reports, upserts = self.declared(), self.declared_messages(), self.declared_reports(), self.declared_upserts()
+        every = set(declared) | set(sent) | set(reports) | set(upserts)
         if missing := sorted(every - set(values)):
             msg = f"{type(self).__qualname__} is missing outputs {missing}: give every output it declares, None for a message it does not send"
             raise TypeError(msg)
         if unknown := sorted(set(values) - every):
             msg = f"{type(self).__qualname__} declares no outputs named {unknown}; it declares {sorted(every)}"
             raise TypeError(msg)
-        for name in reports:
+        for name in [*reports, *upserts]:
             if not isinstance(values[name], pd.DataFrame):
-                msg = f"{name} is a workbook, so its value is a DataFrame, not a {type(values[name]).__name__}"
+                msg = f"{name} is written from a frame, so its value is a DataFrame, not a {type(values[name]).__name__}"
                 raise TypeError(msg)
         for name, table in declared.items():
             expected = Changes if isinstance(table.target.write, Manual) else pd.DataFrame
@@ -379,6 +447,11 @@ class Outputs:
         return {name: value for klass in reversed(cls.__mro__) for name, value in vars(klass).items() if isinstance(value, ExcelReport)}
 
     @classmethod
+    def declared_upserts(cls) -> dict[str, MongoUpsert]:
+        """Each Mongo collection the job upserts into, by its output's name."""
+        return {name: value for klass in reversed(cls.__mro__) for name, value in vars(klass).items() if isinstance(value, MongoUpsert)}
+
+    @classmethod
     def declared_messages(cls) -> dict[str, Slack | Email]:
         """Each message the job sends, by its output's name."""
         return {name: value for klass in reversed(cls.__mro__) for name, value in vars(klass).items() if isinstance(value, Slack | Email)}
@@ -397,6 +470,6 @@ def report_value(outputs: Outputs, name: str) -> pd.DataFrame:
     """The frame the transform gave the workbook `name`."""
     value = outputs.values[name]  # noqa: PD011 -- the outputs by name, no frame's values
     if not isinstance(value, pd.DataFrame):
-        msg = f"{name} is a workbook, so its value is a DataFrame, not a {type(value).__name__}"
+        msg = f"{name} is written from a frame, so its value is a DataFrame, not a {type(value).__name__}"
         raise TypeError(msg)
     return value

@@ -28,6 +28,9 @@ class Column:
     nullable: bool
     max_length: int | None = None
     zone: str | None = None
+    json: bool = False
+    """A `str` column whose every value is JSON text, an object or an array, as a database's JSON type holds it
+    (`basis.core.jsontext`): never a key, and never matched on, since such a type cannot be compared."""
 
 
 @dataclass(frozen=True)

@@ -10,12 +10,13 @@ from typing import TYPE_CHECKING
 
 from basis.core.calendars import Calendar, calendar
 from basis.core.interval import Interval
+from basis.core.jsontext import dumps as json_text
 from basis.core.messages import Mail
 from basis.core.tables import Changes, Delete, Range
-from basis.job.inputs import Clock, Excel, Fetch, File, Ids, Inputs, Query
-from basis.job.outputs import Append, Email, ExcelReport, InsertNew, Manual, Outputs, Replace, ReplaceWhere, Slack, Table, Upsert
+from basis.job.inputs import Clock, Excel, Fetch, File, Ids, Inputs, Mongo, Query
+from basis.job.outputs import Append, Email, ExcelReport, InsertNew, Manual, MongoUpsert, Outputs, Replace, ReplaceWhere, Slack, Table, Upsert
 from basis.job.params import Params
-from basis.job.rows import MaxLength, Row, Zone
+from basis.job.rows import Json, MaxLength, Row, Zone
 from basis.job.version import VERSION
 
 if TYPE_CHECKING:
@@ -37,9 +38,12 @@ __all__ = [
     "Inputs",
     "InsertNew",
     "Interval",
+    "Json",
     "Mail",
     "Manual",
     "MaxLength",
+    "Mongo",
+    "MongoUpsert",
     "Outputs",
     "Params",
     "Query",
@@ -52,6 +56,7 @@ __all__ = [
     "Upsert",
     "Zone",
     "calendar",
+    "json_text",
     "replay",
     "run",
 ]

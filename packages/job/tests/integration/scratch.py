@@ -32,6 +32,8 @@ class TestDatabases(BaseSettings):
     oracle_dsn: str | None = None
     oracle_user: str | None = None
     oracle_password: SecretStr | None = None
+    mongo: SecretStr | None = None
+    """A connection string to a scratch Mongo server, whose collections a test creates and drops: step 5.5's."""
 
 
 @dataclass(frozen=True)

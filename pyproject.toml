@@ -7,7 +7,7 @@
 name = "basis-workspace"
 version = "0.0.0"
 requires-python = ">=3.14"
-dependencies = ["basis-api", "basis-core[excel]", "basis-job"]  # what basis releases, with basis-core's extras, which its tests use; `uv sync --all-packages` installs every member
+dependencies = ["basis-api", "basis-core[excel,mongo]", "basis-job"]  # what basis releases, with basis-core's extras, which its tests use; `uv sync --all-packages` installs every member
 
 [tool.uv]
 package = false
@@ -172,7 +172,7 @@ source_modules = [
     "basis.job.rows", "basis.job.params", "basis.job.inputs", "basis.job.outputs", "basis.job.changes", "basis.job.diff",
     "basis.job.ddl", "basis.job.job", "basis.job.example.job", "basis.job.example.rows",
     "basis.core.interval", "basis.core.tables", "basis.core.destination", "basis.core.model", "basis.core.ddl", "basis.core.frames",
-    "basis.core.calendars", "basis.core.display", "basis.core.messages",
+    "basis.core.calendars", "basis.core.display", "basis.core.messages", "basis.core.jsontext",
 ]
 forbidden_modules = [
     "basis.job.loader", "basis.job.runs", "basis.job.api", "basis.job.cli", "basis.job.new", "basis.job.sync", "basis.job.testing",
@@ -180,7 +180,7 @@ forbidden_modules = [
     "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.storage",
     "basis.core.settings", "basis.core.new", "basis.core.sync", "basis.core.testing", "basis.core.command",
     "basis.core.check", "basis.core.verbs", "basis.core.hooks", "basis.core.hygiene", "basis.core.clone", "basis.core.full", "basis.core.invalid",
-    "basis.core.gates", "basis.core.mutation", "basis.core.pytest_plugin", "basis.core.qa", "basis.core.review", "basis.core.doctor", "basis.core.upgrade", "basis.core.opened", "basis.core.fakes", "basis.core.traces", "basis.core.sending", "basis.core.folders",
+    "basis.core.gates", "basis.core.mutation", "basis.core.pytest_plugin", "basis.core.qa", "basis.core.review", "basis.core.doctor", "basis.core.upgrade", "basis.core.opened", "basis.core.fakes", "basis.core.traces", "basis.core.sending", "basis.core.folders", "basis.core.mongo",
     "mssql_python", "oracledb", "httpx2",
 ]
 ignore_imports = [

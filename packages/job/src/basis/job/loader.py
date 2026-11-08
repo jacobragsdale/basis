@@ -24,7 +24,7 @@ import httpx2
 import pandas as pd
 from opentelemetry.trace import Tracer
 
-from basis.core import folders
+from basis.core import folders, mongo
 from basis.core.databases import Database
 from basis.core.errors import BadReply
 from basis.core.interval import Interval
@@ -32,7 +32,7 @@ from basis.core.logs import ms_since
 from basis.core.opened import HttpClient, Waits
 from basis.core.snapshots import InputRecord
 from basis.core.storage import Root
-from basis.job.inputs import Dataset, Excel, Fetch, File, Query
+from basis.job.inputs import Dataset, Excel, Fetch, File, Mongo, Query
 from basis.job.rows import Row, conform
 
 log = logging.getLogger(__name__)
@@ -48,7 +48,15 @@ system's waits, or the fake's, which take no time."""
 
 
 def load(  # noqa: PLR0913 -- what the run reads, and how it reaches it, by keyword
-    datasets: Mapping[str, Dataset], interval: Interval | None, *, open_database: Callable[[str], Database], reach: Reach, tracer: Tracer, data: Path | None, open_folder: folders.Opener | None = None
+    datasets: Mapping[str, Dataset],
+    interval: Interval | None,
+    *,
+    open_database: Callable[[str], Database],
+    reach: Reach,
+    tracer: Tracer,
+    data: Path | None,
+    open_folder: folders.Opener | None = None,
+    open_mongo: MongoOpener | None = None,
 ) -> tuple[dict[str, pd.DataFrame], dict[str, InputRecord]]:
     """Every dataset's frame and where it came from, by name."""
     files = {name: found for name in datasets if data is not None and (found := _data_file(data, name)) is not None}
@@ -66,13 +74,8 @@ def load(  # noqa: PLR0913 -- what the run reads, and how it reaches it, by keyw
                 by_database.setdefault(dataset.database, {})[name] = dataset
             case Fetch():
                 fetches[name] = dataset
-            case File():
-                frames[name], records[name] = _read_file(dataset, dataset.location(interval), source=f"file: {dataset.path}")
-            case Excel():
-                if open_folder is None:
-                    msg = f"{name} reads a workbook in the folder {dataset.folder}, and the run was given no folders"
-                    raise TypeError(msg)
-                frames[name], records[name] = _read_sheet(dataset, open_folder(dataset.folder), dataset.location(interval))
+            case File() | Excel() | Mongo():
+                frames[name], records[name] = _read_one(name, dataset, interval, open_folder, open_mongo)
             case _:
                 msg = f"{name} is a {type(dataset).__name__}, which nothing reads"
                 raise TypeError(msg)
@@ -214,6 +217,41 @@ def _read_sheet(dataset: Excel, folder: folders.Folder, location: str) -> tuple[
         error.add_note(f"while loading {what}")
         raise
     record = InputRecord(source=f"{dataset.folder}: {location} [{dataset.sheet}]", rows=len(frame), read_ms=ms_since(start))
+    log.info("loaded", extra={"dataset": dataset.name, "source": record.source, "rows": record.rows, "ms": record.read_ms})
+    return frame, record
+
+
+def _read_one(name: str, dataset: File | Excel | Mongo, interval: Interval | None, open_folder: folders.Opener | None, open_mongo: MongoOpener | None) -> tuple[pd.DataFrame, InputRecord]:
+    """A dataset read on its own, on this thread: a file, a workbook's sheet, or a Mongo collection's documents."""
+    match dataset:
+        case File():
+            return _read_file(dataset, dataset.location(interval), source=f"file: {dataset.path}")
+        case Excel():
+            if open_folder is None:
+                msg = f"{name} reads a workbook in the folder {dataset.folder}, and the run was given no folders"
+                raise TypeError(msg)
+            return _read_sheet(dataset, open_folder(dataset.folder), dataset.location(interval))
+        case Mongo():
+            if open_mongo is None:
+                msg = f"{name} reads the Mongo database {dataset.mongo}, and the run was given none"
+                raise TypeError(msg)
+            return _read_mongo(dataset, *open_mongo(dataset.mongo), interval)
+
+
+type MongoOpener = Callable[[str], tuple[mongo.Store, int]]
+"""Each Mongo database a run names, with the most documents a read of it may return."""
+
+
+def _read_mongo(dataset: Mongo, store: mongo.Store, max_documents: int, interval: Interval | None) -> tuple[pd.DataFrame, InputRecord]:
+    start = time.perf_counter()
+    what = f"dataset {dataset.name} ({dataset.mongo}: {dataset.collection})"
+    try:
+        documents = mongo.read(store, dataset.collection, dataset.query(interval), max_documents=max_documents, name=dataset.mongo)
+        frame = conform(mongo.frame_of(documents, dataset.row.columns), dataset.row, what=what, naive="in_zone")
+    except Exception as error:
+        error.add_note(f"while loading {what}")
+        raise
+    record = InputRecord(source=f"{dataset.mongo}: {dataset.collection}", rows=len(frame), read_ms=ms_since(start))
     log.info("loaded", extra={"dataset": dataset.name, "source": record.source, "rows": record.rows, "ms": record.read_ms})
     return frame, record
 

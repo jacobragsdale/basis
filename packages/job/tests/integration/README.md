@@ -14,3 +14,12 @@ export BASIS_TEST_MSSQL='Server=127.0.0.1,14433;Database=etltest;UID=sa;PWD=Etl-
 export BASIS_TEST_ORACLE_DSN=127.0.0.1:15221/FREEPDB1 BASIS_TEST_ORACLE_USER=etl BASIS_TEST_ORACLE_PASSWORD=etltest
 uv run pytest -m integration
 ```
+
+The Mongo tests (`test_mongo.py`) run where `BASIS_TEST_MONGO` names a scratch Mongo server, and publish to SQL
+Server's `json` type, which only SQL Server 2025 has, so they skip on 2022:
+
+```sh
+docker run -d --name etlf-test-mssql -p 127.0.0.1:14433:1433 -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD=Etl-test-1234 mcr.microsoft.com/mssql/server:2025-latest
+docker run -d --name etlf-test-mongo -p 127.0.0.1:27018:27017 mongo:8
+export BASIS_TEST_MONGO='mongodb://127.0.0.1:27018/?directConnection=true'
+```

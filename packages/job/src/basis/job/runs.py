@@ -25,6 +25,7 @@ import traceback
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+from functools import cache
 from pathlib import Path
 from uuid import UUID
 
@@ -35,7 +36,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Tracer
 from pydantic import ValidationError
 
-from basis.core import fakes, folders, frames, logs, publish, sending, snapshots, traces
+from basis.core import fakes, folders, frames, logs, mongo, publish, sending, snapshots, traces
 from basis.core import runs as core_runs
 from basis.core.databases import Database
 from basis.core.destination import TableSpec, check_table, check_values
@@ -46,16 +47,16 @@ from basis.core.opened import SYSTEM_WAITS, Waits, client
 from basis.core.publish import refused_overlap
 from basis.core.runs import Regression
 from basis.core.settings import Settings, SettingsError, Traces, publish_refusal, variable
-from basis.core.snapshots import InputRecord, MessageRecord, PublishRecord, ReportRecord, RunRecord, SendRecord, Snapshot, Status, WrittenRecord
+from basis.core.snapshots import DocumentsRecord, InputRecord, MessageRecord, PublishRecord, ReportRecord, RunRecord, SendRecord, Snapshot, Status, UpsertRecord, WrittenRecord
 from basis.core.storage import Root
 from basis.core.tables import Changes
 from basis.job import handles
 from basis.job.changes import Planned, plan
 from basis.job.diff import OperationDiff, diff
 from basis.job.handles import Kept
-from basis.job.inputs import Clock, Fetch
+from basis.job.inputs import Clock, Fetch, Mongo
 from basis.job.job import Job, JobError, repo_root
-from basis.job.loader import Reach, load
+from basis.job.loader import MongoOpener, Reach, load
 from basis.job.outputs import Email, Slack, Target, report_value
 from basis.job.outputs import Outputs as OutputsOf
 from basis.job.params import Params
@@ -143,7 +144,8 @@ def run(  # noqa: PLR0913 -- what the run reads and where it saves, by keyword
     attributes = {"basis.job": job.name, "basis.run_id": run_id}
     with traces.trace("run", service=job.name, settings=settings.traces, version=settings.git_sha, environment=environment, given=provider, **attributes) as (tracer, _):
         opened = open_folder if open_folder is not None else folders.opener(settings)
-        return _run(job, settings, request, _Run(params, params_text, run_id, snapshot_root, clock, databases, given, tracer, opened))
+        this = _Run(params, params_text, run_id, snapshot_root, clock, databases, given, tracer, opened, mongo_opener(settings, given, tracer))
+        return _run(job, settings, request, this)
 
 
 @dataclass(frozen=True)
@@ -159,6 +161,22 @@ class _Run:
     faked: Mapping[str, fakes.Fake]
     tracer: Tracer
     open_folder: folders.Opener
+    open_mongo: MongoOpener
+
+
+def mongo_opener(settings: Settings, faked: Mapping[str, fakes.Fake], tracer: Tracer) -> MongoOpener:
+    """Each Mongo database a run names, as the settings configure it, or its fake, opened once however often asked,
+    with the most documents a read may return: the settings', or a million for a fake the settings do not name."""
+
+    @cache
+    def opened(name: str) -> tuple[mongo.Store, int]:
+        configured = settings.mongo.get(name)
+        limit = configured.max_documents if configured is not None else 1_000_000
+        if isinstance(fake := faked.get(name), fakes.Mongo):
+            return fake, limit
+        return mongo.store(name, settings, tracer), limit
+
+    return opened
 
 
 def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
@@ -175,10 +193,13 @@ def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
     targets = targets_of(job)
     specs, reasons = _check_destinations(targets, settings, databases, publishing=request.publish)
     reasons += _check_messages(job, settings, this.faked, publishing=request.publish) + _check_reports(job, settings, this.open_folder, publishing=request.publish)
+    reasons += _check_upserts(job, settings, this.faked, publishing=request.publish)
     if reasons:
         return _summarized(_finish(record.done("failed", reasons=reasons, finished_at=clock()), snapshot_root, params_text, {}, {}))
     try:
-        loaded, inputs = load(job.inputs.declared(), request.interval, open_database=databases, reach=_reach(settings, this.faked), tracer=this.tracer, data=request.data, open_folder=this.open_folder)
+        reach = _reach(settings, this.faked)
+        declared = job.inputs.declared()
+        loaded, inputs = load(declared, request.interval, open_database=databases, reach=reach, tracer=this.tracer, data=request.data, open_folder=this.open_folder, open_mongo=this.open_mongo)
         tables = {name: frames.to_arrow(frame) for name, frame in loaded.items()}
     except Exception as error:
         log.exception("could not load the inputs")
@@ -194,7 +215,7 @@ def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
         if (spec := specs.get(name)) is not None and entry.changes is not None:
             reasons.extend(f"{name}: {reason}" for reason in check_values(entry.target, spec, entry.changes))
     status: Status = "failed" if reasons else "checked"
-    record = record.with_outputs(planned, inputs).with_made(kept).with_messages(planned_sends).with_reports(made.reports)
+    record = record.with_outputs(planned, inputs).with_made(kept).with_messages(planned_sends).with_reports(made.reports).with_documents(made.documents)
     result = _finish(record.done(status, reasons=reasons, finished_at=clock()), snapshot_root, params_text, tables, planned, reports=made.frames)
     if reasons or not request.publish or result.snapshot is None:
         _summary(result.record)
@@ -207,12 +228,16 @@ def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
     if status == "published" and made.reports:
         written = write_reports(job, made.reports, made.frames, this.open_folder, clock)
         status = "partial" if any(entry.status == "failed" for entry in written.values()) else status
+    upserted: dict[str, UpsertRecord] = {}
+    if status == "published" and made.documents:
+        upserted = upsert_all(job, made.documents, made.frames, this.open_mongo, clock)
+        status = "partial" if any(entry.status == "failed" for entry in upserted.values()) else status
     sent: dict[str, SendRecord] = {}
     if status == "published" and planned_sends:
         delivery = sending.Delivery(run_id, job.name, request.interval, VERSION, request.again, clock)
         sent = send(job, planned_sends, delivery, settings=settings, databases=databases, faked=this.faked, tracer=this.tracer)
         status = "partial" if any(entry.status == "failed" for entry in sent.values()) else status
-    final = record.done(status, reasons=[], finished_at=clock(), publishes=publishes, sent=sent, written=written)
+    final = record.done(status, reasons=[], finished_at=clock(), publishes=publishes, sent=sent, written=written, upserted=upserted)
     snapshot = result.snapshot.save_record(final)
     _summary(final)
     return Result(final, snapshot, tables, planned)
@@ -224,6 +249,8 @@ def _checked(job: Job, faked: Mapping[str, fakes.Fake]) -> dict[str, fakes.Fake]
     declared: dict[str, type[fakes.Fake]] = {dataset.http: fakes.Http for dataset in job.inputs.declared().values() if isinstance(dataset, Fetch)}
     declared |= {name: fakes.Clock if isinstance(given, Clock) else fakes.Ids for name, given in job.inputs.declared_resources().items()}
     declared |= {message.to: fakes.Slack if isinstance(message, Slack) else fakes.Email for message in job.outputs.declared_messages().values()}
+    declared |= {dataset.mongo: fakes.Mongo for dataset in job.inputs.declared().values() if isinstance(dataset, Mongo)}
+    declared |= {upsert.mongo: fakes.Mongo for upsert in job.outputs.declared_upserts().values()}
     for name, fake in faked.items():
         if (kind := declared.get(name)) is None:
             msg = f"a fake is given for {name}, which {job.name} neither fetches from, declares nor sends to: fake its fetches' services, its clocks and ids, and its messages' channels and emails"
@@ -330,7 +357,8 @@ class _Transformed:
     messages: dict[str, MessageRecord] = field(default_factory=dict)
     reports: dict[str, ReportRecord] = field(default_factory=dict)
     frames: dict[str, pd.DataFrame] = field(default_factory=dict)
-    """Each workbook's rows, conformed to its row."""
+    """Each workbook's and each upsert's rows, conformed to its row."""
+    documents: dict[str, DocumentsRecord] = field(default_factory=dict)
 
 
 def _transform(job: Job, params: Params, tables: Mapping[str, pa.Table], interval: Interval | None, kept: Kept) -> _Transformed:
@@ -347,7 +375,8 @@ def _transform(job: Job, params: Params, tables: Mapping[str, pa.Table], interva
     planned = plan(outputs, interval)
     reasons = [reason for entry in planned.values() for reason in entry.reasons]
     reports, report_frames, refused = planned_reports(job, outputs, interval)
-    reasons.extend(refused)
+    documents, document_frames, unconformed = planned_upserts(job, outputs)
+    reasons.extend(refused + unconformed)
     try:
         checked = job.inputs(fresh(tables), interval=interval, handles=kept.handles)
         reasons.extend(f"check: {reason}" for reason in job.run_check(checked, outputs, params))
@@ -356,7 +385,58 @@ def _transform(job: Job, params: Params, tables: Mapping[str, pa.Table], interva
         reasons.append(f"the job's check raised {_headline(error)}{_at(error, job.directory)}")
     for reason in reasons:
         log.warning("not writing: %s", reason)
-    return _Transformed(planned, reasons, planned_messages(job, outputs), reports, report_frames)
+    return _Transformed(planned, reasons, planned_messages(job, outputs), reports, report_frames | document_frames, documents)
+
+
+def planned_upserts(job: Job, outputs: OutputsOf) -> tuple[dict[str, DocumentsRecord], dict[str, pd.DataFrame], list[str]]:
+    """Each Mongo upsert the transform gave, by its output's name, its rows conformed to its row, and every reason it
+    cannot be made."""
+    records: dict[str, DocumentsRecord] = {}
+    frames_of: dict[str, pd.DataFrame] = {}
+    reasons: list[str] = []
+    for name, upsert in job.outputs.declared_upserts().items():
+        try:
+            frame = conform(report_value(outputs, name), upsert.row, what=f"{name}'s rows", naive="reject")
+        except SchemaError as error:
+            reasons.append(f"{name}: {error}")
+            continue
+        if (repeated := int(frame.duplicated(subset=list(upsert.key)).sum())) > 0:
+            reasons.append(f"{name}: {repeated} rows repeat a key of {list(upsert.key)}, so an upsert would set one document twice: make each key once")
+            continue
+        records[name] = DocumentsRecord(mongo=upsert.mongo, collection=upsert.collection, key=upsert.key, rows=len(frame))
+        frames_of[name] = frame
+    return records, frames_of, reasons
+
+
+def upsert_all(job: Job, documents: Mapping[str, DocumentsRecord], frames_of: Mapping[str, pd.DataFrame], open_mongo: MongoOpener, clock: Callable[[], datetime]) -> dict[str, UpsertRecord]:
+    """Upsert each output's documents, in name order; one that fails is recorded as failed, and the rest are still
+    upserted. An upsert is safe to make again, so a resume makes a failed one again whole."""
+    declared = job.outputs.declared_upserts()
+    done: dict[str, UpsertRecord] = {}
+    for name in sorted(documents):
+        record = documents[name]
+        try:
+            store, _ = open_mongo(record.mongo)
+            counts = store.upsert(record.collection, record.key, mongo.documents_of(frames_of[name], declared[name].row.columns))
+        except Exception as error:
+            log.exception("could not upsert %s", name, extra={"output": name})
+            done[name] = UpsertRecord(status="failed", at=clock(), error=_headline(error))
+            continue
+        log.info("upserted %s into %s.%s", name, record.mongo, record.collection, extra={"output": name, "matched": counts.matched, "modified": counts.modified, "upserted": counts.upserted})
+        done[name] = UpsertRecord(status="upserted", at=clock(), matched=counts.matched, modified=counts.modified, upserted=counts.upserted)
+    return done
+
+
+def _check_upserts(job: Job, settings: Settings, faked: Mapping[str, fakes.Fake], *, publishing: bool) -> list[str]:
+    """Every reason a run that publishes cannot upsert into a Mongo database the job declares: it is not configured,
+    and has no fake."""
+    if not publishing:
+        return []
+    return [
+        f"{name}: the Mongo database {upsert.mongo} is not configured, and the run upserts into it: set BASIS_MONGO__{upsert.mongo.upper()}__*, as .env.example shows"
+        for name, upsert in job.outputs.declared_upserts().items()
+        if upsert.mongo not in settings.mongo and upsert.mongo not in faked
+    ]
 
 
 def planned_reports(job: Job, outputs: OutputsOf, interval: Interval | None) -> tuple[dict[str, ReportRecord], dict[str, pd.DataFrame], list[str]]:
@@ -457,6 +537,10 @@ class _Record:
     ids: dict[str, list[UUID]] = field(default_factory=dict)
     messages: dict[str, MessageRecord] = field(default_factory=dict)
     reports: dict[str, ReportRecord] = field(default_factory=dict)
+    documents: dict[str, DocumentsRecord] = field(default_factory=dict)
+
+    def with_documents(self, documents: Mapping[str, DocumentsRecord]) -> _Record:
+        return replace(self, documents=dict(documents))
 
     def with_messages(self, messages: Mapping[str, MessageRecord]) -> _Record:
         return replace(self, messages=dict(messages))
@@ -482,12 +566,14 @@ class _Record:
         publishes: dict[str, PublishRecord] | None = None,
         sent: dict[str, SendRecord] | None = None,
         written: dict[str, WrittenRecord] | None = None,
+        upserted: dict[str, UpsertRecord] | None = None,
     ) -> RunRecord:
         return RunRecord(
             run_id=self.run_id, job=self.job, module=self.module, version=self.version, git_sha=self.git_sha, started_at=self.started_at,
             finished_at=finished_at, interval=self.interval, params_path=self.params_path, params_sha256=self.params_sha256, labels=self.labels,
             data=self.data, replay_of=self.replay_of, again=self.again, status=status, inputs=self.inputs, outputs=self.outputs, reasons=reasons or [], error=error,
-            publishes=publishes or {}, messages=self.messages, sent=sent or {}, reports=self.reports, written=written or {}, clocks=self.clocks, ids=self.ids,
+            publishes=publishes or {}, messages=self.messages, sent=sent or {}, reports=self.reports, written=written or {},
+            documents=self.documents, upserted=upserted or {}, clocks=self.clocks, ids=self.ids,
         )  # fmt: skip
 
 
@@ -598,7 +684,7 @@ def resume(  # noqa: PLR0913 -- resume's, by keyword
         databases = databases if databases is not None else core_runs.opener(settings)
         count = len({output.database for output in record.outputs.values()})
         final = record
-        if record.reasons or record.error is not None or not (record.messages or record.reports) or core_runs.status_of(record.publishes, count) != "published":
+        if record.reasons or record.error is not None or not (record.messages or record.reports or record.documents) or core_runs.status_of(record.publishes, count) != "published":
             final = core_runs.resume(source, record, name=job.name, targets=targets_of(job), databases=databases, version=VERSION, clock=clock, again=again)  # which refuses a run that never published
         if core_runs.status_of(final.publishes, count) == "published":
             given, opened = _checked(job, faked or {}), open_folder or folders.opener(settings)
@@ -623,18 +709,21 @@ def _finish_files(  # noqa: PLR0913 -- the run, and how it reaches what it write
     """`record`, once its databases have committed, with each workbook it had not written written from its snapshot,
     and then, once every workbook is written, each message it had not sent sent, and saved."""
     unwritten = {name: entry for name, entry in record.reports.items() if (done := record.written.get(name)) is None or done.status == "failed"}
+    unupserted = {name: entry for name, entry in record.documents.items() if (done := record.upserted.get(name)) is None or done.status == "failed"}
     unsent = {name: message for name, message in record.messages.items() if (done := record.sent.get(name)) is None or done.status == "failed"}
-    if not unwritten and not unsent:
+    if not unwritten and not unsent and not unupserted:
         return record
     written = record.written | write_reports(job, unwritten, {name: source.dataset(f"outputs/{name}/insert") for name in unwritten}, open_folder, clock)
+    saved_rows = {name: source.dataset(f"outputs/{name}/insert") for name in unupserted}
+    upserted = record.upserted | upsert_all(job, unupserted, saved_rows, mongo_opener(settings, faked, tracer), clock)
     sent = record.sent
     told = record.again or again
-    if unsent and all(entry.status == "written" for entry in written.values()):
+    if unsent and all(entry.status == "written" for entry in written.values()) and all(entry.status == "upserted" for entry in upserted.values()):
         delivery = sending.Delivery(record.run_id, job.name, record.parsed_interval(), VERSION, told, clock)
         sent = sent | send(job, unsent, delivery, settings=settings, databases=databases, faked=faked, tracer=tracer)
-    failed = any(entry.status == "failed" for entry in written.values()) or any(entry.status == "failed" for entry in sent.values()) or len(sent) < len(record.messages)
+    failed = any(entry.status == "failed" for entry in [*written.values(), *upserted.values(), *sent.values()]) or len(sent) < len(record.messages)
     status: Status = "partial" if failed else "published"
-    final = RunRecord.model_validate(record.model_dump() | {"written": written, "sent": sent, "status": status, "again": told})
+    final = RunRecord.model_validate(record.model_dump() | {"written": written, "upserted": upserted, "sent": sent, "status": status, "again": told})
     source.save_record(final)
     return final
 

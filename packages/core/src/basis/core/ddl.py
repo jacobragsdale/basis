@@ -57,6 +57,8 @@ _FIXED: dict[tuple[Kind, Dialect], str] = {
 
 
 def _type(column: Column, dialect: Dialect) -> str:
+    if column.json:
+        return "JSON" if dialect == "mssql" else "CLOB"
     if column.kind == "str" and dialect == "mssql":
         return f"NVARCHAR({column.max_length if column.max_length is not None else 'MAX'})"
     if column.kind == "str":
@@ -66,7 +68,9 @@ def _type(column: Column, dialect: Dialect) -> str:
 
 def _note(column: Column) -> str:
     notes: list[str] = []
-    if column.kind == "str" and column.max_length is None:
+    if column.json:
+        notes.append("JSON text: SQL Server 2025 or Azure SQL" if column.max_length is None else "JSON text")
+    elif column.kind == "str" and column.max_length is None:
         notes.append("no MaxLength in the row: unbounded")
     if column.kind == "datetime":
         notes.append(f"naive, in {column.zone}")

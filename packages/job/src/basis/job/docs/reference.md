@@ -37,6 +37,7 @@ A row is a subclass of `etl.Row` with one annotated attribute per column, in col
 | `bool` | `pd.ArrowDtype(pa.bool_())` | |
 | `date` | `pd.ArrowDtype(pa.date32())` | |
 | `Annotated[datetime, etl.Zone(NAME)]` | `pd.ArrowDtype(pa.timestamp("us", "UTC"))` | an IANA zone name |
+| `Annotated[str, etl.Json()]` | `String` | each value JSON text, an object or an array, as SQL Server's `json` type holds it; never a key or a `ReplaceWhere(matching=...)` column |
 
 Every column is backed by Arrow, so a null is `pd.NA` in every type, an `int` with nulls stays an integer, a
 `Decimal` stays exact through arithmetic and sums, and no column is `object`. Job code, which may not import pyarrow,
@@ -45,6 +46,11 @@ names a dtype through its row: `Row.dtypes()` gives each column's by name, for `
 `Annotated[T, ...] | None`, makes a column nullable. A column name is lower-case letters, digits and underscores,
 starting with a letter or an underscore. `Zone` names the zone a datetime's naive values are in, in sources and
 destinations; in a frame, every datetime is UTC.
+
+A JSON column's values are checked as SQL Server's `json` type would: an object or an array at the top, numbers with
+at most 38 digits before the point, nesting at most 128 deep. `etl.json_text(value)` writes a dict or a list so,
+numbers in plain notation and NaN refused. `basis ddl` gives it SQL Server's `json`, which SQL Server 2025 and Azure
+SQL have, and `CLOB` on Oracle; a destination's `json` column takes only a column declared so.
 
 Every frame that enters or leaves a job is conformed to its row:
 
@@ -113,6 +119,16 @@ pod. `path` is the workbook's inside it, `.xlsx`, `.xlsm`, `.xlsb` or `.xls`, wh
 is read as a CSV's text is, for the row to type, so nothing is inferred: a whole number as its digits, a date as
 `YYYY-MM-DD`, an empty cell null. A naive time is read in its column's `Zone`. A repo that reads or writes workbooks
 takes `basis-core[excel]` (python-calamine and xlsxwriter).
+
+### `etl.Mongo(row, *, mongo, collection, filter, empty)`
+
+Documents of a Mongo collection, in the database `BASIS_MONGO__MONGO__*` configures: those `filter` matches, as
+Mongo's own query, where a value that is exactly `"{start}"` or `"{end}"` is the run's interval's end, an aware
+datetime, as in `{"traded_at": {"$gte": "{start}", "$lt": "{end}"}}`. Each document's fields become the row's columns
+by name, without regard to case, so `accountId` fills `accountid`; a field the row lacks is left out, and one a
+document lacks is null. Each value is read as its text for the row to type: an `ObjectId` as its hex, a date in UTC,
+a `Decimal128` as its digits, and an object or an array as JSON text, which an `etl.Json()` column keeps. A read that
+returns more than the database's `MAX_DOCUMENTS` fails. A repo that reads or writes Mongo takes `basis-core[mongo]`.
 
 ### A run on files
 
@@ -195,6 +211,16 @@ beside it that is then renamed into place, so a reader of the folder never sees 
 again, whole. A datetime is written as its wall clock in its column's `Zone`, since Excel has none. A write that fails
 leaves the run `partial`, its `written` naming the error, and `basis resume` writes it from the run's snapshot; a run
 writes no message while one of its workbooks is unwritten.
+
+### `etl.MongoUpsert(row, *, mongo, collection, key)`
+
+Documents the job upserts into a Mongo collection: its value is a frame of `row`, each row a document of its columns,
+matched by `key`'s, neither null nor JSON, whose fields it sets, inserting it where none matches, so a second upsert
+of the same documents matches each and modifies none. A JSON column's value is written as its object or array, a
+datetime as a BSON date, and a date as its `YYYY-MM-DD` text, since BSON has none. Only `basis run --publish`
+upserts, once every database has committed, after the workbooks and before the messages; Mongo has no transaction
+and no ledger here, so the record keeps Mongo's counts (`upserted`), and a run whose upsert fails is `partial`, which
+`basis resume` makes again, whole. A key the frame repeats is refused before anything is written.
 
 ### `etl.Changes(delete=None, upsert=None, insert_new=None, insert=None)`
 
@@ -416,6 +442,7 @@ berth's 40 characters do, keeps a database's secret parts in one secret that way
 | `BASIS_HTTP__NAME__URL` | The base URL of the service a fetch names `NAME`. |
 | `BASIS_HTTP__NAME__CA_BUNDLE` | A PEM file of the certificate authorities the service's certificate chains to, in place of the system's. |
 | `BASIS_HTTP__NAME__PROXY` | The proxy the service's calls go through; without it, they go direct. `HTTP_PROXY` and `SSL_CERT_FILE` are never read. |
+| `BASIS_MONGO__NAME__URI`, `__DATABASE`, `__TIMEOUT_S`, `__MAX_DOCUMENTS` | The Mongo database an `etl.Mongo` or `etl.MongoUpsert` names `NAME`: its connection string, a secret, the database the collections are in, the seconds each read or upsert may take, and the most documents a read may return. `__CA_BUNDLE` where its TLS needs one. |
 | `BASIS_FOLDERS__NAME__PATH` | The absolute path on this machine of the shared folder an `etl.Excel` or `etl.ExcelReport` names `NAME`: `\\server\share\pm` on Windows, `/mnt/pm` in WSL and in a pod. |
 | `BASIS_SLACK__NAME__WEBHOOK` | The incoming-webhook URL of the Slack channel a message names `NAME`, a secret. `__CA_BUNDLE` and `__PROXY` as for a service. |
 | `BASIS_EMAIL__NAME__HOST`, `__PORT`, `__SECURITY`, `__SENDER`, `__TO` | The relay an email named `NAME` goes through, `none`, `starttls` or `tls`, its sender's address, and, as JSON, the addresses it goes to, `["desk@example.com"]`: each environment's own. `__USER` and `__PASSWORD` where the relay asks for a login. |

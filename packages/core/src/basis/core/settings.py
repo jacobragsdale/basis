@@ -136,6 +136,21 @@ class FolderSettings(Model):
         return self
 
 
+class MongoSettings(Model):
+    """A Mongo database, and how a part reaches it: from these settings alone."""
+
+    uri: SecretStr
+    """The connection string, `mongodb://user:password@host:27017/?replicaSet=rs0` or `mongodb+srv://...`, a secret."""
+    database: str
+    """The database the part's collections are in."""
+    timeout_s: Annotated[float, Field(gt=0)]
+    """Seconds each read or write may take, the server's selection included."""
+    max_documents: Annotated[int, Field(ge=1)]
+    """The most documents a read may return: one that returns more fails, rather than filling the run's memory."""
+    ca_bundle: FilePath | None = None
+    """A PEM file of the certificate authorities the server's certificate must chain to, where it uses TLS."""
+
+
 EMAIL = r"^[^@\s<>,;]+@[^@\s<>,;]+$"
 """An address, `name@host`, with nothing around it."""
 
@@ -223,6 +238,8 @@ class Settings(BaseSettings):
     """Each database a job reads or writes, by the name its datasets and tables give."""
     http: dict[str, HttpService] = Field(default_factory=dict)
     """Each other service a part calls, by the name its declaration gives."""
+    mongo: dict[str, MongoSettings] = Field(default_factory=dict)
+    """Each Mongo database a part reads or upserts into, by the name its declaration gives."""
     folders: dict[str, FolderSettings] = Field(default_factory=dict)
     """Each shared folder a part reads or writes files in, by the name its declaration gives."""
     slack: dict[str, SlackChannel] = Field(default_factory=dict)

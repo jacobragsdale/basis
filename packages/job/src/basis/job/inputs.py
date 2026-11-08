@@ -211,6 +211,47 @@ class Excel(Dataset):
         return f"{self.folder}: {self.path} [{self.sheet}]"
 
 
+class Mongo(Dataset):
+    """Documents of a Mongo collection, as `BASIS_MONGO__MONGO__*` configures the database: those `filter` matches,
+    where a value that is exactly `"{start}"` or `"{end}"` is the run's interval's end, as an aware datetime, as in
+    `{"traded_at": {"$gte": "{start}", "$lt": "{end}"}}`. Each document's fields become the row's columns by name,
+    without regard to case, and each value is read as its text, an object or an array as JSON text
+    (`basis.core.mongo`). A repo that reads Mongo takes `basis-core[mongo]`."""
+
+    def __init__(self, row: type[Row], *, mongo: str, collection: str, filter: Mapping[str, object], empty: Empty) -> None:  # noqa: A002 -- Mongo's own word for it
+        super().__init__(row, empty=empty, base=_caller_folder())
+        if not IDENTIFIER.match(mongo):
+            msg = f"mongo {mongo!r}: a Mongo database's name is lower-case letters, digits and underscores, as in BASIS_MONGO__{mongo.upper()}__URI"
+            raise ValueError(msg)
+        if not collection or "$" in collection:
+            msg = f"collection {collection!r}: name the collection, without $"
+            raise ValueError(msg)
+        self.mongo = mongo
+        self.collection = collection
+        self.filter = dict(filter)
+
+    def query(self, interval: Interval | None) -> dict[str, object]:
+        """The filter for a run, its interval's ends bound in."""
+        return {key: _bound(value, interval, self.collection) for key, value in self.filter.items()}
+
+    @override
+    def describe(self) -> str:
+        return f"{self.mongo}: {self.collection}"
+
+
+def _bound(value: object, interval: Interval | None, where: str) -> object:
+    if isinstance(value, str) and value in {"{start}", "{end}"}:
+        if interval is None:
+            msg = f"{where}'s filter binds the interval, and this run has none: give it one"
+            raise ValueError(msg)
+        return interval.start if value == "{start}" else interval.end
+    if isinstance(value, Mapping):
+        return {str(key): _bound(item, interval, where) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_bound(item, interval, where) for item in value]
+    return value
+
+
 def _caller_folder() -> Path:
     """The folder of the module that declares the dataset, in a class body or at module level: two frames up, past
     `Query.__init__` or `File.__init__`."""

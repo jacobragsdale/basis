@@ -13,17 +13,18 @@ waits as its `waits` do, which take no time, so a GET made again until its deadl
 import json
 import smtplib
 import threading
-from collections.abc import Awaitable, Callable, Hashable, MutableMapping
+from collections.abc import Awaitable, Callable, Hashable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 from http import HTTPStatus
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 import httpx2
 
 from basis.core.errors import KINDS, BadReply, Conflict, Denied, Failed, NotFound, Rejected, ServiceError, Timeout, Unavailable
+from basis.core.mongo import Upserted
 
 type _Message = MutableMapping[str, Any]
 type ASGIApp = Callable[[_Message, Callable[[], Awaitable[_Message]], Callable[[_Message], Awaitable[None]]], Awaitable[None]]
@@ -260,4 +261,69 @@ class _Session:
         return None
 
 
-type Fake = Http | Clock | Ids | Slack | Email
+MONGO_KINDS: tuple[type[ServiceError], ...] = (Timeout, Unavailable, Conflict, Rejected, Denied, Failed)
+"""The kinds a Mongo database's reads and upserts raise, real or fake."""
+
+
+class Mongo:
+    """A Mongo database in memory: each collection a list of documents, in `collections`, which a test fills and reads.
+    A query matches by equality and by `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte` and `$in` on a field, as a job's
+    filters do; an upsert sets fields by key, as Mongo's does. It fails on demand (`fails`), every time or the next
+    `times`, with a kind of `ServiceError`: its finds, its upserts, or both."""
+
+    def __init__(self) -> None:
+        self.collections: dict[str, list[dict[str, object]]] = {}
+        self._failing = Failures[str]("a fake Mongo database", MONGO_KINDS)
+
+    def fails(self, kind: type[ServiceError], *, times: int | None = None, on: Literal["find", "upsert", "any"] = "any") -> None:
+        self._failing.set(on, kind, times)
+
+    def find(self, collection: str, query: Mapping[str, object], *, limit: int) -> list[dict[str, object]]:
+        self._fail("find")
+        return [dict(document) for document in self.collections.get(collection, []) if _matches(document, query)][:limit]
+
+    def upsert(self, collection: str, key: Sequence[str], documents: Sequence[Mapping[str, object]]) -> Upserted:
+        self._fail("upsert")
+        held = self.collections.setdefault(collection, [])
+        matched = modified = upserted = 0
+        for document in documents:
+            found = next((there for there in held if all(there.get(field) == document[field] for field in key)), None)
+            if found is None:
+                held.append(dict(document))
+                upserted += 1
+                continue
+            matched += 1
+            if any(found.get(field) != value for field, value in document.items()):
+                found.update(document)
+                modified += 1
+        return Upserted(matched, modified, upserted)
+
+    def _fail(self, operation: str) -> None:
+        if (taken := self._failing.take(operation, "any")) is not None:
+            failure = taken[1]("a fake Mongo database fails", resource="mongo")
+            raise failure
+
+
+_COMPARE: dict[str, Callable[[Any, Any], bool]] = {
+    "$eq": lambda found, wanted: found == wanted,
+    "$ne": lambda found, wanted: found != wanted,
+    "$gt": lambda found, wanted: found is not None and found > wanted,
+    "$gte": lambda found, wanted: found is not None and found >= wanted,
+    "$lt": lambda found, wanted: found is not None and found < wanted,
+    "$lte": lambda found, wanted: found is not None and found <= wanted,
+    "$in": lambda found, wanted: found in wanted,
+}
+
+
+def _matches(document: Mapping[str, object], query: Mapping[str, object]) -> bool:
+    for field, wanted in query.items():
+        found = document.get(field)
+        if isinstance(wanted, Mapping) and wanted and all(str(operator).startswith("$") for operator in wanted):
+            if not all(_COMPARE[str(operator)](found, value) for operator, value in wanted.items()):
+                return False
+        elif found != wanted:
+            return False
+    return True
+
+
+type Fake = Http | Clock | Ids | Slack | Email | Mongo

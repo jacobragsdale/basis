@@ -111,6 +111,26 @@ class WrittenRecord(Model):
     error: str | None = None
 
 
+class DocumentsRecord(Model):
+    """Documents a run planned to upsert into Mongo: where, by which key, and how many."""
+
+    mongo: str
+    collection: str
+    key: tuple[str, ...]
+    rows: int
+
+
+class UpsertRecord(Model):
+    """What became of an upsert: `upserted`, with Mongo's counts, or `failed`, with the error."""
+
+    status: Literal["upserted", "failed"]
+    at: datetime
+    matched: int = 0
+    modified: int = 0
+    upserted: int = 0
+    error: str | None = None
+
+
 class RunRecord(Model):
     run_id: str
     job: str
@@ -147,6 +167,10 @@ class RunRecord(Model):
     """Each workbook the run planned to write, by its output's name: only `--publish` writes them."""
     written: dict[str, WrittenRecord] = Field(default_factory=dict)
     """What became of each workbook the run wrote, by its output's name."""
+    documents: dict[str, DocumentsRecord] = Field(default_factory=dict)
+    """Each Mongo upsert the run planned, by its output's name: only `--publish` upserts."""
+    upserted: dict[str, UpsertRecord] = Field(default_factory=dict)
+    """What became of each upsert, by its output's name."""
     clocks: dict[str, list[AwareDatetime]] = Field(default_factory=dict)
     """Each time each clock the run declares gave, by its name, in order, which a replay of the run is given again."""
     ids: dict[str, list[UUID]] = Field(default_factory=dict)

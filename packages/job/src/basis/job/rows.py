@@ -30,7 +30,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import numpy as np
 import pandas as pd
 
-from basis.core import frames
+from basis.core import frames, jsontext
 from basis.core.errors import BasisError
 from basis.core.frames import Naive
 from basis.core.tables import IDENTIFIER, Column, Kind
@@ -52,6 +52,13 @@ class Zone:
     """The IANA time zone a `datetime` column's naive values are in, in its sources and destinations."""
 
     name: str
+
+
+@dataclass(frozen=True)
+class Json:
+    """A `str` column whose values are JSON text, each an object or an array, as SQL Server's `json` type holds them:
+    `Annotated[str, etl.Json()]`. Write its values with `etl.json_text(value)`; it can be no key, and no
+    `ReplaceWhere(matching=...)` column, since a JSON type cannot be compared."""
 
 
 class RowError(BasisError, TypeError):
@@ -125,10 +132,13 @@ def _column(row: type, name: str, hint: object) -> Column:
 
 def _with_metadata(where: str, name: str, kind: Kind, *, nullable: bool, metadata: list[object]) -> Column:
     max_length = zone = None
+    json = False
     for item in metadata:
         match item:
             case MaxLength(chars=chars) if kind == "str" and chars >= 1:
                 max_length = chars
+            case Json() if kind == "str":
+                json = True
             case Zone(name=zone_name) if kind == "datetime":
                 try:
                     ZoneInfo(zone_name)
@@ -142,7 +152,7 @@ def _with_metadata(where: str, name: str, kind: Kind, *, nullable: bool, metadat
     if kind == "datetime" and zone is None:
         msg = f"{where}: a datetime column names the zone its naive values are in, as Annotated[datetime, etl.Zone('UTC')]"
         raise RowError(msg)
-    return Column(name, kind, nullable, max_length=max_length, zone=zone)
+    return Column(name, kind, nullable, max_length=max_length, zone=zone, json=json)
 
 
 class SchemaError(ValueError):
@@ -222,4 +232,9 @@ def _invalid(series: pd.Series, column: Column) -> list[str]:
         problems.append(f"{nulls} nulls in a column that may not be null")
     if column.max_length is not None and len(found := series.dropna()) and (longest := int(found.str.len().max())) > column.max_length:
         problems.append(f"values up to {longest} characters, longer than its MaxLength({column.max_length})")
+    if column.json:
+        for position, text in series.dropna().items():
+            if (refused := jsontext.problem(str(text))) is not None:
+                problems.append(f"row {position}'s value is {refused}: write it with etl.json_text")
+                break
     return problems

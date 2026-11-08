@@ -126,6 +126,8 @@ def check_table(target: Target, spec: TableSpec) -> list[str]:
 
 
 def _type_problem(dialect: Dialect, column: Column, found: DestColumn) -> str | None:
+    if found.type == "JSON":
+        return None if column.json else "a JSON column holds JSON text, objects and arrays: declare the row's column Annotated[str, etl.Json()]"
     if found.type not in _TYPES[dialect][column.kind]:
         return f"a {found.type} column cannot hold a row's {column.kind} values exactly"
     match column.kind, found.type:
