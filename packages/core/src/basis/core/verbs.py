@@ -17,13 +17,13 @@ that one of them gives something to do:
 
 | Core verb | Listed when a declared part has | What it does with them |
 |---|---|---|
-| `check` | always | lints, type checks and tests the repo, checks its clone runs its hooks, and compares the files `sync` owns with what basis and `files` give |
+| `check` | always | lints, type checks and tests the repo to its gates (`gates`), runs each part's `checks`, checks its clone runs its hooks, and compares what `sync` owns with what basis gives |
 | `sync` | always | writes basis's own files and what every part's `files` give, and removes what basis wrote that none of them gives now |
 | `docs [PAGE]` | `docs` | lists every part's pages as `PART/PAGE`, or prints one |
 | `new KIND NAME` | `new` | calls `new[KIND](repo, NAME)` |
 | `run`, `describe`, `resume`, `replay`, `regress`, `ddl` | that field of `runs` | parses NAME, and RUN_ID for `resume` and `replay`; NAME's part's `Shared` adds and reads the rest |
-| `check --full` | always | `check`, then each part's `runs.regressions` where the run store is reachable, and its `qa` where the repo declares a QA tier and this machine has its settings |
-| `review` | always | prints what `check --full` found for a commit, with each part's `contract` diff |
+| `check --full` | always | `check`, then each part's `runs.regressions` where the run store is reachable, its `qa` where the repo declares a QA tier and this machine has its settings, and mutants |
+| `review` | always | prints what `check --full` found for a commit, with each part's `contract` diff and the mutants that survived |
 | `doctor`, `upgrade` | always | check the desktop's setup; relock basis, `sync` and `check --full` |
 
 No two declared parts may add the same verb, nor a verb core has, nor the same kind to `new`. A verb that several
@@ -263,6 +263,10 @@ class Part:
     `basis review`. Its first line is one plain sentence that sums it up, which `basis check --full` prints: a
     heading's or a list item's mark before it is dropped, and a blank line prints as `changed`. A change the
     contract's users cannot take raises a `BasisError` that names it, which fails the check. A job offers none."""
+    checks: Callable[[Path], Sequence[Problem]] | None = None
+    """The part's own checks of the repo's code, which `basis check` runs on the repo beside its tests, such as
+    basis-api's layers: each problem one `ERROR` line, its reason and its fix. A check the repo's code cannot pass
+    raises nothing, and returns the problem; a `BasisError` it raises is one line too."""
 
 
 _held: ContextVar[list[str] | None] = ContextVar("basis.core.verbs.held", default=None)

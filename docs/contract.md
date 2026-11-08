@@ -114,7 +114,8 @@ The errors basis answers itself, besides each API's own:
 
 A `service-` problem is a failure of something the route called that its handler did not handle, one of basis's kinds
 of service error ([the design](design.md#what-jobs-and-apis-share)); a handler that has something to say about one, as
-the example's `dirty_price` says `unpriced` when the pricing service has no price, answers its own error instead. Its
+the example's repository raises its domain's `Unpriced` when the pricing service has no price, which its route answers
+as `unpriced`, answers its own error instead. Its
 `detail` names what was called, as `pricing answered 503 to GET /prices/US0001`, and never holds what a database's
 driver said. An operation lists the kinds that what its route asks for can raise: every kind for another service, all
 but `service-not-found` and `service-bad-reply` for a database, and `service-timeout` for a cache or a compute

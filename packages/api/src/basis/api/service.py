@@ -20,7 +20,8 @@ Every route declares three things, none of which has a default, so a route that 
   commit of its writes included (see `deadlines.py`);
 - `response`, what it answers when it succeeds, which its handler's return annotation must be; None for a route
   that answers 204 with no body;
-- `errors`, every `api.Error` its handler may raise. Each appears in the OpenAPI document under its status, and an
+- `errors`, every `api.Error` its handler may raise, and the meaning `api.error` gives each domain exception it may
+  raise (see `errors.py`). Each appears in the OpenAPI document under its status, and an
   error the route does not declare, or an `HTTPException`, answers 500 as the defect it is. basis adds its own: an
   invalid request's 422 on every route, and each kind of `api.ServiceError` that what the route asks for can raise,
   which its handler need not catch (see `errors.py`): `api.Timeout`, a 504, on one that asks for a resource that
@@ -74,7 +75,7 @@ from starlette.routing import Route as StarletteRoute
 from basis.api import strict
 from basis.api.compute import Compute, ComputeFunction
 from basis.api.dataset import Rows, rows
-from basis.api.errors import Answerable, DeclarationError, Error, NotReadyError
+from basis.api.errors import Answerable, DeclarationError, DomainError, Error, NotReadyError
 from basis.api.identity import GivenUser, SignInRequiredError, User, annotation_refusal
 from basis.api.resources import Cache, CacheResource, Client, Clock, ClockResource, DatabaseResource, HttpResource, Ids, IdsResource, Opened, Reader, Resource, Session, Writer, check_outboxes
 from basis.api.settings import Settings
@@ -252,6 +253,9 @@ def _declared_errors(name: str, declared: object) -> tuple[type[Error], ...]:
             raise DeclarationError(msg)
         if error in found:
             msg = f"{name} declares {error.__qualname__} twice: declare each error once"
+            raise DeclarationError(msg)
+        if issubclass(error, DomainError) and (same := next((other for other in found if issubclass(other, DomainError) and other.exception is error.exception), None)) is not None:
+            msg = f"{name} declares two meanings of {error.exception.__qualname__}, {same.title!r} and {error.title!r}: declare the one api.error its errors.py gives it"
             raise DeclarationError(msg)
         found.append(error)
     return tuple(found)

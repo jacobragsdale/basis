@@ -224,7 +224,8 @@ Lane B. Needs step 1.3. Steps 2.3 and 2.4 run at once, and so do 2.5 and 2.9.
    Needs 2.5, 5.1 and 5.8, and step 2.11 needs it. Done when the example API passes them all, a copy of it that breaks
    any one fails `basis check` with that rule's fix, and `basis review` lists a mutant that survived.
 7. **2.7 New app.** `basis-api new app NAME` writes the API part in its layers (`service.py`, `handlers.py`,
-   `repository.py` and `domain.py`, with `resources.py` and `errors.py`) and `[tool.basis] coverage = 90`, adds jobs
+   `repository.py` and `domain.py`, with `resources.py` and `errors.py`), `[tool.basis] coverage = 90`, and the
+   development dependencies the gates run, pytest-cov, mutmut for Linux and Schemathesis, adds jobs
    through `basis.job`'s generator, and writes `basis.core`'s repo files. Needs 1.7, 2.6 and 5.1. Done when a
    generated repo with an API and a job passes `basis check --full`, and its image serves the API and runs the job.
 8. **2.8 Pilot (work).** Create a pilot API repo with `uvx basis-api new app pilot`, beside basis-ui's pilot UI repo,
@@ -435,3 +436,23 @@ Later, and not yet stepped:
 - output checks;
 - Azure Key Vault;
 - deleting the rows a lake archive holds from its source database, as an explicit step of its own.
+
+## Later: what the MVP leaves for the review
+
+Since 2026-11-08 the maintainer has the work go fast to the MVP, one agent committing to `main`, with the review after.
+These are left for it.
+
+- **Step 2.6, from its review.** These are not fixed yet:
+  - `basis review` prints a mutation record that holds only a failure as a clean run on a first commit.
+  - Schemathesis loads the service installed in the running environment, not the commit under check, so in the push
+    hook's worktree it can test other code.
+  - Purity is checked on modules named `domain`, not on every module inside a `domain` package.
+  - The socket plugin blames the unit test that is running for a socket a leftover thread opens.
+  - A hunk that only deletes lines marks the function above it as touched.
+  - `mutation.STATUSES` copies mutmut's exit-code table by hand, and -9 and -11 should be `segfault`.
+  - The folders basis never reads are listed in four places.
+  - `layers.DECLARATIONS` is unused.
+- **Schemathesis and mutmut are off by default.** `BASIS_FUZZ=1` turns Schemathesis on for `basis check`, and
+  `BASIS_MUTATE=1` turns mutation testing on for `basis check --full`. Their own tests are marked `heavy`, which the
+  default run leaves out; `uv run pytest -m heavy` runs them. Turning them back on is the review's call, and it moves
+  the fuzz into `check --full` and builds the app once.

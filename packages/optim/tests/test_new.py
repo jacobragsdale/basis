@@ -24,7 +24,7 @@ def test_a_new_repo_holds_one_model_folder_and_everything_around_it(tmp_path: Pa
     _, minor, _ = optim.__version__.split(".")
     assert project["project"]["dependencies"] == [f"optim>={optim.__version__},<0.{int(minor) + 1}"]
     assert project["project"]["entry-points"]["optim.models"] == {"real-income": "models.real_income.model"}
-    assert project["tool"]["basis"] == {"parts": ["optim"]}
+    assert project["tool"]["basis"] == {"parts": ["optim"], "coverage": 90}
     assert project["build-system"]["requires"] == ["uv_build>=0.13.6,<0.14"]
     folder = repo / "models" / "real_income"
     for path in ("__init__.py", "main.py", "model.py", "prep.py", "README.md", "datasets/README.md", "datasets/sql/controls.sql", "rules/README.md", "optimizer/problem.py"):

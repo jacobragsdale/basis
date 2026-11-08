@@ -23,6 +23,9 @@ dependencies = [
 [project.scripts]
 basis = "basis.core.command:main"  # every part's verbs, through the basis.verbs entry points
 
+[project.entry-points.pytest11]
+basis = "basis.core.pytest_plugin"  # every repo's tests: no sockets in unit tests, and what basis check reads of them (basis.core.gates)
+
 [build-system]
 requires = ["uv_build>=0.13.6,<0.14"]
 build-backend = "uv_build"
