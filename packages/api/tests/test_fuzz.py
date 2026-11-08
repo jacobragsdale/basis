@@ -124,16 +124,50 @@ def test_without_schemathesis_the_repo_is_told_to_install_it(monkeypatch: pytest
     ]
 
 
-def test_a_service_that_does_not_load_is_left_to_openapi_jsons_line(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_service_that_does_not_load_is_left_to_openapi_jsons_line(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(services, "entry_points", lambda **_: [EntryPoint(name="broken", value="nowhere_at_all:service", group=services.GROUP)])
-    assert fuzz.problems() == []
+    assert fuzz.problems(tmp_path) == []
+
+
+SHADOWED = """from pydantic import BaseModel
+
+from basis import api
+
+
+class Up(BaseModel):
+    up: bool
+
+
+def up() -> Up:
+    return Up(up=True)
+
+
+def fakes() -> dict[object, object]:
+    {body}
+
+
+service = api.Service(name="shadowed", settings=api.Settings, routes=[api.get("/up", up, deadline_s=1, response=Up, errors=[])], fakes="shadowed.service:fakes")
+"""
+
+
+def test_the_repos_own_code_is_checked_not_an_installed_copy_of_it(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """As in the push hook's worktree, whose commit is checked while the clone's own checkout is the one installed."""
+    for folder, body in [("installed", "return {}"), ("repo", "raise RuntimeError('the commit under check')")]:
+        (tmp_path / folder / "shadowed").mkdir(parents=True)
+        (tmp_path / folder / "shadowed" / "__init__.py").write_text("", encoding="utf-8")
+        (tmp_path / folder / "shadowed" / "service.py").write_text(SHADOWED.replace("{body}", body), encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path / "installed"))
+    monkeypatch.setattr(services, "entry_points", lambda **_: [EntryPoint(name="shadowed", value="shadowed.service:service", group=services.GROUP)])
+    [(reason, _)] = fuzz.problems(tmp_path / "repo")
+    assert reason == "service shadowed's app does not build on the fakes it declares, since it raised RuntimeError: the commit under check"
+    assert "shadowed" not in sys.modules
 
 
 @pytest.mark.heavy
 @pytest.mark.usefixtures("fuzzing")
 def test_the_example_answers_every_request_as_its_document_says(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(services, "entry_points", lambda **_: [EntryPoint(name="accruals", value="basis.api.example.service:service", group=services.GROUP)])
-    assert fuzz.problems() == []
+    assert fuzz.problems(Path(fuzz.__file__).parent / "example") == []  # a folder with no package of its own: the installed example
 
 
 def test_an_app_whose_fakes_raise_is_one_line(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -110,7 +110,7 @@ def part() -> Part:
 def _checks(repo: Path) -> list[Problem]:
     from basis.api import fuzz, layers  # noqa: PLC0415 -- grimp, FastAPI and Schemathesis load when the check runs, not for every `basis --help`
 
-    return [*layers.problems(repo), *fuzz.problems()]
+    return [*layers.problems(repo), *fuzz.problems(repo)]
 
 
 def _smoke(repo: Path, env: str, commit: str | None) -> list[Problem]:

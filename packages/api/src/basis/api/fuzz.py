@@ -23,12 +23,13 @@ import tempfile
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from basis.api import dev, fakes
+from basis.api import dev, fakes, layers
 from basis.api.app import App, build
 from basis.api.compute import ComputeFunction
 from basis.api.resources import DatabaseResource, HttpResource
@@ -54,14 +55,17 @@ takes shape, so the commit hook checks only that the app builds and starts on it
 INSTALL = "add schemathesis to [dependency-groups] dev, and run `uv lock`"
 
 
-def problems() -> list[Problem]:
-    """Each way the repo's one service fails on its fakes: it does not build or start, or Schemathesis finds a request
-    it answers as its document does not say. A service that does not load is `openapi.json`'s line already."""
-    try:
-        service = load()
-    except Exception:  # noqa: BLE001 -- basis sync's openapi.json says why, as its one line
-        return []
-    return check(service)
+def problems(repo: Path) -> list[Problem]:
+    """Each way the repo's one service, as the repo at `repo` holds its code, fails on its fakes: it does not build or
+    start, or Schemathesis finds a request it answers as its document does not say. Its code is imported from the repo's
+    folder, never the installed package, which in the push hook's worktree is the clone's own checkout. A service that
+    does not load is `openapi.json`'s line already."""
+    with layers.importable(repo, layers.packages(repo)):
+        try:
+            service = load()
+        except Exception:  # noqa: BLE001 -- basis sync's openapi.json says why, as its one line
+            return []
+        return check(service)
 
 
 def check(service: Service) -> list[Problem]:

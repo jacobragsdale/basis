@@ -233,16 +233,23 @@ def _packages(repo: Path) -> Iterator[str]:
 
 
 def _graph(repo: Path, packages: Sequence[str]) -> _Graph:
-    with _importable(repo, packages):
+    with importable(repo, packages):
         graph = grimp.build_graph(*packages, include_external_packages=True, exclude_type_checking_imports=True, cache_dir=None)
     internal = frozenset(module for module in graph.modules if module.partition(".")[0] in packages)
     return _Graph(graph, repo, internal, frozenset(packages))
 
 
+def packages(repo: Path) -> list[str]:
+    """The repo's packages, each a folder at its root with an `__init__.py`."""
+    return sorted(_packages(repo))
+
+
 @contextmanager
-def _importable(repo: Path, packages: Sequence[str]) -> Generator[None]:
-    """The repo's packages found at its root, whatever the process imported before: grimp finds a package as Python
-    would, so the root goes first on the path, and a module of the same name imported from elsewhere is set aside."""
+def importable(repo: Path, packages: Sequence[str]) -> Generator[None]:
+    """The repo's packages imported from its root, whatever the process imported before, as a check of the repo's code
+    must, since the installed package may be another checkout's, as it is in the push hook's worktree: the root goes
+    first on the path, a module of the same name imported from elsewhere is set aside, and what the block imported of
+    them is forgotten after, when the set-aside modules come back."""
     held = {name: module for name, module in sys.modules.items() if name.partition(".")[0] in packages}
     for name in held:
         del sys.modules[name]
@@ -251,4 +258,6 @@ def _importable(repo: Path, packages: Sequence[str]) -> Generator[None]:
         yield
     finally:
         sys.path.remove(str(repo))
+        for name in [name for name in sys.modules if name.partition(".")[0] in packages]:
+            del sys.modules[name]
         sys.modules.update(held)

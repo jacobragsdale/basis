@@ -445,11 +445,7 @@ Later, and not yet stepped:
 Since 2026-11-08 the maintainer has the work go fast to the MVP, one agent committing to `main`, with the review after.
 These are left for it.
 
-- **Step 2.6, from its review.** These are not fixed yet:
-  - Schemathesis loads the service installed in the running environment, not the commit under check, so in the push
-    hook's worktree it can test other code.
-  - The folders basis never reads are listed in four places.
-  - `layers.DECLARATIONS` is unused.
+- **Step 2.6, from its review.** Every finding is fixed: the last, on 2026-11-07, in b11ab5c, d000f6f, 94d3fe9, b7923d3 and the fuzz's commit.
 - **Schemathesis and mutmut are off by default.** `BASIS_FUZZ=1` turns Schemathesis on for `basis check`, and
   `BASIS_MUTATE=1` turns mutation testing on for `basis check --full`. Their own tests are marked `heavy`, which the
   default run leaves out; `uv run pytest -m heavy` runs them. Turning them back on is the review's call, and it moves
