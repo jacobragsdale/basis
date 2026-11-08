@@ -57,7 +57,10 @@ def document(service: Service) -> dict[str, JsonValue]:
     """`service`'s document, as its app serves it, made without its settings or its resources."""
     app = Application(title=service.name)
     routes.add(app, service)
-    return app.openapi()
+    found = app.openapi()
+    if service.ui is not None:
+        found["servers"] = [{"url": routes.API}]  # the paths stay the routes' own, and a client reaches them under /api
+    return found
 
 
 def text(service: Service) -> str:

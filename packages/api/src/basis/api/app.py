@@ -38,7 +38,7 @@ from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from basis.api import errors, openapi, opened, origins, routes, tokens
+from basis.api import errors, openapi, opened, origins, routes, tokens, ui
 from basis.api.fakes import Fakes
 from basis.api.requests import HEALTH, REQUEST_ID, Requests
 from basis.api.service import STATE, DeclarationError, Runtime, Service
@@ -179,8 +179,19 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | 
 
     app.add_api_route(f"{HEALTH}live", live, methods=["GET"], include_in_schema=False)
     app.add_api_route(f"{HEALTH}ready", ready, methods=["GET"], include_in_schema=False)
-    routes.add(app, service)
+    _routes(app, service)
     return App(service, configured, app, lifecycle, provider)
+
+
+def _routes(app: openapi.Application, service: Service) -> None:
+    """The service's routes on `app`: at their own paths, or, for an app that serves a UI, under /api, with the
+    document theirs as the repo commits it, and the UI at / after every route."""
+    if service.ui is None:
+        routes.add(app, service)
+        return
+    routes.add(app, service, prefix=routes.API)
+    app._document = openapi.document(service)  # noqa: SLF001 -- the one document, unprefixed, which the app serves
+    app.mount("/", ui.Folder(service.ui), name="ui")
 
 
 async def _problem(request: Request, error: Exception) -> Response:

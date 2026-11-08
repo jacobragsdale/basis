@@ -64,6 +64,7 @@ from collections.abc import AsyncIterator, Iterable, Iterator, Mapping, Sequence
 from dataclasses import InitVar, dataclass, field
 from http import HTTPStatus
 from importlib.metadata import EntryPoint, entry_points
+from pathlib import PurePosixPath, PureWindowsPath
 from types import FunctionType
 from typing import Annotated, Literal, Protocol, assert_never, get_args, get_origin
 
@@ -302,6 +303,10 @@ class Service:
     """Where its fakes for `basis dev` and `basis call --fake` are made: `module:function`, a function that takes
     nothing and returns a fake for each database and other service it declares, by resource, as `api.build` takes them.
     None for a service that has none yet."""
+    ui: str | None = None
+    """The folder of a built UI the app serves at `/`, beside its routes, which then mount under `/api`, so one
+    container serves a UI and its API on one origin: a relative path, as `web/dist`, found from the folder the app runs
+    in, and holding `index.html`. None for an app that serves no UI, whose routes are at their own paths."""
 
     def __post_init__(self) -> None:
         if not NAME.fullmatch(self.name):
@@ -310,6 +315,7 @@ class Service:
         if self.fakes is not None and not _REFERENCE.fullmatch(self.fakes):
             msg = f"service {self.name}'s fakes are {self.fakes!r}: give fakes='module:function', the function that makes them, as 'accruals.dev:fakes'"
             raise DeclarationError(msg)
+        _check_ui(self.name, self.ui)
         if not (isinstance(self.settings, type) and issubclass(self.settings, Settings)):
             msg = f"service {self.name}'s settings are {self.settings!r}, not a subclass of api.Settings: declare `class Settings(api.Settings)`, or pass api.Settings itself"
             raise DeclarationError(msg)
@@ -344,6 +350,15 @@ class Service:
                 raise DeclarationError(msg)
             seen[route.shape] = route
         _check_names(self.name, routes)
+
+
+def _check_ui(name: str, folder: str | None) -> None:
+    """That a service's UI folder, if it serves one, is a relative path inside the app's own folder."""
+    if folder is None:
+        return
+    if not folder or PurePosixPath(folder).is_absolute() or PureWindowsPath(folder).is_absolute() or ".." in PurePosixPath(folder.replace("\\", "/")).parts:
+        msg = f"service {name}'s ui is {folder!r}: give the built UI's folder as a relative path inside the app's own folder, as ui='web/dist'"
+        raise DeclarationError(msg)
 
 
 @dataclass(frozen=True)

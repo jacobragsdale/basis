@@ -223,11 +223,16 @@ def responses(declared: Route) -> dict[int | str, dict[str, object]]:
     return listed
 
 
-def add(app: FastAPI, service: Service) -> None:
-    """Add `service`'s routes to `app`, each as `Served`, its operation's id its handler's name."""
+API = "/api"
+"""Where an app that serves a UI mounts its routes."""
+
+
+def add(app: FastAPI, service: Service, *, prefix: str = "") -> None:
+    """Add `service`'s routes to `app`, each as `Served`, its operation's id its handler's name, each path after
+    `prefix`: `API` in an app that serves a UI, and nothing in its document."""
     for route in service.routes:
         app.router.add_api_route(
-            route.path, route.handler, methods=[route.method], status_code=route.status, name=route.name, response_model=route.response,
+            prefix + route.path, route.handler, methods=[route.method], status_code=route.status, name=route.name, response_model=route.response,
             responses=responses(route), route_class_override=route_class(route), generate_unique_id_function=_operation_id,
         )  # fmt: skip
 

@@ -265,6 +265,11 @@ class NotReadyError(Error):
     title = "The service is not ready"
 
 
+class UiNotBuiltError(Error):
+    status = HTTPStatus.SERVICE_UNAVAILABLE
+    title = "The UI is not built"
+
+
 def problem(error: Exception, request_id: UUID | None) -> tuple[Problem, Mapping[str, str]]:
     """The one exception map: the problem details for `error`, with the headers its response needs, such as `Allow`."""
     instance = request_id.urn if request_id is not None else None
