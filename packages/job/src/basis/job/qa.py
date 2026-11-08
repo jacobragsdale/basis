@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 from pydantic import ValidationError
 
-from basis.core import invalid
+from basis.core import fakes, invalid
 from basis.core.interval import Interval
 from basis.core.model import Model
 from basis.core.settings import publish_refusal
@@ -27,6 +27,7 @@ from basis.core.verbs import Qa, QaPlan, QaRun
 from basis.job import job as jobs
 from basis.job import runs
 from basis.job.inputs import Query
+from basis.job.outputs import Slack
 
 log = logging.getLogger(__name__)
 
@@ -122,7 +123,8 @@ def _headline(error: BaseException) -> str:
 def _run(qa: Qa, planned: _Planned) -> QaRun:
     job = planned.job
     try:
-        result = runs.run(job, qa.settings, planned.request, snapshot_root=qa.store, databases=qa.databases)
+        quiet: dict[str, fakes.Fake] = {message.to: fakes.Slack() if isinstance(message, Slack) else fakes.Email() for message in job.outputs.messages().values()}  # QA sends nothing
+        result = runs.run(job, qa.settings, planned.request, snapshot_root=qa.store, databases=qa.databases, faked=quiet)
     except Exception as error:
         log.exception("the QA run of %s failed", job.name)
         return QaRun(job.name, None, "did not run", (f"the QA run of {job.name} failed: {_headline(error)}", "fix it, and check again"))

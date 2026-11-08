@@ -304,6 +304,7 @@ def describe(job: jobs.Job) -> dict[str, object]:
             }
             for name, table in job.outputs.declared().items()
         },
+        "messages": {name: {"destination": message.destination, "to": message.to, "ledger": message.ledger} for name, message in job.outputs.messages().items()},
         "check": job.check is not None,
     }
 

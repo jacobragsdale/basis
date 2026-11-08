@@ -10,10 +10,13 @@ own client makes the kind of it, as it makes a real service's, and retries it as
 waits as its `waits` do, which take no time, so a GET made again until its deadline makes every attempt at once.
 `Failures` is how a fake keeps what it fails with, which every part's fakes share."""
 
+import json
+import smtplib
 import threading
 from collections.abc import Awaitable, Callable, Hashable, MutableMapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from email.message import EmailMessage
 from http import HTTPStatus
 from typing import Any
 from uuid import UUID
@@ -175,4 +178,86 @@ class Ids:
         return UUID(int=(7 << 76) | (0b10 << 62) | made)
 
 
-type Fake = Http | Clock | Ids
+SLACK_KINDS: tuple[type[ServiceError], ...] = (Timeout, Unavailable, NotFound, Rejected, Denied, Failed)
+"""The kinds a Slack channel's post raises, real or fake: never a `Conflict` or a `BadReply`, since its reply is read
+for its status alone."""
+EMAIL_KINDS: tuple[type[ServiceError], ...] = (Timeout, Unavailable, Rejected, Denied, Failed)
+"""The kinds an email's send raises, real or fake."""
+
+
+class Slack:
+    """A Slack channel, as its webhook answers: each message posted keeps its text, in `posted`, unless the test has
+    made the channel fail (`fails`), when the webhook answers as a failing one does, every time, or the next `times`.
+    The part's own poster posts to it, through `transport`, as it posts to Slack."""
+
+    def __init__(self) -> None:
+        self.posted: list[str] = []
+        self._failing = Failures[str]("a fake Slack channel", SLACK_KINDS)
+
+    def fails(self, kind: type[ServiceError], *, times: int | None = None) -> None:
+        self._failing.set("post", kind, times)
+
+    def client(self) -> httpx2.Client:
+        return httpx2.Client(transport=httpx2.MockTransport(self._answer))
+
+    def _answer(self, request: httpx2.Request) -> httpx2.Response:
+        if (taken := self._failing.take("post")) is not None:
+            return httpx2.Response(ANSWERS[taken[1]], text="failing")
+        sent: object = json.loads(request.content)
+        if not isinstance(sent, dict) or not isinstance(text := sent.get("text"), str):
+            return httpx2.Response(HTTPStatus.BAD_REQUEST, text="invalid_payload")
+        self.posted.append(text)
+        return httpx2.Response(HTTPStatus.OK, text="ok")
+
+
+_SMTP_FAILURES: dict[type[ServiceError], Callable[[], Exception]] = {
+    Timeout: lambda: TimeoutError("timed out"),
+    Unavailable: lambda: smtplib.SMTPConnectError(421, b"4.3.2 service not available"),
+    Rejected: lambda: smtplib.SMTPRecipientsRefused({"someone@example.com": (550, b"5.1.1 no such user")}),
+    Denied: lambda: smtplib.SMTPAuthenticationError(535, b"5.7.8 authentication failed"),
+    Failed: lambda: smtplib.SMTPDataError(554, b"5.6.0 message refused"),
+}
+"""What a relay that fails with each kind does, as `smtplib` raises it."""
+
+
+class Email:
+    """An SMTP relay: each message sent to it keeps what it was, in `sent`, unless the test has made the relay fail
+    (`fails`), when it fails as a relay that does, every time, or the next `times`. The part's own mailer opens a
+    session with it through `connect`, as it does with a relay."""
+
+    def __init__(self) -> None:
+        self.sent: list[EmailMessage] = []
+        self.logins: list[str] = []
+        self._failing = Failures[str]("a fake email relay", EMAIL_KINDS)
+
+    def fails(self, kind: type[ServiceError], *, times: int | None = None) -> None:
+        self._failing.set("send", kind, times)
+
+    def connect(self, relay: object, timeout_s: float) -> _Session:
+        del relay, timeout_s  # a fake relay is reached in the process, at once
+        return _Session(self)
+
+
+class _Session:
+    """One session with a fake relay, as `smtplib.SMTP` gives one."""
+
+    def __init__(self, relay: Email) -> None:
+        self._relay = relay
+
+    def login(self, user: str, password: str) -> object:
+        del password
+        self._relay.logins.append(user)
+        return None
+
+    def send_message(self, msg: EmailMessage) -> object:
+        if (taken := self._relay._failing.take("send")) is not None:  # noqa: SLF001 -- the session is its relay's
+            failure = _SMTP_FAILURES[taken[1]]()
+            raise failure
+        self._relay.sent.append(msg)
+        return {}
+
+    def quit(self) -> object:
+        return None
+
+
+type Fake = Http | Clock | Ids | Slack | Email

@@ -229,7 +229,7 @@ def test_a_fixtures_clock_and_ids_are_fakes(tmp_path: Path, sql: Path) -> None:
 @pytest.mark.parametrize(
     ("faked", "message"),
     [
-        ({"pricing": venues()}, "a fake is given for pricing, which stamping neither fetches from nor declares"),
+        ({"pricing": venues()}, "a fake is given for pricing, which stamping neither fetches from, declares nor sends to"),
         ({"clock": fakes.Ids()}, "clock is given a fakes.Ids, and stamping takes a fakes.Clock for it"),
     ],
     ids=["undeclared", "wrong-kind"],

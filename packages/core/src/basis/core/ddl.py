@@ -24,13 +24,13 @@ _LEDGER: dict[Dialect, list[str]] = {
         "run_id CHAR(36) NOT NULL", "job NVARCHAR(200) NOT NULL", "output NVARCHAR(128) NOT NULL", "table_name NVARCHAR(261) NOT NULL",
         "interval_start DATETIME2 NULL", "interval_end DATETIME2 NULL", "rerun_safe BIT NOT NULL", "deleted BIGINT NOT NULL",
         "upserted BIGINT NOT NULL", "inserted_new BIGINT NOT NULL", "inserted BIGINT NOT NULL", "published_at DATETIME2 NOT NULL",
-        "etl_version NVARCHAR(50) NOT NULL",
+        "etl_version NVARCHAR(50) NOT NULL", "detail NVARCHAR(MAX) NULL",
     ],
     "oracle": [
         "run_id CHAR(36) NOT NULL", "job VARCHAR2(200 CHAR) NOT NULL", "output VARCHAR2(128 CHAR) NOT NULL", "table_name VARCHAR2(261 CHAR) NOT NULL",
         "interval_start TIMESTAMP NULL", "interval_end TIMESTAMP NULL", "rerun_safe NUMBER(1) NOT NULL", "deleted NUMBER(19) NOT NULL",
         "upserted NUMBER(19) NOT NULL", "inserted_new NUMBER(19) NOT NULL", "inserted NUMBER(19) NOT NULL", "published_at TIMESTAMP NOT NULL",
-        "etl_version VARCHAR2(50 CHAR) NOT NULL",
+        "etl_version VARCHAR2(50 CHAR) NOT NULL", "detail CLOB NULL",
     ],
 }  # fmt: skip
 """The ledger's columns, in the order `basis.core.databases.base.LEDGER_COLUMNS` writes them."""

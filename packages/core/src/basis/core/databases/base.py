@@ -56,17 +56,21 @@ class Counts:
 
 @dataclass(frozen=True)
 class LedgerEntry:
-    """One table's publish, as the ledger records it, in the transaction that wrote the table."""
+    """One output's publish, as the ledger records it: a table's, in the transaction that wrote it, or a message's,
+    in the transaction that commits once it is sent."""
 
     run_id: str
     job: str
     output: str
     table: str
+    """Where it went: the table, or a message's destination, as `slack:desk` or `email:desk`."""
     interval: Interval | None
     rerun_safe: bool
     counts: Counts
     published_at: datetime
     version: str
+    detail: str | None = None
+    """What else the ledger keeps of it, as a JSON object: a message's text's `sha256`."""
 
 
 class Reader(Protocol):
@@ -145,7 +149,7 @@ class Database(Protocol):
 
 LEDGER_COLUMNS = (
     "run_id", "job", "output", "table_name", "interval_start", "interval_end", "rerun_safe",
-    "deleted", "upserted", "inserted_new", "inserted", "published_at", "etl_version",
+    "deleted", "upserted", "inserted_new", "inserted", "published_at", "etl_version", "detail",
 )  # fmt: skip
 
 
@@ -155,7 +159,7 @@ def ledger_values(entry: LedgerEntry) -> tuple[object, ...]:
     counts = entry.counts
     return (
         entry.run_id, entry.job, entry.output, entry.table, interval["interval_start"], interval["interval_end"], entry.rerun_safe,
-        counts.deleted, counts.upserted, counts.inserted_new, counts.inserted, naive_in_zone(entry.published_at, None), entry.version,
+        counts.deleted, counts.upserted, counts.inserted_new, counts.inserted, naive_in_zone(entry.published_at, None), entry.version, entry.detail,
     )  # fmt: skip
 
 

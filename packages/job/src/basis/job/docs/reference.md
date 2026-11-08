@@ -151,6 +151,30 @@ new keys, insert. Each write mode makes them from the frame the transform return
 `ReplaceWhere` names `interval`, `matching`, or both. Its `interval` column is a `date` or a `datetime`; a date compares
 as its midnight UTC. Its `matching` columns may not be nullable.
 
+### `etl.Slack(channel, *, ledger, deadline_s)` and `etl.Email(to, *, ledger, deadline_s)`
+
+A message the job sends: to a Slack channel, through its webhook, as `BASIS_SLACK__CHANNEL__WEBHOOK` configures it, or
+an email to the people `BASIS_EMAIL__TO__TO` lists, through the relay the rest of that block names. The transform
+gives a `Slack` output its text, which Slack reads as `mrkdwn`, an `Email` output an `etl.Mail(subject=..., text=...)`,
+and either `None` for no message this run; write numbers in it with `basis.core.display.text`, so they read as the UI
+shows them.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `channel`, `to` | `str` | The channel's or the email's name, as its settings name it. |
+| `ledger` | `str` | The database whose ledger records each message sent, which the run's settings must let it publish to. |
+| `deadline_s` | `float` | Seconds the post or the send may take. |
+
+Only `basis run --publish` sends a message, once every database the run writes has committed; a run without it, a
+replay, `regress` and the QA tier send nothing, and each message the run planned is in its manifest, `messages`.
+Each send is recorded in its ledger first, with its text's SHA-256 in `detail`, in a transaction that commits only
+once the message is sent, so a send that fails records nothing. A run for an interval another run sent the message
+for skips it, and logs why, unless it is given `--again`; `basis resume` sends what a run could not, and never what
+the ledger has. A send is never made again on failure: the run ends `partial`, its `sent` records the error, and
+`basis resume` sends it once it is fixed. In a test, `fakes.Slack()` and `fakes.Email()`, given by the channel's or
+the email's name, keep what is sent, in `posted` and `sent`, and fail on demand, as `channel.fails(Unavailable)`. A
+job's failure is no message of its own: Airflow and Datadog alert on that.
+
 ### `etl.Changes(delete=None, upsert=None, insert_new=None, insert=None)`
 
 What a `Manual()` table's transform returns. `delete` is an `etl.Delete(within=None, matching=None)`: rows in
@@ -350,6 +374,8 @@ Settings are environment variables, which an environment's file holds, as `NAME=
 | `BASIS_HTTP__NAME__URL` | The base URL of the service a fetch names `NAME`. |
 | `BASIS_HTTP__NAME__CA_BUNDLE` | A PEM file of the certificate authorities the service's certificate chains to, in place of the system's. |
 | `BASIS_HTTP__NAME__PROXY` | The proxy the service's calls go through; without it, they go direct. `HTTP_PROXY` and `SSL_CERT_FILE` are never read. |
+| `BASIS_SLACK__NAME__WEBHOOK` | The incoming-webhook URL of the Slack channel a message names `NAME`, a secret. `__CA_BUNDLE` and `__PROXY` as for a service. |
+| `BASIS_EMAIL__NAME__HOST`, `__PORT`, `__SECURITY`, `__SENDER`, `__TO` | The relay an email named `NAME` goes through, `none`, `starttls` or `tls`, its sender's address, and, as JSON, the addresses it goes to, `["desk@example.com"]`: each environment's own. `__USER` and `__PASSWORD` where the relay asks for a login. |
 | `BASIS_TRACES__EXPORTER` | `otlp`, to post each run's spans to `BASIS_TRACES__ENDPOINT`, or `console`, to write them to stderr. Without it, spans go nowhere. |
 | `BASIS_TRACES__ENDPOINT` | For `otlp`: the full URL spans are posted to, path and all, such as `http://$(HOST_IP):4318/v1/traces`, the Datadog Agent on the pod's node. |
 | `BASIS_TRACES__TIMEOUT_S` | Seconds each export may take, its retries included (default 5). An export that fails is logged and fails nothing. |
@@ -404,7 +430,10 @@ each input, as `inputs/NAME`, and of each table's frames, as `outputs/NAME/upser
 One table per database a job writes, created from `basis ddl --ledger`. Each publish adds one row per table, in the
 transaction that wrote the table: `run_id`, `job`, `output`, `table_name`, `interval_start`, `interval_end` (naive
 UTC), `rerun_safe`, `deleted`, `upserted`, `inserted_new`, `inserted` (as the database counted), `published_at`
-(naive UTC), and `etl_version`. Its key is `(run_id, output)`.
+(naive UTC), `etl_version`, and `detail`, a JSON object or null. A message sent adds a row too, its `table_name` the
+destination, as `slack:desk` or `email:risk`, `inserted` 1, and `detail` its text's `sha256`. Its key is
+`(run_id, output)`. A ledger made before `detail` existed takes it with `ALTER TABLE etl.publishes ADD detail
+NVARCHAR(MAX) NULL` on SQL Server, or `ADD (detail CLOB)` on Oracle.
 
 ## Testing
 

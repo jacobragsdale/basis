@@ -10,9 +10,10 @@ from typing import TYPE_CHECKING
 
 from basis.core.calendars import Calendar, calendar
 from basis.core.interval import Interval
+from basis.core.messages import Mail
 from basis.core.tables import Changes, Delete, Range
 from basis.job.inputs import Clock, Fetch, File, Ids, Inputs, Query
-from basis.job.outputs import Append, InsertNew, Manual, Outputs, Replace, ReplaceWhere, Table, Upsert
+from basis.job.outputs import Append, Email, InsertNew, Manual, Outputs, Replace, ReplaceWhere, Slack, Table, Upsert
 from basis.job.params import Params
 from basis.job.rows import MaxLength, Row, Zone
 from basis.job.version import VERSION
@@ -27,12 +28,14 @@ __all__ = [
     "Changes",
     "Clock",
     "Delete",
+    "Email",
     "Fetch",
     "File",
     "Ids",
     "Inputs",
     "InsertNew",
     "Interval",
+    "Mail",
     "Manual",
     "MaxLength",
     "Outputs",
@@ -42,6 +45,7 @@ __all__ = [
     "Replace",
     "ReplaceWhere",
     "Row",
+    "Slack",
     "Table",
     "Upsert",
     "Zone",

@@ -417,8 +417,12 @@ later one is an error, never a silent business day. A job names its calendar exp
 the firm's SMTP relay. Both have fakes, and nothing is sent in tests, `replay`, `regress` or the QA tier. Their numbers
 are written by a Python port of parallax's number formatter, decided on 2026-11-08, which reads the same display
 formats as the UI (see [What a UI can rely on](#what-a-ui-can-rely-on)), so a number reads in a message as it does in
-the grid. It is tested against the output parallax's Rust writes, the 2,192 cases of
-`packages/parallax/crates/parallax-engine/tests/fixtures/format.json` in basis-ui.
+the grid. It is tested against the output parallax's Rust writes, every case of
+`packages/parallax/crates/parallax-engine/tests/fixtures/format.json` in basis-ui. A job's message is an output, a
+Slack channel's text or an email, which only `basis run --publish` sends, after every database has committed, and the
+ledger of a database the message names records it as a publish is, with its text's hash, so a resume never sends
+one twice and `--again` sends it again, decided on 2026-11-08 by the orchestrator on the maintainer's behalf. Alerts
+that a job failed stay with Airflow and Datadog, not basis.
 
 **Folders and Excel.** Portfolio managers live in Excel, and the files sit on NFS. A folder is a named path, which each
 machine's settings give: `\\server\share` on Windows, and a mount path in WSL and in a pod. basis reads and writes Excel

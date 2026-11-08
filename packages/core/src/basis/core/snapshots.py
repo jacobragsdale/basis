@@ -66,6 +66,31 @@ class PublishRecord(Model):
     error: str | None = None
 
 
+class MessageRecord(Model):
+    """A message a run planned to send: what it said, and where it goes."""
+
+    destination: Literal["slack", "email"]
+    to: str
+    """The channel's or the email's name, as the settings configure it."""
+    ledger: str
+    """The database whose ledger records the send."""
+    subject: str | None = None
+    """An email's subject; a Slack message has none."""
+    text: str
+    sha256: str
+    """The text's, which the ledger keeps."""
+
+
+class SendRecord(Model):
+    """What became of a message a run sent: `sent`; `skipped`, since another run sent it for an overlapping interval;
+    or `failed`, with the error."""
+
+    status: Literal["sent", "skipped", "failed"]
+    at: datetime
+    reason: str | None = None
+    error: str | None = None
+
+
 class RunRecord(Model):
     run_id: str
     job: str
@@ -94,6 +119,10 @@ class RunRecord(Model):
     """Every reason the run may not write, from the destinations, the outputs and the job's own check."""
     error: str | None = None
     publishes: dict[str, PublishRecord] = Field(default_factory=dict)
+    messages: dict[str, MessageRecord] = Field(default_factory=dict)
+    """Each message the run planned to send, by its output's name: only `--publish` sends them."""
+    sent: dict[str, SendRecord] = Field(default_factory=dict)
+    """What became of each message the run sent, by its output's name."""
     clocks: dict[str, list[AwareDatetime]] = Field(default_factory=dict)
     """Each time each clock the run declares gave, by its name, in order, which a replay of the run is given again."""
     ids: dict[str, list[UUID]] = Field(default_factory=dict)

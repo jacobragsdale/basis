@@ -381,7 +381,7 @@ requests to `basis-core` merge one at a time (rule 2). The reasons are in [the d
    Port parallax's number formatter to Python for their text, reading the same display format object as the UI
    ([the contract](contract.md#display-formats)), which ctzd moves onto. Needs 5.0b. Done when a job's tests send both
    through the fakes, its replay, regress and QA runs send nothing, and the port writes what parallax's Rust writes
-   for each of the 2,192 cases in basis-ui's `packages/parallax/crates/parallax-engine/tests/fixtures/format.json`.
+   for each case in basis-ui's `packages/parallax/crates/parallax-engine/tests/fixtures/format.json`.
 5. **5.4 Folders and Excel.** Add folders, each a named path, which each machine's settings give: `\\server\share` on
    Windows, and a mount path in WSL and in pods. Read and write Excel with pandas' `read_excel` (calamine) and
    `to_excel` (xlsxwriter), in an optional extra, `basis-core[excel]`. Each write goes to a temporary file, which is

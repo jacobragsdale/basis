@@ -20,10 +20,12 @@ dedupe against rows already there (the destination read as an input), a watermar
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Self, overload
+from typing import Self, overload, override
 
 import pandas as pd
 
+from basis.core import messages
+from basis.core.messages import Destination, EmailResource, Mail, SlackResource
 from basis.core.tables import IDENTIFIER, Changes, Column
 from basis.job.rows import Row
 
@@ -177,25 +179,134 @@ def _validate(target: Target) -> None:
             pass
 
 
-class Outputs:
-    """Base for a job's `Outputs`. Each class attribute that is a `Table` is one the job writes. The transform returns
-    an instance with every output, by name: `Outputs(positions=frame)`."""
+class Message[V: (str, Mail)]:
+    """A message the job sends, named by its attribute on the job's `Outputs`: a Slack channel's (`Slack`) or an
+    email (`Email`). The transform returns its text, or None for none this run; only `basis run --publish` sends it,
+    once every database has committed, recording it in the ledger of the database `ledger` names, which the run's
+    settings must let it publish to."""
 
-    def __init__(self, **values: pd.DataFrame | Changes) -> None:
-        declared = self.declared()
-        if missing := sorted(set(declared) - set(values)):
-            msg = f"{type(self).__qualname__} is missing outputs {missing}: give every output it declares"
+    destination: Destination
+
+    def __init__(self, resource: SlackResource | EmailResource, *, ledger: str) -> None:
+        if not IDENTIFIER.match(ledger):
+            msg = f"ledger={ledger!r}: a message names the database whose ledger records it, lower-case letters, digits and underscores, as in BASIS_DATABASES__{ledger.upper()}__KIND"
+            raise ValueError(msg)
+        self.resource = resource
+        self.ledger = ledger
+        self._name: str | None = None
+
+    @property
+    def to(self) -> str:
+        return self.resource.name
+
+    @property
+    def name(self) -> str:
+        if self._name is None:
+            msg = "a message is named by its attribute on a job's Outputs class; this one is not on one"
             raise TypeError(msg)
-        if unknown := sorted(set(values) - set(declared)):
-            msg = f"{type(self).__qualname__} declares no outputs named {unknown}; it declares {sorted(declared)}"
+        return self._name
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        if not IDENTIFIER.match(name):
+            msg = f"{owner.__qualname__}.{name}: an output's name is lower-case letters, digits and underscores"
+            raise TypeError(msg)
+        if self._name not in {None, name}:
+            msg = f"{owner.__qualname__}.{name} is already declared as {self._name!r}: declare each output once per name"
+            raise TypeError(msg)
+        self._name = name
+
+    def describe(self) -> str:
+        return f"{self.destination}: {self.to}"
+
+    def checked(self, value: object) -> V | None:
+        raise NotImplementedError
+
+    @overload
+    def __get__(self, instance: None, owner: type) -> Self: ...
+    @overload
+    def __get__(self, instance: Outputs, owner: type) -> V | None: ...
+    def __get__(self, instance: Outputs | None, owner: type) -> Self | V | None:
+        if instance is None:
+            return self
+        return self.checked(instance.values[self.name])  # noqa: PD011 -- the outputs by name, no frame's values
+
+
+class Slack(Message[str]):
+    """A message to a Slack channel, through its webhook, as `BASIS_SLACK__CHANNEL__WEBHOOK` configures it: its value
+    is the text, which Slack reads as `mrkdwn`."""
+
+    destination = "slack"
+
+    def __init__(self, channel: str, *, ledger: str, deadline_s: float) -> None:
+        super().__init__(messages.slack(channel, deadline_s=deadline_s), ledger=ledger)
+
+    @override
+    def checked(self, value: object) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            msg = f"{self.name} posts to Slack, so its value is its text or None, not a {type(value).__name__}"
+            raise TypeError(msg)
+        return messages.checked_text(value)
+
+
+class Email(Message[Mail]):
+    """An email to the people `BASIS_EMAIL__TO__TO` lists, through the relay the rest of the block names: its value is
+    an `etl.Mail(subject=..., text=...)`."""
+
+    destination = "email"
+
+    def __init__(self, to: str, *, ledger: str, deadline_s: float) -> None:
+        super().__init__(messages.email(to, deadline_s=deadline_s), ledger=ledger)
+
+    @override
+    def checked(self, value: object) -> Mail | None:
+        if value is None or isinstance(value, Mail):
+            return value
+        msg = f"{self.name} is an email, so its value is an etl.Mail(subject=..., text=...) or None, not a {type(value).__name__}"
+        raise TypeError(msg)
+
+
+type OutputValue = pd.DataFrame | Changes | str | Mail | None
+"""What the transform gives an output: a table's frame or `Changes`, or a message's text or mail, or None for none."""
+
+
+class Outputs:
+    """Base for a job's `Outputs`. Each class attribute that is a `Table` is one the job writes, and each that is a
+    `Slack` or an `Email` a message it sends. The transform returns an instance with every output, by name:
+    `Outputs(positions=frame, alert=None)`."""
+
+    def __init__(self, **values: OutputValue) -> None:
+        declared, sent = self.declared(), self.messages()
+        if missing := sorted((set(declared) | set(sent)) - set(values)):
+            msg = f"{type(self).__qualname__} is missing outputs {missing}: give every output it declares, None for a message it does not send"
+            raise TypeError(msg)
+        if unknown := sorted(set(values) - set(declared) - set(sent)):
+            msg = f"{type(self).__qualname__} declares no outputs named {unknown}; it declares {sorted(set(declared) | set(sent))}"
             raise TypeError(msg)
         for name, table in declared.items():
             expected = Changes if isinstance(table.target.write, Manual) else pd.DataFrame
             if not isinstance(values[name], expected):
                 msg = f"{name} is written with {type(table.target.write).__name__}(), so its value is a {expected.__name__}, not a {type(values[name]).__name__}"
                 raise TypeError(msg)
-        self.values: Mapping[str, pd.DataFrame | Changes] = values
+        for name, message in sent.items():
+            message.checked(values[name])
+        self.values: Mapping[str, OutputValue] = values
+
+    def table(self, name: str) -> pd.DataFrame | Changes:
+        """The frame or `Changes` the transform gave the table `name`."""
+        value = self.values[name]
+        if not isinstance(value, pd.DataFrame | Changes):
+            msg = f"{name} is a table, so its value is a DataFrame or Changes, not a {type(value).__name__}"
+            raise TypeError(msg)
+        return value
 
     @classmethod
     def declared(cls) -> dict[str, Table[pd.DataFrame] | Table[Changes]]:
+        """Each table the job writes, by its output's name."""
         return {name: value for klass in reversed(cls.__mro__) for name, value in vars(klass).items() if isinstance(value, Table)}
+
+    @classmethod
+    def messages(cls) -> dict[str, Slack | Email]:
+        """Each message the job sends, by its output's name."""
+        return {name: value for klass in reversed(cls.__mro__) for name, value in vars(klass).items() if isinstance(value, Slack | Email)}

@@ -31,7 +31,7 @@ class Planned:
 
 def plan(outputs: Outputs, interval: Interval | None) -> dict[str, Planned]:
     """Every declared table's changes, by output name."""
-    return {name: _plan(name, table.target, outputs.values[name], interval) for name, table in outputs.declared().items()}  # noqa: PD011 -- the outputs by name, no frame's values
+    return {name: _plan(name, table.target, outputs.table(name), interval) for name, table in outputs.declared().items()}
 
 
 def _plan(name: str, target: Target, value: pd.DataFrame | Changes, interval: Interval | None) -> Planned:

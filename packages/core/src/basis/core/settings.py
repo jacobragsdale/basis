@@ -110,6 +110,46 @@ class HttpService(Model):
     """The proxy each call goes through, such as `http://proxy.internal.example:8080`. Without it, calls go direct."""
 
 
+class SlackChannel(Model):
+    """A Slack channel, through its incoming webhook, from these settings alone, as another service's are."""
+
+    webhook: SecretStr
+    """The channel's incoming-webhook URL, `https://hooks.slack.com/services/...`, a secret: whoever has it posts."""
+    ca_bundle: FilePath | None = None
+    """A PEM file of the certificate authorities Slack's certificate must chain to, as the firm's proxy re-signs it."""
+    proxy: HttpUrl | None = None
+    """The proxy each post goes through. Without it, posts go direct."""
+
+
+EMAIL = r"^[^@\s<>,;]+@[^@\s<>,;]+$"
+"""An address, `name@host`, with nothing around it."""
+
+
+class EmailRelay(Model):
+    """An SMTP relay, such as the firm's, and who a message to this name goes to: so each environment's settings say
+    who reads it, and a message from dev or QA reaches no desk."""
+
+    host: str
+    port: Annotated[int, Field(ge=1, le=65535)]
+    security: Literal["none", "starttls", "tls"]
+    """`starttls` upgrades a plain connection, as a relay on port 587 does; `tls` connects over TLS, as port 465 does;
+    `none` sends in the clear, as an internal relay on port 25 may."""
+    sender: Annotated[str, Field(pattern=EMAIL)]
+    """The address a message is from."""
+    to: Annotated[tuple[Annotated[str, Field(pattern=EMAIL)], ...], Field(min_length=1)]
+    """The addresses a message goes to, as JSON: `["desk@example.com"]`."""
+    user: str | None = None
+    password: SecretStr | None = None
+    """The login, where the relay asks for one; `user` and `password` come together."""
+
+    @model_validator(mode="after")
+    def _login_whole(self) -> Self:
+        if (self.user is None) != (self.password is None):
+            msg = "a relay's login is a user and a password: set both, or neither for a relay that takes none"
+            raise ValueError(msg)
+        return self
+
+
 class Traces(Model):
     """Where spans go (`basis.core.traces`): from these settings alone, never an `OTEL_*` variable."""
 
@@ -168,6 +208,10 @@ class Settings(BaseSettings):
     """Each database a job reads or writes, by the name its datasets and tables give."""
     http: dict[str, HttpService] = Field(default_factory=dict)
     """Each other service a part calls, by the name its declaration gives."""
+    slack: dict[str, SlackChannel] = Field(default_factory=dict)
+    """Each Slack channel a part posts to, by the name its declaration gives."""
+    email: dict[str, EmailRelay] = Field(default_factory=dict)
+    """Each list of people a part emails, and the relay it goes through, by the name its declaration gives."""
     traces: Traces | None = None
     """Where spans go. Without it they are made, so every record logged in a trace carries its ids, and go nowhere:
     a desktop or a test needs no Agent."""
