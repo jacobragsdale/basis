@@ -144,6 +144,7 @@ jobs:
         ports: ["1433:1433"]
     env:
       QA: Server=127.0.0.1,1433;Database=pricing_qa;UID=sa;PWD=Etl-test-1234;Encrypt=yes;TrustServerCertificate=yes
+      XDG_CONFIG_HOME: ${{ runner.temp }}/config  # the user's configuration folder, where the QA tier finds qa.env
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
@@ -191,7 +192,7 @@ jobs:
       - name: Declare the QA tier, fill in its settings, and publish a run to a local store for regress
         working-directory: ${{ runner.temp }}/pricing-etl
         run: |
-          printf '\n[tool.basis.qa]\nsettings = ".env.qa"\nmarker = "qa"\nstores = ["%s/runs-qa"]\nwrites = { warehouse = ["daily_positions", "account_activity", "etl.publishes"] }\n' "$RUNNER_TEMP" >> pyproject.toml
+          printf '\n[tool.basis.qa]\nmarker = "qa"\nstores = ["%s/runs-qa"]\nwrites = { warehouse = ["daily_positions", "account_activity", "etl.publishes"] }\n' "$RUNNER_TEMP" >> pyproject.toml
           printf '\n[tool.basis.qa.job]\npositions = { params = "jobs/positions/params/default.json", interval = "2026-11-05..2026-11-06" }\n' >> pyproject.toml
           {
             echo "BASIS_SNAPSHOT_ROOT=$RUNNER_TEMP/runs-qa"
@@ -208,6 +209,7 @@ jobs:
           } > .env.qa
           mkdir "$RUNNER_TEMP/store"
           uv run --env-file .env.qa env BASIS_ENV=qa BASIS_SNAPSHOT_ROOT="$RUNNER_TEMP/store" basis run positions --params jobs/positions/params/default.json --interval 2026-11-05..2026-11-06 --publish
+          mkdir -p "$XDG_CONFIG_HOME/basis" && mv .env.qa "$XDG_CONFIG_HOME/basis/qa.env"  # the QA tier reads the user's own qa.env (5.6)
           uv run basis doctor || true  # the runner has no feed; the rest of its lines say what it found
           git add --all && git commit --quiet --message "First commit"
       - name: Push a change through the hook, from a tree with changes of its own, and print what it found
@@ -230,7 +232,7 @@ jobs:
       - name: Refuse QA settings that point outside QA, and run nothing
         working-directory: ${{ runner.temp }}/pricing-etl
         run: |
-          sed -i 's/Database=pricing_qa/Database=master/' .env.qa
+          sed -i 's/Database=pricing_qa/Database=master/' "$XDG_CONFIG_HOME/basis/qa.env"
           if uv run basis check --full 2> "$RUNNER_TEMP/refused.log"; then echo "the QA tier ran against settings outside QA" >&2; exit 1; fi
           grep "^ERROR: " "$RUNNER_TEMP/refused.log"
           grep --quiet "^ERROR: the QA tier ran nothing, for the reasons above" "$RUNNER_TEMP/refused.log"
