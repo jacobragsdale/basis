@@ -23,3 +23,12 @@ docker run -d --name etlf-test-mssql -p 127.0.0.1:14433:1433 -e ACCEPT_EULA=Y -e
 docker run -d --name etlf-test-mongo -p 127.0.0.1:27018:27017 mongo:8
 export BASIS_TEST_MONGO='mongodb://127.0.0.1:27018/?directConnection=true'
 ```
+
+The lake tests (`test_lake.py`) run where `BASIS_TEST_AZURITE` names a scratch Azurite's blob service, with the SQL
+Server above for the ledger. Azurite has no hierarchical namespace, so they check the sign-in, the write and read-back
+and the refused rename; a completed archive needs a real ADLS Gen2 account (`docs/spikes/data-lake.md`):
+
+```sh
+docker run -d --name etlf-test-azurite --memory 512m -p 127.0.0.1:10010:10000 mcr.microsoft.com/azure-storage/azurite azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck --loose
+export BASIS_TEST_AZURITE=127.0.0.1:10010
+```
