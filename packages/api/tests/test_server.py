@@ -86,7 +86,7 @@ def test_dev_serves_on_the_services_fakes_on_this_machine_alone_until_ctrl_c(tmp
         solved = httpx2.get(f"{server.base}/bonds/US912810TM64/yield", params={"settle": "2026-11-06"}, timeout=10)
         os.killpg(server.process.pid, signal.SIGINT)  # as a terminal sends Ctrl+C
         records = _records(server.process)
-    assert (solved.status_code, solved.json()["annual_yield"]) == (HTTPStatus.OK, "0.0472658580")
+    assert (solved.status_code, solved.json()["annual_yield"]) == (HTTPStatus.OK, pytest.approx(0.0472658580, rel=1e-9))
     assert server.process.returncode == 0
     assert _messages(records)[0] == f"serving accruals on 127.0.0.1:{server.port} on its fakes"
     assert _messages(records)[-2:] == ["accruals stopped", "finished dev"]  # and every command ends with its finished record

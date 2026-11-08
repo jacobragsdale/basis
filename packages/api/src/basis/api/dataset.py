@@ -8,17 +8,15 @@ serialization alias, its alias, or its name. A row is flat, so each column has o
 | Field | Column |
 |---|---|
 | `str`, `UUID`, a `Literal` or an `Enum` of strings | `utf8` |
-| `int`, a `Literal` or an `Enum` of integers | `int64` |
 | `float` | `float64` |
 | `bool` | `bool` |
-| `Decimal`, with `max_digits` and `decimal_places` | `decimal128(max_digits, decimal_places)` |
 | `date` | `date32` |
 | `AwareDatetime` | `timestamp[us, tz=UTC]` |
 
-A column is nullable where its field may be None, and only there. A decimal declares its digits, at most 38, and its
-places, as `Annotated[Decimal, Field(max_digits=18, decimal_places=2)]`, since a column of Arrow's has one precision
-and one scale; a row holds no field it computes and no keys beyond its fields, so its JSON and its Arrow hold the same
-values. Anything else is refused when the route is declared.
+Every number is a float (design.md, "Numbers"): an `int`, a `Decimal`, or a `Literal` or an `Enum` of integers is
+refused, each with its fix. A float column is always nullable, since NaN and ±inf travel as null; any other column is
+nullable where its field may be None, and only there. A row holds no field it computes and no keys beyond its fields,
+so its JSON and its Arrow hold the same values. Anything else is refused when the route is declared.
 
 This module only declares: `arrow.py` writes the stream, which a service's declarations never load."""
 
@@ -38,10 +36,7 @@ from pydantic.fields import FieldInfo
 from basis.api import strict
 from basis.api.errors import DeclarationError
 
-type Kind = Literal["utf8", "int64", "float64", "bool", "decimal", "date32", "timestamp"]
-
-MAX_DIGITS = 38
-"""The most digits an Arrow `decimal128` holds."""
+type Kind = Literal["utf8", "float64", "bool", "date32", "timestamp"]
 
 
 @dataclass(frozen=True)
@@ -52,10 +47,6 @@ class Column:
     """The model's field it holds."""
     kind: Kind
     nullable: bool
-    precision: int = 0
-    """A decimal's digits; 0 for a column of any other kind."""
-    scale: int = 0
-    """A decimal's places after the point."""
     enum: bool = False
     """Whether its values are an `Enum`'s members, whose values the column holds."""
     text: bool = False
@@ -76,9 +67,7 @@ class Rows:
 _KINDS: tuple[tuple[type, Kind], ...] = (
     # in this order: a bool is an int, and a datetime a date
     (bool, "bool"),
-    (int, "int64"),
     (float, "float64"),
-    (Decimal, "decimal"),
     (date, "date32"),
     (UUID, "utf8"),
     (str, "utf8"),
@@ -106,24 +95,19 @@ def rows(response: object, route: str) -> Rows:
 
 def _column(route: str, model: type[BaseModel], name: str, field: FieldInfo) -> Column:
     where = f"{route}'s dataset column {model.__qualname__}.{name}"
-    annotation, nullable, metadata = _unwrapped(field.annotation, list(field.metadata))
+    annotation, nullable, _ = _unwrapped(field.annotation, list(field.metadata))
     key = field.serialization_alias or field.alias or name
-    if (choice := _choice(annotation)) is not None:
-        kind, is_enum = choice
-        return Column(key, name, kind, nullable, enum=is_enum)
+    if (choice := _choice(where, annotation)) is not None:
+        return Column(key, name, "utf8", nullable, enum=choice)
+    if isinstance(annotation, type) and issubclass(annotation, Decimal | int) and not issubclass(annotation, bool):
+        what = "a Decimal" if issubclass(annotation, Decimal) else "an int"
+        msg = f"{where} is {what}, and every number in a dataset is a float: declare it float for an amount or a count, or str for an identifier"
+        raise DeclarationError(msg)
     kind: Kind | None = "timestamp" if annotation is strict.AWARE else next((found for scalar, found in _KINDS if isinstance(annotation, type) and issubclass(annotation, scalar)), None)
     if kind is None:
-        msg = f"{where} is {strict.named(annotation)}, which Arrow's columns do not hold: give it str, int, float, bool, Decimal, date, AwareDatetime, UUID, a Literal or an Enum, or T | None"
+        msg = f"{where} is {strict.named(annotation)}, which Arrow's columns do not hold: give it str, float, bool, date, AwareDatetime, UUID, a Literal or an Enum of strings, or T | None"
         raise DeclarationError(msg)
-    if kind != "decimal":
-        return Column(key, name, kind, nullable, text=isinstance(annotation, type) and issubclass(annotation, UUID))
-    digits = next((value for found in metadata if isinstance(value := getattr(found, "max_digits", None), int)), None)
-    places = next((value for found in metadata if isinstance(value := getattr(found, "decimal_places", None), int)), None)
-    if digits is None or places is None or not 0 <= places <= digits <= MAX_DIGITS:
-        example = "Annotated[Decimal, Field(max_digits=18, decimal_places=2)]"
-        msg = f"{where} is a decimal, which a column holds with one precision and one scale: declare them, as {example}, with at most {MAX_DIGITS} digits"
-        raise DeclarationError(msg)
-    return Column(key, name, kind, nullable, precision=digits, scale=places)
+    return Column(key, name, kind, nullable or kind == "float64", text=isinstance(annotation, type) and issubclass(annotation, UUID))
 
 
 def _unwrapped(annotation: object, metadata: list[object]) -> tuple[object, bool, list[object]]:
@@ -147,9 +131,9 @@ def _unwrapped(annotation: object, metadata: list[object]) -> tuple[object, bool
             return annotation, nullable, metadata
 
 
-def _choice(annotation: object) -> tuple[Kind, bool] | None:
-    """The column of a `Literal` or an `Enum` whose values are all strings or all integers, and whether it is an
-    `Enum`; None for any other type."""
+def _choice(where: str, annotation: object) -> bool | None:
+    """Whether a `Literal` or an `Enum` of strings, a text column, is an `Enum`; None for any other type. One of
+    integers is refused, since a dataset's numbers are floats."""
     if get_origin(annotation) is Literal:
         values, is_enum = list(get_args(annotation)), False
     elif isinstance(annotation, type) and issubclass(annotation, Enum):
@@ -157,7 +141,6 @@ def _choice(annotation: object) -> tuple[Kind, bool] | None:
     else:
         return None
     if all(isinstance(value, str) for value in values):
-        return "utf8", is_enum
-    if all(isinstance(value, int) and not isinstance(value, bool) for value in values):
-        return "int64", is_enum
-    return None
+        return is_enum
+    msg = f"{where} is {strict.named(annotation)}, whose values are not all strings, and a dataset's choices are text: declare a str Enum, or a Literal of strings"
+    raise DeclarationError(msg)

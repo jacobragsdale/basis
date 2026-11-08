@@ -484,11 +484,16 @@ _NAIVE: tuple[object, ...] = (NaiveDatetime, PastDatetime, FutureDatetime)
 
 def aware(route: str, where: str, kind: object) -> None:
     """That every time `kind` can hold, at any depth, carries its offset: a `datetime` there, or one of pydantic's
-    datetimes but `AwareDatetime`, is refused, and so is a time of day, whose offset pydantic cannot require. `where`
-    names what `kind` is of the route's, as `response` or `body`."""
+    datetimes but `AwareDatetime`, is refused, and so is a time of day, whose offset pydantic cannot require. A
+    `Decimal` is refused too, since every number basis gives or takes is a JSON number, a float or an int (design.md,
+    "Numbers"). `where` names what `kind` is of the route's, as `response` or `body`."""
     if (found := _naive_time(kind, named(bare(kind)), frozenset())) is None:
         return
     at, what = found
+    if what == "decimal":
+        fix = "declare it a float, which every number basis gives or takes is, or an int for a whole count"
+        msg = f"{route}'s {where} holds {at}, a Decimal, and every number basis gives or takes is a JSON number: {fix}"
+        raise DeclarationError(msg)
     if what == "time":
         fix = "give the time of day with its date, as an AwareDatetime, or as text that names its zone"
         msg = f"{route}'s {where} holds {at}, a time of day, whose offset pydantic cannot require, and every time basis gives or takes carries one: {fix}"
@@ -514,6 +519,8 @@ def _naive_time(kind: object, at: str, within: frozenset[object]) -> tuple[str, 
     inner: list[tuple[str, object]] = []
     if (origin := get_origin(kind)) is not None:
         inner = [] if origin is Literal else [(at, argument) for argument in get_args(kind) if argument is not Ellipsis]
+    elif isinstance(kind, type) and issubclass(kind, Decimal):
+        return at, "decimal"
     elif kind in _NAIVE or (isinstance(kind, type) and issubclass(kind, datetime)):
         return at, f"a {named(kind)}"
     elif isinstance(kind, type) and issubclass(kind, time):

@@ -14,7 +14,6 @@ import textwrap
 import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from http import HTTPStatus
 from pathlib import Path
 from typing import Annotated, override
@@ -44,7 +43,7 @@ LEDGER = api.http("ledger", deadline_s=1)
 INSERT = "INSERT INTO prices (security, price) VALUES (%(security)s, %(price)s)"
 FAILS = "UPDATE prices SET price = price * 2"
 SECURITY = "US912810TM64"
-PRICE = {"security": SECURITY, "price": "101.25"}
+PRICE = {"security": SECURITY, "price": 101.25}
 AT = datetime(2026, 11, 6, 14, 30, tzinfo=UTC)
 
 
@@ -52,7 +51,7 @@ class Price(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     security: str
-    price: Decimal
+    price: float
 
 
 class Refused(api.Error):
@@ -408,8 +407,8 @@ def test_a_call_one_app_sends_never_goes_through_another_apps_transaction() -> N
 
         app = api.build(booking, settings=api.Settings.given(), fakes={WAREHOUSE: warehouse, NOTES: fakes.Http(notes_app), LEDGER: fakes.Http(Ledger(warehouse).app)})
         with TestClient(app.asgi) as client:
-            assert client.post("/book", json={"security": "MENTION", "price": "101.25"}).status_code == HTTPStatus.OK
-            assert client.post("/book", json={"security": "REMEMBER", "price": "101.25"}).status_code == HTTPStatus.OK
+            assert client.post("/book", json={"security": "MENTION", "price": 101.25}).status_code == HTTPStatus.OK
+            assert client.post("/book", json={"security": "REMEMBER", "price": 101.25}).status_code == HTTPStatus.OK
     assert mailed == ["mentioned", "remembered"]
     assert [(row.service, row.idempotency_key, row.status) for row in warehouse.outbox] == [("ledger", "booked", "done")] * 2
     assert [(row.service, row.idempotency_key, row.status) for row in notes_db.outbox] == [("mail", "remembered", "done")]

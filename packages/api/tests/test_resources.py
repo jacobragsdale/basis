@@ -9,7 +9,6 @@ import threading
 from collections.abc import Awaitable, Callable, Generator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -45,7 +44,7 @@ class Price(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     security: str
-    price: Decimal
+    price: float
 
 
 class Refused(api.Error):
@@ -73,7 +72,7 @@ INSERT = "INSERT INTO prices (security, price) VALUES (%(security)s, %(price)s)"
 SLOW = "SELECT security, price FROM prices WITH (HOLDLOCK)"
 FAILS = "UPDATE prices SET price = price * 2"
 AT = datetime(2026, 11, 6, 14, 30, tzinfo=UTC)
-PRICE = {"security": SECURITY, "price": "101.25"}
+PRICE = {"security": SECURITY, "price": 101.25}
 
 
 async def read_price(security: str, warehouse: Annotated[api.Reader, api.given(WAREHOUSE)]) -> Price:
@@ -222,7 +221,7 @@ def _pricing(*, status: int = HTTPStatus.OK, body: object = None, wait_s: float 
         await asyncio.sleep(wait_s)
         if status != HTTPStatus.OK:
             raise HTTPException(status)
-        return body if body is not None else {"security": security, "price": "99.50"}
+        return body if body is not None else {"security": security, "price": 99.50}
 
     return pricing
 
@@ -237,11 +236,11 @@ def _app(warehouse: fakes.Database | None = None, *, quick: fakes.Database | Non
 
 
 def _written() -> fakes.Database:
-    return fakes.Database(answers={INSERT: 1, SELECT: [{"security": SECURITY, "price": Decimal("101.25")}]})
+    return fakes.Database(answers={INSERT: 1, SELECT: [{"security": SECURITY, "price": 101.25}]})
 
 
 def _statement() -> fakes.Statement:
-    return fakes.Statement(INSERT, {"security": SECURITY, "price": Decimal("101.25")})
+    return fakes.Statement(INSERT, {"security": SECURITY, "price": 101.25})
 
 
 def _spans(app: api.App) -> InMemorySpanExporter:
@@ -292,29 +291,29 @@ async def _via_a_class(pricer: Annotated[_Pricer, Depends()]) -> None: ...
 
 
 class Mutable(BaseModel):
-    price: Decimal
+    price: float
 
 
 class Listed(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    prices: list[Decimal]
+    prices: list[float]
 
 
 @dataclasses.dataclass
 class Loose:
-    price: Decimal
+    price: float
 
 
 @dataclasses.dataclass(frozen=True)
 class Fixed:
     security: str
-    price: Decimal
+    price: float
     priced_on: date | None
 
 
 class Plain:
-    price = Decimal(1)
+    price = 1.0
 
 
 @pytest.mark.parametrize(
@@ -362,7 +361,7 @@ def test_resources_cannot_be_declared_wrong(declare: Callable[[], object], messa
         declare()
 
 
-@pytest.mark.parametrize("value", [Price, tuple[Price, ...], tuple[Price, Fixed], Fixed, Decimal, Price | None, Literal["A", "B"], frozenset[str]], ids=str)
+@pytest.mark.parametrize("value", [Price, tuple[Price, ...], tuple[Price, Fixed], Fixed, float, Price | None, Literal["A", "B"], frozenset[str]], ids=str)
 def test_a_cache_holds_what_its_type_proves_never_changes(value: type) -> None:
     assert api.cache("prices", value, ttl_s=1, max_entries=1, deadline_s=1).value == value
 
@@ -475,7 +474,7 @@ def test_a_write_never_answers_2xx_after_a_statement_fails() -> None:
 
 def test_a_connection_takes_statements_again_once_the_one_that_missed_its_deadline_ends() -> None:
     AGAIN.clear()
-    quick = fakes.Database(answers={SLOW: _held(AGAIN), SELECT: [{"security": SECURITY, "price": Decimal("101.25")}]})
+    quick = fakes.Database(answers={SLOW: _held(AGAIN), SELECT: [{"security": SECURITY, "price": 101.25}]})
     with TestClient(_app(quick=quick).asgi) as client:
         assert client.get("/again").json() == PRICE
 
@@ -729,7 +728,7 @@ class _Prices(BaseHTTPRequestHandler):
     """Answers every GET with a price, as the pricing service, or a proxy in front of it, would."""
 
     def do_GET(self) -> None:
-        body = json.dumps({"security": self.path.rsplit("/", 1)[-1], "price": "99.50"}).encode()
+        body = json.dumps({"security": self.path.rsplit("/", 1)[-1], "price": 99.50}).encode()
         self.send_response(HTTPStatus.OK)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(body)))
@@ -766,7 +765,7 @@ def test_another_services_certificate_is_checked_against_the_declared_ca_bundle_
     with _serving(context) as port:
         trusting = _quoted({"url": f"https://127.0.0.1:{port}", "ca_bundle": str(bundle)})
         undeclared = _quoted({"url": f"https://127.0.0.1:{port}"})
-    assert trusting.json() == {"security": SECURITY, "price": "99.50"}
+    assert trusting.json() == {"security": SECURITY, "price": 99.50}
     assert (undeclared.status_code, undeclared.json()["detail"]) == (HTTPStatus.SERVICE_UNAVAILABLE, f"pricing could not be reached for GET /prices/{SECURITY}: ConnectError")
 
 
@@ -775,7 +774,7 @@ def test_calls_go_through_the_declared_proxy_alone(monkeypatch: pytest.MonkeyPat
         monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{port}")  # read by nothing basis decides
         proxied = _quoted({"url": "http://127.0.0.1:9", "proxy": f"http://127.0.0.1:{port}"})  # nothing serves the discard port: only the proxy answers
         direct = _quoted({"url": "http://127.0.0.1:9"})
-    assert proxied.json() == {"security": SECURITY, "price": "99.50"}
+    assert proxied.json() == {"security": SECURITY, "price": 99.50}
     assert direct.status_code == HTTPStatus.SERVICE_UNAVAILABLE
 
 
@@ -792,7 +791,7 @@ def _counting(made: list[str], *, fails: bool = False) -> Callable[[str], Callab
             if fails:
                 msg = "the pricing service is down"
                 raise RuntimeError(msg)
-            return Price(security=security, price=Decimal(len(made)))
+            return Price(security=security, price=float(len(made)))
 
         return load
 
@@ -809,7 +808,7 @@ def test_a_value_is_kept_until_its_time_to_live_passes() -> None:
     clock = fakes.Cache()
     load = _counting(made)
 
-    async def main() -> list[Decimal]:
+    async def main() -> list[float]:
         cache = MemoryCache(PRICES, clock.monotonic, NoOpTracer())
         first = await cache.get("A", load("A"))
         clock.advance(59.9)
@@ -853,7 +852,7 @@ def test_a_load_that_fails_fails_every_request_waiting_on_it_and_keeps_nothing()
         return [*failed, await cache.get("A", _counting(made)("A"))]
 
     first, second, then = asyncio.run(main())
-    assert (str(first), str(second), then, made) == ("the pricing service is down", "the pricing service is down", Price(security="A", price=Decimal(2)), ["A", "A"])
+    assert (str(first), str(second), then, made) == ("the pricing service is down", "the pricing service is down", Price(security="A", price=2.0), ["A", "A"])
 
 
 def test_a_load_whose_request_stops_is_taken_up_by_a_request_waiting_on_it() -> None:
@@ -868,7 +867,7 @@ def test_a_load_whose_request_stops_is_taken_up_by_a_request_waiting_on_it() -> 
         stopped.cancel()
         return await waiting
 
-    assert (asyncio.run(main()), made) == (Price(security="A", price=Decimal(1)), ["A"])
+    assert (asyncio.run(main()), made) == (Price(security="A", price=1.0), ["A"])
 
 
 # The clock and ids

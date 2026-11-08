@@ -11,6 +11,7 @@ The rows are validated as the route's response, by one adapter, as FastAPI valid
 included, and dumped once, before they are written, so a request's transaction commits only after both, and a value no
 column holds is a defect: a 500, logged once."""
 
+import math
 import re
 from collections.abc import Mapping, Sequence
 from enum import Enum
@@ -42,14 +43,14 @@ def wanted(accept: str | None) -> bool:
 
 
 def schema(rows: Rows) -> pa.Schema:
-    """The stream's schema: a field for each column, nullable only where its model's field may be None."""
+    """The stream's schema: a field for each column, nullable where its model's field may be None, and every float."""
     return pa.schema([pa.field(column.name, _type(column), nullable=column.nullable) for column in rows.columns])
 
 
 def encode(rows: Rows, values: Sequence[Mapping[str, object]]) -> bytes:
     """`values`, rows of `rows.model` as its adapter dumps them, by their columns' names, as an Arrow IPC stream."""
     declared = schema(rows)
-    if converted := [column for column in rows.columns if column.enum or column.text]:  # what pyarrow does not convert itself
+    if converted := [column for column in rows.columns if column.enum or column.text or column.kind == "float64"]:  # what pyarrow does not convert itself
         values = [{**row, **{column.name: _value(column, row.get(column.name)) for column in converted}} for row in values]
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, declared) as writer:
@@ -59,16 +60,19 @@ def encode(rows: Rows, values: Sequence[Mapping[str, object]]) -> bytes:
 
 
 def _type(column: Column) -> pa.DataType:
-    return pa.decimal128(column.precision, column.scale) if column.kind == "decimal" else _TYPES[column.kind]
+    return _TYPES[column.kind]
 
 
-_TYPES: dict[Kind, pa.DataType] = {"utf8": pa.string(), "int64": pa.int64(), "float64": pa.float64(), "bool": pa.bool_(), "date32": pa.date32(), "timestamp": pa.timestamp("us", tz="UTC")}
+_TYPES: dict[Kind, pa.DataType] = {"utf8": pa.string(), "float64": pa.float64(), "bool": pa.bool_(), "date32": pa.date32(), "timestamp": pa.timestamp("us", tz="UTC")}
 
 
 def _value(column: Column, value: object) -> object:
-    """`value` as its column holds it: an `Enum` member by its value, and a UUID as its text."""
+    """`value` as its column holds it: an `Enum` member by its value, a UUID as its text, and NaN or ±inf as null, as
+    every number on the wire is (design.md, "Numbers")."""
     if value is None:
         return None
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
     if isinstance(value, Enum):
         return value.value
     return str(value) if column.text else value

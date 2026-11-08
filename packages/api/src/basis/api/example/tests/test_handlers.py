@@ -4,7 +4,6 @@ problem. A resource's failure is made with its fake's `fails`, as a real one wou
 
 from collections.abc import Iterator, Mapping
 from datetime import UTC, date, datetime
-from decimal import Decimal
 from http import HTTPStatus
 from uuid import UUID
 
@@ -20,18 +19,18 @@ from basis.api.example import dev, resources, service
 from basis.api.example.repository import BOND, RECORD
 from basis.api.example.resources import Settings
 
-PERIOD = {"face": "1000000", "rate": "0.045", "convention": "30/360"}
+PERIOD = {"face": 1000000, "rate": 0.045, "convention": "30/360"}
 ISIN = "US912810TM64"
 UNPRICED = "US912810TN48"
 UNSOLVABLE = "US912810TP95"
 """A bond the pricing service quotes at a price no yield from -99% to 1000% a year gives."""
-TERMS = {"security_id": ISIN, "coupon_rate": Decimal("0.045"), "convention": "30/360", "frequency": 2, "issued": date(2024, 11, 15), "maturity": date(2034, 11, 15)}
+TERMS = {"security_id": ISIN, "coupon_rate": 0.045, "convention": "30/360", "frequency": 2, "issued": date(2024, 11, 15), "maturity": date(2034, 11, 15)}
 AT = datetime(2026, 11, 6, 14, 30, tzinfo=UTC)
 ARROW = "application/vnd.apache.arrow.stream"
-HOLDING = {"face": "100", "settle": "2026-11-06"}
+HOLDING = {"face": 100, "settle": "2026-11-06"}
 QUERIES = {"dirty-price": HOLDING, "yield": {"settle": "2026-11-06"}}
 """What each route that prices a bond reads, by its path's end."""
-SETTLEMENT = {"security_id": ISIN, "face": "1000000.00", "settle": "2026-11-06"}
+SETTLEMENT = {"security_id": ISIN, "face": 1000000.0, "settle": "2026-11-06"}
 
 
 def _bonds(binds: Mapping[str, api.Bind]) -> list[Mapping[str, object]]:
@@ -56,8 +55,8 @@ def _pricing() -> FastAPI:
     pricing = FastAPI()
 
     @pricing.get("/prices/{security}")
-    def price(security: str) -> dict[str, str]:
-        clean = {ISIN: "98.50", UNSOLVABLE: "100000000"}.get(security)
+    def price(security: str) -> dict[str, object]:
+        clean = {ISIN: 98.5, UNSOLVABLE: 100000000.0}.get(security)
         if clean is None:
             raise HTTPException(HTTPStatus.NOT_FOUND)
         return {"security_id": security, "clean": clean, "as_of": "2026-11-06"}
@@ -114,7 +113,7 @@ def kind(response: httpx2.Response) -> tuple[int, str]:
 
 def test_accrued_interest(client: TestClient) -> None:
     response = client.get("/accrued-interest", params=PERIOD | {"start": "2026-05-15", "end": "2026-11-15"})
-    assert response.json() == {"start": "2026-05-15", "end": "2026-11-15", "convention": "30/360", "days": 180, "year_days": 360, "interest": "22500.00"}
+    assert response.json() == pytest.approx({"start": "2026-05-15", "end": "2026-11-15", "convention": "30/360", "days": 180, "year_days": 360, "interest": 22500.0})
 
 
 @pytest.mark.parametrize(
@@ -123,7 +122,7 @@ def test_accrued_interest(client: TestClient) -> None:
         ({"start": "2026-11-15", "end": "2026-05-15"}, "period-reversed"),
         ({"start": "2016-01-01", "end": "2026-11-15"}, "period-too-long"),
         ({"start": "2026-05-15", "end": "2026-11-15", "settle": "2026-11-17"}, "invalid-request"),
-        ({"start": "2026-05-15", "end": "2026-11-15", "rate": "4.5"}, "invalid-request"),
+        ({"start": "2026-05-15", "end": "2026-11-15", "rate": 4.5}, "invalid-request"),
     ],
     ids=["reversed", "too-long", "unknown-parameter", "rate-as-a-percentage"],
 )
@@ -151,7 +150,7 @@ def test_conventions(client: TestClient) -> None:
 
 def test_a_bonds_terms_come_from_the_warehouse(client: TestClient) -> None:
     response = client.get(f"/bonds/{ISIN}")
-    assert response.json() == {"security_id": ISIN, "coupon_rate": "0.045", "convention": "30/360", "frequency": 2, "issued": "2024-11-15", "maturity": "2034-11-15"}
+    assert response.json() == {"security_id": ISIN, "coupon_rate": 0.045, "convention": "30/360", "frequency": 2, "issued": "2024-11-15", "maturity": "2034-11-15"}
 
 
 @pytest.mark.parametrize(
@@ -180,9 +179,9 @@ def test_a_warehouse_that_fails_answers_its_kinds_problem(warehouse: fakes.Datab
 
 
 def test_a_dirty_price_is_the_clean_price_and_the_interest_since_the_last_coupon(client: TestClient) -> None:
-    response = client.get(f"/bonds/{ISIN}/dirty-price", params={"face": "1000000", "settle": "2026-11-06"})
+    response = client.get(f"/bonds/{ISIN}/dirty-price", params={"face": 1000000, "settle": "2026-11-06"})
     # 30/360 from the coupon of 2026-05-15 to 2026-11-06 is 171 days: 1,000,000 x 4.5% x 171/360 = 21,375.00
-    assert response.json() == {"security_id": ISIN, "settle": "2026-11-06", "face": "1000000", "clean": "98.50", "accrued": "21375.00", "dirty": "1006375.00"}
+    assert response.json() == pytest.approx({"security_id": ISIN, "settle": "2026-11-06", "face": 1000000.0, "clean": 98.5, "accrued": 21375.0, "dirty": 1006375.0})
 
 
 def test_a_bonds_terms_are_read_once_until_they_expire(warehouse: fakes.Database, app: api.App, terms: fakes.Cache) -> None:
@@ -235,7 +234,9 @@ def test_a_bonds_yield_is_solved_from_its_dirty_price(client: TestClient) -> Non
     response = client.get(f"/bonds/{ISIN}/yield", params={"settle": "2026-11-06"})
     # 98.50 clean, and 171 days of 30/360 interest at 4.5% on 100: 100.6375 dirty, nine days of a 180-day period before
     # the first of 17 coupons of 2.25
-    assert response.json() == {"security_id": ISIN, "settle": "2026-11-06", "clean": "98.50", "dirty": "100.637500", "annual_yield": "0.0472658580"}
+    found = response.json()
+    assert (found.pop("security_id"), found.pop("settle")) == (ISIN, "2026-11-06")
+    assert found == pytest.approx({"clean": 98.5, "dirty": 100.6375, "annual_yield": 0.0472658580}, rel=1e-9)
 
 
 def test_a_price_no_yield_gives_is_refused(client: TestClient) -> None:
@@ -255,16 +256,20 @@ def test_an_unknown_bond_has_no_price_and_no_yield(client: TestClient) -> None:
 def test_a_bonds_coupons_are_its_schedule(client: TestClient) -> None:
     coupons = client.get(f"/bonds/{ISIN}/coupons").json()
     # semiannual from its issue to its maturity, each 30/360 period at 4.5% on 100: 2.25
-    assert (len(coupons), coupons[0], coupons[-1]) == (20, {"starts": "2024-11-15", "pays": "2025-05-15", "interest": "2.25"}, {"starts": "2034-05-15", "pays": "2034-11-15", "interest": "2.25"})
+    assert (len(coupons), coupons[0], coupons[-1]) == (
+        20,
+        pytest.approx({"starts": "2024-11-15", "pays": "2025-05-15", "interest": 2.25}),
+        pytest.approx({"starts": "2034-05-15", "pays": "2034-11-15", "interest": 2.25}),
+    )
 
 
 def test_a_ui_takes_the_coupons_as_arrow(client: TestClient) -> None:
     response = client.get(f"/bonds/{ISIN}/coupons", headers={"accept": ARROW})
     assert (response.headers["content-type"], response.headers["vary"]) == (ARROW, "Accept")
     table = pa.ipc.open_stream(response.content).read_all()
-    assert table.schema == pa.schema([pa.field("starts", pa.date32(), nullable=False), pa.field("pays", pa.date32(), nullable=False), pa.field("interest", pa.decimal128(12, 2), nullable=False)])
+    assert table.schema == pa.schema([pa.field("starts", pa.date32(), nullable=False), pa.field("pays", pa.date32(), nullable=False), pa.field("interest", pa.float64(), nullable=True)])
     as_json = client.get(f"/bonds/{ISIN}/coupons").json()
-    assert table.to_pylist() == [{"starts": date.fromisoformat(row["starts"]), "pays": date.fromisoformat(row["pays"]), "interest": Decimal(row["interest"])} for row in as_json]
+    assert table.to_pylist() == [{"starts": date.fromisoformat(row["starts"]), "pays": date.fromisoformat(row["pays"]), "interest": float(row["interest"])} for row in as_json]
 
 
 def test_a_bond_it_has_no_coupons_for_is_a_problem_whatever_was_asked_for(client: TestClient) -> None:
@@ -280,9 +285,9 @@ def test_a_settlement_is_recorded_with_a_new_id_and_the_time(client: TestClient,
     settlement_id = "00000000-0000-7000-8000-000000000001"
     assert (response.status_code, response.json()) == (
         HTTPStatus.CREATED,
-        {"settlement_id": settlement_id, "security_id": ISIN, "face": "1000000.00", "settle": "2026-11-06", "accrued": "21375.00", "recorded_at": "2026-11-06T14:30:00Z"},
+        pytest.approx({"settlement_id": settlement_id, "security_id": ISIN, "face": 1000000.0, "settle": "2026-11-06", "accrued": 21375.0, "recorded_at": "2026-11-06T14:30:00Z"}),
     )
-    binds = {"settlement_id": UUID(settlement_id), "security": ISIN, "face": Decimal("1000000.00"), "settle": date(2026, 11, 6), "accrued": Decimal("21375.00"), "recorded_at": AT}
+    binds = {"settlement_id": UUID(settlement_id), "security": ISIN, "face": 1000000.00, "settle": date(2026, 11, 6), "accrued": 21375.00, "recorded_at": AT}
     assert warehouse.committed == [fakes.Statement(RECORD, binds)]
 
 
@@ -337,4 +342,4 @@ def test_the_services_own_fakes_run_it() -> None:
         assert client.get("/bonds/XS2010030836/yield", params={"settle": "2026-11-06"}).status_code == HTTPStatus.OK
         assert kind(client.get("/bonds/DE0001102580/dirty-price", params=HOLDING)) == (HTTPStatus.NOT_FOUND, "unpriced")
         assert kind(client.get("/bonds/US0000000000")) == (HTTPStatus.NOT_FOUND, "unknown-bond")
-        assert client.post("/settlements", json={"security_id": "US912810TM64", "face": "100.00", "settle": "2026-11-06"}).status_code == HTTPStatus.CREATED
+        assert client.post("/settlements", json={"security_id": "US912810TM64", "face": 100.0, "settle": "2026-11-06"}).status_code == HTTPStatus.CREATED

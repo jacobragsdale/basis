@@ -8,7 +8,6 @@ import os
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from decimal import Decimal
 from http import HTTPStatus
 from uuid import UUID
 
@@ -113,7 +112,7 @@ def test_a_settlement_and_its_booking_commit_together_and_the_booking_is_made_af
         recorded = client.post("/settlements", json={"security_id": ISIN, "face": "1000000.00", "settle": "2026-11-06"})
     assert recorded.status_code == HTTPStatus.CREATED
     [(settlement_id, security, face, settle, accrued, recorded_at)] = warehouse.rows("SELECT settlement_id, security_id, face, settle, accrued, recorded_at FROM settlements")
-    assert (UUID(str(settlement_id)), security, face, settle, accrued) == (UUID("00000000-0000-7000-8000-000000000001"), ISIN, Decimal("1000000.00"), date(2026, 11, 6), Decimal("21375.00"))
+    assert (UUID(str(settlement_id)), security, face, settle, accrued) == (UUID("00000000-0000-7000-8000-000000000001"), ISIN, 1000000.00, date(2026, 11, 6), 21375.00)
     assert recorded_at == AT
     assert warehouse.rows("SELECT idempotency_key, status FROM accruals_outbox") == [("00000000-0000-7000-8000-000000000001", "done")]
     assert ledger.keys == ["00000000-0000-7000-8000-000000000001"]

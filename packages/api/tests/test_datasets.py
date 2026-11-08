@@ -27,6 +27,8 @@ class Desk(StrEnum):
 
 
 class Tier(IntEnum):
+    """An enum of integers, which a dataset refuses: its choices are text."""
+
     ONE = 1
     TWO = 2
 
@@ -36,13 +38,12 @@ class Exposure(BaseModel):
 
     book: str
     desk: Desk
-    tier: Tier
     side: Literal["long", "short"]
-    lots: int
+    lots: float
     weight: float
     hedged: bool
-    exposure: Annotated[Decimal, Field(max_digits=18, decimal_places=2)]
-    margin: Annotated[Decimal, Field(max_digits=10, decimal_places=4)] | None = None
+    exposure: float
+    margin: float | None = None
     as_of: date
     at: AwareDatetime
     position_id: UUID
@@ -50,14 +51,14 @@ class Exposure(BaseModel):
 
 
 ROW = Exposure(
-    book="RATES-1", desk=Desk.RATES, tier=Tier.TWO, side="long", lots=7, weight=0.25, hedged=True, exposure=Decimal("1692406.25"),
+    book="RATES-1", desk=Desk.RATES, side="long", lots=7.0, weight=0.25, hedged=True, exposure=1692406.25,
     as_of=date(2026, 11, 6), at=AT, position_id=UUID("019a5c3e-0000-7000-8000-000000000001"),
 )  # fmt: skip
 
 
 def exposures() -> list[Exposure]:
     """Sync, as a handler that calls blocking code is: FastAPI runs it in its threadpool."""
-    return [ROW, ROW.model_copy(update={"book": "RATES-2", "margin": Decimal("0.0125"), "note": "watch"})]
+    return [ROW, ROW.model_copy(update={"book": "RATES-2", "margin": 0.0125, "note": "watch"})]
 
 
 async def none_yet() -> tuple[Exposure, ...]:
@@ -65,7 +66,7 @@ async def none_yet() -> tuple[Exposure, ...]:
 
 
 class Lot(BaseModel):
-    lots: int
+    lots: float
 
 
 @dataclass(frozen=True)
@@ -123,13 +124,12 @@ def test_each_field_is_a_column_of_its_type_nullable_only_where_it_may_be_none()
     assert arrow.schema(rows) == pa.schema([
         pa.field("book", pa.string(), nullable=False),
         pa.field("desk", pa.string(), nullable=False),
-        pa.field("tier", pa.int64(), nullable=False),
         pa.field("side", pa.string(), nullable=False),
-        pa.field("lots", pa.int64(), nullable=False),
-        pa.field("weight", pa.float64(), nullable=False),
+        pa.field("lots", pa.float64(), nullable=True),
+        pa.field("weight", pa.float64(), nullable=True),
         pa.field("hedged", pa.bool_(), nullable=False),
-        pa.field("exposure", pa.decimal128(18, 2), nullable=False),
-        pa.field("margin", pa.decimal128(10, 4), nullable=True),
+        pa.field("exposure", pa.float64(), nullable=True),
+        pa.field("margin", pa.float64(), nullable=True),
         pa.field("as_of", pa.date32(), nullable=False),
         pa.field("at", pa.timestamp("us", tz="UTC"), nullable=False),
         pa.field("position_id", pa.string(), nullable=False),
@@ -142,8 +142,8 @@ def test_a_request_that_asks_for_arrow_gets_the_rows_it_would_get_as_json(client
     assert (response.status_code, response.headers["content-type"], response.headers["vary"]) == (HTTPStatus.OK, ARROW, "Accept")
     table = pa.ipc.open_stream(response.content).read_all()
     assert table.to_pylist()[1] == {
-        "book": "RATES-2", "desk": "rates", "tier": 2, "side": "long", "lots": 7, "weight": 0.25, "hedged": True, "exposure": Decimal("1692406.25"),
-        "margin": Decimal("0.0125"), "as_of": date(2026, 11, 6), "at": AT, "position_id": "019a5c3e-0000-7000-8000-000000000001", "comment": "watch",
+        "book": "RATES-2", "desk": "rates", "side": "long", "lots": 7.0, "weight": 0.25, "hedged": True, "exposure": 1692406.25,
+        "margin": 0.0125, "as_of": date(2026, 11, 6), "at": AT, "position_id": "019a5c3e-0000-7000-8000-000000000001", "comment": "watch",
     }  # fmt: skip
     as_json = client.get("/exposures")
     assert (as_json.headers["content-type"], as_json.headers["vary"]) == ("application/json", "Accept")
@@ -203,12 +203,16 @@ class Listed(BaseModel):
     lots: list[int]
 
 
-class Undigited(BaseModel):
+class Counted(BaseModel):
+    lots: int
+
+
+class Exact(BaseModel):
     exposure: Decimal
 
 
-class TooPrecise(BaseModel):
-    exposure: Annotated[Decimal, Field(max_digits=40, decimal_places=2)]
+class Tiered(BaseModel):
+    tier: Tier
 
 
 class Mixed(BaseModel):
@@ -226,11 +230,11 @@ class Open(BaseModel):
 
 
 class Computed(BaseModel):
-    lots: int
+    lots: float
 
     @computed_field
     @property
-    def doubled(self) -> int:
+    def doubled(self) -> float:
         return self.lots * 2
 
 
@@ -247,14 +251,15 @@ class Books(RootModel[list[str]]):
         (list[Books], "a dataset is rows, so answer list[Row]"),
         (list[Nested], "Nested.exposure is Exposure, which Arrow's columns do not hold"),
         (list[Listed], "Listed.lots is list[int], which Arrow's columns do not hold"),
-        (list[Undigited], "Undigited.exposure is a decimal, which a column holds with one precision and one scale"),
-        (list[TooPrecise], "with at most 38 digits"),
-        (list[Mixed], "Mixed.code is typing.Literal['a', 1], which Arrow's columns do not hold"),
+        (list[Counted], "Counted.lots is an int, and every number in a dataset is a float"),
+        (list[Exact], "Exact.exposure, a Decimal, and every number basis gives or takes is a JSON number"),
+        (list[Tiered], "Tiered.tier is Tier, whose values are not all strings, and a dataset's choices are text"),
+        (list[Mixed], "Mixed.code is typing.Literal['a', 1], whose values are not all strings"),
         (list[Open], "allow keys beyond their fields"),
         (list[Computed], "compute doubled, which no column holds"),
         (list[Naive], "Naive.at, a datetime, which takes a time without its offset"),
     ],
-    ids=["one-row", "a-mapping", "not-models", "root-models", "a-nested-model", "a-list", "a-decimal-without-its-digits", "too-many-digits", "a-mixed-literal", "open", "computed", "a-naive-time"],
+    ids=["one-row", "a-mapping", "not-models", "root-models", "a-nested-model", "a-list", "an-int", "a-decimal", "an-int-enum", "a-mixed-literal", "open", "computed", "a-naive-time"],
 )
 def test_a_dataset_that_is_not_flat_rows_is_refused_when_its_route_is_declared(response: object, message: str) -> None:
     def handler() -> None: ...
@@ -262,3 +267,21 @@ def test_a_dataset_that_is_not_flat_rows_is_refused_when_its_route_is_declared(r
     handler.__annotations__["return"] = response
     with pytest.raises(api.DeclarationError, match=message.replace("[", r"\[").replace("]", r"\]")):
         api.get("/rows", handler, deadline_s=1, response=response, errors=[], dataset=True)
+
+
+class Measured(BaseModel):
+    value: float
+
+
+def unmeasured() -> list[Measured]:
+    return [Measured(value=float("nan")), Measured(value=float("inf")), Measured(value=1.5)]
+
+
+def test_nan_and_infinity_are_null_in_json_and_arrow_alike() -> None:
+    """Every number on the wire is a float or null (design.md, "Numbers"): a float column is always nullable."""
+    service = api.Service(name="measures", settings=api.Settings, routes=[api.get("/measures", unmeasured, deadline_s=1, response=list[Measured], errors=[], dataset=True)])
+    with TestClient(api.build(service, settings=api.Settings.given()).asgi) as client:
+        as_json = client.get("/measures").json()
+        table = pa.ipc.open_stream(client.get("/measures", headers={"accept": ARROW}).content).read_all()
+    assert as_json == table.to_pylist() == [{"value": None}, {"value": None}, {"value": 1.5}]
+    assert table.schema.field("value").nullable

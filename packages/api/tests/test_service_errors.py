@@ -5,7 +5,6 @@ as its statuses say."""
 
 from collections.abc import Callable
 from datetime import UTC, datetime
-from decimal import Decimal
 from http import HTTPStatus
 from typing import Annotated
 
@@ -27,7 +26,7 @@ CLOCK = api.clock("clock")
 SELECT = "SELECT security, price FROM prices WHERE security = %(security)s"
 INSERT = "INSERT INTO prices (security, price) VALUES (%(security)s, %(price)s)"
 SECURITY = "US912810TM64"
-PRICE = {"security": SECURITY, "price": "101.25"}
+PRICE = {"security": SECURITY, "price": 101.25}
 STATUSES: dict[type[api.ServiceError], int] = {
     api.Timeout: HTTPStatus.GATEWAY_TIMEOUT, api.Unavailable: HTTPStatus.SERVICE_UNAVAILABLE, api.NotFound: HTTPStatus.BAD_GATEWAY, api.Conflict: HTTPStatus.BAD_GATEWAY,
     api.Rejected: HTTPStatus.BAD_GATEWAY, api.Denied: HTTPStatus.BAD_GATEWAY, api.BadReply: HTTPStatus.BAD_GATEWAY, api.Failed: HTTPStatus.BAD_GATEWAY,
@@ -43,7 +42,7 @@ class Price(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     security: str
-    price: Decimal
+    price: float
 
 
 class Unpriced(api.Error):
@@ -118,8 +117,8 @@ def _pricing() -> fakes.Http:
     app = FastAPI()
 
     @app.get("/prices/{security}")
-    def price(security: str) -> dict[str, str]:
-        return {"security": security, "price": "99.50"}
+    def price(security: str) -> dict[str, object]:
+        return {"security": security, "price": 99.50}
 
     return fakes.Http(app)
 
@@ -193,7 +192,7 @@ def test_a_get_unavailable_once_is_made_again_and_the_route_answers() -> None:
     pricing.fails(f"/prices/{SECURITY}", api.Unavailable, times=1)
     with _client(pricing=pricing) as client:
         response = client.get(f"/quotes/{SECURITY}")
-    assert (response.status_code, response.json()) == (HTTPStatus.OK, {"security": SECURITY, "price": "99.50"})
+    assert (response.status_code, response.json()) == (HTTPStatus.OK, {"security": SECURITY, "price": 99.50})
 
 
 def test_a_get_unavailable_every_time_is_made_again_as_often_as_its_deadline_allows() -> None:

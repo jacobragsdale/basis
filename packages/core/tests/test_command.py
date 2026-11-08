@@ -180,6 +180,21 @@ def test_a_repo_declares_its_parts_in_pyproject_and_nowhere_else(tmp_path: Path,
     assert problem in error_line(capsys)
 
 
+@pytest.mark.parametrize("argv", [["sync"], ["check"], ["check", "--full"], ["new", "job", "rates"], ["upgrade"], ["review"]], ids=" ".join)
+def test_a_repo_without_tool_basis_refuses_every_verb_that_reads_or_writes_its_files(tmp_path: Path, capsys: pytest.CaptureFixture[str], argv: list[str]) -> None:
+    """So no agent runs `basis sync` over an app another tool owns, such as a ctzd app (design.md, "ctzd, a consumer")."""
+    assert basis(repo(tmp_path, '[project]\nname = "app"\n'), *argv) != 0
+    assert 'declares no basis parts: add [tool.basis] parts = ["job"]' in error_line(capsys)
+
+
+def test_a_repo_without_tool_basis_still_tells_its_version_and_checks_its_desktop(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    folder = repo(tmp_path, '[project]\nname = "app"\n')
+    assert basis(folder, "--version") == 0
+    capsys.readouterr()
+    basis(folder, "doctor")
+    assert "declares no basis parts" not in capsys.readouterr().err  # `basis docs` should run here too: docs/roadmap.md, Later
+
+
 def test_a_folder_in_no_repo_says_how_to_make_one(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert basis(tmp_path, "check") == 1
     assert error_line(capsys).endswith("make one, as `uvx basis-job new repo NAME` does")

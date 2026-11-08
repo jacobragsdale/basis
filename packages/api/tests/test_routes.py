@@ -32,13 +32,13 @@ class Quote(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     security: str
-    price: Decimal
+    price: float
 
 
 class Leg(BaseModel):
     """Lax, as pydantic's default is: basis reads a request strictly whatever a model says."""
 
-    rate: Decimal
+    rate: float
     at: AwareDatetime
 
 
@@ -47,7 +47,7 @@ class Order(BaseModel):
 
     security: str
     quantity: int
-    price: Decimal
+    price: float
     hedged: bool = False
     legs: tuple[Leg, ...] = ()
 
@@ -74,11 +74,11 @@ INSERT = "INSERT INTO orders (security) VALUES (%(security)s)"
 
 def quote(security: str, size: int, side: Side, venue: Annotated[tuple[str, ...], Query()] = (), at: AwareDatetime | None = None) -> Quote:
     del size, side, venue, at
-    return Quote(security=security, price=Decimal("101.25"))
+    return Quote(security=security, price=101.25)
 
 
 def lot(number: int) -> Quote:
-    return Quote(security=str(number), price=Decimal(1))
+    return Quote(security=str(number), price=1.0)
 
 
 def place(order: Order) -> Order:
@@ -188,7 +188,7 @@ def _ok(handler: Callable[..., object], **changed: object) -> Callable[[], api.R
 
 
 def no_annotation(security: str):  # noqa: ANN201 -- the case under test
-    return Quote(security=security, price=Decimal(1))
+    return Quote(security=security, price=1.0)
 
 
 def nothing(security: str) -> None:
@@ -197,22 +197,22 @@ def nothing(security: str) -> None:
 
 def by_time(security: str, at: time) -> Quote:
     del at
-    return Quote(security=security, price=Decimal(1))
+    return Quote(security=security, price=1.0)
 
 
 def by_mixed(security: str, pair: Annotated[tuple[int, str], Query()]) -> Quote:
     del pair
-    return Quote(security=security, price=Decimal(1))
+    return Quote(security=security, price=1.0)
 
 
 def two_bodies(security: str, order: Order, other: Order) -> Quote:
     del order, other
-    return Quote(security=security, price=Decimal(1))
+    return Quote(security=security, price=1.0)
 
 
 def embedded(security: str, order: Annotated[Order, Body(embed=True)]) -> Quote:
     del order
-    return Quote(security=security, price=Decimal(1))
+    return Quote(security=security, price=1.0)
 
 
 @pytest.mark.parametrize(
@@ -265,7 +265,6 @@ class _Rating(StrEnum):
     ("kind", "text", "accepted"),
     [
         (int, "10", True), (int, "-3", True), (int, "0", True), (int, "010", False), (int, "+1", False), (int, "1.0", False), (int, " 1", False), (int, "1_000", False),
-        (Decimal, "0.045", True), (Decimal, "-2.50", True), (Decimal, "1e3", False), (Decimal, ".5", False), (Decimal, "1.", False), (Decimal, "NaN", False),
         (float, "2e-3", True), (float, "1.5", True), (float, "1e400", False), (float, "inf", False),
         (bool, "true", True), (bool, "false", True), (bool, "True", False), (bool, "1", False), (bool, "yes", False),
         (date, "2026-11-06", True), (date, "20261106", False), (date, "2026-11-06T00:00:00", False),
@@ -305,7 +304,7 @@ def test_a_list_takes_its_key_once_for_each_value(client: TestClient) -> None:
     assert response.status_code == HTTPStatus.OK
 
 
-ORDER = {"security": "US912810TM64", "quantity": 10, "price": "12345678901234567890.123456789", "legs": [{"rate": "0.0450", "at": "2026-11-06T14:30:00Z"}]}
+ORDER = {"security": "US912810TM64", "quantity": 10, "price": 12345678901234567890.123456789, "legs": [{"rate": 0.0450, "at": "2026-11-06T14:30:00Z"}]}
 
 
 def test_a_body_reaches_the_handler_exactly(client: TestClient) -> None:
@@ -317,21 +316,16 @@ def test_a_body_reaches_the_handler_exactly(client: TestClient) -> None:
     ("changed", "pointer", "kind"),
     [
         ({"quantity": "10"}, "#/quantity", "Input should be a valid integer"),
-        ({"quantity": 10.0}, "#/quantity", "Input should be a valid integer"),
+        ({"quantity": 10.5}, "#/quantity", "Input should be a valid integer"),
         ({"security": 912810}, "#/security", "Input should be a valid string"),
         ({"hedged": "true"}, "#/hedged", "Input should be a valid boolean"),
-        ({"price": 101.25}, "#/price", 'Input should be a string of the decimal, as "0.045"'),
-        ({"legs": [{"rate": 0.045, "at": "2026-11-06T14:30:00Z"}]}, "#/legs/0/rate", 'Input should be a string of the decimal, as "0.045"'),
-        ({"legs": [{"rate": "0.045", "at": "2026-11-06T14:30:00"}]}, "#/legs/0/at", "Input should have timezone info"),
+        ({"price": "101.25"}, "#/price", "Input should be a valid number"),
+        ({"legs": [{"rate": 0.045, "at": "2026-11-06T14:30:00"}]}, "#/legs/0/at", "Input should have timezone info"),
         ({"side": "buy"}, "#/side", "Extra inputs are not permitted"),
-        ({"price": "1e3"}, "#/price", 'Input should be a decimal\'s digits, as "0.045"'),
-        ({"price": "+1.5"}, "#/price", 'Input should be a decimal\'s digits, as "0.045"'),
-        ({"legs": [{"rate": " 0.045", "at": "2026-11-06T14:30:00Z"}]}, "#/legs/0/rate", 'Input should be a decimal\'s digits, as "0.045"'),
-        ({"legs": [{"rate": "0.045", "at": "2026-11-06T14:30:00Z", "notional": "1"}]}, "#/legs/0/notional", "Extra inputs are not permitted"),
+        ({"legs": [{"rate": 0.045, "at": "2026-11-06T14:30:00Z", "notional": 1}]}, "#/legs/0/notional", "Extra inputs are not permitted"),
     ],
     ids=[
-        "int-as-text", "int-as-a-float", "str-as-a-number", "bool-as-text", "decimal-as-a-number", "nested-decimal-as-a-number", "naive-time", "unknown-key",
-        "decimal-with-an-exponent", "decimal-with-a-plus", "nested-decimal-with-a-space", "nested-unknown-key",
+        "int-as-text", "int-as-a-fraction", "str-as-a-number", "bool-as-text", "a-number-as-text", "naive-time", "unknown-key", "nested-unknown-key",
     ],
 )  # fmt: skip
 def test_a_body_is_read_strictly(client: TestClient, changed: dict[str, object], pointer: str, kind: str) -> None:
@@ -342,7 +336,7 @@ def test_a_body_is_read_strictly(client: TestClient, changed: dict[str, object],
 
 
 def test_a_body_is_json_only_when_the_request_says_so(client: TestClient) -> None:
-    response = client.post("/orders", content=b'{"security": "X", "quantity": 1, "price": "1"}', headers={"content-type": "text/plain"})
+    response = client.post("/orders", content=b'{"security": "X", "quantity": 1, "price": 1}', headers={"content-type": "text/plain"})
     [error] = response.json()["errors"]
     assert (error["pointer"], error["detail"]) == ("#", "The body is text/plain, not JSON: send it as application/json")
 
@@ -378,7 +372,7 @@ def test_a_write_never_commits_once_its_routes_deadline_has_passed() -> None:
     warehouse = fakes.Database(answers={INSERT: _held(release, 1)})
     given: fakes.Fakes = {WAREHOUSE: warehouse, PRICING: fakes.Http(_pricing()), PRICES: fakes.Cache()}
     with TestClient(api.build(SERVICE, settings=api.Settings.given(), fakes=given).asgi) as client:
-        response = client.post("/write", json={"security": "X", "quantity": 1, "price": "1"})
+        response = client.post("/write", json={"security": "X", "quantity": 1, "price": 1})
         release.set()  # the statement ends, and its transaction rolls back, before the app stops
     assert (response.status_code, response.json()["type"]) == (HTTPStatus.GATEWAY_TIMEOUT, "service-timeout")
     assert (warehouse.committed, warehouse.rolled_back) == ([], [fakes.Statement(INSERT, {"security": "X"})])
@@ -444,11 +438,11 @@ def _at(document: JsonValue, *keys: str) -> JsonValue:
 class Booked(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, validate_default=True, revalidate_instances="always")
 
-    price: Decimal
+    price: float
 
     @field_validator("price")
     @classmethod
-    def in_cents(cls, price: Decimal) -> Decimal:
+    def in_cents(cls, price: float) -> float:
         """Not idempotent: run twice, it would make 1.5 into 15000."""
         return price * 100
 
@@ -461,49 +455,31 @@ def book(booking: Booked) -> Quote:
 def test_a_body_is_validated_once() -> None:
     service = _service(api.post("/bookings", book, deadline_s=1, response=Quote, errors=[]))
     with TestClient(api.build(service, settings=api.Settings.given(), fakes={WAREHOUSE: fakes.Database(), PRICING: fakes.Http(_pricing())}).asgi) as client:
-        assert client.post("/bookings", json={"price": "1.5"}).json() == {"security": "X", "price": "150.0"}  # not 15000.0
+        assert client.post("/bookings", json={"price": 1.5}).json() == {"security": "X", "price": 150.0}  # not 15000.0
 
 
 def test_a_body_sent_to_a_route_that_takes_none_is_refused(client: TestClient) -> None:
-    response = client.request("GET", "/stale/X", content=b'{"price": "1"}', headers={"content-type": "application/json"})
+    response = client.request("GET", "/stale/X", content=b'{"price": 1}', headers={"content-type": "application/json"})
     assert [(error["pointer"], error["detail"]) for error in response.json()["errors"]] == [("#", "This route takes no body: send the request without one")]
 
 
 @dataclass(frozen=True)
 class Fill:
-    price: Decimal
+    price: float
 
 
 class Aliased(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    unit_price: Decimal = Field(alias="unitPrice")
-    sizes: frozenset[Decimal] = frozenset()
+    unit_price: float = Field(alias="unitPrice")
+    sizes: frozenset[float] = frozenset()
     fills: tuple[Fill, ...] = ()
     at: frozenset[AwareDatetime] = frozenset()
 
 
-@pytest.mark.parametrize(
-    ("raw", "errors"),
-    [
-        (b'{"unitPrice": 1.5}', [(("body", "unitPrice"), "decimal_string")]),
-        (b'{"unitPrice": "1.5", "sizes": ["1", 2]}', [(("body", "sizes", 1), "decimal_string")]),
-        (b'{"unitPrice": "1.5", "fills": [{"price": 1.5}]}', [(("body", "fills", 0, "price"), "decimal_string")]),
-        (b'{"unitPrice": "1.5", "at": ["2026-11-06T14:30:00"]}', [(("body", "at", 0), "timezone_aware")]),
-        (b'{"unitPrice": "1.5", "sizes": ["1"], "fills": [{"price": "1"}], "at": ["2026-11-06T14:30:00Z"]}', []),
-    ],
-    ids=["aliased", "in-a-set", "in-a-dataclass", "naive-time-in-a-set", "all-exact"],
-)
-def test_a_decimal_is_a_string_and_a_time_has_its_offset_wherever_the_body_holds_them(raw: bytes, errors: list[tuple[tuple[object, ...], str]]) -> None:
-    declared = strict.shape("/a", _taking(Aliased), "aliased").body
-    assert declared is not None
-    _, found = strict.body(declared, raw, "application/json")
-    assert [(error["loc"], error["type"]) for error in found] == errors
-
-
-def test_a_decimal_is_a_string_in_a_root_models_list_too() -> None:
-    _, errors = strict.body(strict.Body(TypeAdapter(RootModel[list[Decimal]]), precise=True), b'["1.10", 2.5]', "application/json")
-    assert [(error["loc"], error["type"]) for error in errors] == [(("body", 1), "decimal_string")]
+def test_a_decimal_anywhere_in_a_route_is_refused_with_the_fix() -> None:
+    with pytest.raises(api.DeclarationError, match="a Decimal, and every number basis gives or takes is a JSON number: declare it a float"):
+        strict.shape("/a", _taking(dict[str, Decimal]), "taking")
 
 
 def _taking(kind: type) -> Callable[..., object]:
@@ -515,24 +491,16 @@ def _taking(kind: type) -> Callable[..., object]:
 
 
 class Chosen(BaseModel):
-    price: Decimal = Field(validation_alias=AliasChoices("price", "px"))
+    price: float = Field(validation_alias=AliasChoices("price", "px"))
 
 
 class ByName(BaseModel):
     model_config = ConfigDict(validate_by_name=True)
 
-    unit_price: Decimal = Field(alias="unitPrice")
+    unit_price: float = Field(alias="unitPrice")
 
 
-class Sets(BaseModel):
-    fills: frozenset[Fill]
-
-
-@pytest.mark.parametrize(
-    ("kind", "message"),
-    [(Chosen, "Chosen reads price by AliasChoices"), (ByName, "ByName reads its fields by their names and their aliases"), (Sets, "holds a frozenset")],
-    ids=["alias-choices", "by-name", "a-set-of-dataclasses"],
-)
+@pytest.mark.parametrize(("kind", "message"), [(Chosen, "Chosen reads price by AliasChoices"), (ByName, "ByName reads its fields by their names and their aliases")], ids=["alias-choices", "by-name"])
 def test_a_body_reads_each_field_by_one_key_and_holds_no_set_of_what_basis_checks(kind: type, message: str) -> None:
     with pytest.raises(api.DeclarationError, match=message):
         strict.shape("/a", _taking(kind), "taking")
@@ -543,11 +511,11 @@ class Plain(BaseModel):
     quantity: int
 
 
-@pytest.mark.parametrize(("kind", "precise"), [(Plain, False), (Order, True), (Aliased, True), (RootModel[list[int]], False)], ids=["no-decimal", "a-decimal", "nested", "a-list-of-ints"])
-def test_a_body_is_parsed_again_only_where_it_can_hold_a_decimal(kind: type, precise: bool) -> None:  # noqa: FBT001 -- a table's column
+@pytest.mark.parametrize("kind", [Plain, Order, Aliased, RootModel[list[int]]], ids=["plain", "an-order", "nested", "a-list-of-ints"])
+def test_a_body_holds_no_decimal_so_it_is_parsed_once(kind: type) -> None:
     declared = strict.shape("/a", _taking(kind), "taking").body
     assert declared is not None
-    assert declared.precise is precise
+    assert declared.precise is False
 
 
 def later(tasks: BackgroundTasks) -> dict[str, str]:
@@ -670,8 +638,8 @@ class Hedged(BaseModel):
 @pytest.mark.parametrize(
     ("raw", "pointers"),
     [
-        (b'{"leg": {"rate": "1"}}', {"#/leg/rate", "#/leg/coupon"}),
-        (b'{"leg": {"coupon": "c"}, "legs": [{"rate": "1"}]}', {"#/legs/0/rate", "#/legs/0/coupon"}),
+        (b'{"leg": {"rate": "x"}}', {"#/leg/rate", "#/leg/coupon"}),
+        (b'{"leg": {"coupon": "c"}, "legs": [{"rate": "x"}]}', {"#/legs/0/rate", "#/legs/0/coupon"}),
         (b'{"leg": {"coupon": "c"}, "size": 1.5}', {"#/size"}),
     ],
     ids=["a-union", "a-union-in-a-list", "a-validators-tag"],
@@ -685,4 +653,4 @@ def test_a_body_errors_pointer_names_the_bodys_own_keys_never_a_unions_tags(raw:
 
 def hedge(hedged: Hedged) -> Quote:
     del hedged
-    return Quote(security="X", price=Decimal(1))
+    return Quote(security="X", price=1.0)

@@ -142,7 +142,7 @@ def _called(capsys: pytest.CaptureFixture[str]) -> tuple[JsonValue, str]:
 def test_call_prints_a_routes_response_as_json(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert basis(repo, "call", "bond", json.dumps({"path": {"security": ISIN}}), "--fake", *EXAMPLE) == 0
     body, _ = _called(capsys)
-    assert body == {"security_id": ISIN, "coupon_rate": "0.045", "convention": "30/360", "frequency": 2, "issued": "2024-11-15", "maturity": "2034-11-15"}
+    assert body == {"security_id": ISIN, "coupon_rate": 0.045, "convention": "30/360", "frequency": 2, "issued": "2024-11-15", "maturity": "2034-11-15"}
 
 
 @pytest.mark.usefixtures("clean")
@@ -151,17 +151,17 @@ def test_call_runs_compute_in_the_pool(repo: Path, monkeypatch: pytest.MonkeyPat
     assert basis(repo, "call", "bond_yield", json.dumps({"path": {"security": ISIN}, "query": {"settle": "2026-11-06"}}), "--fake", *EXAMPLE) == 0
     body, _ = _called(capsys)
     assert isinstance(body, dict)
-    assert body["annual_yield"] == "0.0472658580"
+    assert body["annual_yield"] == pytest.approx(0.0472658580, rel=1e-9)
 
 
 @pytest.mark.usefixtures("clean")
 def test_call_reads_its_request_from_stdin(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    request = {"query": {"face": 1000000, "rate": "0.045", "start": "2026-05-15", "end": "2026-11-15", "convention": "30/360"}}
+    request = {"query": {"face": 1000000, "rate": 0.045, "start": "2026-05-15", "end": "2026-11-15", "convention": "30/360"}}
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(request)))
     assert basis(repo, "call", "accrued_interest", "-", "--fake", *EXAMPLE) == 0
     body, _ = _called(capsys)
     assert isinstance(body, dict)
-    assert body["interest"] == "22500.00"
+    assert body["interest"] == pytest.approx(22500.0)
 
 
 @pytest.mark.usefixtures("clean")

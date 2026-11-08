@@ -15,6 +15,10 @@
   `ALLOW_MOCKS` finds; one that gives no reason is refused.
 - **No sockets in unit tests.** basis's pytest plugin (`basis.core.pytest_plugin`) fails a unit test that opens one,
   and tells `basis check` which did.
+- **No rounding.** Python never rounds a number (design.md, "Numbers"): the repo's own code, its tests aside, calls no
+  `round()`, no `.round()` (pandas', numpy's or any other), no `numpy.around` or `numpy.rint`, and imports nothing of
+  the `decimal` module. The UI rounds once, as it shows a number. For now no function is exempt; a mark for business
+  rounding, such as lot and tick sizes, comes later.
 
 Each failure is one `ERROR` line with its fix. A pytest run that fails only because unit tests opened sockets prints
 their lines alone; any other failure adds pytest's own line. What basis has the pytest step write, the coverage data,
@@ -100,6 +104,52 @@ def mocks(repo: Path) -> list[Problem]:
                 )
             )
     return found
+
+
+ROUNDERS = frozenset({"round", "around", "rint"})
+"""The methods and numpy functions that round: `.round()`, `numpy.round`, `numpy.around` and `numpy.rint`."""
+
+
+def rounding(repo: Path) -> list[Problem]:
+    """Each place the repo's own code, its tests aside, rounds a number or reaches the `decimal` module, with the fix."""
+    found: list[Problem] = []
+    tests = set(_tests(repo))
+    for path in _python(repo):
+        if path in tests:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except OSError, UnicodeDecodeError, SyntaxError, ValueError:  # ruff and ty say what is wrong with it
+            continue
+        name = path.relative_to(repo).as_posix()
+        for line, what in _rounding(tree):
+            found.append((f"{name}:{line} rounds with {what}, and Python never rounds a number", "leave rounding to the UI, which rounds once as it shows the number, and give it the number whole"))
+    return found
+
+
+def _python(repo: Path) -> Iterator[Path]:
+    for folder, names, files in os.walk(repo):
+        here = Path(folder)
+        names[:] = sorted(name for name in names if name not in _UNREAD and not (here / name / "pyvenv.cfg").exists())
+        yield from (here / name for name in sorted(files) if name.endswith(".py"))
+
+
+def _rounding(tree: ast.Module) -> list[tuple[int, str]]:
+    """Each rounding in `tree`, by its line, in order."""
+    uses: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        match node:
+            case ast.Call(func=ast.Name(id="round")):
+                uses.append((node.lineno, "round()"))
+            case ast.Call(func=ast.Attribute(attr=str(attr))) if attr in ROUNDERS:
+                uses.append((node.lineno, f".{attr}()"))
+            case ast.Import(names=names):
+                uses += [(node.lineno, f"the {alias.name} module") for alias in names if alias.name.partition(".")[0] == "decimal"]
+            case ast.ImportFrom(module=str(module), level=0) if module.partition(".")[0] == "decimal":
+                uses.append((node.lineno, "the decimal module"))
+            case _:
+                pass
+    return sorted(uses)
 
 
 def _tests(repo: Path) -> Iterator[Path]:

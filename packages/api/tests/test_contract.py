@@ -105,7 +105,7 @@ class OrderOfAnySide(BaseModel):
 
 class Row(BaseModel):
     book: str
-    lots: int
+    lots: float
 
 
 def _bond(response: type[BaseModel]) -> Callable[[str], object]:

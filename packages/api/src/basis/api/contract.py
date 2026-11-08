@@ -45,7 +45,7 @@ from pathlib import Path
 
 from pydantic import ConfigDict, JsonValue, ValidationError
 
-from basis.api import arrow, decimals, openapi
+from basis.api import arrow, openapi
 from basis.core.errors import BasisError
 from basis.core.model import Model
 from basis.core.verbs import table
@@ -326,8 +326,6 @@ def _kind(schema: Document) -> set[str]:
         kinds |= {_type_of(value) for value in _enumerated(schema)}
     if (form := schema.get("format")) is not None:
         kinds = {f"{found}:{form}" if found == "string" else found for found in kinds}
-    if decimals.EXTENSION in schema:
-        kinds = {"string:decimal" if found == "string" else found for found in kinds}
     return kinds or {"any"}
 
 

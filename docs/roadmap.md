@@ -456,3 +456,7 @@ These are left for it.
   `BASIS_MUTATE=1` turns mutation testing on for `basis check --full`. Their own tests are marked `heavy`, which the
   default run leaves out; `uv run pytest -m heavy` runs them. Turning them back on is the review's call, and it moves
   the fuzz into `check --full` and builds the app once.
+- **Step 2.11, left for the review.** `strict.py`'s decimal-string paths (`_precise`, `_inexact` and the second parse
+  of a body) are unreachable now that a `Decimal` is refused when a route is declared; remove them. `basis docs`
+  should run in a repo with no `[tool.basis]` table, as the design says; it is refused there today, and the change
+  is in `command.py`, which step 5.6 is changing.

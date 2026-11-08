@@ -34,8 +34,8 @@ CLEAN = {
     "accruals/repository.py": "from accruals import domain\nfrom accruals.resources import WAREHOUSE\n",
     "accruals/resources.py": "from basis import api\n\nfrom accruals import domain\n\nWAREHOUSE = api.database('warehouse', deadline_s=5, max_concurrent=4)\n",
     "accruals/errors.py": "from basis import api\n\nfrom accruals import domain\n",
-    "accruals/domain.py": "from decimal import Decimal\n\nfrom pydantic import BaseModel\n\nfrom accruals import money\n",
-    "accruals/money.py": "from decimal import ROUND_HALF_EVEN\n",
+    "accruals/domain.py": "from datetime import date\n\nfrom pydantic import BaseModel\n\nfrom accruals import money\n",
+    "accruals/money.py": "import math\n",
     "accruals/bonds/__init__.py": "",
     "accruals/bonds/domain.py": "from accruals import domain\n",
     "accruals/tests/__init__.py": "",
@@ -79,7 +79,7 @@ def test_a_layer_is_known_by_its_own_name_at_any_depth() -> None:
 
 
 def test_an_import_up_the_layers_fails_with_the_fix(repo: Path) -> None:
-    write(repo, CLEAN | {"accruals/domain.py": "from decimal import Decimal\n\nfrom accruals import handlers\n"})
+    write(repo, CLEAN | {"accruals/domain.py": "from datetime import date\n\nfrom accruals import handlers\n"})
     reason = f"accruals/domain.py:3 imports accruals.handlers into accruals.domain: a domain module imports a handlers module, above it, and {layers.ORDER}"
     fix = "move what accruals.domain needs of accruals.handlers down into accruals.domain, or into a layer below it, or move the code that needs it up into a handlers module"
     assert layers.problems(repo) == [(reason, fix)]

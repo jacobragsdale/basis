@@ -5,16 +5,13 @@ Its errors are plain exceptions, which `errors.py` gives their HTTP meaning."""
 import calendar
 from dataclasses import dataclass
 from datetime import date
-from decimal import ROUND_HALF_EVEN, Decimal
-from typing import Annotated, Literal, assert_never, get_args
+from typing import Literal, assert_never, get_args
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 type Convention = Literal["30/360", "ACT/360", "ACT/365F"]
-CENT = Decimal("0.01")
-MICRO = Decimal("0.000001")
-HUNDRED = Decimal(100)
+HUNDRED = 100.0
 
 
 class UnknownBond(Exception):  # noqa: N818 -- the domain's name for it, which its problem's type is
@@ -47,8 +44,8 @@ class Accrual(BaseModel):
     """The days in the period, as the convention counts them."""
     year_days: int
     """The days in a year, as the convention counts them."""
-    interest: Decimal
-    """In the face amount's currency, rounded half to even to the cent."""
+    interest: float
+    """In the face amount's currency, unrounded: the UI rounds it, once, as it shows it."""
 
 
 class DayCount(BaseModel):
@@ -64,7 +61,7 @@ class Bond(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     security_id: str
-    coupon_rate: Decimal
+    coupon_rate: float
     """The annual coupon rate, as a fraction."""
     convention: Convention
     frequency: Literal[1, 2, 4, 12]
@@ -79,13 +76,13 @@ class DirtyPrice(BaseModel):
 
     security_id: str
     settle: date
-    face: Decimal
-    clean: Decimal
+    face: float
+    clean: float
     """Per 100 of face, as the pricing service quotes it."""
-    accrued: Decimal
-    """The interest accrued since the last coupon, on the face amount, to the cent."""
-    dirty: Decimal
-    """What the holding costs at settlement: its clean price on the face amount, and the interest accrued, to the cent."""
+    accrued: float
+    """The interest accrued since the last coupon, on the face amount."""
+    dirty: float
+    """What the holding costs at settlement: its clean price on the face amount, and the interest accrued."""
 
 
 class Yield(BaseModel):
@@ -93,11 +90,11 @@ class Yield(BaseModel):
 
     security_id: str
     settle: date
-    clean: Decimal
+    clean: float
     """Per 100 of face, as the pricing service quotes it."""
-    dirty: Decimal
-    """Per 100 of face: the clean price and the interest accrued since the last coupon, to six places."""
-    annual_yield: Decimal
+    dirty: float
+    """Per 100 of face: the clean price and the interest accrued since the last coupon."""
+    annual_yield: float
     """The yield to maturity, compounded as often as the bond pays coupons, as a fraction: 0.0461 for 4.61%."""
 
 
@@ -109,8 +106,8 @@ class Coupon(BaseModel):
     starts: date
     """The day its period starts accruing: the coupon date before, or the issue date for the first."""
     pays: date
-    interest: Annotated[Decimal, Field(max_digits=12, decimal_places=2)]
-    """Per 100 of face, as the bond's convention accrues it over the period, to the cent."""
+    interest: float
+    """Per 100 of face, as the bond's convention accrues it over the period."""
 
 
 class Settlement(BaseModel):
@@ -118,9 +115,9 @@ class Settlement(BaseModel):
 
     settlement_id: UUID
     security_id: str
-    face: Decimal
+    face: float
     settle: date
-    accrued: Decimal
+    accrued: float
     recorded_at: AwareDatetime
 
 
@@ -130,9 +127,9 @@ class Remaining:
 
     periods: int
     """The coupons still to pay, the next among them."""
-    first: Decimal
+    first: float
     """The fraction of a period until the next coupon."""
-    accrued: Decimal
+    accrued: float
     """The interest accrued since the last coupon, per 100 of face, unrounded."""
 
 
@@ -157,9 +154,9 @@ def conventions() -> list[DayCount]:
     return [DayCount(convention=convention, year_days=day_count(date(2026, 1, 1), date(2026, 1, 1), convention)[1]) for convention in get_args(Convention.__value__)]
 
 
-def accrue(face: Decimal, rate: Decimal, start: date, end: date, convention: Convention) -> Accrual:
+def accrue(face: float, rate: float, start: date, end: date, convention: Convention) -> Accrual:
     days, year_days = day_count(start, end, convention)
-    interest = (face * rate * days / year_days).quantize(CENT, rounding=ROUND_HALF_EVEN)
+    interest = face * rate * days / year_days
     return Accrual(start=start, end=end, convention=convention, days=days, year_days=year_days, interest=interest)
 
 
@@ -171,8 +168,8 @@ def last_coupon(bond: Bond, settle: date) -> date:
     return max(period(bond, settle)[0], bond.issued)
 
 
-def accrued_at(bond: Bond, face: Decimal, settle: date) -> Decimal:
-    """The interest accrued on `face` of the bond from its last coupon to `settle`, to the cent."""
+def accrued_at(bond: Bond, face: float, settle: date) -> float:
+    """The interest accrued on `face` of the bond from its last coupon to `settle`."""
     return accrue(face, bond.coupon_rate, last_coupon(bond, settle), settle, bond.convention).interest
 
 
@@ -199,9 +196,9 @@ def months_before(day: date, months: int) -> date:
     return date(year, month + 1, min(day.day, calendar.monthrange(year, month + 1)[1]))
 
 
-def dirty_price(bond: Bond, face: Decimal, settle: date, accrued: Decimal, clean: Decimal) -> DirtyPrice:
-    """A holding's price at settlement: its clean price on `face`, and the interest `accrued`, to the cent."""
-    dirty = (face * clean / HUNDRED + accrued).quantize(CENT, rounding=ROUND_HALF_EVEN)
+def dirty_price(bond: Bond, face: float, settle: date, accrued: float, clean: float) -> DirtyPrice:
+    """A holding's price at settlement: its clean price on `face`, and the interest `accrued`."""
+    dirty = face * clean / HUNDRED + accrued
     return DirtyPrice(security_id=bond.security_id, settle=settle, face=face, clean=clean, accrued=accrued, dirty=dirty)
 
 
@@ -210,18 +207,18 @@ def remaining(bond: Bond, settle: date) -> Remaining:
     accrued since the last, per 100 of face."""
     start, end, periods = period(bond, settle)
     days, year_days = day_count(last_coupon(bond, settle), settle, bond.convention)
-    first = Decimal(day_count(settle, end, bond.convention)[0]) / day_count(start, end, bond.convention)[0]  # of a period, to the next coupon
+    first = day_count(settle, end, bond.convention)[0] / day_count(start, end, bond.convention)[0]  # of a period, to the next coupon
     return Remaining(periods=periods, first=first, accrued=HUNDRED * bond.coupon_rate * days / year_days)
 
 
-def coupon(bond: Bond) -> Decimal:
+def coupon(bond: Bond) -> float:
     """Each coupon the bond pays, per 100 of face."""
     return HUNDRED * bond.coupon_rate / bond.frequency
 
 
-def quoted(bond: Bond, settle: date, clean: Decimal, dirty: Decimal, annual: Decimal) -> Yield:
-    """The bond's yield at `settle`, as `annual`, solved from its `dirty` price per 100, which it gives to six places."""
-    return Yield(security_id=bond.security_id, settle=settle, clean=clean, dirty=dirty.quantize(MICRO, rounding=ROUND_HALF_EVEN), annual_yield=annual)
+def quoted(bond: Bond, settle: date, clean: float, dirty: float, annual: float) -> Yield:
+    """The bond's yield at `settle`, as `annual`, solved from its `dirty` price per 100."""
+    return Yield(security_id=bond.security_id, settle=settle, clean=clean, dirty=dirty, annual_yield=annual)
 
 
 def schedule(bond: Bond) -> list[Coupon]:

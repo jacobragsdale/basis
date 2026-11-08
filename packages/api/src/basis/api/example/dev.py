@@ -6,7 +6,6 @@ warehouse's memory, and end with the process."""
 
 from collections.abc import Mapping
 from datetime import date
-from decimal import Decimal
 from http import HTTPStatus
 
 from basis import api
@@ -16,12 +15,12 @@ from fastapi import FastAPI, HTTPException
 from basis.api.example import repository, resources
 
 BONDS: Mapping[str, Mapping[str, object]] = {
-    "US912810TM64": {"coupon_rate": Decimal("0.045"), "convention": "30/360", "frequency": 2, "issued": date(2024, 11, 15), "maturity": date(2034, 11, 15)},
-    "XS2010030836": {"coupon_rate": Decimal("0.0325"), "convention": "ACT/360", "frequency": 4, "issued": date(2025, 3, 31), "maturity": date(2030, 3, 31)},
-    "DE0001102580": {"coupon_rate": Decimal("0.02"), "convention": "ACT/365F", "frequency": 1, "issued": date(2023, 2, 15), "maturity": date(2033, 2, 15)},
+    "US912810TM64": {"coupon_rate": 0.045, "convention": "30/360", "frequency": 2, "issued": date(2024, 11, 15), "maturity": date(2034, 11, 15)},
+    "XS2010030836": {"coupon_rate": 0.0325, "convention": "ACT/360", "frequency": 4, "issued": date(2025, 3, 31), "maturity": date(2030, 3, 31)},
+    "DE0001102580": {"coupon_rate": 0.02, "convention": "ACT/365F", "frequency": 1, "issued": date(2023, 2, 15), "maturity": date(2033, 2, 15)},
 }
 """Each bond's terms, by its ISIN: made up, like every value here."""
-PRICES = {"US912810TM64": "98.50", "XS2010030836": "101.125"}
+PRICES = {"US912810TM64": 98.5, "XS2010030836": 101.125}
 """Each clean price the fake pricing service quotes, per 100 of face; it has none for DE0001102580."""
 
 
@@ -51,7 +50,7 @@ def pricing() -> FastAPI:
     app = FastAPI()
 
     @app.get("/prices/{security}")
-    def price(security: str) -> dict[str, str]:
+    def price(security: str) -> dict[str, object]:
         if (clean := PRICES.get(security)) is None:
             raise HTTPException(HTTPStatus.NOT_FOUND)
         return {"security_id": security, "clean": clean}

@@ -18,7 +18,7 @@ Paths are under `src/basis/api/`.
 |---|---|
 | `__init__.py` | The declarations' names; `api.build` and `api.serve` load on first use, so a service's modules import no server. |
 | `service.py` | `Service`, `Route` and `get`/`post`/`put`/`patch`/`delete`, with what each route declares (its deadline, its response, its errors, and whether it answers a dataset) and `Route.answers`; `given`, what a handler asks basis for, and the checks of what it asks for; `load`, a service by entry point (`basis.apis`) or module. |
-| `strict.py` | How a request is read, strictly: a JSON body in pydantic's strict mode, with decimals as strings and times with offsets, and query and path text by each type's grammar. Its docstring is the reference. |
+| `strict.py` | How a request is read, strictly: a JSON body in pydantic's strict mode, with every number a JSON number, a `Decimal` refused, and times with offsets, and query and path text by each type's grammar. Its docstring is the reference. |
 | `compute.py` | `compute`, which declares a pure function a route runs in the process pool, and `Compute`, what a handler gets for it. Its docstring is the reference. |
 | `resources.py` | The resources a service declares (`database`, `http`, `cache`, `clock`, `ids`), a database's `outbox`, and what a handler gets for each (`Reader`, `Writer`, `Client`, `Cache`, `Clock`, `Ids`), with `Client.send`. `http`, `clock` and `ids` are basis-core's declarations, which jobs share. Its docstring is the reference. |
 | `opened.py` | Each resource as the app opens it, through basis-core's databases, basis-core's resources (another service's client, the clock and ids, `basis.core.opened`) and memory, or a fake: every database and cache call's deadline and span, a request's transaction with its outbox rows, the calls made after its commit, `Client.send`, and the checks at build and startup. |
@@ -27,8 +27,7 @@ Paths are under `src/basis/api/`.
 | `deadlines.py` | A route's deadline, basis-core's deadline around a block's calls (`basis.core.deadlines`, of kind `route`), which caps each call its request makes, basis-core's client's included: `limit`, how long one call may take, and whose deadline sets it, and `exceeded`, its 504. |
 | `pool.py` | The process pool, spawned at startup: each compute call's deadline, span and log fields, and the in-process runs of `fakes.Compute`. |
 | `routes.py` | Each route as the app serves it: its deadline, its request read strictly before FastAPI's handler, a domain exception answered as the most specific meaning the route declares, its undeclared errors refused, a dataset's Arrow when the request asks for it, and `add`, which adds the routes to an app with each operation's id its handler's name and its errors under their statuses. |
-| `openapi.py` | The OpenAPI document, as the app serves it and a repo commits it: `Application`, whose `openapi()` `finish`es FastAPI's (problem media types, strict models, a request's decimals as strings of their digits); `document` and `text`, made without settings; `operations`, `mapping` and `array`, which `contract.py` reads documents by too. Its docstring is the reference. |
-| `decimals.py` | A request's decimal as the document gives it: its pattern from its digits and places, and its bounds in `x-basis-decimal`, from the types the routes read. Its docstring is the reference. |
+| `openapi.py` | The OpenAPI document, as the app serves it and a repo commits it: `Application`, whose `openapi()` `finish`es FastAPI's (problem media types and strict models; every number a JSON number); `document` and `text`, made without settings; `operations`, `mapping` and `array`, which `contract.py` reads documents by too. Its docstring is the reference. |
 | `contract.py` | The breaking-change check, basis-api's `Part.contract`: `openapi.json` against the one at the last release the repo's `[tool.basis.api] releases` glob matches, and what breaks a UI on each side. Its docstring is the reference. |
 | `dataset.py`, `arrow.py` | A dataset route's rows as Arrow columns, checked when the route is declared, which declarations import; and the stream itself, with pyarrow, and the `Accept` that asks for it. Their docstrings are the reference. |
 | `origins.py` | The `allowed_origins` setting, `BASIS_ALLOWED_ORIGINS`: each origin as a browser sends it, and the CORS middleware, outermost, when there are any. |
@@ -69,7 +68,7 @@ Paths are under `src/basis/api/`.
   meaning it does not declare, or an `HTTPException`, is a defect, a 500. A new error that basis raises inside a route
   joins `BASIS_ERRORS` and `_met`.
 - A request is read strictly before FastAPI sees it (`strict.py`): a key nothing declares is refused, a body's values
-  have their own JSON types, a decimal is a string, a time has its offset, and query and path text reads by its type's
+  have their own JSON types, every number is a JSON number and a `Decimal` is refused when the route is declared, a time has its offset, and query and path text reads by its type's
   grammar. A type basis cannot read strictly is refused when the route is declared, and so is a request model that
   reads a field by any key but a plain alias or its name, a set of models in a body, and `BackgroundTasks`. The body is
   validated once: FastAPI's handler gets basis's value through `routes._ValidatedOnce`, and never validates it again.
@@ -113,8 +112,10 @@ Paths are under `src/basis/api/`.
 - Every time a route reads or answers carries its offset: it is pydantic's `AwareDatetime`, and `strict.aware` refuses
   a route whose request or response holds a plain `datetime`, another of pydantic's datetimes, or a time of day,
   when it is declared, so pydantic refuses a time without its offset in the one validation it makes.
-- A request's decimal in the document has its digits and places in its pattern, and its bounds in `x-basis-decimal`,
-  from its type's declarations (`decimals.py`), never from pydantic's schema of it.
+- Every number basis gives or takes is a JSON number, a float or an int, never a string; a `Decimal` anywhere in a
+  route's request or response is refused when the route is declared (`strict.aware`), and NaN and ±inf travel as null,
+  in JSON (pydantic's own) and Arrow (`arrow.py`) alike. A dataset's numbers are floats, its float columns always
+  nullable, and an `int`, a `Decimal` or a choice of integers in its rows is refused (`dataset.py`).
 - A dataset route's rows are flat, each field a column Arrow holds, which `dataset.rows` checks when the route is
   declared; its Arrow is written only after the rows validate, so a request's writes commit after both.
 - No page of another origin calls the API unless the settings name its origin, as a browser sends it.

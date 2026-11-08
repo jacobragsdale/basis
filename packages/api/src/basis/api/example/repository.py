@@ -4,7 +4,6 @@ price the pricing service does not have is `Unpriced`; any other answers its own
 The integration tier tests it against a real database."""
 
 from datetime import datetime
-from decimal import Decimal
 from uuid import UUID
 
 from basis import api
@@ -22,7 +21,7 @@ class CleanPrice(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     security_id: str
-    clean: Decimal
+    clean: float
     """Per 100 of face."""
 
 
@@ -39,7 +38,7 @@ async def cached_bond(warehouse: api.Reader, terms: api.Cache[Bond], security: s
     return await terms.get(security, lambda: bond(warehouse, security))
 
 
-async def clean_price(pricing: api.Client, security: str) -> Decimal:
+async def clean_price(pricing: api.Client, security: str) -> float:
     """The pricing service's clean price of the bond, per 100 of face."""
     try:
         return (await pricing.get(f"/prices/{security}", CleanPrice)).clean

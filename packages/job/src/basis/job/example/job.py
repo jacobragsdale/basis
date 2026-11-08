@@ -34,7 +34,6 @@ def transform(inputs: Inputs, params: Params) -> Outputs:
         trades = trades[~trades["closed"]]
     trades = trades.assign(signed=trades["quantity"].where(trades["side"] == "BUY", -trades["quantity"]), notional=trades["quantity"] * trades["price"])
     positions = trades.groupby(["trade_date", "account_id", "security_id"], as_index=False).agg(net_quantity=("signed", "sum"), gross_notional=("notional", "sum"), trades=("trade_id", "size"))
-    positions["gross_notional"] = positions["gross_notional"].round(2)
     activity = trades.groupby("account_id", as_index=False).agg(last_trade_date=("trade_date", "max"), last_booked_at=("booked_at", "max"))
     return Outputs(positions=positions.sort_values(["trade_date", "account_id", "security_id"], ignore_index=True), activity=activity.sort_values("account_id", ignore_index=True))
 

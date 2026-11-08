@@ -16,12 +16,9 @@
             "in": "query",
             "required": true,
             "schema": {
-              "title": "Face",
-              "type": "string",
-              "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
-              "x-basis-decimal": {
-                "exclusiveMinimum": "0"
-              }
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "title": "Face"
             }
           },
           {
@@ -29,13 +26,10 @@
             "in": "query",
             "required": true,
             "schema": {
-              "title": "Rate",
-              "type": "string",
-              "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
-              "x-basis-decimal": {
-                "minimum": "0",
-                "exclusiveMaximum": "1"
-              }
+              "type": "number",
+              "minimum": 0,
+              "exclusiveMaximum": 1,
+              "title": "Rate"
             }
           },
           {
@@ -227,12 +221,9 @@
             "in": "query",
             "required": true,
             "schema": {
-              "title": "Face",
-              "type": "string",
-              "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
-              "x-basis-decimal": {
-                "exclusiveMinimum": "0"
-              }
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "title": "Face"
             }
           },
           {
@@ -602,7 +593,7 @@
             "title": "Year Days"
           },
           "interest": {
-            "type": "string",
+            "type": "number",
             "title": "Interest"
           }
         },
@@ -625,7 +616,7 @@
             "title": "Security Id"
           },
           "coupon_rate": {
-            "type": "string",
+            "type": "number",
             "title": "Coupon Rate"
           },
           "convention": {
@@ -686,7 +677,7 @@
             "title": "Pays"
           },
           "interest": {
-            "type": "string",
+            "type": "number",
             "title": "Interest"
           }
         },
@@ -730,19 +721,19 @@
             "title": "Settle"
           },
           "face": {
-            "type": "string",
+            "type": "number",
             "title": "Face"
           },
           "clean": {
-            "type": "string",
+            "type": "number",
             "title": "Clean"
           },
           "accrued": {
-            "type": "string",
+            "type": "number",
             "title": "Accrued"
           },
           "dirty": {
-            "type": "string",
+            "type": "number",
             "title": "Dirty"
           }
         },
@@ -872,7 +863,7 @@
             "title": "Security Id"
           },
           "face": {
-            "type": "string",
+            "type": "number",
             "title": "Face"
           },
           "settle": {
@@ -881,7 +872,7 @@
             "title": "Settle"
           },
           "accrued": {
-            "type": "string",
+            "type": "number",
             "title": "Accrued"
           },
           "recorded_at": {
@@ -910,12 +901,9 @@
             "title": "Security Id"
           },
           "face": {
-            "title": "Face",
-            "type": "string",
-            "pattern": "^-?(?:0|[1-9][0-9]{0,15})(?:\\.[0-9]{1,2}0*)?$",
-            "x-basis-decimal": {
-              "exclusiveMinimum": "0"
-            }
+            "type": "number",
+            "exclusiveMinimum": 0.0,
+            "title": "Face"
           },
           "settle": {
             "type": "string",
@@ -1019,15 +1007,15 @@
             "title": "Settle"
           },
           "clean": {
-            "type": "string",
+            "type": "number",
             "title": "Clean"
           },
           "dirty": {
-            "type": "string",
+            "type": "number",
             "title": "Dirty"
           },
           "annual_yield": {
-            "type": "string",
+            "type": "number",
             "title": "Annual Yield"
           }
         },

@@ -11,7 +11,6 @@ import textwrap
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from decimal import Decimal
 from http import HTTPStatus
 from pathlib import Path
 from types import ModuleType
@@ -31,12 +30,11 @@ import logging
 import os
 import threading
 import time
-from decimal import Decimal
 from pathlib import Path
 
 from basis import api
 
-type Amount = Decimal
+type Amount = float
 
 
 def spin(seconds: float) -> int:
@@ -167,11 +165,11 @@ def _nested() -> Callable[[float], int]:
     return spin
 
 
-async def _async_solve(dirty: Decimal) -> Decimal:
+async def _async_solve(dirty: float) -> float:
     return dirty
 
 
-def solve_here(dirty: Decimal) -> Decimal:
+def solve_here(dirty: float) -> float:
     return dirty
 
 
@@ -193,21 +191,21 @@ def test_a_compute_function_is_a_plain_def_in_a_compute_module(declare: Callable
 SOLVE = api.compute(example.yield_to_maturity)
 
 
-async def _wrong_annotation(solve: Annotated[api.Compute[[Decimal], Decimal], api.given(SOLVE)]) -> dict[str, str]:
+async def _wrong_annotation(solve: Annotated[api.Compute[[float], float], api.given(SOLVE)]) -> dict[str, str]:
     del solve
     return {}
 
 
-def _sync(solve: Annotated[api.Compute[[Decimal, Decimal, int, int, Decimal], Decimal], api.given(SOLVE)]) -> dict[str, str]:
+def _sync(solve: Annotated[api.Compute[[float, float, int, int, float], float], api.given(SOLVE)]) -> dict[str, str]:
     del solve
     return {}
 
 
-async def _solves(solve: Annotated[api.Compute[[Decimal, Decimal, int, int, Decimal], Decimal], api.given(SOLVE)]) -> Decimal:
-    return await solve(Decimal(100), Decimal("2.25"), 2, 16, Decimal(1))
+async def _solves(solve: Annotated[api.Compute[[float, float, int, int, float], float], api.given(SOLVE)]) -> float:
+    return await solve(100.0, 2.25, 2, 16, 1.0)
 
 
-async def _in_a_dependency(solved: Annotated[Decimal, Depends(_solves)]) -> dict[str, str]:
+async def _in_a_dependency(solved: Annotated[float, Depends(_solves)]) -> dict[str, str]:
     del solved
     return {}
 
@@ -215,7 +213,7 @@ async def _in_a_dependency(solved: Annotated[Decimal, Depends(_solves)]) -> dict
 @pytest.mark.parametrize(
     ("handler", "message"),
     [
-        (_wrong_annotation, r"annotate it Annotated\[api.Compute\[\[Decimal, Decimal, int, int, Decimal\], Decimal\], api.given\(...\)\]"),
+        (_wrong_annotation, r"annotate it Annotated\[api.Compute\[\[float, float, int, int, float\], float\], api.given\(...\)\]"),
         (_sync, "whose calls are awaited: declare it `async def _sync`"),
         (_in_a_dependency, "_in_a_dependency's dependency _solves -> solve asks for yield_to_maturity"),
     ],
@@ -287,7 +285,7 @@ def test_a_call_past_its_routes_deadline_is_a_504_and_shutdown_kills_it(workload
 
 def test_a_request_id_reaches_what_its_compute_function_logs(workloads: ModuleType, capfd: pytest.CaptureFixture[str]) -> None:
     with TestClient(_pooled(workloads).asgi) as client:
-        response = client.get("/tell", params={"value": "7"})
+        response = client.get("/tell", params={"value": 7})
     assert response.json() == {"value": 7}
     told = [record for line in capfd.readouterr().err.splitlines() if line.startswith("{") and (record := json.loads(line)).get("message") == "computing 7"]
     assert [record["request_id"] for record in told] == [response.headers["x-request-id"]]
@@ -308,8 +306,8 @@ def test_a_pool_whose_idle_process_died_starts_again_for_the_next_call(workloads
 def test_a_compute_function_is_asked_for_by_the_types_its_aliases_name(workloads: ModuleType) -> None:
     scale = _declared(workloads, "scale")
 
-    async def doubled(run: Annotated[api.Compute[[Decimal], Decimal], api.given(scale)]) -> dict[str, str]:
-        return {"amount": str(await run(Decimal(1)))}
+    async def doubled(run: Annotated[api.Compute[[float], float], api.given(scale)]) -> dict[str, str]:
+        return {"amount": str(await run(1.0))}
 
     assert api.get("/double", doubled, deadline_s=1, response=dict[str, str], errors=[]).asks[0].given == scale
 
@@ -322,16 +320,16 @@ def test_a_process_that_dies_fails_its_call_and_the_next_call_starts_new_ones(wo
 
 def test_the_examples_solver_finds_the_coupon_rate_at_par() -> None:
     """Sixteen semiannual coupons of 2.25 per 100, the next a whole period away, priced at 100: the yield is 4.5%."""
-    assert example.yield_to_maturity(Decimal(100), Decimal("2.25"), 2, 16, Decimal(1)) == Decimal("0.0450000000")
+    assert example.yield_to_maturity(100.0, 2.25, 2, 16, 1.0) == pytest.approx(0.045, abs=1e-9)
 
 
-@pytest.mark.parametrize(("annual", "first"), [(Decimal("0.04"), Decimal(1)), (Decimal("0.07"), Decimal("0.25"))], ids=["at-a-premium", "at-a-discount-mid-period"])
-def test_the_examples_solver_inverts_its_price(annual: Decimal, first: Decimal) -> None:
-    dirty = example.price(annual, Decimal("2.25"), 2, 16, first)
-    assert example.yield_to_maturity(dirty, Decimal("2.25"), 2, 16, first) == annual.quantize(example.PLACES)
+@pytest.mark.parametrize(("annual", "first"), [(0.04, 1.0), (0.07, 0.25)], ids=["at-a-premium", "at-a-discount-mid-period"])
+def test_the_examples_solver_inverts_its_price(annual: float, first: float) -> None:
+    dirty = example.price(annual, 2.25, 2, 16, first)
+    assert example.yield_to_maturity(dirty, 2.25, 2, 16, first) == pytest.approx(annual, abs=1e-9)
 
 
-@pytest.mark.parametrize(("dirty", "periods", "message"), [(Decimal(0), 16, "no yield from"), (Decimal(100), 0, "has no yield")], ids=["no-yield-prices-it", "no-coupons-left"])
-def test_the_examples_solver_refuses_what_no_yield_solves(dirty: Decimal, periods: int, message: str) -> None:
+@pytest.mark.parametrize(("dirty", "periods", "message"), [(0.0, 16, "no yield from"), (100.0, 0, "has no yield")], ids=["no-yield-prices-it", "no-coupons-left"])
+def test_the_examples_solver_refuses_what_no_yield_solves(dirty: float, periods: int, message: str) -> None:
     with pytest.raises(ValueError, match=message):
-        example.yield_to_maturity(dirty, Decimal("2.25"), 2, periods, Decimal(1))
+        example.yield_to_maturity(dirty, 2.25, 2, periods, 1.0)

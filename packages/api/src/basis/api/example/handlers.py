@@ -4,7 +4,6 @@ methods itself, so the SQL stays in `repository.py`; it awaits a compute functio
 
 import logging
 from datetime import date
-from decimal import Decimal
 from typing import Annotated
 
 from basis import api
@@ -27,8 +26,8 @@ class Period(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    face: Annotated[Decimal, Field(gt=0)]
-    rate: Annotated[Decimal, Field(ge=0, lt=1)]
+    face: Annotated[float, Field(gt=0)]
+    rate: Annotated[float, Field(ge=0, lt=1)]
     """The annual coupon rate, as a fraction: 0.045 for 4.5%."""
     start: date
     end: date
@@ -40,7 +39,7 @@ class Holding(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    face: Annotated[Decimal, Field(gt=0)]
+    face: Annotated[float, Field(gt=0)]
     settle: date
 
 
@@ -48,7 +47,7 @@ class SettlementRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     security_id: Annotated[str, Field(pattern=r"^[A-Z0-9]{12}$")]
-    face: Annotated[Decimal, Field(gt=0, max_digits=18, decimal_places=2)]
+    face: Annotated[float, Field(gt=0)]
     settle: date
 
 
@@ -92,7 +91,7 @@ async def bond_yield(  # noqa: PLR0913, PLR0917 -- what the route reads and reac
     warehouse: Annotated[api.Reader, api.given(WAREHOUSE)],
     terms: Annotated[api.Cache[Bond], api.given(TERMS)],
     pricing: Annotated[api.Client, api.given(PRICING)],
-    solve: Annotated[api.Compute[[Decimal, Decimal, int, int, Decimal], Decimal], api.given(SOLVE)],
+    solve: Annotated[api.Compute[[float, float, int, int, float], float], api.given(SOLVE)],
 ) -> Yield:
     """The bond's yield to maturity at the pricing service's clean price, settling on `settle`."""
     found = await repository.cached_bond(warehouse, terms, security)
