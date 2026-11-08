@@ -3,12 +3,12 @@ trades, and each account's latest activity. A run is for an interval of trade da
 positions and leaves every other day's alone.
 
 This file is the job: its params, what it reads, what it writes and how, and the transform between them. The
-transform and the check are pure: they see frames, never a database, so a run replays from its snapshot."""
+transform and the check are pure: they see pandas frames, never a database, so a run replays from its snapshot. Every
+number is a float, numpy's, and a datetime keeps its zone."""
 
 from datetime import date
 
 import basis.job as etl
-import polars as pl
 
 from basis.job.example.rows import Account, AccountActivity, DailyPosition, Trade
 
@@ -29,22 +29,23 @@ class Outputs(etl.Outputs):
 
 
 def transform(inputs: Inputs, params: Params) -> Outputs:
-    trades = inputs.trades.join(inputs.accounts.select("account_id", "closed"), on="account_id", how="inner", validate="m:1")
+    trades = inputs.trades.merge(inputs.accounts[["account_id", "closed"]], on="account_id", how="inner", validate="m:1")
     if not params.include_closed_accounts:
-        trades = trades.filter(~pl.col("closed"))
-    signed = pl.when(pl.col("side") == "BUY").then(pl.col("quantity")).otherwise(-pl.col("quantity"))
-    positions = trades.group_by("trade_date", "account_id", "security_id").agg(net_quantity=signed.sum(), gross_notional=(pl.col("quantity") * pl.col("price")).sum().round(2), trades=pl.len())
-    activity = trades.group_by("account_id").agg(last_trade_date=pl.col("trade_date").max(), last_booked_at=pl.col("booked_at").max())
-    return Outputs(positions=positions.sort("trade_date", "account_id", "security_id"), activity=activity.sort("account_id"))
+        trades = trades[~trades["closed"]]
+    trades = trades.assign(signed=trades["quantity"].where(trades["side"] == "BUY", -trades["quantity"]), notional=trades["quantity"] * trades["price"])
+    positions = trades.groupby(["trade_date", "account_id", "security_id"], as_index=False).agg(net_quantity=("signed", "sum"), gross_notional=("notional", "sum"), trades=("trade_id", "size"))
+    positions["gross_notional"] = positions["gross_notional"].round(2)
+    activity = trades.groupby("account_id", as_index=False).agg(last_trade_date=("trade_date", "max"), last_booked_at=("booked_at", "max"))
+    return Outputs(positions=positions.sort_values(["trade_date", "account_id", "security_id"], ignore_index=True), activity=activity.sort_values("account_id", ignore_index=True))
 
 
 def check(inputs: Inputs, outputs: Outputs, params: Params) -> list[str]:
     """Reasons not to write, beyond the framework's own checks."""
     reasons: list[str] = []
-    if unknown := inputs.trades.join(inputs.accounts, on="account_id", how="anti").height:
+    if unknown := int((~inputs.trades["account_id"].isin(inputs.accounts["account_id"])).sum()):
         reasons.append(f"{unknown} trades are in accounts the accounts table does not list")
-    if (sides := set(inputs.trades.get_column("side").unique())) - {"BUY", "SELL"}:
-        reasons.append(f"trades have sides other than BUY and SELL: {sorted(sides - {'BUY', 'SELL'})}")
-    if inputs.interval is not None and (late := outputs.positions.filter(pl.col("trade_date") >= inputs.interval.end.date()).height):
+    if sides := set(inputs.trades["side"]) - {"BUY", "SELL"}:
+        reasons.append(f"trades have sides other than BUY and SELL: {sorted(sides)}")
+    if inputs.interval is not None and (late := int((outputs.positions["trade_date"] >= inputs.interval.end.date()).sum())):
         reasons.append(f"{late} positions are for trade dates after {date.isoformat(inputs.interval.end.date())}")
     return reasons

@@ -1,14 +1,17 @@
+import json
+import os
+import subprocess
+import sys
 from datetime import UTC, datetime
-from decimal import Decimal
 from pathlib import Path
 
-import polars as pl
+import pandas as pd
 from builders import DAY, Price, make_job, params_file, prices
 
 import basis.job as etl
-from basis.core import snapshots
+from basis.core import frames, snapshots
 from basis.core.settings import GivenSettings
-from basis.core.storage import Root
+from basis.core.storage import Root, digest
 from basis.job import runs
 from basis.job.job import Job
 
@@ -17,10 +20,10 @@ def clock() -> datetime:
     return datetime(2026, 11, 6, 6, 0, tzinfo=UTC)
 
 
-def run_on_files(tmp_path: Path, job: Job, frame: pl.DataFrame, *, params: str = "{}", publish: bool = False) -> runs.Result:
+def run_on_files(tmp_path: Path, job: Job, frame: pd.DataFrame, *, params: str = "{}", publish: bool = False) -> runs.Result:
     folder = tmp_path / "data"
     folder.mkdir(exist_ok=True)
-    frame.write_parquet(folder / "prices.parquet")
+    frame.to_parquet(folder / "prices.parquet", index=False)
     request = runs.Request(params_file(tmp_path, params), DAY, folder, {"purpose": "test"}, publish=publish)
     return runs.run(job, GivenSettings(), request, snapshot_root=Root.at(tmp_path / "snapshots"), clock=clock)
 
@@ -39,7 +42,7 @@ def test_a_run_on_files_checks_its_changes_and_saves_a_snapshot_that_holds_them(
     assert saved.insert.equals(prices({}, {"security_id": "S2"}))
     assert saved.delete is not None
     assert saved.delete.within == etl.Range("day", DAY.start, DAY.end)
-    assert result.snapshot.inputs()["prices"].equals(prices({}, {"security_id": "S2"}))
+    assert result.snapshot.inputs()["prices"].equals(frames.to_arrow(prices({}, {"security_id": "S2"})))
 
 
 def test_a_transform_that_raises_names_the_line_of_job_code(tmp_path: Path) -> None:
@@ -58,7 +61,7 @@ def test_the_jobs_own_check_stops_the_run_and_the_snapshot_keeps_its_inputs(tmp_
     result = run_on_files(tmp_path, make_job(write=etl.Append(), check=check), prices({}))
     assert result.record.reasons == ["check: prices look stale"]
     assert result.snapshot is not None
-    assert result.snapshot.inputs()["prices"].height == 1
+    assert len(result.snapshot.inputs()["prices"]) == 1
 
 
 def test_a_run_that_publishes_to_an_unconfigured_database_fails_before_loading(tmp_path: Path) -> None:
@@ -78,7 +81,7 @@ def test_a_replay_with_other_params_reports_what_they_change(tmp_path: Path) -> 
     upsert = replayed.changes("prices")
     assert upsert is not None
     assert upsert.upsert is not None
-    assert upsert.upsert.get_column("price").to_list() == [Decimal(200)]
+    assert upsert.upsert["price"].tolist() == [200.0]
 
 
 def test_regress_replays_only_published_runs_and_lists_what_changed(tmp_path: Path) -> None:
@@ -101,11 +104,11 @@ def test_a_run_that_loads_the_same_input_twice_stores_it_once_as_does_a_second_r
         prices = etl.Table(Price, database="warehouse", table="prices", write=etl.Upsert(), key=("day", "security_id"))
 
     def transform(inputs: Inputs, _params: etl.Params) -> Outputs:
-        return Outputs(prices=inputs.prices.with_columns(pl.col("price") * 2))
+        return Outputs(prices=inputs.prices.assign(price=inputs.prices["price"] * 2))
 
     job = Job("prices", "tests.prices", etl.Params, Inputs, Outputs, transform, None, Path(__file__).parent)
     (tmp_path / "data").mkdir()
-    prices({}, {"security_id": "S2"}).write_parquet(tmp_path / "data" / "again.parquet")
+    prices({}, {"security_id": "S2"}).to_parquet(tmp_path / "data" / "again.parquet", index=False)
     first = run_on_files(tmp_path, job, prices({}, {"security_id": "S2"}))
     assert first.snapshot is not None
     saved = first.snapshot.manifest.datasets
@@ -115,6 +118,65 @@ def test_a_run_that_loads_the_same_input_twice_stores_it_once_as_does_a_second_r
     assert second.snapshot is not None
     assert second.snapshot.manifest.datasets == saved
     assert objects(tmp_path) == set(saved.values())
+
+
+def test_the_same_rows_are_the_same_objects_in_runs_of_two_processes(tmp_path: Path) -> None:
+    script = (
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        "from basis.job import job\n"
+        "from basis.job.example import job as example\n"
+        "from basis.job.testing import check_fixture\n"
+        "found = job.read(example)\n"
+        "result = check_fixture(found, found.directory / 'tests/fixture', found.directory / 'params/default.json', Path(sys.argv[1]))\n"
+        "print(json.dumps(result.snapshot.manifest.datasets if result.snapshot is not None else None))\n"
+    )
+
+    def datasets(seed: str) -> dict[str, str]:
+        ran = subprocess.run([sys.executable, "-c", script, str(tmp_path / seed)], capture_output=True, text=True, env=os.environ | {"PYTHONHASHSEED": seed}, check=True)
+        found = json.loads(ran.stdout.splitlines()[-1])
+        assert isinstance(found, dict)
+        return {str(key): str(value) for key, value in found.items()}
+
+    first = datasets("1")
+    assert sorted(first) == ["inputs/accounts", "inputs/trades", "outputs/activity/upsert", "outputs/positions/insert"]
+    assert datasets("2") == first
+
+
+def test_a_transform_that_changes_its_inputs_in_place_changes_neither_what_the_check_sees_nor_the_snapshot(tmp_path: Path) -> None:
+    class Inputs(etl.Inputs):
+        prices = etl.File(Price, path="prices.parquet", empty="fail")
+
+    class Outputs(etl.Outputs):
+        prices = etl.Table(Price, database="warehouse", table="prices", write=etl.Upsert(), key=("day", "security_id"))
+
+    def transform(inputs: Inputs, _params: etl.Params) -> Outputs:
+        changed = inputs.prices
+        changed["price"] = changed["price"] * 2
+        changed.loc[changed.index[0], "note"] = "changed"
+        del changed["booked_at"]
+        changed["extra"] = 1
+        return Outputs(prices=changed[["day", "security_id", "price"]].assign(note=None, booked_at=None))
+
+    seen: list[pd.DataFrame] = []
+
+    def check(inputs: Inputs, _outputs: Outputs, _params: etl.Params) -> list[str]:
+        seen.append(inputs.prices)
+        return []
+
+    job = Job("prices", "tests.prices", etl.Params, Inputs, Outputs, transform, check, Path(__file__).parent)
+    given = prices({}, {"security_id": "S2"})
+    first = run_on_files(tmp_path, job, given)
+    assert first.ok, first.record
+    assert first.snapshot is not None
+    [checked] = seen
+    assert checked.equals(given)
+    assert first.inputs["prices"].equals(given)
+    assert first.snapshot.manifest.datasets["inputs/prices"] == digest(frames.to_arrow(given))
+    replayed, differences = runs.replay(job, first.snapshot, snapshot_root=Root.at(tmp_path / "snapshots"))
+    assert replayed.snapshot is not None
+    assert (replayed.snapshot.manifest.datasets, differences) == (first.snapshot.manifest.datasets, [])
+    assert seen[1].equals(given)
 
 
 def test_a_replay_saved_beside_its_run_stores_only_the_outputs_that_changed(tmp_path: Path) -> None:

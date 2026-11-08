@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Annotated, Any, Never
 from uuid import UUID
 
-import polars as pl
 import pyarrow as pa
 import pytest
 from builders import DAY, Price, params_file
@@ -56,7 +55,7 @@ def logged() -> Iterator[Records]:
 class Stamped(etl.Row):
     day: date
     security_id: Annotated[str, etl.MaxLength(8)]
-    price: Annotated[Decimal, etl.Precision(18, 4)]
+    price: float
     venue: Annotated[str, etl.MaxLength(8)]
     stamped_at: Annotated[datetime, etl.Zone("UTC")]
     price_id: Annotated[str, etl.MaxLength(36)]
@@ -81,10 +80,10 @@ def stamping(sql: Path, *, more_ids: int = 0) -> Job:
         stamped = etl.Table(Stamped, database="warehouse", table="stamped", write=etl.Append())
 
     def transform(inputs: Inputs, _params: etl.Params) -> Outputs:
-        joined = inputs.prices.join(inputs.venues, on="security_id", how="inner", validate="1:1").sort("security_id")
-        made = inputs.ids.new(joined.height)
+        joined = inputs.prices.merge(inputs.venues, on="security_id", how="inner", validate="1:1").sort_values("security_id", ignore_index=True)
+        made = inputs.ids.new(len(joined))
         inputs.ids.new(more_ids)
-        stamped = joined.select("day", "security_id", "price", "venue").with_columns(stamped_at=pl.lit(inputs.clock.now()), price_id=pl.Series([str(made_id) for made_id in made]))
+        stamped = joined[["day", "security_id", "price", "venue"]].assign(stamped_at=inputs.clock.now(), price_id=[str(made_id) for made_id in made])
         return Outputs(stamped=stamped)
 
     return Job("stamping", "tests.stamping", etl.Params, Inputs, Outputs, transform, None, Path(__file__).parent)
@@ -200,8 +199,8 @@ def test_a_run_keeps_its_clocks_times_and_its_ids_and_a_replay_is_given_them_aga
     assert stamped is not None
     assert stamped.insert is not None
     kept = result.snapshot.record()
-    assert kept.clocks == {"clock": stamped.insert.get_column("stamped_at").unique().to_list()}
-    assert kept.ids == {"ids": [UUID(found) for found in stamped.insert.get_column("price_id").to_list()]}
+    assert kept.clocks == {"clock": stamped.insert["stamped_at"].unique().tolist()}
+    assert kept.ids == {"ids": [UUID(found) for found in stamped.insert["price_id"].tolist()]}
     replaying, spans = traced()
     replayed, differences = runs.replay(stamping(sql), result.snapshot, provider=replaying)
     assert (replayed.record.status, differences, replayed.record.clocks, replayed.record.ids) == ("checked", [], kept.clocks, kept.ids)

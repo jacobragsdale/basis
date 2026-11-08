@@ -138,7 +138,7 @@ class Outputs(etl.Outputs):
 
 
 def transform(inputs: Inputs, params: Params) -> Outputs:
-    new = inputs.prices.join(inputs.current, on="security_id", how="anti")
+    new = inputs.prices[~inputs.prices["security_id"].isin(inputs.current["security_id"])]
     return Outputs(prices=etl.Changes(insert_new=new))
 ```
 

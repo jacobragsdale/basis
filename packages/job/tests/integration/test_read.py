@@ -73,10 +73,10 @@ def test_a_query_reads_the_intervals_rows_as_the_row_declares_them(source: Scrat
     )
     result = load(source, tmp_path)
     assert result.record.status == "checked", result.record
-    frame = result.inputs["prices"].sort("security_id")
-    expected = prices({"security_id": "S1", "price": Decimal("100.1234"), "note": "é note", "booked_at": datetime(2026, 11, 5, 9, 30)}, {"security_id": "S2", "price": Decimal("0.5")})
+    frame = result.inputs["prices"].sort_values("security_id", ignore_index=True)
+    expected = prices({"security_id": "S1", "price": 100.1234, "note": "é note", "booked_at": datetime(2026, 11, 5, 9, 30)}, {"security_id": "S2", "price": 0.5})
     assert frame.equals(expected)
-    assert frame.get_column("booked_at").to_list()[0] == datetime(2026, 11, 5, 14, 30, tzinfo=UTC)
+    assert frame["booked_at"].tolist()[0] == datetime(2026, 11, 5, 14, 30, tzinfo=UTC)
 
 
 def test_a_query_that_returns_more_than_its_cap_fails_the_run(source: Scratch, tmp_path: Path) -> None:
@@ -118,7 +118,7 @@ def test_the_example_job_publishes_to_sql_server_and_reruns_to_the_same_tables(t
             result = runs.run(job, settings, request, snapshot_root=Root.at(tmp_path))
             assert result.record.status == "published", result.record
             assert scratch.rows("SELECT COUNT(*) FROM daily_positions") == [(3,)]
-        assert scratch.rows("SELECT net_quantity, gross_notional, trades FROM daily_positions WHERE account_id = 'A1' AND security_id = 'XS0001'") == [(Decimal("60.0000"), Decimal("14185.00"), 2)]
+        assert scratch.rows("SELECT net_quantity, gross_notional, trades FROM daily_positions WHERE account_id = 'A1' AND security_id = 'XS0001'") == [(60.0, 14185.0, 2.0)]
         assert scratch.rows("SELECT account_id, last_booked_at FROM account_activity ORDER BY account_id") == [("A1", datetime(2026, 11, 5, 19, 2)), ("A2", datetime(2026, 11, 5, 16, 45))]
     finally:
         scratch.drop(*names, scratch.ledger())

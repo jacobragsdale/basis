@@ -4,11 +4,9 @@ loads, and a run that committed to one database and failed on another resumes fr
 
 import dataclasses
 from datetime import UTC, date, datetime
-from decimal import Decimal
 from pathlib import Path
 from typing import Annotated
 
-import polars as pl
 import pytest
 from builders import Price, prices
 from integration.scratch import Scratch, run
@@ -53,7 +51,7 @@ def contents(scratch: Scratch, table: str) -> list[tuple[object, ...]]:
     return sorted(scratch.rows(f"SELECT day, security_id, price, note FROM {table}"), key=str)
 
 
-TODAY = prices({"security_id": "S1"}, {"security_id": "S2", "price": Decimal("101.25"), "note": "é"})
+TODAY = prices({"security_id": "S1"}, {"security_id": "S2", "price": 101.25, "note": "é"})
 
 
 @pytest.mark.parametrize("write", [etl.ReplaceWhere(interval="day"), etl.ReplaceWhere(matching=("security_id",)), etl.Replace(), etl.Upsert(), etl.InsertNew()], ids=lambda write: type(write).__name__)
@@ -123,12 +121,12 @@ def test_a_failure_anywhere_in_a_databases_transaction_writes_nothing_there(scra
 def test_a_table_that_has_drifted_from_its_row_stops_the_run_before_it_loads(scratch: Scratch, tmp_path: Path) -> None:
     table = f"prices_{scratch.suffix}"
     timestamp = "DATETIME2" if scratch.dialect == "mssql" else "TIMESTAMP"
-    scratch.execute(f"CREATE TABLE {table} (day DATE NOT NULL, security_id VARCHAR(8) NOT NULL, price DECIMAL(18,2) NOT NULL, booked_at {timestamp})")
+    scratch.execute(f"CREATE TABLE {table} (day DATE NOT NULL, security_id VARCHAR(8) NOT NULL, price VARCHAR(20) NOT NULL, booked_at {timestamp})")
     result = run(price_job(table, etl.Upsert()), {"warehouse": scratch}, TODAY, tmp_path)
     assert result.record.status == "failed"
     assert result.record.inputs == {}
-    decimal = "DECIMAL" if scratch.dialect == "mssql" else "NUMBER"
-    assert sorted(result.record.reasons) == [f"prices: note: {table} has no such column", f"prices: price: {decimal}(18,2) keeps fewer decimal places than the row's 4"]
+    text = "VARCHAR" if scratch.dialect == "mssql" else "VARCHAR2"
+    assert sorted(result.record.reasons) == [f"prices: note: {table} has no such column", f"prices: price: a {text} column cannot hold a row's float values exactly"]
 
 
 def test_a_value_that_does_not_fit_its_column_is_refused_before_any_write(scratch: Scratch, tmp_path: Path) -> None:
@@ -149,7 +147,7 @@ def test_a_datetime_is_stored_naive_in_its_columns_zone(scratch: Scratch, tmp_pa
     create(scratch, table)
     run(price_job(table, etl.Upsert()), {"warehouse": scratch}, prices({"booked_at": datetime(2026, 11, 5, 9, 30)}), tmp_path)
     assert scratch.rows(f"SELECT booked_at FROM {table}") == [(datetime(2026, 11, 5, 9, 30),)]
-    assert prices({"booked_at": datetime(2026, 11, 5, 9, 30)}).get_column("booked_at").to_list() == [datetime(2026, 11, 5, 14, 30, tzinfo=UTC)]
+    assert prices({"booked_at": datetime(2026, 11, 5, 9, 30)})["booked_at"].tolist() == [datetime(2026, 11, 5, 14, 30, tzinfo=UTC)]
 
 
 def two_databases(table: str) -> Job:
@@ -199,7 +197,7 @@ def test_the_ledger_records_each_publish_with_what_the_database_counted(scratch:
 
 
 def test_frames_shared_by_both_dialects_round_trip_exactly() -> None:
-    assert pl.DataFrame(TODAY).equals(TODAY)
+    assert TODAY.copy().equals(TODAY)
 
 
 def test_a_run_told_again_that_committed_to_one_database_resumes_again_on_the_other(

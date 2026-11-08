@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated
 
-import polars as pl
+import pandas as pd
 from pydantic import ConfigDict, Field, ValidationError
 
 from basis.core import invalid
@@ -339,7 +339,7 @@ class _GuardedWriter:
     database: str
     tables: frozenset[str]
 
-    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pl.DataFrame:
+    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pd.DataFrame:
         return self.writer.fetch(sql, interval, what=what)
 
     def describe(self, table: str) -> TableSpec | None:

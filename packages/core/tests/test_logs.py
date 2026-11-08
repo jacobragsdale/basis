@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import override
 
-import polars as pl
+import pandas as pd
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
 
@@ -131,16 +131,16 @@ class _Other:
 @pytest.mark.parametrize(
     ("value", "logged"),
     [
-        (pl.DataFrame({"price": [1.5, 2.0]}), {"rows": 2, "columns": ["price"]}),
-        (pl.Series([1, 2]), [1, 2]),
+        (pd.DataFrame({"price": pd.Series([1.5, 2.0], dtype="double[pyarrow]")}), {"rows": 2, "columns": ["price"]}),
+        (pd.Series([1.5, 2.0], index=["A", "B"], dtype="double[pyarrow]"), {"A": 1.5, "B": 2.0}),
         (_Frame(), {"rows": 3, "columns": ["price", "2026"]}),
         (_Series(), {"A": 1.5, "B": 2.0}),
         (_Scalar(), [1, 2]),
         (_Other(), "other"),
     ],
-    ids=["polars-frame", "polars-series", "a-pandas-frame", "a-pandas-series", "a-numpy-value", "anything-else"],
+    ids=["a-pandas-frame", "a-pandas-series", "a-frames-shape", "a-series-shape", "a-numpy-value", "anything-else"],
 )
-def test_a_value_json_has_no_type_for_logs_by_its_shape_since_basis_core_imports_no_pandas_or_numpy(value: object, logged: object) -> None:
+def test_a_value_json_has_no_type_for_logs_by_its_shape_since_logging_loads_no_pandas_or_numpy(value: object, logged: object) -> None:
     assert json.loads(logs.to_json({"value": value})) == {"value": logged}
 
 

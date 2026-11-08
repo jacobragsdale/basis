@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Never
 
 import httpx2
-import polars as pl
+import pandas as pd
 from opentelemetry.trace import Tracer
 
 from basis.core.databases import Database
@@ -48,10 +48,10 @@ system's waits, or the fake's, which take no time."""
 
 def load(  # noqa: PLR0913 -- what the run reads, and how it reaches it, by keyword
     datasets: Mapping[str, Dataset], interval: Interval | None, *, open_database: Callable[[str], Database], reach: Reach, tracer: Tracer, data: Path | None
-) -> tuple[dict[str, pl.DataFrame], dict[str, InputRecord]]:
+) -> tuple[dict[str, pd.DataFrame], dict[str, InputRecord]]:
     """Every dataset's frame and where it came from, by name."""
     files = {name: found for name in datasets if data is not None and (found := _data_file(data, name)) is not None}
-    frames: dict[str, pl.DataFrame] = {}
+    frames: dict[str, pd.DataFrame] = {}
     records: dict[str, InputRecord] = {}
     for name, path in files.items():
         frames[name], records[name] = _read_file(datasets[name], str(path), source=f"data: {path}")
@@ -78,7 +78,7 @@ def load(  # noqa: PLR0913 -- what the run reads, and how it reaches it, by keyw
         loaded = future.result()
         frames |= {name: frame for name, (frame, _) in loaded.items()}
         records |= {name: record for name, (_, record) in loaded.items()}
-    if empty := sorted(name for name, frame in frames.items() if not frame.height and datasets[name].empty == "fail"):
+    if empty := sorted(name for name, frame in frames.items() if not len(frame) and datasets[name].empty == "fail"):
         msg = f"{', '.join(empty)} returned no rows, which their datasets do not allow (empty='fail'): has the data landed?"
         raise EmptyInputError(msg)
     return {name: frames[name] for name in datasets}, {name: records[name] for name in datasets}
@@ -91,8 +91,8 @@ def _copied[**A, T](work: Callable[A, T], *args: A.args, **kwargs: A.kwargs) -> 
     return lambda: context.run(work, *args, **kwargs)
 
 
-def _read_database(database: Database, queries: Mapping[str, Query], interval: Interval | None) -> dict[str, tuple[pl.DataFrame, InputRecord]]:
-    loaded: dict[str, tuple[pl.DataFrame, InputRecord]] = {}
+def _read_database(database: Database, queries: Mapping[str, Query], interval: Interval | None) -> dict[str, tuple[pd.DataFrame, InputRecord]]:
+    loaded: dict[str, tuple[pd.DataFrame, InputRecord]] = {}
     with database.reading() as reader:
         for name, query in queries.items():
             start = time.perf_counter()
@@ -102,13 +102,13 @@ def _read_database(database: Database, queries: Mapping[str, Query], interval: I
             except Exception as error:
                 error.add_note(f"while loading {what} from database {database.name}")
                 raise
-            record = InputRecord(source=query.describe(), rows=frame.height, read_ms=ms_since(start))
+            record = InputRecord(source=query.describe(), rows=len(frame), read_ms=ms_since(start))
             log.info("loaded", extra={"dataset": name, "source": record.source, "rows": record.rows, "ms": record.read_ms})
             loaded[name] = (frame, record)
     return loaded
 
 
-async def _fetch_all(fetches: Mapping[str, Fetch], interval: Interval | None, reach: Reach, tracer: Tracer) -> dict[str, tuple[pl.DataFrame, InputRecord]]:
+async def _fetch_all(fetches: Mapping[str, Fetch], interval: Interval | None, reach: Reach, tracer: Tracer) -> dict[str, tuple[pd.DataFrame, InputRecord]]:
     """Each fetch's GET, at once, on one client for each service."""
     clients: dict[str, tuple[httpx2.AsyncClient, Waits]] = {}
     try:
@@ -127,7 +127,7 @@ async def _fetch_all(fetches: Mapping[str, Fetch], interval: Interval | None, re
     return {name: task.result() for name, task in tasks.items()}
 
 
-async def _fetch(name: str, fetch: Fetch, interval: Interval | None, client: HttpClient) -> tuple[pl.DataFrame, InputRecord]:
+async def _fetch(name: str, fetch: Fetch, interval: Interval | None, client: HttpClient) -> tuple[pd.DataFrame, InputRecord]:
     """The fetch's rows, or the kind of `ServiceError` its GET failed with, as basis-core's client makes it, or
     `BadReply` for a reply that is not rows of the fetch's row, which `json_rows` says why of."""
     start = time.perf_counter()
@@ -143,12 +143,12 @@ async def _fetch(name: str, fetch: Fetch, interval: Interval | None, client: Htt
     except Exception as error:
         error.add_note(f"while loading {what}")
         raise
-    record = InputRecord(source=fetch.describe(), rows=frame.height, read_ms=ms_since(start))
+    record = InputRecord(source=fetch.describe(), rows=len(frame), read_ms=ms_since(start))
     log.info("loaded", extra={"dataset": name, "source": record.source, "rows": record.rows, "ms": record.read_ms})
     return frame, record
 
 
-def json_rows(content: bytes, row: type[Row], *, what: str) -> pl.DataFrame:
+def json_rows(content: bytes, row: type[Row], *, what: str) -> pd.DataFrame:
     """A JSON list of objects as `row`'s frame: each value as its text, as a CSV's arrives, so that a number keeps the
     digits it was sent with, and `conform` converts each value as it converts a CSV's. A field the row has no column
     for, a value that is an object or a list, and `NaN` or `Infinity`, which Python reads and JSON has not, are
@@ -169,8 +169,8 @@ def json_rows(content: bytes, row: type[Row], *, what: str) -> pl.DataFrame:
     if unknown := sorted({key for entry in entries for key in entry} - set(names)):
         msg = f"{what} has fields its row has no column for: {', '.join(unknown)}"
         raise ValueError(msg)
-    columns = {name: [_text(entry.get(name), what=what, name=name) for entry in entries] for name in names}
-    return conform(pl.DataFrame(columns, schema=dict.fromkeys(names, pl.String())), row, what=what, naive="in_zone")
+    columns = {name: pd.Series([_text(entry.get(name), what=what, name=name) for entry in entries], dtype=_TEXT) for name in names}
+    return conform(pd.DataFrame(columns), row, what=what, naive="in_zone")
 
 
 def _text(value: object, *, what: str, name: str) -> str | None:
@@ -184,19 +184,34 @@ def _text(value: object, *, what: str, name: str) -> str | None:
             raise TypeError(msg)
 
 
-def _read_file(dataset: Dataset, location: str, *, source: str) -> tuple[pl.DataFrame, InputRecord]:
+def _read_file(dataset: Dataset, location: str, *, source: str) -> tuple[pd.DataFrame, InputRecord]:
     start = time.perf_counter()
     what = f"dataset {dataset.name} ({location})"
     try:
         root = Root.at(location)
-        raw = pl.read_csv(io.BytesIO(root.read_bytes()), infer_schema=False) if location.endswith(".csv") else root.read_frame()
+        raw = _read_csv(root.read_bytes()) if location.endswith(".csv") else root.read_frame()
         frame = conform(raw, dataset.row, what=what, naive="in_zone")
     except Exception as error:
         error.add_note(f"while loading {what}")
         raise
-    record = InputRecord(source=source, rows=frame.height, read_ms=ms_since(start))
+    record = InputRecord(source=source, rows=len(frame), read_ms=ms_since(start))
     log.info("loaded", extra={"dataset": dataset.name, "source": source, "rows": record.rows, "ms": record.read_ms})
     return frame, record
+
+
+def _read_csv(content: bytes) -> pd.DataFrame:
+    """A CSV's columns as their text, as a fetch's arrive, for `conform` to type by the dataset's row: nothing is
+    inferred, and only an empty field is null, never text such as `NA` or `null`. Every line after the header is a
+    row, a blank one too, which in a CSV of one column is a null; the header is read as written, so a name it repeats
+    is one `conform` refuses, where pandas would rename it `NAME.1`."""
+    read = pd.read_csv(io.BytesIO(content), header=None, dtype=_TEXT, keep_default_na=False, na_values=[""], skip_blank_lines=False)
+    frame = read.iloc[1:].reset_index(drop=True)
+    frame.columns = pd.Index([str(name) for name in read.iloc[0]] if len(read) else [], dtype=object)
+    return frame
+
+
+_TEXT = "string[pyarrow]"
+"""Text, before `conform` types it: pandas' Arrow-backed strings, whose null is pandas' NA."""
 
 
 def _data_file(data: Path, name: str) -> Path | None:

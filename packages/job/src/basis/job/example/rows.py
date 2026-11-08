@@ -2,7 +2,6 @@
 here, then to the SQL that reads it or the transform that writes it."""
 
 from datetime import date, datetime
-from decimal import Decimal
 from typing import Annotated
 
 import basis.job as etl
@@ -14,8 +13,8 @@ class Trade(etl.Row):
     security_id: Annotated[str, etl.MaxLength(12)]
     trade_date: date
     side: Annotated[str, etl.MaxLength(4)]
-    quantity: Annotated[Decimal, etl.Precision(18, 4)]
-    price: Annotated[Decimal, etl.Precision(18, 6)]
+    quantity: float
+    price: float
     booked_at: Annotated[datetime, etl.Zone("America/New_York")]
 
 
@@ -29,9 +28,9 @@ class DailyPosition(etl.Row):
     trade_date: date
     account_id: Annotated[str, etl.MaxLength(20)]
     security_id: Annotated[str, etl.MaxLength(12)]
-    net_quantity: Annotated[Decimal, etl.Precision(18, 4)]
-    gross_notional: Annotated[Decimal, etl.Precision(22, 2)]
-    trades: int
+    net_quantity: float
+    gross_notional: float
+    trades: float
 
 
 class AccountActivity(etl.Row):

@@ -13,7 +13,7 @@ from basis.core.tables import Changes, Delete, Range
 from basis.job.inputs import Clock, Fetch, File, Ids, Inputs, Query
 from basis.job.outputs import Append, InsertNew, Manual, Outputs, Replace, ReplaceWhere, Table, Upsert
 from basis.job.params import Params
-from basis.job.rows import MaxLength, Precision, Row, Zone
+from basis.job.rows import MaxLength, Row, Zone
 from basis.job.version import VERSION
 
 if TYPE_CHECKING:
@@ -35,7 +35,6 @@ __all__ = [
     "MaxLength",
     "Outputs",
     "Params",
-    "Precision",
     "Query",
     "Range",
     "Replace",

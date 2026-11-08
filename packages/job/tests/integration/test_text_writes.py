@@ -7,11 +7,13 @@ which types each column of an `executemany` by its longest value:
 - a value with more UTF-16 units than that longest one, as six emoji beside `hello world`, raised;
 - a value past 4,000 UTF-16 units made the driver write each row by itself and count only the last, so the count
   check refused the publish;
-- a decimal of 38 digits, whose text is longer than 38 characters, raised.
+- a float bound as a float into a `decimal` column kept its binary error, so 123456789.1234565 was 123456789.123456 in
+  a `decimal(38,6)`, where its shortest text, which basis binds, rounds to 123456789.123457.
 
-test_text's batches passed only because their longest values were not ASCII. Every row here also carries a decimal, a
-bigint, a bit, a float and a datetime, which basis binds by their kinds, in a row past 4,000 units too, and every
-publish keeps the frame's order, which a plain insert's identity column shows.
+test_text's batches passed only because their longest values were not ASCII. Every row here also carries a float into
+a `decimal`, an identifier's text and a count's float into an `int`, a bit, a float and a datetime, which basis binds
+by their columns' types, in a row past 4,000 units too, and every publish keeps the frame's order, which a plain
+insert's identity column shows.
 
 A column measures a value in its own units, `nvarchar(n)` in UTF-16 units and `varchar(n)` in its code page's bytes,
 and refuses a character its code page cannot hold, before anything is written, since the server would replace it
@@ -24,11 +26,11 @@ tests alone (docs/spikes/sqlserver-json.md)."""
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Annotated
 
-import polars as pl
+import pandas as pd
 import pytest
 from integration.scratch import Scratch, configured, mssql, oracle
 
@@ -44,17 +46,18 @@ from basis.job.testing import frame
 pytestmark = pytest.mark.integration
 
 COLUMNS = (
-    "seq int IDENTITY(1,1) NOT NULL, id int NOT NULL PRIMARY KEY, day date NOT NULL, code int NOT NULL, amount decimal(38,10) NULL,"
+    "seq int IDENTITY(1,1) NOT NULL, id int NOT NULL PRIMARY KEY, day date NOT NULL, code int NOT NULL, amount decimal(38,6) NULL,"
     " flag bit NULL, ratio float NULL, at datetime2(6) NULL, unicode nvarchar(max) NULL,"
     " utf8 varchar(max) COLLATE Latin1_General_100_CI_AS_SC_UTF8 NULL, latin varchar(max) COLLATE SQL_Latin1_General_CP1_CI_AS NULL"
 )
 EXACT = "SELECT id, day, code, amount, flag, ratio, at, unicode, CAST(utf8 AS nvarchar(max)), CAST(latin AS nvarchar(max)) FROM {table} ORDER BY id"
 """What a table holds, its text read as nvarchar, which the driver reads exactly."""
 DAY = date(2026, 11, 5)
-AMOUNT = Decimal("123456789012345678901234567.0123456789")
-"""37 digits, beyond the range of `money`, within which the driver binds a decimal as text itself."""
-WIDEST = Decimal("-1234567890123456789012345678.0123456789")
-"""38 digits, and 40 characters of text, which the driver's own typing refused, as `Invalid precision value`."""
+AMOUNT = 123456789.1234565
+"""A float whose shortest text, which basis binds into a `decimal`, rounds at 6 places to 123456789.123457, and whose
+binary value, 123456789.12345649302005767822265625, to 123456789.123456."""
+NEGATIVE = -98765432.1234565
+"""A negative one alike, which rounds away from zero, to -98765432.123457, as SQL Server rounds text."""
 AT = datetime(2026, 11, 5, 9, 30, 1, 123456, tzinfo=UTC)
 EMOJI = "\U0001f600"
 UNITS_4000 = "a" * 3998 + EMOJI
@@ -79,10 +82,10 @@ LATIN: dict[str, list[str | None]] = {
 
 
 class Doc(etl.Row):
-    id: int
+    id: str
     day: date
-    code: int
-    amount: Annotated[Decimal, etl.Precision(38, 10)] | None
+    code: float
+    amount: float | None
     flag: bool | None
     ratio: float | None
     at: Annotated[datetime, etl.Zone("UTC")] | None
@@ -96,27 +99,29 @@ def ids(texts: list[str | None]) -> list[int]:
     return list(range(len(texts), 0, -1))
 
 
-def values(index: int, text: str | None, *, latin: bool, amount: Decimal) -> dict[str, object]:
-    """A row of every kind: each but the decimal is null in every third row."""
+def values(index: int, text: str | None, *, latin: bool, amount: float) -> dict[str, object]:
+    """A row of every kind, its id as text and its code a float: each but the amount is null in every third row."""
     nulls = index % 3 == 0
     return {
-        "id": index, "day": DAY, "code": index, "amount": amount, "flag": None if nulls else index % 2 == 0, "ratio": None if nulls else index / 10,
+        "id": str(index), "day": DAY, "code": float(index), "amount": amount, "flag": None if nulls else index % 2 == 0, "ratio": None if nulls else index / 10,
         "at": None if nulls else AT, "unicode": text, "utf8": text, "latin": text if latin else None,
     }  # fmt: skip
 
 
-def docs(texts: list[str | None], *, latin: bool, amount: Decimal = AMOUNT) -> pl.DataFrame:
+def docs(texts: list[str | None], *, latin: bool, amount: float = AMOUNT) -> pd.DataFrame:
     """A row for each text, in the Unicode columns and, where `latin`, the code page 1252 one, with every other kind."""
     return frame(Doc, *(values(index, text, latin=latin, amount=amount) for index, text in zip(ids(texts), texts, strict=True)))
 
 
-def expected(texts: list[str | None], *, latin: bool, amount: Decimal = AMOUNT) -> list[tuple[object, ...]]:
-    """The rows `docs` makes, as `EXACT` reads them back, by id."""
+def expected(texts: list[str | None], *, latin: bool, amount: float = AMOUNT) -> list[tuple[object, ...]]:
+    """The rows `docs` makes, as `EXACT` reads them back, by id: the amount its shortest text rounded at 6 places, half
+    away from zero, as SQL Server converts text to a `decimal(38,6)`."""
+    stored = Decimal(repr(amount)).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
 
     def read(index: int, text: str | None) -> tuple[object, ...]:
         nulls = index % 3 == 0
         at = None if nulls else AT.replace(tzinfo=None)
-        return (index, DAY, index, amount, None if nulls else index % 2 == 0, None if nulls else index / 10, at, text, text, text if latin else None)
+        return (index, DAY, index, stored, None if nulls else index % 2 == 0, None if nulls else index / 10, at, text, text, text if latin else None)
 
     return [read(index, text) for index, text in sorted(zip(ids(texts), texts, strict=True), key=lambda pair: pair[0])]
 
@@ -134,10 +139,10 @@ def table_of(scratch: Scratch) -> str:
     return f"etl_it_docs_{scratch.suffix}"
 
 
-def publish(scratch: Scratch, write: FrameWrite, rows: pl.DataFrame, root: Path, *, row: type[etl.Row] = Doc, table: str | None = None) -> runs.Result:  # noqa: PLR0913 -- a test's knobs, each by keyword
+def publish(scratch: Scratch, write: FrameWrite, rows: pd.DataFrame, root: Path, *, row: type[etl.Row] = Doc, table: str | None = None) -> runs.Result:  # noqa: PLR0913 -- a test's knobs, each by keyword
     data = root / "data"
     data.mkdir(parents=True)
-    rows.write_parquet(data / "docs.parquet")
+    rows.to_parquet(data / "docs.parquet", index=False)
 
     class Inputs(etl.Inputs):
         docs = etl.File(row, path="docs.parquet", empty="fail")
@@ -181,11 +186,14 @@ def test_text_publishes_exactly_in_the_frames_order_and_is_counted_by_the_server
 
 
 @pytest.mark.parametrize("write", WRITES, ids=lambda write: type(write).__name__)
-def test_a_decimal_of_38_digits_publishes_exactly_in_a_batch_and_in_a_row_by_itself(scratch: Scratch, tmp_path: Path, write: FrameWrite) -> None:
+@pytest.mark.parametrize("amount", [AMOUNT, NEGATIVE], ids=["positive", "negative"])
+def test_a_float_into_a_decimal_binds_its_shortest_text_which_the_columns_scale_rounds_in_a_batch_and_by_itself(scratch: Scratch, tmp_path: Path, write: FrameWrite, amount: float) -> None:
     texts: list[str | None] = ["hello world", UNITS_4001, "a" * 100_000, None]
-    result = publish(scratch, write, docs(texts, latin=False, amount=WIDEST), tmp_path)
+    result = publish(scratch, write, docs(texts, latin=False, amount=amount), tmp_path)
     assert result.record.status == "published", result.record
-    assert scratch.rows(EXACT.format(table=table_of(scratch))) == expected(texts, latin=False, amount=WIDEST)
+    rows = scratch.rows(EXACT.format(table=table_of(scratch)))
+    assert rows == expected(texts, latin=False, amount=amount)
+    assert {row[3] for row in rows} == {Decimal("123456789.123457") if amount > 0 else Decimal("-98765432.123457")}
 
 
 @pytest.mark.parametrize("write", WRITES, ids=lambda write: type(write).__name__)
@@ -222,7 +230,7 @@ def test_a_row_the_server_drops_and_counts_fails_the_count_check(scratch: Scratc
 
 
 class Sized(etl.Row):
-    id: int
+    id: str
     day: date
     units: str | None
     utf8: str | None
@@ -239,12 +247,12 @@ def test_a_value_is_measured_in_its_columns_own_units_before_anything_is_written
         " utf8 varchar(10) COLLATE Latin1_General_100_CI_AS_SC_UTF8 NULL, japanese varchar(10) COLLATE Japanese_CI_AS NULL)"
     )
     try:
-        fits = frame(Sized, {"id": 1, "day": DAY, "units": EMOJI * 3, "utf8": "é" * 5, "japanese": "日本語abcd"})
+        fits = frame(Sized, {"id": "1", "day": DAY, "units": EMOJI * 3, "utf8": "é" * 5, "japanese": "日本語abcd"})
         published = publish(scratch, etl.Append(), fits, tmp_path / "fits", row=Sized, table=table)
         assert published.record.status == "published", published.record
         read = scratch.rows(f"SELECT id, units, CAST(utf8 AS nvarchar(10)), CAST(japanese AS nvarchar(10)) FROM {table}")
         assert read == [(1, EMOJI * 3, "é" * 5, "日本語abcd")]
-        too_long = frame(Sized, {"id": 2, "day": DAY, "units": EMOJI * 6, "utf8": "é" * 10, "japanese": "日本語" * 2})
+        too_long = frame(Sized, {"id": "2", "day": DAY, "units": EMOJI * 6, "utf8": "é" * 10, "japanese": "日本語" * 2})
         refused = publish(scratch, etl.Append(), too_long, tmp_path / "too-long", row=Sized, table=table)
         assert refused.record.status == "failed"
         assert refused.record.reasons == [
@@ -258,7 +266,7 @@ def test_a_value_is_measured_in_its_columns_own_units_before_anything_is_written
 
 
 class Aliased(etl.Row):
-    id: int
+    id: str
     day: date
     code: str | None
     name: str | None
@@ -271,11 +279,11 @@ def test_a_column_of_an_alias_type_is_checked_as_the_type_it_is(scratch: Scratch
     scratch.execute(f"CREATE TYPE {code} FROM varchar(50)", f"CREATE TYPE {name} FROM nvarchar(50)")
     try:
         scratch.execute(f"CREATE TABLE {table} (id int NOT NULL PRIMARY KEY, day date NOT NULL, code {code} NULL, name {name} NULL)")
-        rows = frame(Aliased, {"id": 1, "day": DAY, "code": "Zoë, €5", "name": "日本 " + EMOJI})
+        rows = frame(Aliased, {"id": "1", "day": DAY, "code": "Zoë, €5", "name": "日本 " + EMOJI})
         published = publish(scratch, etl.Append(), rows, tmp_path / "held", row=Aliased, table=table)
         assert published.record.status == "published", published.record
         assert scratch.rows(f"SELECT id, CAST(code AS nvarchar(50)), name FROM {table}") == [(1, "Zoë, €5", "日本 " + EMOJI)]
-        refused = publish(scratch, etl.Append(), frame(Aliased, {"id": 2, "day": DAY, "code": "日本"}), tmp_path / "lost", row=Aliased, table=table)
+        refused = publish(scratch, etl.Append(), frame(Aliased, {"id": "2", "day": DAY, "code": "日本"}), tmp_path / "lost", row=Aliased, table=table)
         assert refused.record.status == "failed"
         refusal = (
             "docs: insert: code: 1 values hold characters code page 1252 cannot store, such as '日', which the database would replace without an"
@@ -288,7 +296,7 @@ def test_a_column_of_an_alias_type_is_checked_as_the_type_it_is(scratch: Scratch
 
 
 class OracleDoc(etl.Row):
-    id: int
+    id: str
     day: date
     note: str | None
     body: str | None
@@ -305,7 +313,7 @@ def oracle_scratch() -> Iterator[Scratch]:
 @pytest.mark.parametrize("write", WRITES, ids=lambda write: type(write).__name__)
 @pytest.mark.parametrize("texts", [UNICODE["ascii-longest"], UNICODE["more-units-than-the-longest"], ["a" * 4000, "é" * 2000, "x"]], ids=["ascii-longest", "more-units-than-the-longest", "4000-bytes"])
 def test_oracle_takes_the_same_text_exactly(oracle_scratch: Scratch, tmp_path: Path, write: FrameWrite, texts: list[str | None]) -> None:
-    rows = frame(OracleDoc, *({"id": index, "day": DAY, "note": text, "body": text} for index, text in enumerate(texts, 1)))
+    rows = frame(OracleDoc, *({"id": str(index), "day": DAY, "note": text, "body": text} for index, text in enumerate(texts, 1)))
     result = publish(oracle_scratch, write, rows, tmp_path, row=OracleDoc)
     assert result.record.status == "published", result.record
     assert oracle_scratch.rows(f"SELECT id, note, body FROM {table_of(oracle_scratch)} ORDER BY id") == [(index, text, text) for index, text in enumerate(texts, 1)]
@@ -314,7 +322,7 @@ def test_oracle_takes_the_same_text_exactly(oracle_scratch: Scratch, tmp_path: P
 def test_an_oracle_varchar2_refuses_a_value_past_its_bytes_before_anything_is_written(oracle_scratch: Scratch, tmp_path: Path) -> None:
     """`VARCHAR2(4000 CHAR)` holds 4,000 bytes at most, which 3,998 `a` and an emoji pass by 2 in AL32UTF8: the server
     raised ORA-12899 while basis counted characters."""
-    rows = frame(OracleDoc, {"id": 1, "day": DAY, "note": "a" * 3998 + EMOJI, "body": None})
+    rows = frame(OracleDoc, {"id": "1", "day": DAY, "note": "a" * 3998 + EMOJI, "body": None})
     result = publish(oracle_scratch, etl.Append(), rows, tmp_path, row=OracleDoc)
     assert result.record.status == "failed"
     assert result.record.reasons == ["docs: insert: note: values up to 4002 bytes in AL32UTF8, and the column holds 4000"]

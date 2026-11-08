@@ -1,7 +1,6 @@
 from datetime import date
-from decimal import Decimal
 
-import polars as pl
+import pandas as pd
 import pytest
 from builders import DAY, Price, prices
 
@@ -15,7 +14,7 @@ def target(write: Write, key: tuple[str, ...] | None = ("day", "security_id")) -
     return Target(Price, "warehouse", "prices", write, key)
 
 
-def planned(write: Write, value: pl.DataFrame | Changes, *, key: tuple[str, ...] | None = ("day", "security_id"), interval: etl.Interval | None = DAY) -> Planned:
+def planned(write: Write, value: pd.DataFrame | Changes, *, key: tuple[str, ...] | None = ("day", "security_id"), interval: etl.Interval | None = DAY) -> Planned:
     class Outputs(etl.Outputs):
         prices = etl.Table(Price, database="warehouse", table="prices", write=write, key=key)
 
@@ -57,7 +56,7 @@ def test_an_inserted_row_outside_the_replaced_interval_is_refused(day: date, *, 
 
 
 def test_a_manual_insert_outside_its_matching_delete_is_refused() -> None:
-    changes = Changes(delete=Delete(matching=pl.DataFrame({"security_id": ["S1"]})), insert=prices({"security_id": "S1"}, {"security_id": "S2"}))
+    changes = Changes(delete=Delete(matching=pd.DataFrame({"security_id": ["S1"]})), insert=prices({"security_id": "S1"}, {"security_id": "S2"}))
     [reason] = planned(etl.Manual(), changes).reasons
     assert reason.startswith("prices: 1 inserted rows are outside what the delete removes, so a rerun would insert them twice")
     assert "security_id='S2'" in reason
@@ -69,15 +68,28 @@ def test_a_key_repeated_across_operations_is_refused() -> None:
 
 
 def test_a_delete_matching_a_null_is_refused() -> None:
-    changes = Changes(delete=Delete(matching=pl.DataFrame({"note": [None]}, schema={"note": pl.String})))
+    changes = Changes(delete=Delete(matching=pd.DataFrame({"note": pd.Series([None], dtype="string[pyarrow]")})))
     assert planned(etl.Manual(), changes).reasons == ["prices: the delete matches on 1 nulls, which match nothing"]
 
 
 def test_every_frame_is_conformed_to_the_row() -> None:
-    bad = prices({}).with_columns(pl.lit(Decimal("1.23456")).alias("price"))
+    bad = prices({}).assign(price=[float("inf")])
     reasons = planned(etl.Append(), bad).reasons
     assert len(reasons) == 1
-    assert "insert: price: 1 of 1 values change when stored as Decimal(precision=18, scale=4)" in reasons[0]
+    assert "insert: price: infinite values" in reasons[0]
+
+
+def test_replace_where_matching_finds_its_columns_as_conform_does_and_says_why_it_cannot() -> None:
+    renamed = planned(etl.ReplaceWhere(matching=("security_id",)), prices({}).rename(columns={"security_id": "SECURITY_ID"}))
+    assert renamed.reasons == []
+    assert renamed.changes is not None
+    assert renamed.changes.delete is not None
+    assert renamed.changes.delete.matching is not None
+    assert renamed.changes.delete.matching["security_id"].tolist() == ["S1"]
+    [missing] = planned(etl.ReplaceWhere(matching=("security_id",)), prices({}).drop(columns=["security_id"])).reasons
+    assert missing == "prices: the frame ReplaceWhere(matching=...) deletes by does not match its row:\n  - missing columns: security_id"
+    [indexed] = planned(etl.ReplaceWhere(matching=("security_id",)), prices({}).set_index("security_id")).reasons
+    assert "missing columns: security_id (security_id in the frame's index: reset_index() it, or group with as_index=False)" in indexed
 
 
 def test_an_empty_replace_deletes_every_row_and_inserts_none() -> None:

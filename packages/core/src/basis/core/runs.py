@@ -12,7 +12,7 @@ from datetime import datetime
 from functools import cache
 from pathlib import Path
 
-import polars as pl
+import pyarrow as pa
 
 from basis.core import logs, publish, snapshots
 from basis.core.databases import Database, open_database
@@ -64,8 +64,8 @@ class Replay[P]:
     params_text: str
     params_path: str
     """Where the params came from: the file given, or `run RUN_ID` for the run's own."""
-    saved: dict[str, pl.DataFrame]
-    """Every input the run saved, by name."""
+    saved: dict[str, pa.Table]
+    """Every input the run saved, by name, as Arrow."""
 
 
 @contextmanager

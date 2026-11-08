@@ -12,10 +12,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-import polars as pl
+import pandas as pd
 import pyarrow as pa
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
+
+from basis.core import frames
 
 DIGEST = re.compile(r"[0-9a-f]{64}")
 """A dataset's name in the store: its content's SHA-256, in lower-case hex."""
@@ -84,12 +86,9 @@ class Root:
             raise TypeError(msg)
         return table
 
-    def read_frame(self) -> pl.DataFrame:
-        frame = pl.from_arrow(self.read_table())
-        if not isinstance(frame, pl.DataFrame):
-            msg = f"{self.location} holds a column, not a table"
-            raise TypeError(msg)
-        return frame
+    def read_frame(self) -> pd.DataFrame:
+        """A Parquet file as a frame of Arrow-backed columns, each of the type it was written with."""
+        return frames.from_arrow(self.read_table())
 
     def make_dir(self) -> None:
         self.fs.create_dir(self.path, recursive=True)

@@ -213,7 +213,8 @@ jobs:
       - name: Push a change through the hook, from a tree with changes of its own, and print what it found
         working-directory: ${{ runner.temp }}/pricing-etl
         run: |
-          sed -i 's/.sum().round(2), trades=pl.len())/.sum().round(0), trades=pl.len())/' jobs/positions/job.py
+          sed -i 's/\["gross_notional"\]\.round(2)/["gross_notional"].round(0)/' jobs/positions/job.py
+          grep --quiet 'gross_notional"\]\.round(0)' jobs/positions/job.py
           git add --all && git commit --quiet --message "Round gross notional to whole units"
           echo "A change not yet committed." >> README.md
           git init --quiet --bare "$RUNNER_TEMP/remote.git"
@@ -322,7 +323,7 @@ jobs:
           text = '["\U0001f600"] Zoë 日本 \U00020000'
           database = {"kind": "mssql", "connection_string": os.environ["DATABASE"], "isolation": "read_committed", "timeout_s": 60, "max_rows": 10}
           with open_database(GivenSettings(databases={"loads": database}), "loads").reading() as reader:
-              read = reader.fetch(f"SELECT CAST(N'{text}' COLLATE Latin1_General_100_CI_AS_SC_UTF8 AS varchar(max)) AS v", None, what="the check").item()
+              read = reader.fetch(f"SELECT CAST(N'{text}' COLLATE Latin1_General_100_CI_AS_SC_UTF8 AS varchar(max)) AS v", None, what="the check").iloc[0, 0]
           where = {"LC_CTYPE": locale.setlocale(locale.LC_CTYPE), "encoding": locale.getencoding(), "utf8": fetches_char_as_utf8(sys.platform, locale.getencoding())}
           assert where["utf8"], where  # so a text the default read happens to keep cannot pass
           assert read == text, (where, read)

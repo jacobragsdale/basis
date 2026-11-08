@@ -8,8 +8,8 @@ in `src/basis/job/docs/`, describe the result; this page records the decisions a
 Since basis's step 1.3, etl-framework is basis-job, which imports as `basis.job`, and its plumbing is basis-core's:
 the databases, settings, logs, storage, snapshots, publishing with the ledger, the shared halves of `replay`, `resume`
 and `regress`, and the machinery of `new`, `sync` and the contract tests. [basis's design](../../../docs/design.md)
-supersedes the decisions below about sharing a core with portfolio-optim, and about polars, whose frames become pandas
-in basis's step 5.0b; the rest stand.
+supersedes the decisions below about sharing a core with portfolio-optim, and about polars, whose frames became pandas
+in basis's step 5.0b, as the table now says; the rest stand.
 
 ## The problem
 
@@ -30,8 +30,8 @@ read and write SQL Server or Oracle, and they do not feed each other.
 | A ledger table per destination database, written in the same transaction | It is never wrong about whether a publish happened. It guards plain appends against a second publish of an overlapping interval, and tells `resume` which databases have a run. It is the only DDL the framework asks for. |
 | Databases commit one at a time, in name order; `resume` finishes a partial run from its snapshot | Distributed transactions are not dependable from these drivers; resuming the same rows gives the same end state. |
 | No DDL at run time | Whether job logins have DDL rights is unknown, so runs never need them: SQL Server stages in `#temp` tables, Oracle binds frames to batched statements, and `basis ddl` prints the tables. |
-| polars, not pandas | ETL moves values that must arrive exactly: integers with nulls, decimals at their scale, zone-aware datetimes. polars keeps those types; pandas would turn nullable integers into floats and decimals into objects. |
-| No worker processes or partitions | Data fits in memory, and polars already uses every core. optim's process pool exists for CPU-bound solves. |
+| pandas, every column Arrow-backed (since basis's 5.0b; polars before it) | ETL moves values that must arrive exactly: integers with nulls, decimals at their scale, zone-aware datetimes. An Arrow-backed pandas column keeps each, where numpy's would make a nullable integer a float and a decimal an object, and data arrives and leaves as Arrow. Why pandas rather than polars is [basis's design](../../../docs/design.md#jobs-basisjob)'s. |
+| No worker processes or partitions | Data fits in memory. optim's process pool exists for CPU-bound solves. |
 | Destination checks against what the database says the table is | A drifted table fails a run in seconds, before it loads; a value too long or too precise fails it before the database would truncate it or fail halfway. |
 | Read isolation is a required setting per database | SQL Server's snapshot isolation must be enabled, and Oracle's read-only transactions fail on a table truncated seconds before; the trade-off is each database's own. |
 
@@ -50,8 +50,18 @@ read and write SQL Server or Oracle, and they do not feed each other.
   itself (docs/spikes/sqlserver-json.md, section 3).
 - Oracle's read-only transactions raise ORA-01466 for a table whose definition changed in the last few seconds, which
   is why Oracle's isolation is a setting.
-- polars rounds a decimal cast to a smaller scale and truncates a decimal cast to an integer, even with `strict=True`,
-  so `conform` casts back and compares.
+- polars rounded a decimal cast to a smaller scale and truncated a decimal cast to an integer, even with `strict=True`,
+  so `conform` cast back and compared. Since basis's 5.0b, pyarrow's safe casts refuse both, and a value that would
+  overflow or lose a fraction of a microsecond, but cast a datetime to a date by dropping its time of day, and make
+  any integer but 0 a true boolean, so `basis.core.frames.convert` checks those two itself.
+- pandas makes `[1, None]` a float column, since numpy's integers have no null, and `conform` refuses a float for an
+  `int` column: a transform gives such a column its dtype, from `Row.dtypes()`.
+- A decimal's `pd.ArrowDtype` cannot be named by a string, so code that declares one imports pyarrow, which the
+  contract tests forbid in job code: `basis.core.frames` is the one pure module that does, and the import check
+  discounts that one import.
+- `pa.Table.from_pandas` records pandas' version in the schema's metadata, which would make an object's hash depend
+  on it; `frames.to_arrow` drops the metadata, so the hash depends on pyarrow's version and the writer's settings
+  alone, as the run store's design says.
 - A settings file read by pydantic-settings rejects any line the settings do not declare, such as `BASIS_LOG_LEVEL`. The
   Python API sets the file's variables for the call alone instead, as the command line's `uv run --env-file` does.
 - The generated image's dependencies install in a build stage with git, since `uv sync` fetches an etl-framework taken

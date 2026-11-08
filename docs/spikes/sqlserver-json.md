@@ -10,6 +10,9 @@ function and JSON indexes. Step 5.5 can build on it with four rules this spike f
 - fetch char data as UTF-8, because the driver's default Arrow path loses characters outside Unicode's Basic
   Multilingual Plane.
 
+Since step 5.0b, basis's frames are pandas, not polars: the polars calls below are what this spike ran, and step 5.5
+encodes and decodes in pandas, to the same four rules.
+
 Run on 2026-11-07 against a SQL Server 2025 container on Linux, under both of mssql-python's native providers. Where a
 fact about the firm was missing, this result assumes the firm runs SQL Server 2025 or Azure SQL with the type, as the
 maintainer was told it has been added. Each question ends with a **best guess**, the behaviour basis should build to

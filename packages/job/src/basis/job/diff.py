@@ -1,11 +1,15 @@
 """How two runs' changes to a table differ, as `basis replay` and `basis regress` report it. With a key, rows are matched
 by it, and a matched row that differs in any column counts as changed, by column; without one, rows are compared as
-a multiset, so a row repeated once more is one added."""
+a multiset, so a row repeated once more is one added. Two nulls are equal, in a key and in a value alike, and two
+floats are equal when they agree to 15 significant digits, so a sum taken in another order is no change. A column
+added, removed or retyped between the runs is a change of its own, and the rest compare."""
 
 from dataclasses import dataclass, field
 
-import polars as pl
+import numpy as np
+import pandas as pd
 
+from basis.core.frames import FLOAT
 from basis.core.tables import Changes
 from basis.job.outputs import Target
 
@@ -19,10 +23,12 @@ class OperationDiff:
     changed: int
     columns: dict[str, int] = field(default_factory=dict)
     """Changed rows, by the column that changed."""
+    schema: dict[str, str] = field(default_factory=dict)
+    """Each column the two runs' frames do not hold alike, and how: `added`, `removed`, or `retyped from A to B`."""
 
     @property
     def same(self) -> bool:
-        return not (self.added or self.removed or self.changed)
+        return not (self.added or self.removed or self.changed or self.schema)
 
 
 def diff(name: str, target: Target, before: Changes | None, after: Changes | None) -> list[OperationDiff]:
@@ -47,29 +53,81 @@ def _delete_of(changes: Changes | None) -> tuple[object, ...] | None:
     return (within.column, within.start, within.end) if within is not None else (None,)
 
 
-def diff_frames(output: str, operation: str, before: pl.DataFrame | None, after: pl.DataFrame | None, key: tuple[str, ...] | None) -> OperationDiff:
+def diff_frames(output: str, operation: str, before: pd.DataFrame | None, after: pd.DataFrame | None, key: tuple[str, ...] | None) -> OperationDiff:
+    """How two runs' frames of one operation differ. A column one has and the other has not, or holds as another type,
+    is a change of its own; the rows compare by the columns both hold alike, by `key` where both hold all of it."""
     if before is None or after is None:
         rows = after if after is not None else before
-        count = rows.height if rows is not None else 0
+        count = len(rows) if rows is not None else 0
         return OperationDiff(output, operation, added=count if after is not None else 0, removed=count if before is not None else 0, changed=0)
-    if key is None:
-        return _multiset(output, operation, before, after)
+    schema = _schema(before, after)
+    shared = [str(name) for name in before.columns if name in after.columns and name not in schema]
+    if not shared:
+        return OperationDiff(output, operation, added=len(after), removed=len(before), changed=0, schema=schema)
+    before, after = _rounded(before[shared]), _rounded(after[shared])
+    if key is None or not set(key) <= set(shared):
+        return _multiset(output, operation, before[shared], after[shared], schema)
     on = list(key)
-    added = after.join(before, on=on, how="anti", nulls_equal=True).height
-    removed = before.join(after, on=on, how="anti", nulls_equal=True).height
-    values = [name for name in before.columns if name not in key]
-    both = before.join(after, on=on, how="inner", suffix="#after", nulls_equal=True)
-    differs = {name: pl.col(name).ne_missing(pl.col(f"{name}#after")) for name in values}
-    columns = {name: int(both.select(expression.sum()).item()) for name, expression in differs.items()}
-    changed = both.filter(pl.any_horizontal(differs.values())).height if differs else 0
-    return OperationDiff(output, operation, added=added, removed=removed, changed=changed, columns={name: count for name, count in columns.items() if count})
+    values = [name for name in shared if name not in key]
+    merged = before[shared].merge(after[shared], on=on, how="outer", suffixes=("", _AFTER), indicator=_SIDE)
+    side = merged[_SIDE]
+    both = merged[side == "both"]
+    differs = {name: ~_same(both[name], both[f"{name}{_AFTER}"]) for name in values}
+    columns = {name: int(changed.sum()) for name, changed in differs.items()}
+    changed = int(pd.concat(differs.values(), axis=1).any(axis=1).sum()) if differs else 0
+    return OperationDiff(
+        output, operation, added=int((side == "right_only").sum()), removed=int((side == "left_only").sum()), changed=changed,
+        columns={name: count for name, count in columns.items() if count}, schema=schema,
+    )  # fmt: skip
 
 
-def _multiset(output: str, operation: str, before: pl.DataFrame, after: pl.DataFrame) -> OperationDiff:
-    columns = before.columns
-    old = before.group_by(columns).agg(pl.len().cast(pl.Int64).alias("#before"))  # pl.len() is unsigned: a difference would wrap
-    new = after.group_by(columns).agg(pl.len().cast(pl.Int64).alias("#after"))
-    joined = old.join(new, on=columns, how="full", coalesce=True, nulls_equal=True).fill_null(0)
-    added = int(joined.select((pl.col("#after") - pl.col("#before")).clip(lower_bound=0).sum()).item())
-    removed = int(joined.select((pl.col("#before") - pl.col("#after")).clip(lower_bound=0).sum()).item())
-    return OperationDiff(output, operation, added=added, removed=removed, changed=0)
+_SIDE = "#side"  # never a row's column, whose name is lower-case letters, digits and underscores
+_AFTER = "#after"
+
+
+def _schema(before: pd.DataFrame, after: pd.DataFrame) -> dict[str, str]:
+    """Each column added, removed or retyped from `before` to `after`, in the order the frames hold them."""
+    found = {str(name): "removed" for name in before.columns if name not in after.columns}
+    for name in after.columns:
+        if name not in before.columns:
+            found[str(name)] = "added"
+        elif (old := before[name].dtype) != (new := after[name].dtype):
+            found[str(name)] = f"retyped from {_type(old)} to {_type(new)}"
+    return found
+
+
+def _type(dtype: object) -> str:
+    return str(dtype.pyarrow_dtype) if isinstance(dtype, pd.ArrowDtype) else str(dtype)
+
+
+SIGNIFICANT = 15
+"""The digits two floats must agree to, to be the same: a double holds 15 exactly, and a sum taken in another order
+differs only past them."""
+
+
+def _rounded(frame: pd.DataFrame) -> pd.DataFrame:
+    """`frame` with each float rounded to `SIGNIFICANT` digits, as two runs' values compare."""
+    rounded = frame.copy()
+    for name in frame.columns:
+        if frame[name].dtype == FLOAT:
+            numbers = frame[name].to_numpy(copy=True)
+            finite = np.isfinite(numbers)
+            numbers[finite] = [float(f"{value:.{SIGNIFICANT}g}") for value in numbers[finite]]
+            rounded[name] = numbers
+    return rounded
+
+
+def _same(before: pd.Series, after: pd.Series) -> pd.Series:
+    """Whether each pair of values is equal, two nulls being equal."""
+    return ((before == after).fillna(value=False) | (before.isna() & after.isna())).astype(bool)
+
+
+def _multiset(output: str, operation: str, before: pd.DataFrame, after: pd.DataFrame, schema: dict[str, str]) -> OperationDiff:
+    columns = [str(name) for name in before.columns]
+    old = before.groupby(columns, dropna=False, sort=False).size().rename("#before").reset_index()
+    new = after.groupby(columns, dropna=False, sort=False).size().rename("#after").reset_index()
+    joined = old.merge(new, on=columns, how="outer")
+    counts = joined[["#before", "#after"]].fillna(0).astype("int64")
+    added = int((counts["#after"] - counts["#before"]).clip(lower=0).sum())
+    removed = int((counts["#before"] - counts["#after"]).clip(lower=0).sum())
+    return OperationDiff(output, operation, added=added, removed=removed, changed=0, schema=schema)

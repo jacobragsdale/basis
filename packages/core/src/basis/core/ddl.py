@@ -45,8 +45,6 @@ def ledger(table: str, dialect: Dialect) -> str:
 
 
 _FIXED: dict[tuple[Kind, Dialect], str] = {
-    ("int", "mssql"): "BIGINT",
-    ("int", "oracle"): "NUMBER(19)",
     ("float", "mssql"): "FLOAT",
     ("float", "oracle"): "BINARY_DOUBLE",
     ("bool", "mssql"): "BIT",
@@ -59,8 +57,6 @@ _FIXED: dict[tuple[Kind, Dialect], str] = {
 
 
 def _type(column: Column, dialect: Dialect) -> str:
-    if column.kind == "decimal":
-        return f"{'DECIMAL' if dialect == 'mssql' else 'NUMBER'}({column.precision},{column.scale})"
     if column.kind == "str" and dialect == "mssql":
         return f"NVARCHAR({column.max_length if column.max_length is not None else 'MAX'})"
     if column.kind == "str":

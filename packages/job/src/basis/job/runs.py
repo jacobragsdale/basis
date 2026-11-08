@@ -5,9 +5,10 @@ same steps:
 1. Read the params, strictly, and give the run its id.
 2. Describe each destination table and check it against its row, where its database is configured: a table that has
    drifted fails the run before anything loads.
-3. Load the inputs, each database in one transaction that only reads.
+3. Load the inputs, each database in one transaction that only reads, and keep each as Arrow, which nothing changes.
 4. Run the transform, then build each table's changes, conform them, and check them: the core's checks, the values
-   against each destination, and the job's own `check`.
+   against each destination, and the job's own `check`. The transform and the check are each given frames of their
+   own of the inputs, since a pandas frame changes in place.
 5. Write the snapshot.
 6. Publish, if asked and nothing gave a reason not to: each database in one transaction, with its ledger rows.
 
@@ -28,12 +29,13 @@ from pathlib import Path
 from uuid import UUID
 
 import httpx2
-import polars as pl
+import pandas as pd
+import pyarrow as pa
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Tracer
 from pydantic import ValidationError
 
-from basis.core import fakes, logs, publish, snapshots, traces
+from basis.core import fakes, frames, logs, publish, snapshots, traces
 from basis.core import runs as core_runs
 from basis.core.databases import Database
 from basis.core.destination import TableSpec, check_table, check_values
@@ -80,8 +82,16 @@ class Request:
 class Result:
     record: RunRecord
     snapshot: Snapshot | None
-    inputs: dict[str, pl.DataFrame]
+    tables: dict[str, pa.Table]
+    """Each input as the run loaded it, as Arrow, which nothing changes: what the transform and the check were each
+    given a frame of, and what the snapshot saved."""
     planned: dict[str, Planned]
+
+    @property
+    def inputs(self) -> dict[str, pd.DataFrame]:
+        """Each input as a frame of its own, made afresh from `tables`, so that changing it changes nothing the run
+        kept."""
+        return fresh(self.tables)
 
     @property
     def ok(self) -> bool:
@@ -158,7 +168,8 @@ def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
     if reasons:
         return _summarized(_finish(record.done("failed", reasons=reasons, finished_at=clock()), snapshot_root, params_text, {}, {}))
     try:
-        frames, inputs = load(job.inputs.declared(), request.interval, open_database=databases, reach=_reach(settings, this.faked), tracer=this.tracer, data=request.data)
+        loaded, inputs = load(job.inputs.declared(), request.interval, open_database=databases, reach=_reach(settings, this.faked), tracer=this.tracer, data=request.data)
+        tables = {name: frames.to_arrow(frame) for name, frame in loaded.items()}
     except Exception as error:
         log.exception("could not load the inputs")
         return _summarized(_finish(record.done("failed", error=_headline(error), finished_at=clock()), snapshot_root, params_text, {}, {}))
@@ -166,14 +177,14 @@ def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
         kept = handles.live(job.inputs, this.faked, this.tracer)
     except Exception as error:  # a defect: the inputs' declarations are checked when their class is made
         log.exception("could not give the transform its clocks and ids")
-        return _summarized(_finish(record.with_outputs({}, inputs).done("failed", error=_headline(error), finished_at=clock()), snapshot_root, params_text, frames, {}))
-    planned, reasons = _transform(job, params, frames, request.interval, kept)
+        return _summarized(_finish(record.with_outputs({}, inputs).done("failed", error=_headline(error), finished_at=clock()), snapshot_root, params_text, tables, {}))
+    planned, reasons = _transform(job, params, tables, request.interval, kept)
     for name, entry in planned.items():
         if (spec := specs.get(name)) is not None and entry.changes is not None:
             reasons.extend(f"{name}: {reason}" for reason in check_values(entry.target, spec, entry.changes))
     status: Status = "failed" if reasons else "checked"
     record = record.with_outputs(planned, inputs).with_made(kept)
-    result = _finish(record.done(status, reasons=reasons, finished_at=clock()), snapshot_root, params_text, frames, planned)
+    result = _finish(record.done(status, reasons=reasons, finished_at=clock()), snapshot_root, params_text, tables, planned)
     if reasons or not request.publish or result.snapshot is None:
         _summary(result.record)
         return result
@@ -183,7 +194,7 @@ def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
     final = record.done(core_runs.status_of(publishes, len({target.database for target in targets.values()})), reasons=[], finished_at=clock(), publishes=publishes)
     snapshot = result.snapshot.save_record(final)
     _summary(final)
-    return Result(final, snapshot, frames, planned)
+    return Result(final, snapshot, tables, planned)
 
 
 def _checked(job: Job, faked: Mapping[str, fakes.Fake]) -> dict[str, fakes.Fake]:
@@ -275,10 +286,17 @@ def _check_destinations(targets: Mapping[str, Target], settings: Settings, datab
     return specs, reasons
 
 
-def _transform(job: Job, params: Params, frames: Mapping[str, pl.DataFrame], interval: Interval | None, kept: Kept) -> tuple[dict[str, Planned], list[str]]:
-    """Each table's changes, and every reason not to write them. A transform or check that raises is a reason that
-    names the line of job code that raised; the log holds its traceback."""
-    inputs = job.inputs(frames, interval=interval, handles=kept.handles)
+def fresh(tables: Mapping[str, pa.Table]) -> dict[str, pd.DataFrame]:
+    """A frame of each table, its own: a pandas frame changes in place, and an Arrow table never does, so a frame that
+    job code changes changes no table, nor another frame of it."""
+    return {name: frames.from_arrow(table) for name, table in tables.items()}
+
+
+def _transform(job: Job, params: Params, tables: Mapping[str, pa.Table], interval: Interval | None, kept: Kept) -> tuple[dict[str, Planned], list[str]]:
+    """Each table's changes, and every reason not to write them. The transform and the check are each given frames of
+    their own of the inputs, so neither sees what the other changed in them. A transform or check that raises is a
+    reason that names the line of job code that raised; the log holds its traceback."""
+    inputs = job.inputs(fresh(tables), interval=interval, handles=kept.handles)
     try:
         with logs.timed(log, "transformed"):
             outputs = job.run_transform(inputs, params)
@@ -288,7 +306,8 @@ def _transform(job: Job, params: Params, frames: Mapping[str, pl.DataFrame], int
     planned = plan(outputs, interval)
     reasons = [reason for entry in planned.values() for reason in entry.reasons]
     try:
-        reasons.extend(f"check: {reason}" for reason in job.run_check(inputs, outputs, params))
+        checked = job.inputs(fresh(tables), interval=interval, handles=kept.handles)
+        reasons.extend(f"check: {reason}" for reason in job.run_check(checked, outputs, params))
     except Exception as error:
         log.exception("the job's check raised")
         reasons.append(f"the job's check raised {_headline(error)}{_at(error, job.directory)}")
@@ -349,12 +368,12 @@ class _Record:
         )  # fmt: skip
 
 
-def _finish(record: RunRecord, root: Root | None, params_text: str, frames: Mapping[str, pl.DataFrame], planned: Mapping[str, Planned]) -> Result:
+def _finish(record: RunRecord, root: Root | None, params_text: str, tables: Mapping[str, pa.Table], planned: Mapping[str, Planned]) -> Result:
     changes = {name: entry.changes for name, entry in planned.items() if entry.changes is not None}
-    snapshot = snapshots.write(root, record, params_text, frames, changes, package=PACKAGE) if root is not None else None
+    snapshot = snapshots.write(root, record, params_text, tables, changes, package=PACKAGE) if root is not None else None
     if snapshot is not None:
         log.info("saved the snapshot", extra={"snapshot": snapshot.path.location})
-    return Result(record, snapshot, dict(frames), dict(planned))
+    return Result(record, snapshot, dict(tables), dict(planned))
 
 
 def _summarized(result: Result) -> Result:
@@ -413,13 +432,13 @@ def _replayed(job: Job, source: Snapshot, opened: core_runs.Replay[Params], *, s
         run_id=opened.run_id, job=job.name, module=job.module, version=VERSION, git_sha=None, started_at=clock(), interval=original.interval,
         params_path=opened.params_path, params_sha256=snapshots.params_digest(opened.params_text),
         labels={"replay_of": original.run_id}, data=None, replay_of=original.run_id,
-        inputs={name: InputRecord(source=f"snapshot: {original.run_id}", rows=frame.height, read_ms=0.0) for name, frame in opened.saved.items()},
+        inputs={name: InputRecord(source=f"snapshot: {original.run_id}", rows=table.num_rows, read_ms=0.0) for name, table in opened.saved.items()},
     )  # fmt: skip
-    frames = {name: opened.saved[name] for name in job.inputs.declared()}
+    tables = {name: opened.saved[name] for name in job.inputs.declared()}
     kept = handles.replayed(job.inputs, original, tracer)
-    planned, reasons = _transform(job, opened.params, frames, interval, kept)
+    planned, reasons = _transform(job, opened.params, tables, interval, kept)
     record = record.with_outputs(planned, record.inputs).with_made(kept)
-    result = _finish(record.done("failed" if reasons else "checked", reasons=reasons, finished_at=clock()), snapshot_root, opened.params_text, frames, planned)
+    result = _finish(record.done("failed" if reasons else "checked", reasons=reasons, finished_at=clock()), snapshot_root, opened.params_text, tables, planned)
     before = source.changes()
     targets = targets_of(job)
     diffs = [found for name in sorted(set(before) | set(planned)) if name in targets for found in diff(name, targets[name], before.get(name), result.changes(name))]

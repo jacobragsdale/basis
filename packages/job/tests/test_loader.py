@@ -1,13 +1,12 @@
 import json
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from datetime import datetime
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
 
 import httpx2
-import polars as pl
+import pandas as pd
 import pytest
 from builders import DAY, Price, make_job, prices
 from opentelemetry.trace import NoOpTracer
@@ -22,6 +21,7 @@ from basis.core.snapshots import InputRecord
 from basis.job.inputs import Dataset
 from basis.job.loader import EmptyInputError, Reach, json_rows
 from basis.job.loader import load as loading
+from basis.job.rows import SchemaError
 
 type Message = MutableMapping[str, Any]
 
@@ -42,7 +42,7 @@ def reaching(fake: fakes.Http) -> Reach:
 
 def load(
     datasets: Mapping[str, Dataset], interval: Interval | None, *, open_database: Callable[[str], Database], data: Path | None, reach: Reach = no_services
-) -> tuple[dict[str, pl.DataFrame], dict[str, InputRecord]]:
+) -> tuple[dict[str, pd.DataFrame], dict[str, InputRecord]]:
     return loading(datasets, interval, open_database=open_database, reach=reach, tracer=NoOpTracer(), data=data)
 
 
@@ -61,8 +61,8 @@ def answering(body: object, seen: list[str]) -> fakes.Http:
 def test_a_csv_reads_as_text_its_row_converts_and_an_empty_field_is_null(tmp_path: Path) -> None:
     (tmp_path / "prices.csv").write_text("day,security_id,price,note,booked_at\n2026-11-05,S1,100.5,,\n", encoding="utf-8")
     frames, records = load(make_job(write=etl.Append()).inputs.declared(), DAY, open_database=no_databases, data=tmp_path)
-    assert frames["prices"].row(0, named=True)["note"] is None
-    assert frames["prices"].schema == prices({}).schema
+    assert frames["prices"]["note"].tolist() == [pd.NA]
+    assert frames["prices"].dtypes.equals(prices({}).dtypes)
     assert records["prices"].source == f"data: {tmp_path / 'prices.csv'}"
 
 
@@ -84,12 +84,12 @@ class Fetched(etl.Inputs):
     prices = etl.Fetch(Price, http="pricing", path="/prices/{start:%Y-%m-%d}", deadline_s=5, empty="fail")
 
 
-def test_a_fetch_gets_its_intervals_rows_and_a_number_keeps_the_digits_it_was_sent_with(tmp_path: Path) -> None:
+def test_a_fetch_gets_its_intervals_rows_and_a_number_is_the_nearest_float_to_the_digits_it_was_sent_with(tmp_path: Path) -> None:
     seen: list[str] = []
     body = b'[{"day": "2026-11-05", "security_id": "S1", "price": 100.1234, "booked_at": "2026-11-05T09:30:00"}, {"day": "2026-11-05", "security_id": "S2", "price": 7}]'
     frames, records = load(Fetched.declared(), DAY, open_database=no_databases, data=tmp_path, reach=reaching(answering(body, seen)))
     assert seen == ["/prices/2026-11-05"]
-    expected = prices({"price": Decimal("100.1234"), "booked_at": datetime(2026, 11, 5, 9, 30)}, {"security_id": "S2", "price": Decimal(7)})
+    expected = prices({"price": 100.1234, "booked_at": datetime(2026, 11, 5, 9, 30)}, {"security_id": "S2", "price": 7.0})
     assert frames["prices"].equals(expected)
     assert (records["prices"].source, records["prices"].rows) == ("pricing: GET /prices/{start:%Y-%m-%d}", 2)
 
@@ -109,6 +109,32 @@ def test_a_fetchs_rows_are_a_list_of_flat_objects_of_its_rows_columns(body: byte
         json_rows(body, Price, what="dataset prices")
 
 
+def test_a_csvs_text_is_never_read_as_a_null_or_a_number_unless_its_row_says_so(tmp_path: Path) -> None:
+    (tmp_path / "prices.csv").write_text("day,security_id,price,note,booked_at\n2026-11-05,0012,100.5,NA,\n2026-11-05,S2,100.5,null,\n", encoding="utf-8")
+    frames, _ = load(make_job(write=etl.Append()).inputs.declared(), DAY, open_database=no_databases, data=tmp_path)
+    assert (frames["prices"]["security_id"].tolist(), frames["prices"]["note"].tolist()) == (["0012", "S2"], ["NA", "null"])
+
+
+class Note(etl.Row):
+    note: str | None
+
+
+class Noted(etl.Inputs):
+    notes = etl.File(Note, path="notes.csv", empty="fail")
+
+
+def test_a_blank_line_in_a_csv_of_one_column_is_a_row_whose_value_is_null(tmp_path: Path) -> None:
+    (tmp_path / "notes.csv").write_text("note\na\n\nb\n", encoding="utf-8")
+    frames, records = load(Noted.declared(), DAY, open_database=no_databases, data=tmp_path)
+    assert (frames["notes"]["note"].tolist(), records["notes"].rows) == (["a", pd.NA, "b"], 3)
+
+
+def test_a_csv_header_that_names_a_column_twice_is_refused_as_named_more_than_once(tmp_path: Path) -> None:
+    (tmp_path / "prices.csv").write_text("day,security_id,price,note,booked_at,price\n2026-11-05,S1,100.5,,,100.5\n", encoding="utf-8")
+    with pytest.raises(SchemaError, match="columns named more than once: price"):
+        load(make_job(write=etl.Append()).inputs.declared(), DAY, open_database=no_databases, data=tmp_path)
+
+
 def test_a_fetchs_empty_list_fails_unless_its_dataset_allows_it(tmp_path: Path) -> None:
     with pytest.raises(EmptyInputError, match="prices returned no rows"):
         load(Fetched.declared(), DAY, open_database=no_databases, data=tmp_path, reach=reaching(answering([], [])))
@@ -117,7 +143,7 @@ def test_a_fetchs_empty_list_fails_unless_its_dataset_allows_it(tmp_path: Path) 
 def test_a_fixtures_file_stands_in_for_a_fetch(tmp_path: Path) -> None:
     (tmp_path / "prices.csv").write_text("day,security_id,price,note,booked_at\n2026-11-05,S1,100.5,,\n", encoding="utf-8")
     frames, _ = load(Fetched.declared(), DAY, open_database=no_databases, data=tmp_path)
-    assert frames["prices"].get_column("price").to_list() == [Decimal("100.5")]
+    assert frames["prices"]["price"].tolist() == [100.5]
 
 
 def test_a_fetch_declares_its_service_and_its_deadline() -> None:

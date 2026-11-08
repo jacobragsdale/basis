@@ -18,10 +18,14 @@ FORBIDDEN = (
 """What a part's pure code may not reach through its imports: basis-core's I/O, its resources as they are opened and
 faked, and its exporter of spans, a database driver, an HTTP client, or storage. Each part adds its own run loop. An installed package is named whole, since an import graph records only an
 external package's top-level name: `pyarrow`, whose `fs` reads and writes files, rather than `pyarrow.fs`, which no
-graph holds. Pure code needs no pyarrow of its own: its part hands it frames, such as basis-job's polars. The
-command is I/O too: `basis.core.check` runs tools, `basis.core.verbs` writes to stderr, and the gates (`clone`,
-`full`, `gates`, `mutation`, `pytest_plugin`, `qa`, `review`, `doctor`, `upgrade`) run git and tools, read settings
-files and write records."""
+graph holds. Pure code needs no pyarrow of its own: its part hands it pandas frames, whose columns' Arrow types
+`basis.core.frames` gives it (see `TYPES`). The command is I/O too: `basis.core.check` runs tools, `basis.core.verbs`
+writes to stderr, and the gates (`clone`, `full`, `gates`, `mutation`, `pytest_plugin`, `qa`, `review`, `doctor`,
+`upgrade`) run git and tools, read settings files and write records."""
+TYPES = (("basis.core.frames", "pyarrow"),)
+"""The imports of pyarrow by basis's own pure code, which the check discounts: `basis.core.frames`, the one module that
+gives a frame's columns their Arrow types and converts them, and reads and writes nothing. Code the check reads
+reaches pyarrow through it alone; code that imports pyarrow itself is still caught."""
 
 
 class ContractError(AssertionError):
@@ -32,9 +36,10 @@ def import_chains(module: str, *, packages: Iterable[str], forbidden: Iterable[s
     """Every shortest chain of imports from `module` to what `forbidden` lists, in a graph of `module`'s package and
     `packages`, built on each check, so it is never stale. basis's packages are portions of one namespace, which a graph
     of installed packages collapses to `basis`, so each is named. `lazy` lists imports that load on first use, which
-    the code checked never makes. grimp's cache stays off, so no `.grimp_cache` folder appears in a repo."""
+    the code checked never makes, and the imports `TYPES` lists are discounted too. grimp's cache stays off, so no
+    `.grimp_cache` folder appears in a repo."""
     graph = grimp.build_graph(*dict.fromkeys([package_of(module), *packages]), include_external_packages=True, exclude_type_checking_imports=True, cache_dir=None)
-    for importer, imported in lazy:
+    for importer, imported in (*lazy, *TYPES):
         if graph.direct_import_exists(importer=importer, imported=imported):
             graph.remove_import(importer=importer, imported=imported)
     return sorted(

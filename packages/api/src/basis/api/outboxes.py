@@ -46,7 +46,6 @@ from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from typing import Annotated, Literal, Protocol
 
-import polars as pl
 from pydantic import AfterValidator
 
 from basis.api.resources import Outbox, SendMethod
@@ -281,17 +280,17 @@ class _Target:
 
 
 def _text(name: str, length: int | None, *, nullable: bool = False) -> Column:
-    return Column(name, "str", nullable, pl.String(), max_length=length)
+    return Column(name, "str", nullable, max_length=length)
 
 
 def _time(name: str, *, nullable: bool = False) -> Column:
-    return Column(name, "datetime", nullable, pl.Datetime("us", "UTC"), zone="UTC")
+    return Column(name, "datetime", nullable, zone="UTC")
 
 
 _COLUMNS = (  # the table's, in the order of `Row`'s fields
     _text("id", 36), _text("service", 63), _text("method", 6), _text("path", PATH_LENGTH), _text("body", None, nullable=True),
     _text("idempotency_key", 255), _text("route", ROUTE_LENGTH), _text("request_id", 36, nullable=True), _time("created_at"),
-    _time("expires_at"), _time("next_at", nullable=True), Column("attempts", "int", nullable=False, dtype=pl.Int64()), _text("status", 7),
+    _time("expires_at"), _time("next_at", nullable=True), Column("attempts", "float", nullable=False), _text("status", 7),
     _text("last_error", ERROR_LENGTH, nullable=True), _time("ended_at", nullable=True),
 )  # fmt: skip
 

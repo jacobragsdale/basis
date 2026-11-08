@@ -15,7 +15,10 @@ difference you find.
    `InsertNew()`, anything else is `Manual()` with `Changes`. A plain insert is `Append()`, which the ledger guards
    against a second publish of the same interval.
 3. Move every query filter that depends on a parameter into the transform: queries bind only the interval.
-4. Port the old job's checks into `check`, and add a reason for anything it used to log and carry on past.
+4. Port the old job's checks into `check`, and add a reason for anything it used to log and carry on past. Old pandas
+   code carries over, but its frames now hold each column as its row declares it, Arrow-backed: where the old job let
+   numpy make a decimal a float, or an integer with nulls a float, the port keeps the exact value, and the comparison
+   below shows each place that changes an output.
 5. Prove the port: run the old job and the new one (`uv run basis run NAME ... --data DIR` on the same inputs, or
    against QA) and compare the outputs row for row by key. Record every difference in `PORTING.md`, and resolve each
    with the user.

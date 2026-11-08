@@ -40,7 +40,6 @@ from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Literal, override
 
-import polars as pl
 from opentelemetry import trace
 from opentelemetry.trace import SpanContext
 from pydantic import ConfigDict, TypeAdapter, ValidationError
@@ -223,14 +222,10 @@ def _extras(record: logging.LogRecord, *, traced: bool = False) -> dict[str, obj
 
 
 def _fallback(value: object) -> object:
-    """A value JSON has no type for. A part's frames are known by their shape, since basis-core imports neither pandas
-    nor numpy: a frame logs as its size and columns, a pandas series as its values by its index, and an index or a
-    numpy value as its `tolist()`."""
+    """A value JSON has no type for. A frame is known by its shape, so that logging, which every command loads first,
+    loads neither pandas nor numpy: a frame logs as its size and columns, a pandas series as its values by its index,
+    and an index or a numpy value as its `tolist()`."""
     match value:
-        case pl.DataFrame():
-            return {"rows": value.height, "columns": value.columns}
-        case pl.Series():
-            return value.to_list()
         case _ if isinstance(shape := getattr(value, "shape", None), tuple) and shape and (columns := getattr(value, "columns", None)) is not None:
             return {"rows": shape[0], "columns": [str(column) for column in columns]}  # a pandas frame
         case _ if callable(to_dict := getattr(value, "to_dict", None)) and getattr(value, "index", None) is not None:

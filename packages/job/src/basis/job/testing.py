@@ -9,7 +9,7 @@ tests, which run like any other, in an IDE's test panel too:
 The builders make frames from a few partial rows, each conformed to its row as a load would, so a test states only
 the columns it is about:
 
-    trades = frame(Trade, {"trade_id": "T1", "quantity": Decimal("100")})
+    trades = frame(Trade, {"trade_id": "T1", "quantity": 100.0})
     outputs = job.transform(inputs(job.Inputs, trades=trades, interval="2026-11-05..2026-11-06"), job.Params())
 
 A job whose `Inputs` declare a clock is given the time a test names, as `inputs(..., now=datetime(...))`, and its fixture
@@ -22,7 +22,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from types import ModuleType
 
-import polars as pl
+import pandas as pd
 from opentelemetry.trace import NoOpTracer
 
 from basis.core import testing as core_testing
@@ -102,28 +102,19 @@ def check_imports(job: jobs.Job) -> None:
         raise ContractError(msg)
 
 
-def frame(row: type[Row], *rows: Mapping[str, object]) -> pl.DataFrame:
+def frame(row: type[Row], *rows: Mapping[str, object]) -> pd.DataFrame:
     """`rows` as `row`'s frame, conformed as a load conforms it: a column a row leaves out is null, a naive datetime is
-    in its column's zone, and a `Decimal`, `date` or `str` converts as it would from a database or a CSV."""
+    in its column's zone, and a number, `date` or `str` converts as it would from a database or a CSV."""
     if unknown := sorted({name for values in rows for name in values} - set(row.names())):
         msg = f"{row.__qualname__} has no columns {unknown}; it has {row.names()}"
         raise TypeError(msg)
     if not rows:
         return row.empty()
-    columns = {name: pl.Series(name, [values.get(name) for values in rows], dtype=_loose(row, name), strict=False) for name in row.names()}
-    return conform(pl.DataFrame(list(columns.values())), row, what=f"a {row.__qualname__} frame", naive="in_zone")
+    columns = {column.name: pd.Series([values.get(column.name) for values in rows], dtype=object) for column in row.columns}
+    return conform(pd.DataFrame(columns), row, what=f"a {row.__qualname__} frame", naive="in_zone")
 
 
-def _loose(row: type[Row], name: str) -> pl.DataType | None:
-    """The type a builder's Python values are read as, before conforming: decimals at their row's scale, so a value
-    given as an int or a str is exact; datetimes naive, for the column's zone; the rest as polars infers them."""
-    column = row.column(name)
-    if column.kind == "decimal":
-        return column.dtype
-    return None
-
-
-def inputs[I: Inputs](cls: type[I], *, interval: Interval | str | None = None, now: datetime | None = None, **frames: pl.DataFrame) -> I:
+def inputs[I: Inputs](cls: type[I], *, interval: Interval | str | None = None, now: datetime | None = None, **frames: pd.DataFrame) -> I:
     """A job's `Inputs` from frames by dataset name; a dataset not given has no rows. Each clock the inputs declare
     gives `now`, and each ids counts up from 1, as basis-core's fake does."""
     declared = cls.declared()

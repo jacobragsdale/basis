@@ -26,6 +26,7 @@ dev = [
     "hypothesis>=6.170.0",  # the example's property-based tests, and what Schemathesis generates its requests with
     "import-linter>=2.16",
     "mutmut>=3.8.1; sys_platform == 'linux'",  # what `basis check --full` tests mutants with, which needs fork: basis.core.mutation
+    "pandas-stubs>=3.1.0.261029",  # pandas' types, which ty checks basis-core's and basis-job's frames by in every leg of CI
     "pre-commit>=4.7.0",
     "pytest>=9.2.0",
     "pytest-cov>=7.1.0",
@@ -170,7 +171,7 @@ type = "forbidden"
 source_modules = [
     "basis.job.rows", "basis.job.params", "basis.job.inputs", "basis.job.outputs", "basis.job.changes", "basis.job.diff",
     "basis.job.ddl", "basis.job.job", "basis.job.example.job", "basis.job.example.rows",
-    "basis.core.interval", "basis.core.tables", "basis.core.destination", "basis.core.model", "basis.core.ddl",
+    "basis.core.interval", "basis.core.tables", "basis.core.destination", "basis.core.model", "basis.core.ddl", "basis.core.frames",
 ]
 forbidden_modules = [
     "basis.job.loader", "basis.job.runs", "basis.job.api", "basis.job.cli", "basis.job.new", "basis.job.sync", "basis.job.testing",

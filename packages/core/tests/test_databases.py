@@ -3,13 +3,12 @@ import socket
 import time
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
-from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Literal
 
 import mssql_python
 import oracledb
-import polars as pl
+import pandas as pd
 import pyarrow as pa
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
@@ -17,13 +16,13 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import Field, ValidationError
 
-from basis.core import traces
+from basis.core import frames, traces
 from basis.core.databases import Counts, mssql, open_database, oracle
-from basis.core.databases.base import end_reading
+from basis.core.databases.base import end_reading, number_text, plain
 from basis.core.databases.failures import Boundary, ending, failures
 from basis.core.databases.mssql import MssqlReader, MssqlWriter, fetches_char_as_utf8
 from basis.core.databases.oracle import OracleReader, connect
-from basis.core.destination import TableSpec
+from basis.core.destination import DestColumn, TableSpec
 from basis.core.errors import Conflict, Denied, Failed, Rejected, ServiceError, Timeout, Unavailable
 from basis.core.model import Model
 from basis.core.settings import GivenSettings, OracleSettings, publish_refusal, variable
@@ -409,12 +408,20 @@ class _Target:
 
 DOCS = _Target(
     (
-        Column(name="id", kind="int", nullable=False, dtype=pl.Int64()),
-        Column(name="body", kind="str", nullable=True, dtype=pl.String()),
-        Column(name="amount", kind="decimal", nullable=True, dtype=pl.Decimal(18, 4), precision=18, scale=4),
+        Column(name="id", kind="float", nullable=False),
+        Column(name="body", kind="str", nullable=True),
+        Column(name="amount", kind="float", nullable=True),
+        Column(name="ratio", kind="float", nullable=True),
     )
 )
-DOCS_SPEC = TableSpec("mssql", "docs", {})  # unread by SQL Server's writer, which binds by the target's kinds
+
+
+def _described(name: str, kind: str, precision: int | None = None, scale: int | None = None) -> DestColumn:
+    return DestColumn(name, kind, None, precision, scale, nullable=True, generated=False, defaulted=False)
+
+
+DOCS_SPEC = TableSpec("mssql", "docs", {"id": _described("id", "INT"), "body": _described("body", "NVARCHAR"), "amount": _described("amount", "DECIMAL", 18, 4), "ratio": _described("ratio", "FLOAT")})
+"""What SQL Server's writer reads of the table: how each float binds, into an integer, a decimal, or a float's column."""
 
 
 class _Server:
@@ -451,26 +458,29 @@ class _Server:
         pass
 
 
-def _docs(*rows: tuple[int, str | None]) -> pl.DataFrame:
-    return pl.DataFrame({"id": [row[0] for row in rows], "body": [row[1] for row in rows], "amount": [Decimal("1.5")] * len(rows)}, schema={column.name: column.dtype for column in DOCS.columns})
+def _docs(*rows: tuple[int, str | None]) -> pd.DataFrame:
+    values = {"id": [float(row[0]) for row in rows], "body": [row[1] for row in rows], "amount": [2.675] * len(rows), "ratio": [0.25 if row[1] not in {None, ""} else float("nan") for row in rows]}
+    return pd.DataFrame({column.name: pd.Series(values[column.name], dtype=frames.dtype(column)) for column in DOCS.columns})
 
 
 def test_every_column_binds_by_its_kind_and_a_row_past_4000_utf16_units_goes_by_itself_in_its_place() -> None:
     """mssql-python 1.17.0 typed each column by its longest value, binding one whose longest is ASCII as `varchar`,
     which the database's code page converts, and counted only the last row of a batch holding a longer string. A long
-    row binds its long string as `nvarchar(max)`, its others as a batch does, and keeps its place among the rows."""
+    row binds its long string as `nvarchar(max)`, its others as a batch does, and keeps its place among the rows. A
+    float binds into an integer column as a whole number's text, into a decimal one as its shortest text, which the
+    column's scale rounds, and into a float's column as a float, NaN as NULL."""
     server = _Server()
     writer = MssqlWriter("warehouse", server, 10, "etl.publishes")  # ty: ignore[invalid-argument-type] -- a fake connection
     frame = _docs((1, "hello world"), (2, "日本\U0001f600"), (3, "a" * 3999 + "\U0001f600"), (4, "\U0001f600" * 2000), (5, None))
     assert writer.apply(DOCS, Changes(insert=frame), DOCS_SPEC) == Counts(inserted=5)
-    bigint, text = (mssql_python.SQL_BIGINT, 19, 0), (mssql_python.SQL_VARCHAR, 41, 0)
+    whole, amount, double = (mssql_python.SQL_VARCHAR, 1, 0), (mssql_python.SQL_VARCHAR, 5, 0), (mssql_python.SQL_DOUBLE, 15, 0)
     assert server.calls == [
-        ("setinputsizes", [bigint, (mssql_python.SQL_WVARCHAR, 11, 0), text]),
-        ("executemany", [(1, "hello world", "1.5000"), (2, "日本\U0001f600", "1.5000")]),
-        ("setinputsizes", [bigint, (mssql_python.SQL_WVARCHAR, 0, 0), text]),
-        ("execute", (3, "a" * 3999 + "\U0001f600", "1.5000")),
-        ("setinputsizes", [bigint, (mssql_python.SQL_WVARCHAR, 4000, 0), text]),
-        ("executemany", [(4, "\U0001f600" * 2000, "1.5000"), (5, None, "1.5000")]),
+        ("setinputsizes", [whole, (mssql_python.SQL_WVARCHAR, 11, 0), amount, double]),
+        ("executemany", [("1", "hello world", "2.675", 0.25), ("2", "日本\U0001f600", "2.675", 0.25)]),
+        ("setinputsizes", [whole, (mssql_python.SQL_WVARCHAR, 0, 0), amount, double]),
+        ("execute", ("3", "a" * 3999 + "\U0001f600", "2.675", 0.25)),
+        ("setinputsizes", [whole, (mssql_python.SQL_WVARCHAR, 4000, 0), amount, double]),
+        ("executemany", [("4", "\U0001f600" * 2000, "2.675", 0.25), ("5", None, "2.675", None)]),
     ]
 
 
@@ -545,3 +555,12 @@ def test_an_oracle_column_stores_text_in_its_character_set(column: tuple[object,
     assert spec is not None
     found = spec.columns["note"]
     assert (found.length, found.unit, found.max_bytes, found.encoding, found.charset) == storage
+
+
+def test_a_floats_text_is_its_shortest_in_plain_notation_since_sql_server_cannot_convert_one_with_an_exponent() -> None:
+    """Arrow writes a float's shortest text with an exponent below 10^-6 and from 10^21, as `1e-07`, and a decimal's as
+    `1E-10`, which SQL Server refuses to convert to a decimal."""
+    floats = pa.chunked_array([pa.array([2.675, 1e-7, 1e21, -0.30000000000000004, 1e16, None])])
+    assert number_text(floats, "decimal").to_pylist() == ["2.675", "0.0000001", "1000000000000000000000", "-0.30000000000000004", "10000000000000000", None]
+    assert number_text(pa.chunked_array([pa.array([3.0, -(2.0**53), None])]), "whole").to_pylist() == ["3", "-9007199254740992", None]
+    assert plain(pa.chunked_array([pa.array(["1E-10", "0E-10", "-12.5", None])])).to_pylist() == ["0.0000000001", "0.0000000000", "-12.5", None]

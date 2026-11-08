@@ -1,11 +1,11 @@
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from decimal import Decimal
 
-import polars as pl
+import pandas as pd
 import pytest
 
-from basis.core.destination import DestColumn, TableSpec, Unit, check_table, check_values
+from basis.core import frames
+from basis.core.destination import DestColumn, TableSpec, Unit, binding, check_table, check_values
 from basis.core.tables import Changes, Column
 
 
@@ -24,19 +24,19 @@ class Table:
 
 TARGET = Table(
     (
-        Column(name="day", kind="date", nullable=False, dtype=pl.Date()),
-        Column(name="security_id", kind="str", nullable=False, dtype=pl.String(), max_length=8),
-        Column(name="price", kind="decimal", nullable=False, dtype=pl.Decimal(18, 4), precision=18, scale=4),
-        Column(name="note", kind="str", nullable=True, dtype=pl.String()),
-        Column(name="booked_at", kind="datetime", nullable=True, dtype=pl.Datetime("us", "UTC"), zone="America/New_York"),
+        Column(name="day", kind="date", nullable=False),
+        Column(name="security_id", kind="str", nullable=False, max_length=8),
+        Column(name="price", kind="float", nullable=False),
+        Column(name="note", kind="str", nullable=True),
+        Column(name="booked_at", kind="datetime", nullable=True, zone="America/New_York"),
     )
 )
-PRICE: dict[str, object] = {"day": date(2026, 11, 5), "security_id": "S1", "price": Decimal(100), "note": None, "booked_at": None}
+PRICE: dict[str, object] = {"day": date(2026, 11, 5), "security_id": "S1", "price": 100.0, "note": None, "booked_at": None}
 
 
-def prices(*rows: dict[str, object]) -> pl.DataFrame:
+def prices(*rows: dict[str, object]) -> pd.DataFrame:
     """Rows of the target, each filled from a valid default row, so a test states only what it is about."""
-    return pl.DataFrame([PRICE | row for row in rows], schema={column.name: column.dtype for column in TARGET.columns})
+    return pd.DataFrame({column.name: pd.Series([(PRICE | row)[column.name] for row in rows], dtype=frames.dtype(column)) for column in TARGET.columns})
 
 
 def column(name: str, kind: str, *, length: int | None = None, digits: tuple[int, int] | None = None, nullable: bool = True) -> DestColumn:
@@ -62,8 +62,8 @@ def test_a_table_that_matches_its_row_has_no_problems() -> None:
 @pytest.mark.parametrize(
     ("changed", "problem"),
     [
-        ({"price": column("price", "FLOAT")}, "price: a FLOAT column cannot hold a row's decimal values exactly"),
-        ({"price": column("price", "DECIMAL", digits=(18, 2))}, "price: DECIMAL(18,2) keeps fewer decimal places than the row's 4"),
+        ({"price": column("price", "NVARCHAR", length=10)}, "price: a NVARCHAR column cannot hold a row's float values exactly"),
+        ({"price": column("price", "MONEY")}, "price: a MONEY column cannot hold a row's float values exactly"),
         ({"day": column("day", "NVARCHAR", length=10)}, "day: a NVARCHAR column cannot hold a row's date values exactly"),
         ({"extra": column("extra", "INT", nullable=False)}, "extra: prices requires it, with no default, and the row leaves it out"),
     ],
@@ -83,7 +83,17 @@ def test_a_column_the_table_does_not_have_or_fills_itself_is_refused() -> None:
     ("changed", "rows", "problem"),
     [
         ({"security_id": column("security_id", "NVARCHAR", length=2)}, {"security_id": "S123"}, "values up to 4 characters, and the column holds 2"),
-        ({"price": column("price", "DECIMAL", digits=(6, 4))}, {"price": Decimal(100)}, "values up to 100.0000, and DECIMAL(6,4) holds less than 100"),
+        ({"price": column("price", "DECIMAL", digits=(6, 4))}, {"price": 99.99995}, "values up to 100.0000, and DECIMAL(6,4) holds less than 100"),
+        ({"price": column("price", "FLOAT")}, {"price": float("-inf")}, "1 infinite values, which FLOAT column price cannot store: replace them in the transform, with NaN for NULL"),
+        ({"price": column("price", "INT")}, {"price": 2.5}, "1 values with a fraction, which INT column price does not keep: round them in the transform, as the data needs"),
+        (
+            {"price": column("price", "BIGINT")},
+            {"price": 2.0**60},
+            "values from 1152921504606846976 to 1152921504606846976, beyond BIGINT's -9007199254740992 to 9007199254740992 that a float holds exactly",
+        ),
+        ({"price": column("price", "FLOAT", nullable=False)}, {"price": float("nan")}, "1 nulls, and FLOAT column price is NOT NULL"),
+        ({"security_id": column("security_id", "INT")}, {"security_id": "S1"}, "1 values that are not whole numbers, which INT column security_id cannot store, such as 'S1'"),
+        ({"security_id": column("security_id", "TINYINT")}, {"security_id": "300"}, "values from 300 to 300, beyond TINYINT's 0 to 255"),
         ({"note": column("note", "NVARCHAR", nullable=False)}, {"note": None}, "1 nulls, and NVARCHAR column note is NOT NULL"),
     ],
 )
@@ -97,10 +107,23 @@ def test_a_time_finer_than_the_column_keeps_is_refused() -> None:
     assert check_values(TARGET, oracle, Changes(insert=insert)) == ["insert: booked_at: fractions of a second, which DATE does not keep"]
 
 
+def test_a_float_goes_into_a_float_a_decimal_or_an_integer_column_and_an_identifiers_text_into_an_integer_one() -> None:
+    assert check_table(TARGET, mssql(price=column("price", "DECIMAL", digits=(10, 2)), security_id=column("security_id", "BIGINT"))) == []
+    oracle = TableSpec("oracle", "prices", {
+        "day": column("day", "DATE", nullable=False), "security_id": column("security_id", "NUMBER", digits=(10, 0), nullable=False),
+        "price": column("price", "NUMBER", digits=(10, 2), nullable=False), "note": column("note", "NVARCHAR2"), "booked_at": column("booked_at", "TIMESTAMP"),
+    })  # fmt: skip
+    assert check_table(TARGET, oracle) == []
+    fraction = TableSpec("oracle", "prices", oracle.columns | {"security_id": column("security_id", "NUMBER", digits=(10, 2))})
+    assert check_table(TARGET, fraction) == ["security_id: text goes into a NUMBER column only as an identifier's whole number, into NUMBER(p) or NUMBER(p,0)"]
+    assert binding(column("price", "DECIMAL", digits=(10, 2))) == binding(column("price", "NUMBER")) == "decimal"
+    assert (binding(column("price", "SMALLINT")), binding(column("price", "FLOAT")), binding(column("price", "BINARY_DOUBLE"))) == ("whole", "float", "float")
+
+
 def test_an_integer_beyond_its_column_is_refused() -> None:
-    target = Table((Column(name="n", kind="int", nullable=False, dtype=pl.Int64()),), table="counts", key=None)
+    target = Table((Column(name="n", kind="float", nullable=False),), table="counts", key=None)
     spec = TableSpec("mssql", "counts", {"n": column("n", "SMALLINT")})
-    assert check_values(target, spec, Changes(insert=pl.DataFrame({"n": [40_000]}))) == ["insert: n: values from 40000 to 40000, beyond SMALLINT's -32768 to 32767"]
+    assert check_values(target, spec, Changes(insert=pd.DataFrame({"n": [40_000.0]}))) == ["insert: n: values from 40000 to 40000, beyond SMALLINT's -32768 to 32767 that a float holds exactly"]
 
 
 def text(type_: str, length: int | None, *, unit: Unit, encoding: str | None, charset: str | None, max_bytes: int | None = None) -> DestColumn:  # noqa: PLR0913 -- a column's storage, each by keyword

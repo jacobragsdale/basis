@@ -138,8 +138,8 @@ def test_a_run_with_no_orders_publishes_nothing_so_its_retry_is_not_refused(tmp_
     [
         (None, "trading.orders does not exist in database trading: `basis ddl MODEL --dialect DIALECT` prints a CREATE TABLE for it"),
         (
-            TableSpec("mssql", "trading.orders", ORDERS_SPEC.columns | {"quantity": DestColumn("quantity", "DECIMAL", None, 18, 4, nullable=False, generated=False, defaulted=False)}),
-            "quantity: a DECIMAL column cannot hold a row's float values exactly",
+            TableSpec("mssql", "trading.orders", ORDERS_SPEC.columns | {"quantity": DestColumn("quantity", "NVARCHAR", 20, None, None, nullable=False, generated=False, defaulted=False)}),
+            "quantity: a NVARCHAR column cannot hold a row's float values exactly",
         ),
     ],
     ids=["missing", "drifted"],

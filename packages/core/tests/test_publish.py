@@ -6,9 +6,10 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-import polars as pl
+import pandas as pd
 import pytest
 
+from basis.core import frames
 from basis.core import publish as publishing
 from basis.core.databases import Counts, LedgerEntry, Reader, Statements, Writer
 from basis.core.destination import DestColumn, TableSpec
@@ -19,7 +20,7 @@ from basis.core.tables import Changes, Column, Target
 
 AT = datetime(2026, 11, 6, 6, tzinfo=UTC)
 DAY = Interval(datetime(2026, 11, 5, tzinfo=UTC), datetime(2026, 11, 6, tzinfo=UTC))
-COLUMNS = (Column("security_id", "str", nullable=False, dtype=pl.String(), max_length=12), Column("price", "float", nullable=False, dtype=pl.Float64()))
+COLUMNS = (Column("security_id", "str", nullable=False, max_length=12), Column("price", "float", nullable=False))
 SPEC = {name: DestColumn(name, type_, length, None, None, nullable=False, generated=False, defaulted=False) for name, type_, length in [("security_id", "NVARCHAR", 12), ("price", "FLOAT", None)]}
 
 
@@ -40,17 +41,17 @@ class Ledger:
 
     name: str
     specs: dict[str, TableSpec] = field(default_factory=dict[str, TableSpec])
-    rows: dict[str, list[pl.DataFrame]] = field(default_factory=dict[str, list[pl.DataFrame]])
+    rows: dict[str, list[pd.DataFrame]] = field(default_factory=dict[str, list[pd.DataFrame]])
     entries: list[LedgerEntry] = field(default_factory=list[LedgerEntry])
 
 
 @dataclass
 class FakeWriter:
     ledger: Ledger
-    rows: dict[str, list[pl.DataFrame]] = field(default_factory=dict[str, list[pl.DataFrame]])
+    rows: dict[str, list[pd.DataFrame]] = field(default_factory=dict[str, list[pd.DataFrame]])
     entries: list[LedgerEntry] = field(default_factory=list[LedgerEntry])
 
-    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pl.DataFrame:
+    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pd.DataFrame:
         raise NotImplementedError
 
     def describe(self, table: str) -> TableSpec | None:
@@ -65,14 +66,14 @@ class FakeWriter:
     def apply(self, target: Target, changes: Changes, spec: TableSpec) -> Counts:  # noqa: ARG002 -- the Writer protocol's signature
         assert changes.insert is not None
         self.rows.setdefault(target.table, []).append(changes.insert)
-        return Counts(inserted=changes.insert.height)
+        return Counts(inserted=len(changes.insert))
 
     def record(self, entry: LedgerEntry) -> None:
         self.entries.append(entry)
 
     def commit(self) -> None:
-        for table, frames in self.rows.items():
-            self.ledger.rows.setdefault(table, []).extend(frames)
+        for table, written in self.rows.items():
+            self.ledger.rows.setdefault(table, []).extend(written)
         self.ledger.entries.extend(self.entries)
 
 
@@ -103,9 +104,13 @@ def databases(*names: str, missing: str | None = None) -> dict[str, Ledger]:
     return {name: Ledger(name, {} if f"{name}.prices" == missing else {f"{name}.prices": TableSpec("mssql", f"{name}.prices", SPEC)}) for name in names}
 
 
-def run(found: Mapping[str, Ledger], *, run_id: str = "R1", again: bool = False, insert: pl.DataFrame | None = None, checked: Mapping[str, TableSpec] | None = None) -> dict[str, PublishRecord]:
+def prices(security_ids: list[str], values: list[float]) -> pd.DataFrame:
+    return pd.DataFrame({column.name: pd.Series(given, dtype=frames.dtype(column)) for column, given in zip(COLUMNS, (security_ids, values), strict=True)})
+
+
+def run(found: Mapping[str, Ledger], *, run_id: str = "R1", again: bool = False, insert: pd.DataFrame | None = None, checked: Mapping[str, TableSpec] | None = None) -> dict[str, PublishRecord]:
     targets = {f"{name}_prices": Table(f"{name}.prices", name) for name in found}
-    frame = insert if insert is not None else pl.DataFrame({"security_id": ["A", "B"], "price": [1.5, 2.0]})
+    frame = insert if insert is not None else prices(["A", "B"], [1.5, 2.0])
     changes = {output: Changes(insert=frame) for output in targets}
     return publish(Publication(run_id, "prices", DAY, "0.0.0", again, lambda: AT), targets, changes, lambda name: FakeDatabase(found[name]), checked)
 
@@ -136,7 +141,7 @@ def test_a_database_that_refuses_commits_nothing_and_the_databases_after_it_are_
 
 def test_a_value_the_table_cannot_hold_refuses_the_publish_and_writes_nothing() -> None:
     found = databases("warehouse")
-    records = run(found, insert=pl.DataFrame({"security_id": ["A" * 13], "price": [1.5]}))
+    records = run(found, insert=prices(["A" * 13], [1.5]))
     assert records["warehouse"].status == "failed"
     assert "security_id: values up to 13 characters, and the column holds 12" in (records["warehouse"].error or "")
     assert found["warehouse"].rows == {}

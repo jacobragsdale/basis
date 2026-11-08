@@ -250,12 +250,14 @@ def regress_jobs(args: RegressArgs) -> Regressions:
 
 
 def difference(found: OperationDiff) -> Difference:
-    """How a table's changes differ, in a few words, in rows: `upsert: 2 added, 1 changed (price 1)`."""
+    """How a table's changes differ, in a few words, in rows and then columns: `upsert: 2 added, 1 changed (price 1)`,
+    or `insert: 1 changed (price 1); note added`."""
     if found.operation == "delete":
         return Difference(found.output, "its delete differs", vars(found))
     counts = ", ".join(f"{count} {word}" for count, word in ((found.added, "added"), (found.removed, "removed"), (found.changed, "changed")) if count)
     columns = f" ({', '.join(f'{name} {count}' for name, count in found.columns.items())})" if found.columns else ""
-    return Difference(found.output, f"{found.operation}: {counts}{columns}", vars(found))
+    schema = ", ".join(f"{name} {change}" for name, change in found.schema.items())
+    return Difference(found.output, f"{found.operation}: {'; '.join(part for part in (counts + columns, schema) if part)}", vars(found))
 
 
 def _describe(args: DescribeArgs) -> int:

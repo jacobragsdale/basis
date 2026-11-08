@@ -11,7 +11,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
-import polars as pl
 import pyarrow as pa
 import pyarrow.fs as pafs
 
@@ -139,7 +138,7 @@ class TradingWriter:
     orders: list[dict[str, object]] = field(default_factory=list[dict[str, object]])
     ledger: list[LedgerEntry] = field(default_factory=list[LedgerEntry])
 
-    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pl.DataFrame:
+    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pd.DataFrame:
         raise NotImplementedError
 
     def describe(self, table: str) -> TableSpec | None:
@@ -162,12 +161,12 @@ class TradingWriter:
         assert target.table == ORDERS_TABLE
         assert changes.insert is not None
         assert (changes.delete, changes.upsert, changes.insert_new) == (None, None, None), "orders are a plain insert"
-        for row in changes.insert.iter_rows(named=True):
+        for row in ({str(name): value for name, value in record.items()} for record in changes.insert.to_dict("records")):
             if row["portfolio_id"] == self.database.fail_on:
                 msg = f"the INSERT statement conflicted with the CHECK constraint on {ORDERS_TABLE}"
                 raise RuntimeError(msg)
             self.orders.append(row)
-        return Counts(inserted=changes.insert.height)
+        return Counts(inserted=len(changes.insert))
 
     def record(self, entry: LedgerEntry) -> None:
         self.ledger.append(entry)

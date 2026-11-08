@@ -4,7 +4,6 @@ transaction, before it writes, so nothing commits."""
 
 import uuid
 from collections.abc import Iterator
-from decimal import Decimal
 from functools import partial
 from pathlib import Path
 
@@ -82,7 +81,7 @@ def test_a_qa_run_publishes_to_the_tables_the_repo_allows_and_saves_in_the_qa_st
     assert outcome.failures == []
     [(part, run)] = outcome.runs
     assert (part, run.summary) == ("job", f"published: prices_{scratch.suffix} (2 upserted)")
-    assert sorted(scratch.rows(f"SELECT security_id, price FROM prices_{scratch.suffix}")) == [("S1", Decimal("100.5000")), ("S2", Decimal("7.2500"))]
+    assert sorted(scratch.rows(f"SELECT security_id, price FROM prices_{scratch.suffix}")) == [("S1", 100.5), ("S2", 7.25)]
     assert run.run_id is not None
     record = snapshots.find(Root.at(repo / "runs-test"), run.run_id).record()
     assert (record.labels, record.git_sha, record.interval) == ({"purpose": "qa"}, "C1", "2026-11-05..2026-11-06")

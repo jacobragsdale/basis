@@ -8,7 +8,7 @@ from typing import Literal
 
 import mssql_python
 import oracledb
-import polars as pl
+import pandas as pd
 import pytest
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -106,11 +106,11 @@ def oracle(databases: TestDatabases, suffix: str) -> Scratch:
     return Scratch("oracle", settings, lambda: oracledb.connect(user=user, password=password, dsn=dsn), suffix)
 
 
-def run(job: Job, databases: dict[str, Scratch], frame: pl.DataFrame, root: Path, *, again: bool = False, interval: str = "2026-11-05..2026-11-06") -> runs.Result:  # noqa: PLR0913 -- a test's knobs, each by keyword
+def run(job: Job, databases: dict[str, Scratch], frame: pd.DataFrame, root: Path, *, again: bool = False, interval: str = "2026-11-05..2026-11-06") -> runs.Result:  # noqa: PLR0913 -- a test's knobs, each by keyword
     """Run `job` on `frame` as its `prices` input, publishing to `databases` by name."""
     folder = root / "data"
     folder.mkdir(exist_ok=True)
-    frame.write_parquet(folder / "prices.parquet")
+    frame.to_parquet(folder / "prices.parquet", index=False)
     params = root / "params.json"
     params.write_text("{}", encoding="utf-8")
     request = runs.Request(params, Interval.parse(interval), folder, publish=True, again=again)
