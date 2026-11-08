@@ -189,9 +189,10 @@ of the `openapi.json` that this repo's example API produces. [The contract page]
   its release tags, and fails when a field is removed, renamed or changes type; with no earlier release, it passes and
   says so, and in a clone that may lack its releases, a shallow one or one that fetches no tags, it fails with the fix. Adding a response field is never breaking, because basis-ui's
   schemas drop fields they do not know. Requests are the other way round: an API refuses unknown request fields, so an
-  API that accepts a new one deploys before the UI that sends it, and it takes a decimal only as a string, as it sends
-  one, and a time only with its offset, as it sends one: a route whose request or response may hold a time without
-  its offset is refused when it is declared.
+  API that accepts a new one deploys before the UI that sends it, and it takes a time only with its offset, as it sends
+  one: a route whose request or response may hold a time without its offset is refused when it is declared.
+- **Numbers.** Every number is a JSON number, never a string, and NaN and ±inf are null, in JSON and Arrow alike. The
+  UI rounds, once, at display, as [Numbers](#numbers) says.
 - **Errors.** Every error is an RFC 9457 problem details response, from one exception map. A 422, whether basis or the
   handler refuses the request, names each field at fault in `errors`, by a JSON Pointer into the body or by a query or
   path parameter's name, as RFC 9457's own example does, so a UI puts each error on its field.
@@ -204,10 +205,20 @@ of the `openapi.json` that this repo's example API produces. [The contract page]
 - **Datasets as Arrow.** A route that returns a dataset declares it, and returns Arrow when the request asks for
   `application/vnd.apache.arrow.stream`, which is how parallax, basis-ui's grid, receives its data. Its rows are flat,
   one column for each field, so its Arrow and its JSON hold the same values.
+- **Display formats.** A dataset's number column may declare how it is shown, on its float field, as
+  `Annotated[float, api.format.money("USD")]` or `api.format.pct(2)`, so pages never choose decimals. basis-api writes
+  it as a JSON object: in Arrow, as the field metadata key `basis.format`, whose value is the object as a JSON string,
+  and in the document as `x-basis-format` on each numeric property's schema, the columns declared for an Arrow response
+  among them. parallax and @basis/ui's number components format each column by it, and a column without it gets the
+  formatter's default for its type. The kinds, agreed with basis-ui on 2026-11-08, are `number`, `money`, `pct`, `bps`,
+  `price` and `price32`, and [the contract page](contract.md#display-formats) gives each one's fields. Rates and
+  spreads are fractions: 0.0525 is 5.25%, or 525 bp.
 - **One origin.** A UI and its API sit behind one host on the AKS cluster, the ingress routing `/api` to the API,
   removing the prefix, and the rest to the UI, so the browser makes no cross-origin calls. The document's paths carry no
   `/api`, and a UI's client adds it. Where that routing is not possible, the API's settings declare the origins it
-  allows, per environment; an empty list, the default, means the same origin only.
+  allows, per environment; an empty list, the default, means the same origin only. basis-api can also serve a built UI
+  folder at `/` from the same app, beside its routes, which gives one origin with no ingress split; ctzd's apps do this
+  (see [ctzd](#ctzd-a-consumer)).
 - **Recorded responses.** `basis records export` writes chosen recorded requests and responses as JSON files in the
   format basis-ui's fixture mode reads. They hold client data, so they go in a folder git ignores, never in a commit.
 
@@ -249,14 +260,21 @@ which have no HTTP. The API gives each its HTTP meaning once, in `errors.py`, as
 `MATURED = api.error(domain.Matured, status=422, title="The bond has matured")`, and its routes list those.
 
 Request bodies and settings are strict models: an unknown key is refused and no value is coerced, so a misspelled field
-fails at the boundary instead of being silently ignored. A decimal in a request body is a JSON string, as it is in a
-response, because a JSON number reaches a decimal through a float, and a time in one carries its offset. Query and path
-parameters, which arrive as text, are read by each type's grammar. Every route declares its deadline, which caps every
+fails at the boundary instead of being silently ignored. A number in a request body is a JSON number, as it is in a
+response (see [Numbers](#numbers)), and a time in one carries its offset. Query and path parameters, which arrive as
+text, are read by each type's grammar. Every route declares its deadline, which caps every
 call its request makes, its response model and its errors, and an error it does not declare answers 500. Database writes
 in a request commit only after the handler returns and its response validates, and calls to other services that change
 state go after that commit. A declared pure compute function runs in a process pool, off the event loop, because
 CPU-bound quant code inside an `async def` stalls every request on that worker. An unexpected error is logged once, with
 its traceback.
+
+A dataset route may return a pandas frame or an Arrow table, declared as `response=api.Table[Row]`, decided on
+2026-11-08. basis checks it once against the row model's columns and types (names, types, nulls and time zones), never
+row by row, and a mismatch is a defect, a 500, whose request's writes roll back. Since no row is checked by itself, a
+`Table` row model may not declare value constraints, and one that does is refused when it is declared.
+`Reader.fetch_table(Row, SQL, ...)` reads Arrow straight from the driver, and the route's JSON is rendered column-wise
+from the Arrow, as [the contract](contract.md#datasets-as-arrow) has it. This is the path ctzd's apps use.
 
 A call that changes another service's state cannot be rolled back if it goes before the request's writes commit, nor
 undone if it fails after, so such a call goes through an outbox. In a route that writes, the handler sends it with
@@ -296,8 +314,10 @@ refuses it in a pod or a container even then, but for an app built from a test's
 PyJWT, which every basis environment already holds.
 
 `basis call ROUTE` runs a handler in-process with its real or fake resources and prints the response, so an agent
-exercises an endpoint without starting a server. Every request in production is recorded in the run store: the request,
-each resource call and its result, the writes, the response, and the code's and the framework's versions. `basis replay`
+exercises an endpoint without starting a server, and `call` and `dev` are library functions too. Where a deployment
+turns recording on, every request is recorded in the run store: the request, each resource call and its result, the
+writes, the response, and the code's and the framework's versions. Recording is off otherwise, which ctzd needs (see
+[ctzd](#ctzd-a-consumer)), in place of recording every request in production. `basis replay`
 reruns one recorded request with today's code against the recorded results, touching nothing live, and `basis regress`
 replays a sample of recorded requests and lists the responses that changed. Both run on developers' desktops, which can
 read the store. How long records are kept is out of scope for this design.
@@ -321,8 +341,8 @@ A job keeps its declarative shape, which has an API's layers already: its `Input
 API's handlers and its jobs' transforms alike, under the same purity check.
 
 `basis.core` and `basis.job` hand job code its frames as pandas DataFrames, decided on 2026-11-07 in place of polars.
-Each column's dtype is chosen from the job's declared row type, among pandas' nullable and Arrow-backed dtypes, so an
-integer with nulls stays an integer, a decimal stays exact, and a time keeps its zone. polars leaves the lock, and
+Every number in them is a float64, as [Numbers](#numbers) has it, and strings, dates and times take pandas' nullable
+and Arrow-backed dtypes from the job's declared row type, so a time keeps its zone. polars leaves the lock, and
 pyarrow stays the I/O layer, for Parquet, the run store, Arrow responses and the lake. The firm's team, its Excel
 habits, optim and the code to port are all pandas, and polars' gains matter little here: frame work was about 5% of a
 measured optim run, and bulk movement goes through pyarrow. A job with a huge in-memory transform can convert to
@@ -380,7 +400,11 @@ gives the previous business day and a day's early-close time. Each states the la
 later one is an error, never a silent business day. A job names its calendar explicitly.
 
 **Messages.** Slack messages go through channel webhooks, as the firm already posts to its channels, and email through
-the firm's SMTP relay. Both have fakes, and nothing is sent in tests, `replay`, `regress` or the QA tier.
+the firm's SMTP relay. Both have fakes, and nothing is sent in tests, `replay`, `regress` or the QA tier. Their numbers
+are written by a Python port of parallax's number formatter, decided on 2026-11-08, which reads the same display
+formats as the UI (see [What a UI can rely on](#what-a-ui-can-rely-on)), so a number reads in a message as it does in
+the grid. It is tested against the output parallax's Rust writes, the 2,192 cases of
+`packages/parallax/crates/parallax-engine/tests/fixtures/format.json` in basis-ui.
 
 **Folders and Excel.** Portfolio managers live in Excel, and the files sit on NFS. A folder is a named path, which each
 machine's settings give: `\\server\share` on Windows, and a mount path in WSL and in a pod. basis reads and writes Excel
@@ -419,6 +443,59 @@ ENV` checks that each login works and each folder is reachable.
 None of this brings Docker to the desktops: cross-platform still means the image in AKS, Windows on the Citrix desktops,
 and WSL.
 
+## Numbers
+
+Every number basis handles is a float64, from the database to the browser, decided on 2026-11-08. One simple
+primitive type then runs the whole way, and the browser's Number is a float64 too. The UI rounds once, at display, by
+Excel's rule: 15 significant digits, half away from zero, then the decimals shown, which parallax's formatter already
+implements. This replaces the rules that kept integers and decimals exact, in frames and as JSON strings.
+
+- **Frames.** Every number in a frame is a plain numpy float64 column, with NaN for missing: not Arrow-backed, not
+  decimal, and not int64. Identifiers, such as ids and account numbers, are text, and a query selects them as text.
+  Strings and dates keep their dtypes, as [Jobs](#jobs-basisjob) says.
+- **Reads.** The drivers cast every numeric source type to float64 at the Arrow level: on Oracle, NUMBER in every form,
+  and BINARY_DOUBLE; on SQL Server, decimal, numeric, money, smallmoney, float, int, bigint, smallint and tinyint.
+  Oracle's BINARY_FLOAT and SQL Server's real widen through their shortest decimal, so 0.1 stays 0.1. A whole-number
+  column that holds a value beyond 2^53 fails the query, naming the column, with the fix: select it as text if it names
+  something, or `CAST AS FLOAT` if it is an amount.
+- **Row models** take `float` for numbers, and an `int` or `Decimal` field is refused, with the same fix.
+- **Writes.** A float published into an existing DECIMAL column binds as its shortest decimal text, its `repr`, so the
+  column's scale rounds it: 2.675 becomes 2.68, not 2.67. Into an INT column, a whole float binds as integer text, and
+  anything else is refused. NaN publishes as NULL, and ±inf is refused. `basis ddl` emits SQL Server `float` and
+  Oracle `BINARY_DOUBLE`, and column kinds lose int and decimal.
+- **`regress`** compares numbers at 15 significant digits, so a sum done in another order is not a change.
+- **APIs.** Numbers are JSON numbers, never strings, and NaN and ±inf are null, in JSON and Arrow alike. Dataset rows
+  take `float` for every number, and refuse `int` and `Decimal` fields, with the fix. Outside datasets, route models
+  refuse `Decimal`, and `int` stays allowed, as a JSON number.
+- **Rounding.** Python never rounds numbers. A `basis check` gate refuses `round()`, `.round()`, `numpy.round`,
+  `numpy.around`, `numpy.rint` and the `decimal` module in user code, with a message that says to leave rounding to the
+  UI. Business rounding, such as lot and tick sizes, stays in named, tested functions. How such a function is marked is
+  still open, pending the maintainer.
+
+## ctzd, a consumer
+
+ctzd is the firm's citizen-developer platform, and since 2026-11-08 a consumer of basis. Its only UI is a React app on
+@basis/ui and @basis/parallax, with a basis-api backend: one repo and one container per app. Citizen code never
+imports basis directly; ctzd-core wraps it. ctzd never runs the `basis` command or `basis sync`, because ctzd owns
+every file in its apps, so a ctzd app is not a basis repo, and the rule that a basis repo holds one toolchain does not
+reach it.
+
+The surface ctzd uses is basis-api's `Service`, dataset routes and `basis.api.build(service, settings=..., fakes=...)`;
+the drivers; and later the calendars, messages and the lake. A change to that surface needs a note to ctzd. basis gives
+ctzd:
+
+- **A UI at `/`.** basis-api can serve a built UI folder at `/` from the same app, beside the routes, so one container
+  serves the UI and its API on one origin.
+- **Library functions.** `call` and `dev` are callable as functions, not only as verbs.
+- **Settings in code.** `build(...)` with `Settings` made in code stays a supported seam. ctzd builds Settings from its
+  own variables, so a ctzd app has no `BASIS_*` variables.
+- **No recording by default.** Request recording to the run store is off unless a deployment turns it on.
+- **No `basis` verbs.** In a repo whose `pyproject.toml` has no `[tool.basis]` table, `basis` refuses every verb but
+  `--version`, so no agent can run `basis sync` over a ctzd app's files. `sync`, `check`, `new` and `run` already
+  refused there on 2026-11-08, and step 2.11 adds a test that holds every verb to it.
+- **A number formatter.** The Python port of parallax's formatter, for Slack and email text (see
+  [Messages](#what-jobs-and-apis-share)), which ctzd moves onto.
+
 ## The run store and fixtures
 
 Every package writes its run data in one format. A run, a request or a decision is a manifest, a JSON file at
@@ -453,7 +530,7 @@ and basis has no tool for scrubbing client data out of a snapshot, because a gen
 
 pyarrow is the I/O layer, for Parquet, the run store, Arrow responses and the lake. Job code works in pandas, as
 [Jobs](#jobs-basisjob) says, and optim, provisionally, in pandas too. `basis.api` works in pydantic models, and in
-pyarrow for its Arrow responses.
+pyarrow for its Arrow responses and its `api.Table` datasets.
 
 ## Agents
 
