@@ -73,8 +73,8 @@ def test_a_repo_with_no_package_has_no_layers_to_hold(repo: Path) -> None:
 
 
 def test_a_layer_is_known_by_its_own_name_at_any_depth() -> None:
-    assert [layers.layer(module) for module in ("api.handlers", "api.bonds.handlers", "api.handlers.bonds", "api.domain", "api.compute", "api")] == [
-        "handlers", "handlers", None, "domain", None, None,
+    assert [layers.layer(module) for module in ("api.handlers", "api.bonds.handlers", "api.handlers.bonds", "api.domain", "api.domain.rates", "api.compute", "api")] == [
+        "handlers", "handlers", None, "domain", "domain", None, None,
     ]  # fmt: skip
 
 
@@ -137,6 +137,13 @@ def test_a_domain_module_that_reaches_io_or_basis_fails_with_the_fix(repo: Path,
             f"take what it needs from {imported} as arguments, from a handler or a repository, which import it, so the same rules run in a job",
         )
     ]
+
+
+def test_every_module_of_a_domain_package_stays_pure(repo: Path) -> None:
+    package = {"accruals/domain.py": None, "accruals/domain/__init__.py": "from accruals.domain.rates import Rate\n", "accruals/domain/rates.py": "import socket\n\nRate = float\n"}
+    write(repo, {name: text for name, text in (CLEAN | package).items() if text is not None})
+    [reason] = reasons(repo)
+    assert reason == "accruals/domain/rates.py:1 imports socket into accruals.domain.rates, and a domain module stays pure: no I/O, no web framework and nothing of basis"
 
 
 def test_a_domain_module_that_reaches_io_through_a_helper_names_the_chain(repo: Path) -> None:

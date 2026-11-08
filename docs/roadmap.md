@@ -448,7 +448,6 @@ These are left for it.
 - **Step 2.6, from its review.** These are not fixed yet:
   - Schemathesis loads the service installed in the running environment, not the commit under check, so in the push
     hook's worktree it can test other code.
-  - Purity is checked on modules named `domain`, not on every module inside a `domain` package.
   - The socket plugin blames the unit test that is running for a socket a leftover thread opens.
   - The folders basis never reads are listed in four places.
   - `layers.DECLARATIONS` is unused.

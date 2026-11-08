@@ -14,7 +14,7 @@ Three rules hold them, each failure one `ERROR` line with its fix:
 
 - **Imports go down the table only**, directly or through modules of the repo's that are no layer, such as a
   helper: a domain module never imports a handlers module, nor a declaration a repository.
-- **A domain module stays pure**, as a compute module is: it imports, directly or through modules of the repo's that
+- **A domain module stays pure**, as a compute module is, `domain.py` or any module of a `domain` package: it imports, directly or through modules of the repo's that
   are no layer, nothing of basis, no web framework, server or settings (`fastapi`, `starlette`, `uvicorn`,
   `pydantic_settings`), no database driver, HTTP client or storage, and none of the standard library's sockets,
   processes or databases (`PURE`), so the same domain code runs in a job, which has no HTTP.
@@ -92,9 +92,12 @@ class _Graph:
 
 
 def layer(module: str) -> str | None:
-    """The layer of the module `module`, by its own name, or None for a module that is no layer."""
-    name = module.rpartition(".")[2]
-    return name if name in RANKS else None
+    """The layer of the module `module`, by its own name; every module of a `domain` package is the domain too, as
+    `domain.py` is, so each stays pure; None for a module that is no layer."""
+    parts = module.split(".")
+    if parts[-1] in RANKS:
+        return parts[-1]
+    return "domain" if "domain" in parts[1:-1] else None
 
 
 def problems(repo: Path) -> list[Problem]:

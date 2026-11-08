@@ -185,3 +185,15 @@ def test_what_each_exit_code_means_is_mutmut_s_own() -> None:
 
     theirs = {code: status for code, status in status_by_exit_code.items() if code != mutation.SURVIVED and code not in mutation.KILLED and status != "suspicious"}
     assert theirs | {2: "interrupted"} == mutation.STATUSES  # mutmut's "check was interrupted by user", in a word
+
+
+def test_every_module_of_a_domain_package_is_domain_code(tmp_path: Path) -> None:
+    write(
+        tmp_path,
+        {
+            "rates/domain/__init__.py": "def head() -> int:\n    return 1\n",
+            "rates/domain/days.py": "def count() -> int:\n    return 2\n",
+            "rates/domain/tests/test_days.py": "def test() -> None: ...\n",
+        },
+    )
+    assert [module for _, module in mutation.domain_modules(tmp_path)] == ["rates.domain", "rates.domain.days"]

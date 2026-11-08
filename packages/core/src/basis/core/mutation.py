@@ -118,15 +118,17 @@ def _base(found: clone.Clone) -> str | None:
 
 
 def domain_modules(repo: Path) -> Iterator[tuple[Path, str]]:
-    """Each domain module of the repo, by its file and its dotted name, outside its tests."""
+    """Each domain module of the repo, by its file and its dotted name, outside its tests: each `domain.py`, and every
+    module of a `domain` package."""
     for folder, names, files in os.walk(repo):
         here = Path(folder)
         names[:] = sorted(name for name in names if name not in _UNREAD and name != "tests" and not (here / name / "pyvenv.cfg").exists())
         parts = here.relative_to(repo).parts
         if f"{DOMAIN}.py" in files:
             yield here / f"{DOMAIN}.py", ".".join((*parts, DOMAIN))
-        if parts and parts[-1] == DOMAIN and "__init__.py" in files:
-            yield here / "__init__.py", ".".join(parts)
+        if DOMAIN in parts[1:] and "__init__.py" in files:
+            for name in sorted(file for file in files if file.endswith(".py")):
+                yield here / name, ".".join(parts if name == "__init__.py" else (*parts, name.removesuffix(".py")))
 
 
 def functions(path: Path, module: str, relative: str) -> list[Function]:
