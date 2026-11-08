@@ -459,5 +459,7 @@ These are left for it.
   data, with fewer distinct values, compresses further. Brotli or zstd for the API's own answers would need a
   dependency, and Safari's zstd support; not done.
 - **Step 2.12, measured.** 100,000 rows, on the development host: through pydantic (`list[Row]`), JSON 59 ms and
-  Arrow 121 ms; as an `api.Table`, Arrow 7 ms and JSON 286 ms. A table's JSON goes through `to_pylist`, so a
-  column-wise JSON writer would cut its 286 ms; Arrow, which basis-ui's grids read, is already the fast path.
+  Arrow 121 ms; as an `api.Table`, Arrow 7 ms and JSON 286 ms. A table's JSON goes through `to_pylist`. Tried on
+  2026-11-07, 100,000 rows of five columns: a column-wise writer (each column cast to JSON text by Arrow, the rows
+  joined element-wise) took 49 ms against `to_pylist`'s 113, but writes a whole float as `3781`, not `3781.0` as
+  pydantic does, and needs its own formatting of times; not adopted, since basis-ui's grids read Arrow, at 7 ms.
