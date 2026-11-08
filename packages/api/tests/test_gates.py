@@ -225,7 +225,7 @@ def test_a_route_that_declares_too_little_fails(repo: Path, monkeypatch: pytest.
 
 
 def test_an_openapi_json_the_code_no_longer_makes_fails(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    edit(repo, "handlers.py", '"""The bond\'s coupons, from its first to its last, which is paid at maturity."""', '"""The bond\'s coupons, first to last."""')
+    edit(repo, "handlers.py", '"""The bond\'s coupons, from its first to its last, which is paid at maturity, as a table: a frame of them."""', '"""The bond\'s coupons, first to last."""')
     assert checked(repo, monkeypatch, capsys) == ["ERROR: openapi.json does not match what the installed basis writes: run `uv run basis sync`, which rewrites or removes each"]
 
 

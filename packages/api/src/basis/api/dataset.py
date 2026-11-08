@@ -36,6 +36,8 @@ from pydantic.fields import FieldInfo
 
 from basis.api import strict
 from basis.api.errors import DeclarationError
+from basis.api.format import Formatted
+from basis.core.display import Display
 
 type Kind = Literal["utf8", "float64", "bool", "date32", "timestamp"]
 
@@ -48,6 +50,9 @@ class Column:
     """The model's field it holds."""
     kind: Kind
     nullable: bool
+    format: Display | None = None
+    """Its display format, which a float field declares as `Annotated[float, api.format.money("USD")]`: see
+    `basis.api.format`."""
     enum: bool = False
     """Whether its values are an `Enum`'s members, whose values the column holds."""
     text: bool = False
@@ -113,12 +118,19 @@ def _column(route: str, model: type[BaseModel], name: str, field: FieldInfo, *, 
     if kind is None:
         msg = f"{where} is {strict.named(annotation)}, which Arrow's columns do not hold: give it str, float, bool, date, AwareDatetime, UUID, a Literal or an Enum of strings, or T | None"
         raise DeclarationError(msg)
-    return Column(key, name, kind, nullable or kind == "float64", text=isinstance(annotation, type) and issubclass(annotation, UUID))
+    formats = [found.display for found in metadata if isinstance(found, Formatted)]
+    if formats and kind != "float64":
+        msg = f"{where} declares a display format, and a dataset's display formats are its numbers', its float columns': drop it, or make the column a float"
+        raise DeclarationError(msg)
+    if len(formats) > 1:
+        msg = f"{where} declares {len(formats)} display formats: give it one"
+        raise DeclarationError(msg)
+    return Column(key, name, kind, nullable or kind == "float64", format=formats[0] if formats else None, text=isinstance(annotation, type) and issubclass(annotation, UUID))
 
 
 def _constrains(metadata: object) -> bool:
-    """Whether a field's metadata is a value constraint, such as `Field(gt=0)`'s or a pattern's."""
-    return isinstance(metadata, annotated_types.BaseMetadata) or type(metadata).__name__ == "_PydanticGeneralMetadata"
+    """Whether a field's metadata is a value constraint, such as `Field(gt=0)`'s or a pattern's; a display format is none."""
+    return not isinstance(metadata, Formatted) and (isinstance(metadata, annotated_types.BaseMetadata) or type(metadata).__name__ == "_PydanticGeneralMetadata")
 
 
 def _unwrapped(annotation: object, metadata: list[object]) -> tuple[object, bool, list[object]]:

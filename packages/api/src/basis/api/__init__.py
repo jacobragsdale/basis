@@ -49,6 +49,7 @@ for their declarations, import no server, no exporter, no database driver and no
 
 from typing import TYPE_CHECKING
 
+from basis.api import format  # noqa: A004 -- `api.format.money("USD")`, a namespace of display formats
 from basis.api.compute import Compute, ComputeFunction, compute
 from basis.api.errors import DeclarationError, DomainError, Error, FieldError, ParameterError, PointerError, Problem, ValidationProblem, error, pointer
 from basis.api.identity import SignInRequiredError, User
@@ -111,6 +112,7 @@ __all__ = [
     "database",
     "delete",
     "error",
+    "format",
     "get",
     "given",
     "http",

@@ -397,7 +397,7 @@
     "/bonds/{security}/coupons": {
       "get": {
         "summary": "Coupons",
-        "description": "The bond's coupons, from its first to its last, which is paid at maturity.",
+        "description": "The bond's coupons, from its first to its last, which is paid at maturity, as a table: a frame of them.",
         "operationId": "coupons",
         "parameters": [
           {
@@ -421,7 +421,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Coupon"
+                    "$ref": "#/components/schemas/CouponRow"
                   },
                   "title": "Response Coupons"
                 }
@@ -664,7 +664,7 @@
           "ACT/365F"
         ]
       },
-      "Coupon": {
+      "CouponRow": {
         "properties": {
           "starts": {
             "type": "string",
@@ -678,7 +678,11 @@
           },
           "interest": {
             "type": "number",
-            "title": "Interest"
+            "title": "Interest",
+            "x-basis-format": {
+              "decimals": 4,
+              "kind": "price"
+            }
           }
         },
         "additionalProperties": false,
@@ -688,8 +692,8 @@
           "pays",
           "interest"
         ],
-        "title": "Coupon",
-        "description": "One of a bond's coupons, a row of its schedule."
+        "title": "CouponRow",
+        "description": "A row of a bond's coupons as a UI's grid shows them: the domain's `Coupon`, with each number's display format,\nwhich is how the API presents it, not a rule of the domain's."
       },
       "DayCount": {
         "properties": {

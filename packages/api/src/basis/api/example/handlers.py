@@ -6,12 +6,13 @@ import logging
 from datetime import date
 from typing import Annotated
 
+import pandas as pd
 from basis import api
 from fastapi import Path, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from basis.api.example import domain, repository
-from basis.api.example.domain import Accrual, Bond, Convention, Coupon, DayCount, DirtyPrice, Settlement, Yield
+from basis.api.example.domain import Accrual, Bond, Convention, DayCount, DirtyPrice, Settlement, Yield
 from basis.api.example.errors import PeriodReversed, PeriodTooLong
 from basis.api.example.resources import CLOCK, IDS, LEDGER, PRICING, SOLVE, TERMS, WAREHOUSE, Settings
 
@@ -105,9 +106,23 @@ async def bond_yield(  # noqa: PLR0913, PLR0917 -- what the route reads and reac
     return domain.quoted(found, settle, clean, dirty, annual)
 
 
-async def coupons(security: Security, warehouse: Annotated[api.Reader, api.given(WAREHOUSE)]) -> list[Coupon]:
-    """The bond's coupons, from its first to its last, which is paid at maturity."""
-    return domain.schedule(await repository.bond(warehouse, security))
+class CouponRow(BaseModel):
+    """A row of a bond's coupons as a UI's grid shows them: the domain's `Coupon`, with each number's display format,
+    which is how the API presents it, not a rule of the domain's."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    starts: date
+    """The day its period starts accruing: the coupon date before, or the issue date for the first."""
+    pays: date
+    interest: Annotated[float, api.format.price(4)]
+    """Per 100 of face, as the bond's convention accrues it over the period."""
+
+
+async def coupons(security: Security, warehouse: Annotated[api.Reader, api.given(WAREHOUSE)]) -> api.Table[CouponRow]:
+    """The bond's coupons, from its first to its last, which is paid at maturity, as a table: a frame of them."""
+    schedule = domain.schedule(await repository.bond(warehouse, security))
+    return pd.DataFrame([coupon.model_dump() for coupon in schedule], columns=list(CouponRow.model_fields))
 
 
 async def record_settlement(

@@ -18,7 +18,7 @@ from http import HTTPStatus
 from basis import api
 
 from basis.api.example import handlers
-from basis.api.example.domain import Accrual, Bond, Coupon, DayCount, DirtyPrice, Settlement, Yield
+from basis.api.example.domain import Accrual, Bond, DayCount, DirtyPrice, Settlement, Yield
 from basis.api.example.errors import NO_YIELD, OUTSIDE_ITS_LIFE, UNKNOWN_BOND, UNPRICED, PeriodReversed, PeriodTooLong
 from basis.api.example.resources import CLOCK, IDS, LEDGER, PRICING, TERMS, WAREHOUSE, Settings
 
@@ -32,7 +32,7 @@ service = api.Service(
         api.get("/bonds/{security}", handlers.bond, deadline_s=5, response=Bond, errors=[UNKNOWN_BOND]),
         api.get("/bonds/{security}/dirty-price", handlers.dirty_price, deadline_s=5, response=DirtyPrice, errors=[UNKNOWN_BOND, UNPRICED, *OUTSIDE_ITS_LIFE]),
         api.get("/bonds/{security}/yield", handlers.bond_yield, deadline_s=5, response=Yield, errors=[UNKNOWN_BOND, UNPRICED, NO_YIELD, *OUTSIDE_ITS_LIFE]),
-        api.get("/bonds/{security}/coupons", handlers.coupons, deadline_s=5, response=list[Coupon], errors=[UNKNOWN_BOND], dataset=True),
+        api.get("/bonds/{security}/coupons", handlers.coupons, deadline_s=5, response=api.Table[handlers.CouponRow], errors=[UNKNOWN_BOND]),
         api.post("/settlements", handlers.record_settlement, status=HTTPStatus.CREATED, deadline_s=5, response=Settlement, errors=[UNKNOWN_BOND, *OUTSIDE_ITS_LIFE]),
     ],
     fakes="basis.api.example.dev:fakes",

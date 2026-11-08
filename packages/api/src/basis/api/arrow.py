@@ -11,6 +11,7 @@ The rows are validated as the route's response, by one adapter, as FastAPI valid
 included, and dumped once, before they are written, so a request's transaction commits only after both, and a value no
 column holds is a defect: a 500, logged once."""
 
+import json
 import math
 import re
 from collections.abc import Mapping, Sequence
@@ -21,6 +22,7 @@ import pyarrow.compute as pc
 import pydantic_core
 
 from basis.api.dataset import Column, Kind, Rows
+from basis.api.format import METADATA
 from basis.core import frames
 
 MEDIA_TYPE = "application/vnd.apache.arrow.stream"
@@ -47,7 +49,14 @@ def wanted(accept: str | None) -> bool:
 
 def schema(rows: Rows) -> pa.Schema:
     """The stream's schema: a field for each column, nullable where its model's field may be None, and every float."""
-    return pa.schema([pa.field(column.name, _type(column), nullable=column.nullable) for column in rows.columns])
+    return pa.schema([pa.field(column.name, _type(column), nullable=column.nullable, metadata=_metadata(column)) for column in rows.columns])
+
+
+def _metadata(column: Column) -> dict[bytes, bytes] | None:
+    """A column's Arrow field metadata: its display format, as `basis.format`, the contract's object as JSON."""
+    if column.format is None:
+        return None
+    return {METADATA.encode(): json.dumps(column.format.as_json(), separators=(",", ":")).encode()}
 
 
 def encode(rows: Rows, values: Sequence[Mapping[str, object]]) -> bytes:
