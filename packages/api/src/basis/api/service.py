@@ -228,7 +228,7 @@ def _check_response(route: Route) -> None:
     if returns is inspect.Signature.empty:
         msg = f"{route.name} has no return annotation: annotate it `-> {strict.named(declared)}`, the response its route declares"
         raise DeclarationError(msg)
-    if returns != declared:
+    if returns != declared and not (tables.row_of(declared) is not None and tables.is_frame_or_table(returns)):
         msg = f"{route.name} returns {strict.named(returns)}, and its route declares response={strict.named(declared)}: declare the one it returns"
         raise DeclarationError(msg)
     strict.aware(route.name, "response", declared)

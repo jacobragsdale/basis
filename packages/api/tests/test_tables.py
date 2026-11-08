@@ -146,3 +146,27 @@ def test_a_route_is_called_and_a_service_served_on_its_fakes_from_python_too() -
     called = api.call_route(api.Service(name="positions", settings=api.Settings, routes=routes), "from_a_frame", {}, settings=api.Settings.given())
     assert (called.status, called.body) == (HTTPStatus.OK, EXPECTED)
     assert callable(api.serve_on_fakes)
+
+
+def plainly_a_frame() -> pd.DataFrame:
+    return a_frame()
+
+
+def a_frame_or_a_table() -> pd.DataFrame | pa.Table:
+    return a_frame()
+
+
+@pytest.mark.parametrize("handler", [plainly_a_frame, a_frame_or_a_table], ids=["a-frame", "a-frame-or-a-table"])
+def test_a_tables_handler_may_say_it_returns_a_frame_or_a_table(handler: Callable[..., object]) -> None:
+    """As a citizen developer's code annotates it, `-> pd.DataFrame`, for ctzd's apps."""
+    route = api.get("/plain", handler, deadline_s=1, response=api.Table[Position], errors=[])  # ty: ignore[invalid-argument-type] -- a named function
+    assert route.table
+
+
+def not_a_frame() -> list[Position]:
+    return []
+
+
+def test_a_tables_handler_that_returns_anything_else_is_refused() -> None:
+    with pytest.raises(api.DeclarationError, match=r"returns list\[.*Position\], and its route declares response="):
+        api.get("/not", not_a_frame, deadline_s=1, response=api.Table[Position], errors=[])
