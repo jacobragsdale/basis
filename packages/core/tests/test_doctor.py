@@ -1,10 +1,15 @@
 import os
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from basis.core import command, doctor, hooks, sync
+from basis.core.databases import Database, Statements
+from basis.core.errors import Denied
+from basis.core.settings import Settings
 from basis.core.verbs import Part
 
 type Git = Callable[..., str]
@@ -180,3 +185,83 @@ def test_doctor_in_a_repo_checks_its_hooks_and_settings_too(repo: Path, capsys: 
     printed = capsys.readouterr().out.splitlines()
     assert "ok: the clone runs the repo's hooks from .githooks/" in printed
     assert "note: the repo declares no QA tier, so the push hook runs none" in printed
+
+
+class Logins:
+    """Databases whose logins answer, but for those `refused` names, as `(database, writes)`, which a database refuses."""
+
+    def __init__(self, *refused: tuple[str, bool]) -> None:
+        self.refused = set(refused)
+        self.asked: list[tuple[str, bool, str]] = []
+
+    def __call__(self, _: Settings, name: str) -> Database:
+        logins = self
+
+        class Answering:
+            @contextmanager
+            def statements(self, *, writes: bool) -> Generator[Statements]:
+                if (name, writes) in logins.refused:
+                    detail = "login failed"
+                    raise Denied(detail, resource=name, reason="Login failed for user 'etl'")
+                yield cast("Statements", self)
+
+            def query(self, sql: str, binds: Mapping[str, object], *, timeout_s: float) -> object:
+                logins.asked.append((name, bool(binds), sql))
+                assert timeout_s == 5
+                return None
+
+        return cast("Database", Answering())
+
+
+def env_file(home: Path, env: str, text: str) -> Path:
+    path = home / ".config" / "basis" / f"{env}.env"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+MSSQL = "BASIS_DATABASES__WAREHOUSE__KIND=mssql\nBASIS_DATABASES__WAREHOUSE__CONNECTION_STRING=Server=sqlqa;Database=Trading\nBASIS_DATABASES__WAREHOUSE__ISOLATION=snapshot\n"
+MSSQL += "BASIS_DATABASES__WAREHOUSE__TIMEOUT_S=5\nBASIS_DATABASES__WAREHOUSE__MAX_ROWS=5\nBASIS_DATABASES__WAREHOUSE__WRITE__CONNECTION_STRING=Server=sqlqa;UID=w\n"
+ORACLE = "BASIS_DATABASES__MARKETS__KIND=oracle\nBASIS_DATABASES__MARKETS__DSN=oraqa:1521/M\nBASIS_DATABASES__MARKETS__USER=u\nBASIS_DATABASES__MARKETS__PASSWORD=p\n"
+ORACLE += "BASIS_DATABASES__MARKETS__MODE=thin\nBASIS_DATABASES__MARKETS__ISOLATION=read_only\nBASIS_DATABASES__MARKETS__TIMEOUT_S=5\nBASIS_DATABASES__MARKETS__MAX_ROWS=5\n"
+
+
+def test_doctor_with_an_environment_checks_each_login_of_each_database_and_its_run_store(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    feed(tmp_path)
+    (tmp_path / "runs-qa").mkdir()
+    path = env_file(tmp_path, "qa", f"{MSSQL}{ORACLE}BASIS_SNAPSHOT_ROOT={tmp_path / 'runs-qa'}\n")
+    logins = Logins(("warehouse", True))
+    code = doctor.doctor(None, {}, desktop(tmp_path), describe=command.one_line, env="qa", databases=logins)
+    captured = capsys.readouterr()
+    assert code == 1
+    assert [line for line in captured.out.splitlines() if "qa's" in line] == [
+        f"ok: qa's settings, from {path}",
+        "ok: qa's database markets: its read login answers",
+        "ok: qa's database warehouse: its read login answers",
+        f"ok: qa's run store: {tmp_path / 'runs-qa'}",
+    ]
+    reason = "qa's database warehouse: its write login does not answer (Denied: login failed: Login failed for user 'etl')"
+    assert captured.err.splitlines() == [f"ERROR: {reason}: check BASIS_DATABASES__WAREHOUSE__* in {path}, and that this machine may reach the database"]
+    assert logins.asked == [("markets", False, "SELECT 1 AS answered FROM DUAL"), ("warehouse", False, "SELECT 1 AS answered")]
+
+
+def test_doctor_with_an_environment_nothing_configures_names_the_file_to_write(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    feed(tmp_path)
+    code = doctor.doctor(None, {}, desktop(tmp_path), describe=command.one_line, env="dev", databases=Logins())
+    assert code == 1
+    assert capsys.readouterr().err.startswith(f"ERROR: there is no {tmp_path / '.config' / 'basis' / 'dev.env'}, and the process's environment sets no BASIS_ settings")
+
+
+def test_doctor_in_prod_says_whether_this_machine_may_write_and_whether_its_store_is_reachable(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    feed(tmp_path)
+    path = env_file(tmp_path, "prod", f"BASIS_SNAPSHOT_ROOT={tmp_path / 'nowhere'}\n")
+    code = doctor.doctor(None, {}, desktop(tmp_path), describe=command.one_line, env="prod", databases=Logins())
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "note: prod is read-only here, since the process does not set BASIS_PROD_WRITES=1, as only a deployment that writes does" in captured.out.splitlines()
+    assert captured.err.splitlines() == [f"ERROR: prod's run store, BASIS_SNAPSHOT_ROOT, is {tmp_path / 'nowhere'}, which this machine cannot reach: correct it in {path}, or reach it from here"]
+
+
+def test_doctor_takes_only_an_environment_basis_knows(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert command.run(["doctor", "--env", "production"], cwd=tmp_path, installed={}) == 2
+    assert "invalid choice: 'production'" in capsys.readouterr().err

@@ -2,7 +2,9 @@
 checks uv and its version, git, that the repo's clone runs its hooks (pointing a clone that names no hooks folder at
 them, as `basis check` does), the feed, and the settings. It runs in a repo or outside one, where it checks what the
 desktop has alone. Each check passed prints one line on stdout, and each problem one `ERROR` line on stderr that ends
-with its fix. It reads no database and no network.
+with its fix. It reads no database and no network, unless it is given an environment: `basis doctor --env qa` also
+checks where that environment's settings come from (`basis.core.environments`), that each database's logins answer
+a query, the write login's too, and that its run store is reachable.
 
 The feed is the default index of the user's `uv.toml`: the design has each developer name the firm's feed there as
 the default index, not an extra one, so a name the feed holds is never looked up on public PyPI. uv reads
@@ -25,8 +27,9 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from basis.core import environments, hooks, qa, settings
-from basis.core.errors import BasisError
-from basis.core.settings import Settings
+from basis.core.databases import Database, open_database
+from basis.core.errors import BasisError, ServiceError
+from basis.core.settings import MssqlSettings, OracleSettings, Settings
 from basis.core.storage import Root
 from basis.core.sync import Problem
 from basis.core.verbs import Part
@@ -82,14 +85,26 @@ type Describe = Callable[[Exception], str]
 """A failure's one line, `REASON: FIX`, as `basis` prints it."""
 
 
-def doctor(repo: Path | None, parts: Mapping[str, Part], desktop: Desktop, *, describe: Describe, unread: str | None = None) -> int:
+def doctor(  # noqa: PLR0913 -- what it checks and how it reaches the databases, by keyword
+    repo: Path | None,
+    parts: Mapping[str, Part],
+    desktop: Desktop,
+    *,
+    describe: Describe,
+    unread: str | None = None,
+    env: str | None = None,
+    databases: Callable[[Settings, str], Database] = open_database,
+) -> int:
     """Check the desktop, and the repo at `repo` when doctor runs in one; `unread` says why a folder with a
-    `pyproject.toml` is no basis repo basis can read. 0 when nothing is wrong."""
+    `pyproject.toml` is no basis repo basis can read. With `env`, also that environment's settings, each login of
+    each database, opened by `databases`, and its run store. 0 when nothing is wrong."""
     found = [Found(f"{desktop.system}, Python {platform.python_version()}"), _uv(desktop), _git(desktop), *_feed(repo, desktop)]
     if unread is not None:
         found.append(Found("the repo", _split(unread)))
     if repo is not None:
         found += [*_hooks(repo), *_where(repo, desktop), *_settings(repo, parts, desktop, describe)]
+    if env is not None:
+        found += _environment_of(env, repo, desktop, describe, databases)
     problems = 0
     for entry in found:
         if entry.problem is None:
@@ -250,6 +265,62 @@ def _environment(repo: Path, desktop: Desktop, describe: Describe) -> list[Found
     else:
         found.append(Found("BASIS_SNAPSHOT_ROOT is not set, so the push hook skips regress", note=True))
     return found
+
+
+PING: dict[type[MssqlSettings | OracleSettings], str] = {MssqlSettings: "SELECT 1 AS answered", OracleSettings: "SELECT 1 AS answered FROM DUAL"}
+"""The query each dialect's logins are checked with, which reads no table."""
+
+
+def _environment_of(given: str, repo: Path | None, desktop: Desktop, describe: Describe, databases: Callable[[Settings, str], Database]) -> list[Found]:
+    """`basis doctor --env ENV`: where the environment's settings come from, whether each of its databases' logins
+    answers, and whether its run store is reachable."""
+    try:
+        environment = environments.load(given, Settings, windows=desktop.system == "Windows", home=desktop.home)
+    except (ValidationError, BasisError) as error:
+        return [Found(f"the {given} environment", _split(describe(error)))]
+    env, configured = environment.name, environment.settings
+    where = str(environment.source) if environment.source is not None else "the process's environment"
+    found: list[Found] = [Found(f"{env}'s settings, from {where}")]
+    if env == "prod":
+        writes = (
+            "may be written here: the process sets BASIS_PROD_WRITES=1"
+            if environment.writes
+            else "is read-only here, since the process does not set BASIS_PROD_WRITES=1, as only a deployment that writes does"
+        )
+        found.append(Found(f"prod {writes}", note=True))
+    for name in sorted(configured.databases):
+        found += _logins(env, name, configured, where, databases)
+    if configured.snapshot_root is None:
+        found.append(Found(f"{env} names no run store, BASIS_SNAPSHOT_ROOT, so `basis run --env {env}` cannot save its runs", note=True))
+    else:
+        location = settings.locate(configured.snapshot_root, repo if repo is not None else Path.cwd())
+        try:
+            reachable = Root.at(location).is_dir()
+        except (OSError, ValueError) as error:
+            reachable, location = False, f"{location} ({' '.join(str(error).split())})"
+        problem = (f"{env}'s run store, BASIS_SNAPSHOT_ROOT, is {location}, which this machine cannot reach", f"correct it in {where}, or reach it from here") if not reachable else None
+        found.append(Found(f"{env}'s run store: {location}", problem))
+    return found
+
+
+def _logins(env: str, name: str, configured: Settings, where: str, databases: Callable[[Settings, str], Database]) -> list[Found]:
+    """Whether each login of the database `name` answers a query that reads no table: its read login's, and its write
+    login's where it has one."""
+    found = configured.databases[name]
+    database = databases(configured, name)
+    logins = [("read", False), *([("write", True)] if found.write is not None else [])]
+    checked: list[Found] = []
+    for login, writes in logins:
+        what = f"{env}'s database {name}: its {login} login"
+        try:
+            with database.statements(writes=writes) as statements:
+                statements.query(PING[type(found)], {}, timeout_s=found.timeout_s)
+        except (ServiceError, BasisError) as error:
+            reason = f"{what} does not answer ({type(error).__name__}: {' '.join(str(error).split())})"
+            checked.append(Found(what, (reason, f"check BASIS_DATABASES__{name.upper()}__* in {where}, and that this machine may reach the database")))
+            continue
+        checked.append(Found(f"{what} answers"))
+    return checked
 
 
 def _qa(repo: Path, parts: Mapping[str, Part], desktop: Desktop, describe: Describe) -> list[Found]:

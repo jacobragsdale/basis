@@ -304,7 +304,7 @@ def _core(repo: Repo) -> list[Verb]:
         "check": Verb("check", "lint, format check, type check and test the repo, and check its framework files and hooks; --full adds regress and the QA tier", _check_arguments, run_check),
         "review": Verb("review", "print the pull request's summary of what basis check --full found on a commit, as Markdown", _review_arguments, lambda n: review.review(repo.root, str(n.commit))),
         "upgrade": Verb("upgrade", "relock basis's packages, sync, check in full, and print what changed", _no_arguments, lambda _: _upgrade(repo)),
-        "doctor": Verb("doctor", DOCTOR, _no_arguments, lambda _: _diagnose(repo, None)),
+        "doctor": Verb("doctor", DOCTOR, _doctor_arguments, lambda n: _diagnose(repo, None, n.env)),
         "new": Verb("new", f"add a {' or a '.join(kinds)} to the repo", partial(_new_arguments, kinds), lambda n: _new(repo, kinds[str(n.kind)], str(n.name))),
         "sync": Verb("sync", "rewrite the repo's framework and agent files from the installed version", _sync_arguments, run_sync),
         "docs": Verb("docs", "list the docs of the installed parts, or print one", _docs_arguments, lambda n: _docs(_pages(repo.parts), n.page)),
@@ -557,13 +557,17 @@ def _upgrade(repo: Repo) -> int:
     return upgrade.upgrade(repo.root, packages, run=check.run_command, write=write)
 
 
-DOCTOR = "check this desktop's uv, git, hooks, feed and settings, with the fix for each problem"
+DOCTOR = "check this desktop's uv, git, hooks, feed and settings, and with --env an environment's logins and run store, with the fix for each problem"
 
 
-def _diagnose(repo: Repo | None, unread: str | None) -> int:
+def _doctor_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--env", metavar="ENV", choices=environments.NAMES, help=f"{', '.join(environments.NAMES)}: also check that environment's settings, each database's logins and its run store")
+
+
+def _diagnose(repo: Repo | None, unread: str | None, env: str | None = None) -> int:
     """`basis doctor`: the desktop, and the repo when it runs in one; `unread` says why the folder's `pyproject.toml`
     is a basis repo's that basis cannot read."""
-    return doctor.doctor(repo.root if repo is not None else None, repo.parts if repo is not None else {}, doctor.Desktop.here(), describe=one_line, unread=unread)
+    return doctor.doctor(repo.root if repo is not None else None, repo.parts if repo is not None else {}, doctor.Desktop.here(), describe=one_line, unread=unread, env=env)
 
 
 def _for_doctor(cwd: Path, installed: Installed) -> tuple[Repo | None, str | None]:
@@ -584,7 +588,7 @@ def _for_doctor(cwd: Path, installed: Installed) -> tuple[Repo | None, str | Non
 
 def _doctor_outside(argv: Sequence[str], unread: str | None) -> int:
     """`basis doctor` where there is no basis repo basis can read, which parses as it does in one."""
-    verb = Verb("doctor", DOCTOR, _no_arguments, lambda _: _diagnose(None, unread))
+    verb = Verb("doctor", DOCTOR, _doctor_arguments, lambda n: _diagnose(None, unread, n.env))
     return _execute(_parser("basis", "Check this desktop's setup for basis.", [verb]), {"doctor": verb}, argv)
 
 
