@@ -189,6 +189,30 @@ one JSON file of params. A field's docstring is its description in `basis descri
 `2026-11-05..2026-11-06` or `2026-11-05T06:00Z..2026-11-05T07:00Z`. A job that has no notion of an interval runs
 without one.
 
+## Calendars
+
+`etl.calendar(NAME)` is a business-day calendar, which a transform or a check calls as it is, since it is data in basis
+and reads nothing. A job names its calendar; there is no default.
+
+| Name | Is | Covers | Early closes |
+|---|---|---|---|
+| `sifma-us` | SIFMA's recommended closes for the US bond market | 1996-01-01 to 2027-12-31 | 2 p.m. New York time, noon on a Good Friday with the employment report |
+| `target2` | TARGET2's (now T2's) closing days, for euro settlement | 2000-01-01 to 2099-12-31 | none |
+
+| Call | Gives |
+|---|---|
+| `cal.is_business_day(day)` | Whether the market is open on `day`, all day or until an early close. |
+| `cal.add(day, n)` | The business day `n` business days after `day`, or before it for a negative `n`; `day` need not be one, and `add(day, 0)` is `day`, which must be. |
+| `cal.previous(day)` | The last business day before `day`. |
+| `cal.early_close(day)` | When a business day closes early, as a `datetime` in `cal.zone`, or `None` for its regular session; a day closed all day is an error. |
+| `cal.reason(day)` | Why a day is closed or closes early, as `Thanksgiving Day` or `Weekend`, or `None`. |
+
+`day` is a `date`, never a `datetime`: give a moment's as `moment.astimezone(cal.zone).date()`. A day before a
+calendar's `first` or after its `last`, or one a call walks to, fails the run with the fix, and is never a business day
+by default: SIFMA publishes each year's recommendations about a year ahead, and a basis release that adds them moves
+`sifma-us`'s last day. Saturdays and Sundays are closed in both. The rules and their dated exceptions are basis-ui's,
+checked against the same schedules SIFMA published, so a day reads alike in a job, an API and the UI.
+
 ## Commands
 
 A job repo has one command, `basis`. It offers the verbs of the parts the repo declares in its `pyproject.toml`, as

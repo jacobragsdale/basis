@@ -172,6 +172,7 @@ source_modules = [
     "basis.job.rows", "basis.job.params", "basis.job.inputs", "basis.job.outputs", "basis.job.changes", "basis.job.diff",
     "basis.job.ddl", "basis.job.job", "basis.job.example.job", "basis.job.example.rows",
     "basis.core.interval", "basis.core.tables", "basis.core.destination", "basis.core.model", "basis.core.ddl", "basis.core.frames",
+    "basis.core.calendars",
 ]
 forbidden_modules = [
     "basis.job.loader", "basis.job.runs", "basis.job.api", "basis.job.cli", "basis.job.new", "basis.job.sync", "basis.job.testing",

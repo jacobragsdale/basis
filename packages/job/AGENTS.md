@@ -28,6 +28,7 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
 | core `resources.py` | The resources every part declares alike: `http`, `clock` and `ids`, and their protocols. It opens nothing, so `inputs.py` imports it. |
 | core `errors.py` | `BasisError`, and `ServiceError` with its kinds, `Timeout`, `Unavailable`, `NotFound`, `Conflict`, `Rejected`, `Denied`, `BadReply` and `Failed`, which every resource raises, real or fake: a fetch's GET and a database's statements among them, so a run's `error` names the kind. |
 | core `interval.py` | `Interval`: a run's span, its parsing and its binds. |
+| core `calendars.py` | `calendar(NAME)`, `sifma-us` and `target2`: business days and early closes, as rules and dated exceptions, each covering only the days it states. |
 | `loader.py` | Loading a job's inputs, each database in one read-only transaction, each fetch's GET, or from a folder of files, each thread in a copy of the run's context, so its spans are the run's; `json_rows`, the one place a fetch's rows become a frame, whose refusal of a reply is a `BadReply`. |
 | core `opened.py`, `fakes.py`, `deadlines.py` | basis-core's resources as a run opens them: another service's client from the settings alone, with each call's span and deadline, the system's clock and new ids; their fakes; and each call's deadline. |
 | `changes.py` | From outputs to conformed `Changes` per table, and the core's checks on them. |

@@ -8,6 +8,7 @@ declarations, imports nothing that reads or writes."""
 
 from typing import TYPE_CHECKING
 
+from basis.core.calendars import Calendar, calendar
 from basis.core.interval import Interval
 from basis.core.tables import Changes, Delete, Range
 from basis.job.inputs import Clock, Fetch, File, Ids, Inputs, Query
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
 __all__ = [
     "VERSION",
     "Append",
+    "Calendar",
     "Changes",
     "Clock",
     "Delete",
@@ -43,6 +45,7 @@ __all__ = [
     "Table",
     "Upsert",
     "Zone",
+    "calendar",
     "replay",
     "run",
 ]
