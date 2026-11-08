@@ -166,3 +166,10 @@ def test_mutmut_says_which_mutants_survived_and_leaves_the_repo_as_it_was(repo: 
     [survivor] = found.shown
     assert (survivor.name, survivor.function, survivor.change) == ("rates.domain.x_clamp__mutmut_1", "rates.domain.clamp", "if x < low: -> if x <= low:")
     assert git(repo, "status", "--porcelain", "--untracked-files=all") == ""
+
+
+def test_what_each_exit_code_means_is_mutmut_s_own() -> None:
+    from mutmut.stats import status_by_exit_code  # noqa: PLC0415 -- mutmut is this workspace's development dependency, never basis-core's
+
+    theirs = {code: status for code, status in status_by_exit_code.items() if code != mutation.SURVIVED and code not in mutation.KILLED and status != "suspicious"}
+    assert theirs | {2: "interrupted"} == mutation.STATUSES  # mutmut's "check was interrupted by user", in a word

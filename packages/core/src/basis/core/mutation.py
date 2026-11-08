@@ -54,8 +54,12 @@ STATUSES = {
     152: "timeout",
     255: "timeout",
     37: "caught by type check",
+    -11: "segfault",
+    -9: "segfault",
 }
-"""What mutmut's exit codes mean, but a killed or a surviving mutant's; any other is suspicious."""
+"""What mutmut's exit codes mean, but a killed or a surviving mutant's; any other is suspicious. mutmut 3.8.1's own
+table (`mutmut.stats.status_by_exit_code`), copied since basis-core runs mutmut in the repo's environment and never
+imports it; `tests/test_mutation.py` checks the copy against the installed mutmut."""
 NO_MUTMUT = "add `mutmut>=3.8; sys_platform == 'linux'` to [dependency-groups] dev, and run `uv lock`"
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@", re.MULTILINE)
 _TABLE = re.compile(r"^\[tool\.mutmut\][^\n]*\n(?:(?!\[)[^\n]*\n?)*", re.MULTILINE)
