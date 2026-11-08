@@ -42,7 +42,7 @@ jobs:
       - name: Run the second model on its fixture, from Python and from the command line under both its names
         working-directory: ${{ runner.temp }}/sma
         run: |
-          cp .env.example .env
+          cp .env.example .env && echo BASIS_ENV=dev >> .env  # a fixture run saves to dev's run store, as a pod's deployment names its environment
           uv run python -c 'from optim import run; from models.ladder import model; run(model, data="tests/fixture")'
           uv run --env-file .env basis run ladder --params models/ladder/params/default.json --data models/ladder/tests/fixture
           uv run --env-file .env optim run ladder --params models/ladder/params/default.json --data models/ladder/tests/fixture

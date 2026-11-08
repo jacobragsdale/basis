@@ -207,7 +207,7 @@ jobs:
             echo "BASIS_DATABASES__WAREHOUSE__WRITE__LEDGER=etl.publishes"
           } > .env.qa
           mkdir "$RUNNER_TEMP/store"
-          uv run --env-file .env.qa env BASIS_SNAPSHOT_ROOT="$RUNNER_TEMP/store" basis run positions --params jobs/positions/params/default.json --interval 2026-11-05..2026-11-06 --publish
+          uv run --env-file .env.qa env BASIS_ENV=qa BASIS_SNAPSHOT_ROOT="$RUNNER_TEMP/store" basis run positions --params jobs/positions/params/default.json --interval 2026-11-05..2026-11-06 --publish
           uv run basis doctor || true  # the runner has no feed; the rest of its lines say what it found
           git add --all && git commit --quiet --message "First commit"
       - name: Push a change through the hook, from a tree with changes of its own, and print what it found
@@ -334,7 +334,7 @@ jobs:
           cd "$RUNNER_TEMP"
           mkdir --mode=777 runs
           database="$SERVER;Database=loads"
-          docker run --rm --network host --volume "$RUNNER_TEMP/runs:/runs" --env BASIS_SNAPSHOT_ROOT=/runs \
+          docker run --rm --network host --volume "$RUNNER_TEMP/runs:/runs" --env BASIS_ENV=dev --env BASIS_SNAPSHOT_ROOT=/runs \
             --env BASIS_DATABASES__SOURCE__KIND=mssql --env "BASIS_DATABASES__SOURCE__CONNECTION_STRING=$database" \
             --env BASIS_DATABASES__SOURCE__ISOLATION=snapshot --env BASIS_DATABASES__SOURCE__TIMEOUT_S=60 --env BASIS_DATABASES__SOURCE__MAX_ROWS=1000 \
             --env BASIS_DATABASES__WAREHOUSE__KIND=mssql --env "BASIS_DATABASES__WAREHOUSE__CONNECTION_STRING=$database" \
