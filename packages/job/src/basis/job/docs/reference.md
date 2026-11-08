@@ -213,6 +213,18 @@ by default: SIFMA publishes each year's recommendations about a year ahead, and 
 `sifma-us`'s last day. Saturdays and Sundays are closed in both. The rules and their dated exceptions are basis-ui's,
 checked against the same schedules SIFMA published, so a day reads alike in a job, an API and the UI.
 
+## Display text
+
+`basis.core.display.text(value, display=None)` writes a value as people read it, in a message's text, as the UI's grid
+writes it: a Python port of parallax's formatter, which follows Excel's display rules, so 2.675 shows as `2.68` and
+0.1 + 0.2 as `0.30`. `display` is a display format, the contract's object, as a dict or a `Display`:
+`{"kind": "money", "currency": "USD"}` shows -1234.5 as `-$1,234.50`, `{"kind": "pct", "decimals": 2}` shows 0.0525
+as `5.25%`, `{"kind": "bps"}` as `525.00 bp`, and `{"kind": "price32", "step": "half"}` shows 99.515625 as `99-16+`;
+the kinds are `number`, `money`, `pct`, `bps`, `price` and `price32`. A `display.Format` gives the formatter's other
+choices, such as `Format(abbreviate="M")` for `1.3M`. Without one, a float shows 2 decimals, an int none, a date
+`YYYY-MM-DD`, an aware datetime its wall clock in New York, and None or NaN nothing. It returns text and never
+changes a value, so keep the float for arithmetic.
+
 ## Commands
 
 A job repo has one command, `basis`. It offers the verbs of the parts the repo declares in its `pyproject.toml`, as
