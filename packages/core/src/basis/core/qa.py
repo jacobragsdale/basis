@@ -230,7 +230,19 @@ def problems(settings: Settings, declared: Declared, *, source: Path) -> list[Pr
         if not carries(shared.path, marker):
             reason = f"BASIS_FOLDERS__{name.upper()}__PATH {where} is {shared.path}, which does not contain the QA marker {marker!r}, and a QA run writes its workbooks there"
             found.append((reason, "point it at QA's folder, whose path contains the marker"))
-    return found
+    return found + _lakes(settings, marker, where)
+
+
+def _lakes(settings: Settings, marker: str, where: str) -> list[Problem]:
+    """Each lake the settings name whose account and container both lack the marker, where a QA run would archive."""
+    return [
+        (
+            f"BASIS_LAKES__{name.upper()}__ACCOUNT and __CONTAINER {where} are {lake.account}/{lake.container}, which lacks the QA marker {marker!r}, and a QA run archives there",
+            "point it at QA's lake, whose account or container contains the marker",
+        )
+        for name, lake in sorted(settings.lakes.items())
+        if not carries(f"{lake.account}/{lake.container}", marker)
+    ]
 
 
 def store(settings: Settings, folder: Path) -> Root | Problem:

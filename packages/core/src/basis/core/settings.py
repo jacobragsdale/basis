@@ -151,6 +151,41 @@ class MongoSettings(Model):
     """A PEM file of the certificate authorities the server's certificate must chain to, where it uses TLS."""
 
 
+ACCOUNT = r"^[a-z0-9]{3,24}$"
+"""An Azure storage account's name."""
+CONTAINER = r"^[a-z0-9](?:-?[a-z0-9])+$"
+"""An Azure storage container's name: lower-case letters, digits and single hyphens, 3 to 63 of them."""
+
+
+class LakeSettings(Model):
+    """An Azure Data Lake Storage Gen2 container, with the hierarchical namespace on, and how this machine signs in to
+    it (`basis.core.lake`): from these settings alone, never Azure's default chain of credentials, which on a desktop
+    that is an Azure VM signs in as the VM rather than as its user."""
+
+    account: Annotated[str, Field(pattern=ACCOUNT)]
+    """The storage account's name, as in `ACCOUNT.dfs.core.windows.net`."""
+    container: Annotated[str, Field(pattern=CONTAINER, min_length=3, max_length=63)]
+    """The container the lake's tables are folders of. basis never creates it."""
+    auth: Literal["key", "sas", "workload_identity", "cli"]
+    """`key` signs in with the account's key, and `sas` with a SAS token, each `secret`; `workload_identity` with the
+    pod's federated identity, which AKS's workload identity webhook sets up; `cli` as the user `az login` signed in."""
+    secret: SecretStr | None = None
+    """The account key, for `key`, or the SAS token, for `sas`, with or without its leading `?`: a secret."""
+    emulator: str | None = None
+    """`HOST:PORT` of a local emulator such as Azurite, reached over plain HTTP with `key` or `sas`: a test's, never a
+    real account's."""
+
+    @model_validator(mode="after")
+    def _secret_for_key_or_sas(self) -> Self:
+        if (self.auth in {"key", "sas"}) != (self.secret is not None):
+            msg = f"a lake signed in to by {self.auth} {'needs' if self.secret is None else 'takes no'} secret: set SECRET for key and sas alone"
+            raise ValueError(msg)
+        if self.emulator is not None and self.auth not in {"key", "sas"}:
+            msg = "an emulator is signed in to with key or sas alone"
+            raise ValueError(msg)
+        return self
+
+
 EMAIL = r"^[^@\s<>,;]+@[^@\s<>,;]+$"
 """An address, `name@host`, with nothing around it."""
 
@@ -242,6 +277,8 @@ class Settings(BaseSettings):
     """Each Mongo database a part reads or upserts into, by the name its declaration gives."""
     folders: dict[str, FolderSettings] = Field(default_factory=dict)
     """Each shared folder a part reads or writes files in, by the name its declaration gives."""
+    lakes: dict[str, LakeSettings] = Field(default_factory=dict)
+    """Each Azure Data Lake container a part archives to, by the name its declaration gives."""
     slack: dict[str, SlackChannel] = Field(default_factory=dict)
     """Each Slack channel a part posts to, by the name its declaration gives."""
     email: dict[str, EmailRelay] = Field(default_factory=dict)

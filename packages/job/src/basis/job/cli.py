@@ -319,6 +319,10 @@ def describe(job: jobs.Job) -> dict[str, object]:
         "upserts": {
             name: {"mongo": upsert.mongo, "collection": upsert.collection, "key": list(upsert.key), "columns": _columns(upsert.row.columns)} for name, upsert in job.outputs.declared_upserts().items()
         },
+        "lakes": {
+            name: {"lake": lake.lake, "table": lake.table, "partition": lake.partition, "ledger": lake.ledger, "columns": _columns(lake.row.columns)}
+            for name, lake in job.outputs.declared_lakes().items()
+        },
         "check": job.check is not None,
     }
 

@@ -4,9 +4,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import cast
 
+import pyarrow.fs as pafs
 import pytest
 
-from basis.core import command, doctor, hooks, sync
+from basis.core import command, doctor, hooks, lake, sync
 from basis.core.databases import Database, Statements
 from basis.core.errors import Denied
 from basis.core.settings import Settings
@@ -283,3 +284,23 @@ def test_doctor_with_an_environment_checks_each_folder_is_reachable(tmp_path: Pa
     captured = capsys.readouterr()
     assert f"ok: dev's folder pm: {tmp_path / 'pm'}" in captured.out.splitlines()
     assert captured.err.splitlines() == [f"ERROR: dev's folder risk, at {tmp_path / 'risk'}, is not there or not reachable from here: mount it, or correct BASIS_FOLDERS__RISK__PATH in {path}"]
+
+
+def test_doctor_with_an_environment_checks_each_lake_s_container_and_that_a_folder_in_it_renames(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    feed(tmp_path)
+    (tmp_path / "lake" / "archive").mkdir(parents=True)
+    lakes_named = (("HISTORY", "archive"), ("GONE", "gone"))
+    lines = [f"BASIS_LAKES__{name}__{key}={value}" for name, box in lakes_named for key, value in (("ACCOUNT", "lakedev"), ("CONTAINER", box), ("AUTH", "cli"))]
+    path = env_file(tmp_path, "dev", "\n".join(lines) + "\n")
+
+    def lakes(name: str, configured: Settings) -> lake.Lake:
+        found = configured.lakes[name]
+        return lake.Lake(name, found.container, pafs.SubTreeFileSystem(str(tmp_path / "lake"), pafs.LocalFileSystem()), found.account)
+
+    assert doctor.doctor(None, {}, desktop(tmp_path), describe=command.one_line, env="dev", databases=Logins(), lakes=lakes) == 1
+    captured = capsys.readouterr()
+    assert "ok: dev's lake history: lakedev/archive is reachable, and a folder in it renames" in captured.out.splitlines()
+    assert captured.err.splitlines() == [
+        f"ERROR: dev's lake gone cannot be archived to (the lake gone has no container lakedev/gone: create it, or correct BASIS_LAKES__GONE__CONTAINER): check BASIS_LAKES__GONE__* in {path}"
+    ]
+    assert sorted(child.name for child in (tmp_path / "lake" / "archive").iterdir()) == []

@@ -20,7 +20,7 @@ dedupe against rows already there (the destination read as an input), a watermar
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Self, overload, override
+from typing import Literal, Self, overload, override
 
 import pandas as pd
 
@@ -401,6 +401,67 @@ class MongoUpsert:
         return report_value(instance, self.name)
 
 
+LAKE_TABLE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
+"""A lake table's folder in its container: lower-case letters, digits and underscores, starting with a letter."""
+
+
+class Lake:
+    """Rows the job archives to an Azure Data Lake container as Parquet, as `BASIS_LAKES__LAKE__*` configures it on
+    each environment: its value is a frame of `row`, written as the run's interval's partition of the folder `table`,
+    as `CONTAINER/trades/date=2026-11-07/`. `partition` says how partitions are named: `date`, for a job whose runs
+    are each one UTC day, or `interval`, `start=20261101T000000Z/end=20261201T000000Z`, for any interval. Only `basis
+    run --publish` archives, once every database has committed, recording it in `ledger`'s database as a publish is,
+    so a run for an interval another run archived archives nothing, unless told `--again` (`basis.core.lake`)."""
+
+    def __init__(self, row: type[Row], *, lake: str, table: str, partition: Literal["date", "interval"], ledger: str) -> None:
+        if not IDENTIFIER.match(lake):
+            msg = f"lake {lake!r}: a lake's name is lower-case letters, digits and underscores, as in BASIS_LAKES__{lake.upper()}__ACCOUNT"
+            raise ValueError(msg)
+        if not LAKE_TABLE.match(table):
+            msg = f"table {table!r}: a lake table's folder is lower-case letters, digits and underscores, starting with a letter"
+            raise ValueError(msg)
+        if partition not in {"date", "interval"}:
+            msg = f"partition {partition!r}: a lake table is partitioned by 'date' or by 'interval'"
+            raise ValueError(msg)
+        if not IDENTIFIER.match(ledger):
+            msg = f"ledger {ledger!r}: name the database whose ledger records the archive, as in BASIS_DATABASES__{ledger.upper()}__*"
+            raise ValueError(msg)
+        self.row = row
+        self.lake = lake
+        self.table = table
+        self.partition: Literal["date", "interval"] = partition
+        self.ledger = ledger
+        self._name: str | None = None
+
+    @property
+    def name(self) -> str:
+        if self._name is None:
+            msg = "an archive is named by its attribute on a job's Outputs class; this one is not on one"
+            raise TypeError(msg)
+        return self._name
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        if not IDENTIFIER.match(name):
+            msg = f"{owner.__qualname__}.{name}: an output's name is lower-case letters, digits and underscores"
+            raise TypeError(msg)
+        if self._name not in {None, name}:
+            msg = f"{owner.__qualname__}.{name} is already declared as {self._name!r}: declare each output once per name"
+            raise TypeError(msg)
+        self._name = name
+
+    def describe(self) -> str:
+        return f"{self.lake}: {self.table}/ by {self.partition}"
+
+    @overload
+    def __get__(self, instance: None, owner: type) -> Self: ...
+    @overload
+    def __get__(self, instance: Outputs, owner: type) -> pd.DataFrame: ...
+    def __get__(self, instance: Outputs | None, owner: type) -> Self | pd.DataFrame:
+        if instance is None:
+            return self
+        return report_value(instance, self.name)
+
+
 MAX_SHEET = 31
 """The longest sheet name Excel takes."""
 
@@ -415,15 +476,15 @@ class Outputs:
     `Outputs(positions=frame, alert=None)`."""
 
     def __init__(self, **values: OutputValue) -> None:
-        declared, sent, reports, upserts = self.declared(), self.declared_messages(), self.declared_reports(), self.declared_upserts()
-        every = set(declared) | set(sent) | set(reports) | set(upserts)
+        declared, sent, reports, upserts, lakes = self.declared(), self.declared_messages(), self.declared_reports(), self.declared_upserts(), self.declared_lakes()
+        every = set(declared) | set(sent) | set(reports) | set(upserts) | set(lakes)
         if missing := sorted(every - set(values)):
             msg = f"{type(self).__qualname__} is missing outputs {missing}: give every output it declares, None for a message it does not send"
             raise TypeError(msg)
         if unknown := sorted(set(values) - every):
             msg = f"{type(self).__qualname__} declares no outputs named {unknown}; it declares {sorted(every)}"
             raise TypeError(msg)
-        for name in [*reports, *upserts]:
+        for name in [*reports, *upserts, *lakes]:
             if not isinstance(values[name], pd.DataFrame):
                 msg = f"{name} is written from a frame, so its value is a DataFrame, not a {type(values[name]).__name__}"
                 raise TypeError(msg)
@@ -450,6 +511,11 @@ class Outputs:
     def declared_upserts(cls) -> dict[str, MongoUpsert]:
         """Each Mongo collection the job upserts into, by its output's name."""
         return {name: value for klass in reversed(cls.__mro__) for name, value in vars(klass).items() if isinstance(value, MongoUpsert)}
+
+    @classmethod
+    def declared_lakes(cls) -> dict[str, Lake]:
+        """Each lake table the job archives to, by its output's name."""
+        return {name: value for klass in reversed(cls.__mro__) for name, value in vars(klass).items() if isinstance(value, Lake)}
 
     @classmethod
     def declared_messages(cls) -> dict[str, Slack | Email]:

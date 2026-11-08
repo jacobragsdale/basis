@@ -26,7 +26,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from basis.core import environments, hooks, qa, settings
+from basis.core import environments, hooks, lake, qa, settings
 from basis.core.databases import Database, open_database
 from basis.core.errors import BasisError, ServiceError
 from basis.core.settings import MssqlSettings, OracleSettings, Settings
@@ -94,17 +94,18 @@ def doctor(  # noqa: PLR0913 -- what it checks and how it reaches the databases,
     unread: str | None = None,
     env: str | None = None,
     databases: Callable[[Settings, str], Database] = open_database,
+    lakes: Callable[[str, Settings], lake.Lake] = lake.lake,
 ) -> int:
     """Check the desktop, and the repo at `repo` when doctor runs in one; `unread` says why a folder with a
     `pyproject.toml` is no basis repo basis can read. With `env`, also that environment's settings, each login of
-    each database, opened by `databases`, and its run store. 0 when nothing is wrong."""
+    each database, opened by `databases`, each lake, opened by `lakes`, and its run store. 0 when nothing is wrong."""
     found = [Found(f"{desktop.system}, Python {platform.python_version()}"), _uv(desktop), _git(desktop), *_feed(repo, desktop)]
     if unread is not None:
         found.append(Found("the repo", _split(unread)))
     if repo is not None:
         found += [*_hooks(repo), *_where(repo, desktop), *_settings(repo, parts, desktop, describe)]
     if env is not None:
-        found += _environment_of(env, repo, desktop, describe, databases)
+        found += _environment_of(env, repo, desktop, describe, databases=databases, lakes=lakes)
     problems = 0
     for entry in found:
         if entry.problem is None:
@@ -271,9 +272,12 @@ PING: dict[type[MssqlSettings | OracleSettings], str] = {MssqlSettings: "SELECT 
 """The query each dialect's logins are checked with, which reads no table."""
 
 
-def _environment_of(given: str, repo: Path | None, desktop: Desktop, describe: Describe, databases: Callable[[Settings, str], Database]) -> list[Found]:
+def _environment_of(  # noqa: PLR0913 -- the environment, and how doctor reaches what it configures
+    given: str, repo: Path | None, desktop: Desktop, describe: Describe, *, databases: Callable[[Settings, str], Database], lakes: Callable[[str, Settings], lake.Lake]
+) -> list[Found]:
     """`basis doctor --env ENV`: where the environment's settings come from, whether each of its databases' logins
-    answers, and whether its run store is reachable."""
+    answers, whether each lake's container is reachable, and renames, where the environment may be written, and
+    whether its run store is reachable."""
     try:
         environment = environments.load(given, Settings, windows=desktop.system == "Windows", home=desktop.home)
     except (ValidationError, BasisError) as error:
@@ -298,6 +302,15 @@ def _environment_of(given: str, repo: Path | None, desktop: Desktop, describe: D
         fix = f"mount it, or correct BASIS_FOLDERS__{name.upper()}__PATH in {where}"
         problem = (f"{env}'s folder {name}, at {shared.path}, is not there or not reachable from here", fix) if not reachable else None
         found.append(Found(f"{env}'s folder {name}: {shared.path}", problem))
+    for name in sorted(configured.lakes):
+        what = f"{env}'s lake {name}"
+        try:
+            store = lakes(name, configured)
+            checked = lake.check(store, rename=environment.writes)
+        except BasisError as error:
+            found.append(Found(what, (f"{what} cannot be archived to ({' '.join(str(error).split())})", f"check BASIS_LAKES__{name.upper()}__* in {where}")))
+            continue
+        found.append(Found(f"{what}: {checked}"))
     if configured.snapshot_root is None:
         found.append(Found(f"{env} names no run store, BASIS_SNAPSHOT_ROOT, so `basis run --env {env}` cannot save its runs", note=True))
     else:

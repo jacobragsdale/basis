@@ -222,6 +222,24 @@ upserts, once every database has committed, after the workbooks and before the m
 and no ledger here, so the record keeps Mongo's counts (`upserted`), and a run whose upsert fails is `partial`, which
 `basis resume` makes again, whole. A key the frame repeats is refused before anything is written.
 
+### `etl.Lake(row, *, lake, table, partition, ledger)`
+
+Rows the job archives to an Azure Data Lake Storage Gen2 container, as Parquet: its value is a frame of `row`, written
+as the run's interval's partition of the folder `table`, as `CONTAINER/trades/date=2026-11-07/`. `partition` is
+`"date"`, `date=YYYY-MM-DD`, for a job each of whose runs is one UTC day, midnight to midnight, or `"interval"`,
+`start=20261101T000000Z/end=20261201T000000Z`, for any interval, a month's among them; a run without an interval
+archives nothing. Only `basis run --publish` archives, once every database has committed, after the workbooks and the
+upserts and before the messages, in a transaction on the ledger of the database `ledger` names: the partition is
+written under a hidden name, `TABLE/.tmp-RUN_ID/`, which a reader of the table skips, each file is read back, its
+SHA-256 taken and its footer's rows added up to the rows written, the ledger row is recorded with the interval, the
+path, the rows and each file's hash, and the partition is renamed into place, the one step a reader sees. A run for an
+interval another run archived the output for archives nothing (`skipped`), unless told `--again`, which moves the old
+partition aside and renames the new one in. An archive that fails leaves the run `partial`, and `basis resume`
+archives it from the run's snapshot; a partition an attempt renamed in before it died, and the ledger lacks, is
+recorded if it holds the rows the run would write, and refused otherwise. The account must have the hierarchical
+namespace on, which makes the rename atomic: a flat account's rename is refused, and nothing is archived. basis never
+creates the container.
+
 ### `etl.Changes(delete=None, upsert=None, insert_new=None, insert=None)`
 
 What a `Manual()` table's transform returns. `delete` is an `etl.Delete(within=None, matching=None)`: rows in
@@ -443,6 +461,7 @@ berth's 40 characters do, keeps a database's secret parts in one secret that way
 | `BASIS_HTTP__NAME__CA_BUNDLE` | A PEM file of the certificate authorities the service's certificate chains to, in place of the system's. |
 | `BASIS_HTTP__NAME__PROXY` | The proxy the service's calls go through; without it, they go direct. `HTTP_PROXY` and `SSL_CERT_FILE` are never read. |
 | `BASIS_MONGO__NAME__URI`, `__DATABASE`, `__TIMEOUT_S`, `__MAX_DOCUMENTS` | The Mongo database an `etl.Mongo` or `etl.MongoUpsert` names `NAME`: its connection string, a secret, the database the collections are in, the seconds each read or upsert may take, and the most documents a read may return. `__CA_BUNDLE` where its TLS needs one. |
+| `BASIS_LAKES__NAME__ACCOUNT`, `__CONTAINER`, `__AUTH` | The Azure Data Lake an `etl.Lake` names `NAME`: the storage account, the container its tables are folders of, and how this machine signs in: `key` or `sas`, with `__SECRET`, the account key or SAS token, a secret; `workload_identity`, in a pod whose service account is federated; or `cli`, on a desktop after `az login`. Azure's default chain of credentials is never used. `__EMULATOR`, `HOST:PORT`, points `key` or `sas` at Azurite, for a test. |
 | `BASIS_FOLDERS__NAME__PATH` | The absolute path on this machine of the shared folder an `etl.Excel` or `etl.ExcelReport` names `NAME`: `\\server\share\pm` on Windows, `/mnt/pm` in WSL and in a pod. |
 | `BASIS_SLACK__NAME__WEBHOOK` | The incoming-webhook URL of the Slack channel a message names `NAME`, a secret. `__CA_BUNDLE` and `__PROXY` as for a service. |
 | `BASIS_EMAIL__NAME__HOST`, `__PORT`, `__SECURITY`, `__SENDER`, `__TO` | The relay an email named `NAME` goes through, `none`, `starttls` or `tls`, its sender's address, and, as JSON, the addresses it goes to, `["desk@example.com"]`: each environment's own. `__USER` and `__PASSWORD` where the relay asks for a login. |

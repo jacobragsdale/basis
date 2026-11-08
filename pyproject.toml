@@ -180,7 +180,7 @@ forbidden_modules = [
     "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.storage",
     "basis.core.settings", "basis.core.new", "basis.core.sync", "basis.core.testing", "basis.core.command",
     "basis.core.check", "basis.core.verbs", "basis.core.hooks", "basis.core.hygiene", "basis.core.clone", "basis.core.full", "basis.core.invalid",
-    "basis.core.gates", "basis.core.mutation", "basis.core.pytest_plugin", "basis.core.qa", "basis.core.review", "basis.core.doctor", "basis.core.upgrade", "basis.core.opened", "basis.core.fakes", "basis.core.traces", "basis.core.sending", "basis.core.folders", "basis.core.mongo",
+    "basis.core.gates", "basis.core.mutation", "basis.core.pytest_plugin", "basis.core.qa", "basis.core.review", "basis.core.doctor", "basis.core.upgrade", "basis.core.opened", "basis.core.fakes", "basis.core.traces", "basis.core.sending", "basis.core.folders", "basis.core.mongo", "basis.core.lake",
     "mssql_python", "oracledb", "httpx2",
 ]
 ignore_imports = [

@@ -131,6 +131,40 @@ class UpsertRecord(Model):
     error: str | None = None
 
 
+class ArchiveRecord(Model):
+    """Rows a run planned to archive to a lake: where, the ledger that records it, and how many."""
+
+    lake: str
+    table: str
+    partition: str
+    """The partition the interval's rows go to, as `date=2026-11-07`."""
+    ledger: str
+    """The database whose ledger records the archive."""
+    rows: int
+
+
+class ArchivedFile(Model):
+    """One Parquet file of an archived partition: its name, its SHA-256 and its rows, as read back."""
+
+    name: str
+    sha256: str
+    rows: int
+
+
+class ArchivedRecord(Model):
+    """What became of an archive: `archived`, with its files; `skipped`, since another run archived the interval; or
+    `failed`, with the error."""
+
+    status: Literal["archived", "skipped", "failed"]
+    at: datetime
+    path: str | None = None
+    """The partition, as `ACCOUNT/CONTAINER/TABLE/date=2026-11-07`."""
+    rows: int = 0
+    files: list[ArchivedFile] = Field(default_factory=list)
+    reason: str | None = None
+    error: str | None = None
+
+
 class RunRecord(Model):
     run_id: str
     job: str
@@ -171,6 +205,10 @@ class RunRecord(Model):
     """Each Mongo upsert the run planned, by its output's name: only `--publish` upserts."""
     upserted: dict[str, UpsertRecord] = Field(default_factory=dict)
     """What became of each upsert, by its output's name."""
+    archives: dict[str, ArchiveRecord] = Field(default_factory=dict)
+    """Each lake archive the run planned, by its output's name: only `--publish` archives."""
+    archived: dict[str, ArchivedRecord] = Field(default_factory=dict)
+    """What became of each archive, by its output's name."""
     clocks: dict[str, list[AwareDatetime]] = Field(default_factory=dict)
     """Each time each clock the run declares gave, by its name, in order, which a replay of the run is given again."""
     ids: dict[str, list[UUID]] = Field(default_factory=dict)

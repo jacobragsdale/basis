@@ -362,3 +362,9 @@ def test_a_repo_with_no_declaration_or_no_part_with_qa_runs_skips_the_tier(tmp_p
 def test_a_folder_whose_path_lacks_the_marker_is_refused_since_a_qa_run_writes_there(declared: qa.Declared) -> None:
     found = GivenSettings.model_validate({"snapshot_root": "runs-qa", "databases": {"warehouse": mssql()}, "folders": {"pm": {"path": "/mnt/pm"}, "pm_qa": {"path": "/mnt/pm-qa"}}})
     assert problems(found, declared) == ["BASIS_FOLDERS__PM__PATH in .env.qa is /mnt/pm, which does not contain the QA marker 'qa', and a QA run writes its workbooks there"]
+
+
+def test_a_lake_whose_account_and_container_lack_the_marker_is_refused_since_a_qa_run_archives_there(declared: qa.Declared) -> None:
+    lakes = {"history": {"account": "lakeprod", "container": "archive", "auth": "cli"}, "risk": {"account": "lakeprod", "container": "archive-qa", "auth": "cli"}}
+    found = GivenSettings.model_validate({"snapshot_root": "runs-qa", "databases": {"warehouse": mssql()}, "lakes": lakes})
+    assert problems(found, declared) == ["BASIS_LAKES__HISTORY__ACCOUNT and __CONTAINER in .env.qa are lakeprod/archive, which lacks the QA marker 'qa', and a QA run archives there"]

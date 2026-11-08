@@ -34,6 +34,8 @@ class TestDatabases(BaseSettings):
     oracle_password: SecretStr | None = None
     mongo: SecretStr | None = None
     """A connection string to a scratch Mongo server, whose collections a test creates and drops: step 5.5's."""
+    azurite: str | None = None
+    """`HOST:PORT` of a scratch Azurite's blob service, whose containers a test creates and deletes: step 5.7's."""
 
 
 @dataclass(frozen=True)
