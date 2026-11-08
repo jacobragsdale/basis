@@ -29,7 +29,11 @@ PYPROJECT = '[project]\nname = "pricing-api"\nversion = "0.1.0"\n\n[tool.basis]\
 
 
 @pytest.fixture
-def repo(tmp_path: Path) -> Path:
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """An API repo, whose verbs act in dev, from the process's environment, as a pod's do: the user has no file of
+    settings."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("BASIS_ENV", "dev")
     (tmp_path / "pyproject.toml").write_text(PYPROJECT, encoding="utf-8")
     return tmp_path
 
@@ -186,10 +190,33 @@ def test_a_call_that_fails_is_one_error_line(repo: Path, capsys: pytest.CaptureF
 
 
 @pytest.mark.usefixtures("clean")
-def test_call_on_real_resources_names_the_settings_they_need(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_call_on_real_resources_names_the_settings_they_need(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BASIS_GIT_SHA", "abc123")  # some setting of dev's, so the call reaches the service's own checks
     assert basis(repo, "call", "bond", json.dumps({"path": {"security": ISIN}}), "--real", *EXAMPLE) == 1
     _, last = _called(capsys)
     assert last.startswith("ERROR: service accruals's resources are not all configured, so the API cannot start: set BASIS_DATABASES__WAREHOUSE__KIND")
+
+
+@pytest.mark.parametrize("argv", [["serve", *EXAMPLE[1:]], ["call", "bond", "{}", "--real", *EXAMPLE], ["relay", *EXAMPLE[1:]]], ids=["serve", "call-real", "relay"])
+def test_a_verb_that_reaches_the_firm_s_systems_names_its_environment(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, argv: list[str]) -> None:
+    monkeypatch.delenv("BASIS_ENV")
+    assert basis(repo, *argv) == 1
+    assert capsys.readouterr().err.splitlines()[-1].endswith("names no environment, which basis never assumes: give --env dev|qa|prod, or set BASIS_ENV")
+
+
+def test_in_prod_a_verb_with_write_logins_is_refused_unless_the_deployment_allows_writes(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BASIS_ENV", "prod")
+    for name, value in {"KIND": "mssql", "CONNECTION_STRING": "Server=sql01;Database=Trading", "ISOLATION": "read_committed", "TIMEOUT_S": "5", "MAX_ROWS": "5"}.items():
+        monkeypatch.setenv(f"BASIS_DATABASES__WAREHOUSE__{name}", value)
+    monkeypatch.setenv("BASIS_DATABASES__WAREHOUSE__WRITE__CONNECTION_STRING", "Server=sql01;UID=api")
+    assert basis(repo, "serve", *EXAMPLE[1:]) == 1
+    assert "basis serve accruals, with write logins to warehouse, would write to prod, which basis refuses unless the process sets BASIS_PROD_WRITES=1" in capsys.readouterr().err
+
+
+def test_call_on_its_fakes_reaches_nothing_and_needs_no_environment(repo: Path, monkeypatch: pytest.MonkeyPatch, clean: None) -> None:
+    del clean
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(repo / "config"))
+    assert basis(repo, "call", "bond", json.dumps({"path": {"security": ISIN}}), "--fake", *EXAMPLE) == 0
 
 
 def test_call_chooses_its_resources_out_loud(repo: Path) -> None:
@@ -228,7 +255,8 @@ PLAIN = api.Service(name="plain", settings=api.Settings, routes=[api.get("/plain
 
 
 @pytest.mark.usefixtures("clean")
-def test_a_reply_that_is_not_json_is_one_error_line_with_its_status_and_type(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_a_reply_that_is_not_json_is_one_error_line_with_its_status_and_type(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BASIS_GIT_SHA", "abc123")  # some setting of dev's, so the call reaches the route
     assert basis(repo, "call", "plain", "{}", "--real", "--service", f"{__name__}:PLAIN") == 1
     out, err = capsys.readouterr()
     assert out == ""

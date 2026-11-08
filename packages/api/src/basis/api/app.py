@@ -96,9 +96,10 @@ class Health(Model):
     status: Literal["live", "ready"]
 
 
-def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | None = None) -> App:
+def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | None = None, environment: str | None = None) -> App:
     """The app for `service`, with `settings`, or its settings read from the environment, and its resources opened
-    as the settings configure them, or as `fakes` gives them, by resource or compute function. An app starts once."""
+    as the settings configure them, or as `fakes` gives them, by resource or compute function. `environment` names
+    the environment the settings are of, as `--env` gave it, which its spans carry. An app starts once."""
     if settings is None:
         settings = read(service.settings)
     elif not isinstance(settings, service.settings):
@@ -109,7 +110,7 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | 
     identity = tokens.plan(service, configured)
     writes = {route.handler: route.writes for route in service.routes if route.writes is not None}
     lifecycle = Lifecycle()
-    provider = traces.provider(service.name, version=configured.git_sha, environment=None)  # step 5.6 names the environment
+    provider = traces.provider(service.name, version=configured.git_sha, environment=environment)
     tracer = provider.get_tracer(traces.SCOPE)
     started = False
 

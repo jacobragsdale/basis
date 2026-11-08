@@ -30,14 +30,14 @@ LOCAL = "127.0.0.1"
 """Where `basis dev` serves: this machine alone."""
 
 
-def serve(service: Service | str | None = None, *, settings: Settings | None = None, fakes: Fakes | None = None, host: str | None = None) -> None:
+def serve(service: Service | str | None = None, *, settings: Settings | None = None, fakes: Fakes | None = None, host: str | None = None, environment: str | None = None) -> None:
     """Serve `service`, or the service a reference names (see `api.load`), or the one the installed packages list,
     with `settings`, or its settings read from the environment, on `fakes` where given, and on `host`, or the one the
-    settings name."""
+    settings name; `environment` names the environment the settings are of, which its spans carry."""
     logs.setup()
     found = service if isinstance(service, Service) else load(service)
     logged(found)
-    app = build(found, settings=settings, fakes=fakes)
+    app = build(found, settings=settings, fakes=fakes, environment=environment)
     serving = app.settings.serve
     host = host if host is not None else serving.host
     config = uvicorn.Config(

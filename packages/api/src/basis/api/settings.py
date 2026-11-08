@@ -109,13 +109,16 @@ def read[S: Settings](settings: type[S]) -> S:
     """`settings` from the environment, or an error that names each variable to set."""
     try:
         return settings()
-    except ValidationError as error:
+    except (ValidationError, SourceError) as error:
+        raise unreadable(error, settings) from None  # the validation error would print every value beside the field it names
+
+
+def unreadable(error: ValidationError | SourceError, settings: type[Settings]) -> SettingsError:
+    """Why `settings` cannot be read, from the environment or an environment's file, naming each variable to set."""
+    if isinstance(error, ValidationError):
         problems = "; ".join(f"{variable(entry['loc'], settings)}: {entry['msg']}" for entry in error.errors(include_url=False, include_input=False))
-        msg = f"the settings are not valid, so the API cannot start: set {problems}"
-        raise SettingsError(msg) from None  # the validation error would print every value beside the field it names
-    except SourceError as error:  # a value that does not parse before it is validated, such as a block's JSON
-        field = re.search(r'field "([^"]+)"', str(error))  # pydantic-settings names the field in its message alone
-        name = variable((field.group(1),)) if field is not None else f"the variable that starts {core.PREFIX}"
-        reason = f": {error.__cause__}" if error.__cause__ is not None else ""
-        msg = f"the settings are not valid, so the API cannot start: set {name}, whose value does not parse{reason}"
-        raise SettingsError(msg) from None
+        return SettingsError(f"the settings are not valid, so the API cannot start: set {problems}")
+    field = re.search(r'field "([^"]+)"', str(error))  # a value that does not parse before it is validated, such as a block's JSON; pydantic-settings names the field in its message alone
+    name = variable((field.group(1),)) if field is not None else f"the variable that starts {core.PREFIX}"
+    reason = f": {error.__cause__}" if error.__cause__ is not None else ""
+    return SettingsError(f"the settings are not valid, so the API cannot start: set {name}, whose value does not parse{reason}")

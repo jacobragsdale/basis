@@ -1,12 +1,19 @@
 """basis-api's part of the `basis` command, in a repo whose `[tool.basis] parts` include `api`:
 
-- `basis serve [SERVICE]` runs the repo's API as `api.serve` does, until SIGTERM, and is its image's command; it
-  never touches git;
+- `basis serve [SERVICE] --env ENV` runs the repo's API as `api.serve` does, until SIGTERM, and is its image's
+  command; it never touches git;
 - `basis dev [SERVICE]` runs it on the fakes its service declares, on 127.0.0.1 alone, until Ctrl+C, and points the
   clone at its hooks, as the verbs a developer runs do;
-- `basis call ROUTE [REQUEST] --fake|--real` runs one route in this process and prints its response (`call.py`);
-- `basis relay [SERVICE]` makes again the calls the service's outboxes still hold, and fails when one has aged out
-  (`relay.py`), which the repo's scheduler runs on a schedule;
+- `basis call ROUTE [REQUEST] --fake|--real` runs one route in this process and prints its response (`call.py`),
+  `--real` in the environment `--env` names;
+- `basis relay [SERVICE] --env ENV` makes again the calls the service's outboxes still hold, and fails when one has
+  aged out (`relay.py`), which the repo's scheduler runs on a schedule;
+
+The verbs that reach the firm's systems, `serve`, `call --real` and `relay`, act in the environment `--env` or
+`BASIS_ENV` names, with its settings (`basis.core.environments`), and in prod refuse to start where the settings give a
+database a write login, unless the deployment sets `BASIS_PROD_WRITES=1`. `dev` and `call --fake` reach nothing, and
+take no environment. The library's `api.build`, `api.serve`, `api.call_route` and `api.serve_on_fakes` take their
+settings in code, and never need one.
 - `basis ddl [SERVICE] --dialect DIALECT`, basis-core's verb, prints the CREATE TABLE of each outbox the service's
   databases declare (`outboxes.py`).
 - `basis sync` writes, and `basis check` checks, the repo's `openapi.json` with the API's other files (`sync.py`), and
@@ -22,20 +29,26 @@ import argparse
 import json
 import logging
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Literal
 
+from pydantic import ValidationError
+from pydantic_settings import SettingsError as SourceError
+
 from basis.api import sync
 from basis.api.resources import DatabaseResource
-from basis.api.service import GROUP, load
-from basis.core import command, hooks
+from basis.api.service import GROUP, Service, load
+from basis.api.settings import Settings, unreadable
+from basis.core import command, environments, hooks
 from basis.core.destination import Dialect
+from basis.core.environments import Environment
 from basis.core.sync import Problem
 from basis.core.verbs import Part, Runs, Shared, Verb, fail
 
+RELAY = "make the calls the API's outboxes still hold, once each, and fail when one has aged out: run it on a schedule"
 LOCAL = "127.0.0.1"
 """Where `basis dev` serves: this machine alone, whatever the settings say."""
 
@@ -44,6 +57,8 @@ LOCAL = "127.0.0.1"
 class ServeArgs:
     service: str | None
     """The service's name in the `basis.apis` entry points, or its module path; None for the one the repo lists."""
+    env: str | None = None
+    """The environment `--env` names, or None for `BASIS_ENV`'s."""
 
 
 @dataclass(frozen=True)
@@ -60,6 +75,7 @@ class CallArgs:
     """The request's JSON, or `-` for stdin's."""
     resources: Literal["real", "fake"]
     service: str | None
+    env: str | None = None
 
 
 @dataclass(frozen=True)
@@ -74,10 +90,10 @@ def part() -> Part:
     check of `openapi.json`; and its checks of the repo's code, its layers and its app on its fakes."""
     return Part(
         verbs=(
-            Verb("serve", "serve the API with uvicorn until SIGTERM, which drains it first", _service_argument, lambda n: _serve(ServeArgs(n.service))),
+            Verb("serve", "serve the API with uvicorn until SIGTERM, which drains it first", _reaching(_service_argument), lambda n: _serve(ServeArgs(n.service, n.env))),
             Verb("dev", "serve the API on its declared fakes, on this machine alone, until Ctrl+C", _service_argument, lambda n: _dev(DevArgs(n.service, Path(n.repo_root)))),
             Verb("call", "run one route in this process, on the API's fakes or its real resources, and print its response as JSON", _call_arguments, lambda n: _call(_call_args(n))),
-            Verb("relay", "make the calls the API's outboxes still hold, once each, and fail when one has aged out: run it on a schedule", _service_argument, lambda n: _relay(ServeArgs(n.service))),
+            Verb("relay", RELAY, _reaching(_service_argument), lambda n: _relay(ServeArgs(n.service, n.env))),
         ),
         files=sync.agent_files,
         runs=Runs(
@@ -129,18 +145,43 @@ def _call_arguments(parser: argparse.ArgumentParser) -> None:
     resources.add_argument("--fake", dest="resources", action="store_const", const="fake", help="run on the fakes the service declares, as basis dev does")
     resources.add_argument("--real", dest="resources", action="store_const", const="real", help="run on the real resources, as the settings configure them")
     parser.add_argument("--service", help="the service's name in the basis.apis entry points, or its module path; by default the one the repo lists")
+    command.environment_argument(parser)
+
+
+def _reaching(arguments: Callable[[argparse.ArgumentParser], None]) -> Callable[[argparse.ArgumentParser], None]:
+    """`arguments`, and `--env`, which a verb that reaches the firm's systems takes."""
+
+    def both(parser: argparse.ArgumentParser) -> None:
+        arguments(parser)
+        command.environment_argument(parser)
+
+    return both
+
+
+def _environment(given: str | None, service: Service, what: str) -> Environment[Settings]:
+    """The environment `given` names, or `BASIS_ENV`, with the service's settings for it; in prod, refused where those
+    settings give a database a write login and the deployment does not allow writes."""
+    try:
+        environment = environments.load(given, service.settings)
+    except (ValidationError, SourceError) as error:
+        raise unreadable(error, service.settings) from None  # the validation error would print every value beside the field it names
+    if writing := sorted(name for name, database in environment.settings.databases.items() if database.write is not None):
+        environment.refuse_writes(f"{what}, with write logins to {', '.join(writing)},")
+    return environment
 
 
 def _call_args(namespace: argparse.Namespace) -> CallArgs:
     resources: Literal["real", "fake"] = "fake" if namespace.resources == "fake" else "real"
     request = str(namespace.request)
-    return CallArgs(str(namespace.route), sys.stdin.read() if request == "-" else request, resources, namespace.service)
+    return CallArgs(str(namespace.route), sys.stdin.read() if request == "-" else request, resources, namespace.service, namespace.env)
 
 
 def _serve(args: ServeArgs) -> int:
     from basis.api.server import serve  # noqa: PLC0415 -- the server loads when the verb runs
 
-    serve(args.service)
+    found = load(args.service)
+    environment = _environment(args.env, found, f"basis serve {found.name}")
+    serve(found, settings=environment.settings, environment=environment.name)
     return 0
 
 
@@ -157,21 +198,25 @@ def _dev(args: DevArgs) -> int:
 def _call(args: CallArgs) -> int:
     from basis.api.call import call  # noqa: PLC0415 -- the app loads when the verb runs
 
-    return call(load(args.service), args.route, args.request, resources=args.resources)
+    found = load(args.service)
+    if args.resources == "fake":
+        return call(found, args.route, args.request, resources="fake")
+    environment = _environment(args.env, found, f"basis call {args.route} --real")
+    return call(found, args.route, args.request, resources="real", settings=environment.settings)
 
 
 def _relay(args: ServeArgs) -> int:
     from basis.api import relay  # noqa: PLC0415 -- the clients and the drivers load when the verb runs
-    from basis.api.settings import read  # noqa: PLC0415
     from basis.core import logs, snapshots, traces  # noqa: PLC0415
 
     found = load(args.service)
-    planned = relay.plan(found, read(found.settings), {})
+    environment = _environment(args.env, found, f"basis relay {found.name}")
+    planned = relay.plan(found, environment.settings, {})
     run_id = snapshots.new_run_id()
     settings = planned.settings
     with (
         logs.fields(run_id=run_id, relay=found.name),  # on each of the run's records, as a job's run has its id
-        traces.trace("relay", service=found.name, settings=settings.traces, version=settings.git_sha, environment=None, **{"basis.run_id": run_id}) as (tracer, _),
+        traces.trace("relay", service=found.name, settings=settings.traces, version=settings.git_sha, environment=environment.name, **{"basis.run_id": run_id}) as (tracer, _),
     ):  # one trace, its spans exported when it ends
         relayed = relay.relay(planned, tracer)
     sys.stdout.write(json.dumps({"service": found.name, "outboxes": [entry.summary() for entry in relayed]}, indent=2) + "\n")

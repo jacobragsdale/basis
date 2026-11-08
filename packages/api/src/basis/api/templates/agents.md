@@ -104,9 +104,13 @@ Rules to keep:
 Commands, all through `basis`, whose `--help` lists every verb this repo has:
 
 ```sh
-uv run basis serve [SERVICE]    # serve the API until SIGTERM, which drains it first; a second signal stops it at once
+uv run basis serve [SERVICE] --env dev   # serve the API until SIGTERM, which drains it first; a second signal stops it at once
 uv run basis dev [SERVICE]      # serve it on its fakes, on 127.0.0.1, until Ctrl+C
-uv run basis call ROUTE '{"path": {...}, "query": {...}, "body": ...}' --fake   # one route in-process, its response as JSON; --real for the real resources
+uv run basis call ROUTE '{"path": {...}, "query": {...}, "body": ...}' --fake   # one route in-process, its response as JSON; --real --env dev for the real resources
 uv run basis ddl [SERVICE] --dialect mssql   # the CREATE TABLE of each outbox, for whoever has the rights to run it
-uv run basis relay [SERVICE]    # make the calls the outboxes still hold; the scheduler runs it, and it fails when one ages out
+uv run basis relay [SERVICE] --env dev   # make the calls the outboxes still hold; the scheduler runs it, and it fails when one ages out
 ```
+
+`serve`, `call --real` and `relay` act in the environment `--env` names, `dev`, `qa` or `prod`, or `BASIS_ENV`, with
+your own settings for it, `~/.config/basis/ENV.env` (`%APPDATA%\basis\ENV.env` on Windows), or in a pod its
+deployment's. In prod they refuse to start with a write login unless the deployment sets `BASIS_PROD_WRITES=1`.
