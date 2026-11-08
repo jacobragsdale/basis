@@ -66,7 +66,8 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
   `Ids`, whose values the run's record keeps, so a replay is given them again and reaches nothing.
 - Every run, replay and resume is one trace, with a span for each SQL statement and GET under its root, on a provider
   of its own; nothing sets OpenTelemetry's global one, no `OTEL_*` variable changes where spans go, and every record
-  it logs carries the job's name as `service`.
+  it logs carries the job's name as `service`, or the deployment's name for it where `OTEL_SERVICE_NAME` and
+  `OTEL_RESOURCE_ATTRIBUTES` give one (`basis.core.telemetry`).
 - basis-core imports nothing from basis-job; `lint-imports` enforces it. What core needs of a job's declarations, it
   takes through `basis.core.tables`.
 - Nothing about a table is assumed: a write mode, a `Precision`, a `Zone` and an input's `empty` are always declared.

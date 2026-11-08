@@ -403,7 +403,10 @@ Settings are environment variables, which an environment's file holds, as `NAME=
 | `BASIS_GIT_SHA` | The job repo's commit, which the run's manifest records, and its spans carry as their version; the generated `Dockerfile` sets it. |
 
 No `OTEL_*` variable changes where spans go. Every run, replay and resume is one trace, with a span for each SQL
-statement and GET, and every JSON record it logs carries `trace_id`, `span_id` and the job's name as `service`.
+statement and GET, and every JSON record it logs carries `trace_id`, `span_id` and the job's name as `service`. Where
+the deployment sets `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`, as berth does, the spans and the `service` field
+carry the deployment's names in place of the job's, so Datadog shows its logs, traces and metrics as one service; an
+environment there that is not the run's fails the run.
 
 `NAME` is the database's or the service's name in upper case. A database without a `WRITE` block can be read and never written. A
 field a database's block does not have is an error; a variable the framework does not read is ignored.

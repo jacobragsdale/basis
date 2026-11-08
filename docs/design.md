@@ -396,10 +396,19 @@ follows Google's AIP-193 and AIP-194, Uber's YARPC codes and Meta's fbthrift, wh
 retry only unavailable, idempotent calls.
 
 **Traces and logs.** Traces go to Datadog. The OpenTelemetry SDK makes them, and basis posts them over OTLP/HTTP to the
-Datadog Agent on each AKS node, at the full URL `BASIS_TRACES__ENDPOINT` names, `http://$(HOST_IP):4318/v1/traces` in a
-pod, the node's IP from the downward API's `status.hostIP`, so basis needs no Datadog library. It posts them with
+Datadog Agent on each AKS node, at the full URL `BASIS_TRACES__ENDPOINT` names, so basis needs no Datadog library: in a
+pod, the Agent's node-local Service (`internalTrafficPolicy: Local`), a fixed URL a deployment's settings can hold, or
+`http://$(HOST_IP):4318/v1/traces` where the deployment sets the variable itself, since Kubernetes expands `$(HOST_IP)`
+only in a container's own `env`, never in a ConfigMap ([the berth spike](spikes/berth.md), answer 7). It posts them with
 httpx2 itself, rather than through the SDK's OTLP exporter, which reads `OTEL_*` variables whatever it is given and
-sends through `HTTP_PROXY`: basis's settings are the only configuration. Each run and each app has its own tracer
+sends through `HTTP_PROXY`: basis's settings are the only configuration, with one exception, decided on 2026-11-07.
+basis reads `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`, and only those two (`basis.core.telemetry`): where a
+deploy platform sets them, as berth does per container, a process's spans carry the platform's service name and
+attributes in place of basis's, and every log record that names its service names the platform's. They say what a
+process is, never where its spans go, and they are the one source of a service's name per container: berth tags a
+pod's metrics and its Datadog tags `<app>-<component>`, which basis cannot know, so without them logs and traces would
+sit under one name in Datadog and metrics under another. An attribute that names another environment than the one the
+process acts in is refused. Each run and each app has its own tracer
 provider, and nothing sets OpenTelemetry's global one. Every run and every request is a trace, and every SQL statement
 and HTTP call is a span; with no endpoint set, as on a desktop, spans are made and go nowhere, and nothing fails. Logs
 stay JSON on stderr, as they are now, never files on NFS, and each record logged in a trace carries its `trace_id` and
@@ -411,7 +420,13 @@ derives request counts, errors and latency from the traces.
 ships two, `sifma-us`, with its full and early closes, and `target2`, as data in `basis.core` built from SIFMA's and the
 ECB's published schedules, with no pandas. A calendar says whether a date is a business day, adds business days, and
 gives the previous business day and a day's early-close time. Each states the last date it covers, and asking about a
-later one is an error, never a silent business day. A job names its calendar explicitly.
+later one is an error, never a silent business day. A job names its calendar explicitly, as its module's `CALENDAR`.
+
+**Relative intervals.** A scheduler runs the same command every time: berth's tasks have static arguments, and its
+Control-M jobs one fixed time a day. So `basis run --interval` also takes an interval relative to the moment the run
+starts, such as `previous-business-day`, `previous-month` or `today-7d..today`, decided on 2026-11-07. It resolves in
+the zone and business days of the job's `CALENDAR`, which it requires, to dates, and the run's manifest records those
+dates, so `replay` and `regress` rerun exactly the interval the run had. The Python API and the QA tier take dates.
 
 **Messages.** Slack messages go through channel webhooks, as the firm already posts to its channels, and email through
 the firm's SMTP relay. Both have fakes, and nothing is sent in tests, `replay`, `regress` or the QA tier. Their numbers

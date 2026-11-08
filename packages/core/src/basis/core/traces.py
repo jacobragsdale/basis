@@ -6,7 +6,8 @@ node in a pod, or to stderr on a desktop that asks to see them. With no exporter
 nowhere and nothing fails. There are no metrics: Datadog's APM derives requests, errors and latency from the spans.
 
 basis's settings are the only configuration. The provider, its processors and the exporter are given every setting, so
-no `OTEL_*` variable changes what they do, and the one switch the SDK reads whatever it is given, `OTEL_SDK_DISABLED`,
+no `OTEL_*` variable changes what they do, but for the two that name the process, `OTEL_SERVICE_NAME` and
+`OTEL_RESOURCE_ATTRIBUTES`, which a deploy platform sets and the provider's resource takes (`basis.core.telemetry`); and the one switch the SDK reads whatever it is given, `OTEL_SDK_DISABLED`,
 is overridden. The SDK's own OTLP/HTTP exporter is not used: it reads `OTEL_EXPORTER_OTLP_*` variables, its headers
 and certificates among them, whatever it is given, and its session follows `HTTP_PROXY`, which in a pod would send the
 spans meant for the node's Agent through a proxy. `Otlp` posts the SDK's own encoding of them with httpx2 instead,
@@ -36,6 +37,7 @@ from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
 from opentelemetry.sdk.trace.sampling import ALWAYS_ON, ParentBased
 from opentelemetry.trace import NoOpTracer, Span, Tracer
 
+from basis.core import telemetry
 from basis.core.settings import Traces
 
 log = logging.getLogger(__name__)
@@ -54,12 +56,9 @@ _RETRIED = frozenset({429, 502, 503, 504})
 
 def provider(service: str, *, version: str | None, environment: str | None) -> TracerProvider:
     """A provider of `service`'s with no exporter yet, whose spans carry its `version`, the repo's commit, and its
-    `environment`, each where it is known. A sampled-out caller's `traceparent` is honoured."""
-    attributes = {"service.name": service}
-    if version is not None:
-        attributes["service.version"] = version
-    if environment is not None:
-        attributes["deployment.environment.name"] = environment
+    `environment`, each where it is known, or the names the platform gives the process in their place
+    (`basis.core.telemetry`). A sampled-out caller's `traceparent` is honoured."""
+    attributes = telemetry.resource(service, version=version, environment=environment)
     made = TracerProvider(
         sampler=ParentBased(ALWAYS_ON), resource=Resource(attributes), shutdown_on_exit=False, id_generator=RandomIdGenerator(), span_limits=_LIMITS, meter_provider=_NO_METRICS
     )  # shut down by whoever made it, as a run's end or an app's lifespan does, never by an atexit hook

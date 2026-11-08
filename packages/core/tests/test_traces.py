@@ -77,10 +77,17 @@ def test_a_provider_carries_the_service_and_its_version_and_environment_where_kn
     assert dict(unknown) == {"service.name": "positions"}
 
 
-def test_no_otel_variable_changes_what_a_provider_or_its_exporter_does(receiver: Receiver, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_provider_carries_the_names_the_platform_gives_the_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OTEL_SERVICE_NAME", "quote-board-api")
+    monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "deployment.environment.name=qa,service.version=3f1c2a9e,service.namespace=quote-board")
+    attributes = dict(traces.provider("quote-board", version="abc123", environment="qa").resource.attributes)
+    assert attributes == {"service.name": "quote-board-api", "service.version": "3f1c2a9e", "deployment.environment.name": "qa", "service.namespace": "quote-board"}
+
+
+def test_no_otel_variable_but_the_two_that_name_the_process_changes_what_a_provider_or_its_exporter_does(receiver: Receiver, monkeypatch: pytest.MonkeyPatch) -> None:
     for name, value in {
         "OTEL_SDK_DISABLED": "true", "OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT": "0", "OTEL_ATTRIBUTE_COUNT_LIMIT": "0", "OTEL_TRACES_SAMPLER": "always_off",
-        "OTEL_SERVICE_NAME": "elsewhere", "OTEL_RESOURCE_ATTRIBUTES": "service.version=elsewhere", "OTEL_BSP_MAX_EXPORT_BATCH_SIZE": "1",
+        "OTEL_BSP_MAX_EXPORT_BATCH_SIZE": "1",
         "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "authorization=leaked", "OTEL_EXPORTER_OTLP_HEADERS": "authorization=leaked",
         "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://127.0.0.1:9/v1/traces", "OTEL_EXPORTER_OTLP_TRACES_COMPRESSION": "gzip",
         "HTTP_PROXY": "http://127.0.0.1:9", "HTTPS_PROXY": "http://127.0.0.1:9", "ALL_PROXY": "http://127.0.0.1:9", "NO_PROXY": "",

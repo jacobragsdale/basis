@@ -127,7 +127,9 @@ Paths are under `src/basis/api/`.
 - An unexpected error is logged once, by the request boundary, with its traceback, and its message never reaches the
   client.
 - Settings come from `Settings` alone, as `BASIS_*` variables, and a failure names them with basis-core's
-  `settings.variable`; no `OTEL_*` variable changes what basis does (`basis.core.traces`).
+  `settings.variable`; no `OTEL_*` variable changes what basis does (`basis.core.traces`), but `OTEL_SERVICE_NAME` and
+  `OTEL_RESOURCE_ATTRIBUTES`, a platform's names for the process, which its spans and log records carry
+  (`basis.core.telemetry`).
 - A failure the developer can fix is a `BasisError`, such as `DeclarationError` or basis-core's `SettingsError`, whose
   message ends with the fix, so `basis` prints it as one line.
 - Each app has its own tracer provider, from `basis.core.traces`; nothing sets OpenTelemetry's global one. Spans go

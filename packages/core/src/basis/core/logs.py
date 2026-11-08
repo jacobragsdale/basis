@@ -45,6 +45,8 @@ from opentelemetry.trace import SpanContext
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from basis.core import telemetry
+
 _FRAMEWORK = "basis"  # the namespace every basis package is a portion of, whose logger is each one's parent
 _GROUP = "basis.verbs"  # the entry points of the parts whose frames an error's `where` names, as basis-core's (`basis.core.verbs.GROUP`)
 _PREFIX = "BASIS_LOG_"
@@ -218,7 +220,10 @@ def _extras(record: logging.LogRecord, *, traced: bool = False) -> dict[str, obj
     """A record's fields: `bind`'s, those of each `fields` block, where `traced` the current span's, and its own `extra`.
     The span is the one current where the record is formatted, which is where it was logged, since a handler formats
     it in the thread that logs it."""
-    return _bound | dict(_scoped.get({})) | (_current() if traced else {}) | {key: value for key, value in vars(record).items() if key not in _STANDARD}
+    found = _bound | dict(_scoped.get({})) | (_current() if traced else {}) | {key: value for key, value in vars(record).items() if key not in _STANDARD}
+    if "service" in found and (name := telemetry.service_name()) is not None:
+        found["service"] = name  # the platform's name for the process, which Datadog's tags and metrics carry
+    return found
 
 
 def _fallback(value: object) -> object:
