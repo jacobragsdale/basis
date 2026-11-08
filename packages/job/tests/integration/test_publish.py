@@ -12,7 +12,7 @@ from builders import Price, prices
 from integration.scratch import Scratch, run
 
 import basis.job as etl
-from basis.core import command, snapshots
+from basis.core import command, environments, snapshots
 from basis.core.settings import GivenSettings
 from basis.core.storage import Root
 from basis.job import cli, ddl, runs
@@ -219,7 +219,7 @@ def test_a_run_told_again_that_committed_to_one_database_resumes_again_on_the_ot
     partial = run(job, {"alpha": alpha, "beta": unledgered}, TODAY, tmp_path, again=True)
     assert (partial.record.status, partial.record.again) == ("partial", True)
     settings = GivenSettings(databases={"alpha": alpha.settings, "beta": beta.settings}, snapshot_root=str(tmp_path / "snapshots"))
-    monkeypatch.setattr(cli, "Settings", lambda: settings)
+    monkeypatch.setattr(environments, "load", lambda _given, _kind: environments.Environment("dev", settings, None, writes=True))  # the containers' databases, as dev's settings
     monkeypatch.setattr("basis.job.job.load", lambda _: job)  # the test's own job, which no module holds
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -246,7 +246,7 @@ def test_a_resume_told_again_is_saved_so_its_next_attempt_is_too(both: tuple[Scr
         partial = run(job, {"alpha": ledgered(alpha, fresh), "beta": ledgered(beta, f"no_ledger_{beta.suffix}")}, TODAY, tmp_path)
         assert (partial.record.status, partial.record.again) == ("partial", False)
         settings = GivenSettings(databases={"alpha": ledgered(alpha, fresh).settings, "beta": beta.settings}, snapshot_root=str(tmp_path / "snapshots"))
-        monkeypatch.setattr(cli, "Settings", lambda: settings)
+        monkeypatch.setattr(environments, "load", lambda _given, _kind: environments.Environment("dev", settings, None, writes=True))  # the containers' databases, as dev's settings
         monkeypatch.setattr("basis.job.job.load", lambda _: job)  # the test's own job, which no module holds
         repo = tmp_path / "repo"
         repo.mkdir()

@@ -577,6 +577,8 @@ def test_relay_fails_with_one_error_line_naming_a_call_that_aged_out(outboxed: O
     monkeypatch.syspath_prepend(str(tmp_path))
     for name in [name for name in os.environ if name.startswith("BASIS_")]:
         monkeypatch.delenv(name)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))  # a pod's: no user file of settings
+    monkeypatch.setenv("BASIS_ENV", "dev")
     monkeypatch.setenv("BASIS_DATABASES", json.dumps({"warehouse": outboxed.scratch.settings}))
     monkeypatch.setenv("BASIS_HTTP", json.dumps({"ledger": {"url": "http://127.0.0.1:9"}}))  # the discard port: an aged-out call is never made
     assert command.run(["relay", module], cwd=tmp_path, installed=command.installed()) == 1

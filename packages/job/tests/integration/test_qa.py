@@ -12,7 +12,7 @@ from builders import Price
 from integration.scratch import Scratch, configured, mssql
 
 import basis.job as etl
-from basis.core import qa, snapshots
+from basis.core import environments, qa, snapshots
 from basis.core.settings import read
 from basis.core.storage import Root
 from basis.core.verbs import Part
@@ -48,9 +48,10 @@ def price_job(sql: Path, table: str) -> Job:
 
 
 @pytest.fixture
-def repo(tmp_path: Path, scratch: Scratch) -> Path:
-    """A repo that declares a QA tier whose marker is in the scratch database's name, with its settings file and a
-    source table of two prices."""
+def repo(tmp_path: Path, scratch: Scratch, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A repo that declares a QA tier whose marker is in the scratch database's name, the user's qa.env, and a source
+    table of two prices."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     suffix = scratch.suffix
     for table in (f"prices_{suffix}", f"other_{suffix}", f"source_{suffix}"):
         scratch.execute(ddl.create_table(Target(Price, "warehouse", table, etl.Append(), ("day", "security_id")), "mssql"))
@@ -60,7 +61,7 @@ def repo(tmp_path: Path, scratch: Scratch) -> Path:
     (tmp_path / "source.sql").write_text(f"SELECT day, security_id, price, note, booked_at FROM source_{suffix}", encoding="utf-8")
     (tmp_path / "params.json").write_text("{}", encoding="utf-8")
     (tmp_path / "pyproject.toml").write_text(
-        f'[tool.basis]\nparts = ["job"]\n\n[tool.basis.qa]\nsettings = ".env.qa"\nmarker = "test"\nstores = ["runs-test"]\n'
+        f'[tool.basis]\nparts = ["job"]\n\n[tool.basis.qa]\nmarker = "test"\nstores = ["runs-test"]\n'
         f'writes = {{ warehouse = ["prices_{suffix}", "{scratch.ledger()}"] }}\n\n'
         f'[tool.basis.qa.job]\nprices = {{ params = "params.json", interval = "2026-11-05..2026-11-06" }}\n',
         encoding="utf-8",
@@ -70,7 +71,9 @@ def repo(tmp_path: Path, scratch: Scratch) -> Path:
     assert isinstance(write, dict)
     lines = [f"BASIS_DATABASES__WAREHOUSE__{key.upper()}='{value}'" for key, value in database.items() if key != "write"]
     lines += [f"BASIS_DATABASES__WAREHOUSE__WRITE__{str(key).upper()}='{value}'" for key, value in write.items()]
-    (tmp_path / ".env.qa").write_text("\n".join([*lines, "BASIS_SNAPSHOT_ROOT=runs-test", ""]), encoding="utf-8")
+    qa_env = environments.user_file("qa")
+    qa_env.parent.mkdir(parents=True)
+    qa_env.write_text("\n".join([*lines, "BASIS_SNAPSHOT_ROOT=runs-test", ""]), encoding="utf-8")
     return tmp_path
 
 
@@ -90,7 +93,7 @@ def test_a_qa_run_publishes_to_the_tables_the_repo_allows_and_saves_in_the_qa_st
 def test_a_write_to_a_table_the_repo_does_not_allow_is_refused_before_it_writes(repo: Path, scratch: Scratch) -> None:
     declared = qa.declared(repo / "pyproject.toml", {"job": Part(qa=job_qa.plan)})
     assert declared is not None
-    settings = read(repo / ".env.qa")
+    settings = read(environments.user_file("qa"))
     store = qa.store(settings, repo)
     assert isinstance(store, Root)
     context = qa.context(declared, settings, store=store, repo=repo, commit="C1", part="job")
