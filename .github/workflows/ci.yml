@@ -144,7 +144,6 @@ jobs:
         ports: ["1433:1433"]
     env:
       QA: Server=127.0.0.1,1433;Database=pricing_qa;UID=sa;PWD=Etl-test-1234;Encrypt=yes;TrustServerCertificate=yes
-      XDG_CONFIG_HOME: ${{ runner.temp }}/config  # the user's configuration folder, where the QA tier finds qa.env
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
@@ -209,6 +208,7 @@ jobs:
           } > .env.qa
           mkdir "$RUNNER_TEMP/store"
           uv run --env-file .env.qa env BASIS_ENV=qa BASIS_SNAPSHOT_ROOT="$RUNNER_TEMP/store" basis run positions --params jobs/positions/params/default.json --interval 2026-11-05..2026-11-06 --publish
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/config" && echo "XDG_CONFIG_HOME=$XDG_CONFIG_HOME" >> "$GITHUB_ENV"  # the user's configuration folder, for this step and the next
           mkdir -p "$XDG_CONFIG_HOME/basis" && mv .env.qa "$XDG_CONFIG_HOME/basis/qa.env"  # the QA tier reads the user's own qa.env (5.6)
           uv run basis doctor || true  # the runner has no feed; the rest of its lines say what it found
           git add --all && git commit --quiet --message "First commit"
