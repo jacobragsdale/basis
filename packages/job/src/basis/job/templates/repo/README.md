@@ -49,7 +49,7 @@ once basis's release fills in the firm's pipeline templates.
 
 [berth](https://github.com/jacobragsdale/berth), the deploy repository the firm is trying, runs this repo's image from
 `apps/APP/app.yaml` and a file for each environment, APP being the repo's name in berth. This spec fits what the image
-runs; basis's `docs/spikes/berth.md` says why each line is as it is.
+runs; basis's `docs/spikes/berth.md` says why each line is as it is, and `berth check` passes it (berth 0.1.0).
 
 ```yaml
 # apps/APP/app.yaml

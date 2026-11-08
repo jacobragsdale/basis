@@ -21,7 +21,7 @@ lists. In a pod, the deployment sets them as the process's environment, `BASIS_E
 
 [berth](https://github.com/jacobragsdale/berth), the deploy repository the firm is trying, runs this repo's image from
 `apps/{app}/app.yaml` and a file for each environment. This spec fits what the image runs; basis's
-`docs/spikes/berth.md` says why each line is as it is.
+`docs/spikes/berth.md` says why each line is as it is, and `berth check` passes it (berth 0.1.0).
 
 ```yaml
 # apps/{app}/app.yaml
@@ -67,7 +67,7 @@ version: COMMIT@sha256:DIGEST         # the image the pipeline tagged with its c
 config:
   BASIS_ENV: dev                      # berth sets BERTH_ENV; basis reads BASIS_ENV
   BASIS_SNAPSHOT_ROOT: abfs://runs@ACCOUNT.dfs.core.windows.net/{app}
-  BASIS_HTTP__PRICING__URL: http://api.pricing-dev.svc.cluster.local:8000   # what talks_to injects as PRICING_API_URL
+  BASIS_HTTP__PRICING__URL: http://api.pricing-dev.svc.cluster.local:8000   # talks_to's PRICING_API_URL: the port its app.yaml gives
   BASIS_HTTP__LEDGER__URL: http://api.ledger-dev.svc.cluster.local:8000
 ```
 
