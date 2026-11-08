@@ -108,3 +108,17 @@ def test_the_plugin_leaves_sockets_as_it_found_them(session: pytest.Pytester) ->
     session.runpytest().assert_outcomes(passed=1)
     assert {name: vars(socket.socket).get(name) for name in before} == before
     assert socket.socketpair is pair
+
+
+def test_a_socket_a_thread_opens_after_its_test_ends_is_that_test_s_not_the_running_one(session: pytest.Pytester) -> None:
+    session.makepyfile(
+        "import socket\nimport threading\n\nSTARTED = threading.Event()\nGO = threading.Event()\nDONE = threading.Event()\n\n\n"
+        "def later() -> None:\n    STARTED.set()\n    GO.wait()\n    try:\n        socket.create_connection(" + UNROUTABLE + ", timeout=5).close()\n"
+        "    except Exception:\n        pass\n    DONE.set()\n\n\n"
+        "def test_leaves_a_thread() -> None:\n    threading.Thread(target=later, name='poller', daemon=True).start()\n    STARTED.wait()\n\n\n"
+        "def test_runs_after() -> None:\n    GO.set()\n    DONE.wait(5)\n"
+    )
+    written = session.path / "gates.json"
+    session.runpytest(f"--basis-gates={written}").assert_outcomes(passed=2)
+    name = "test_a_socket_a_thread_opens_after_its_test_ends_is_that_test_s_not_the_running_one.py"
+    assert json.loads(written.read_text(encoding="utf-8"))["sockets"] == {f"{name}::test_leaves_a_thread": ["connect 192.0.2.1:9, on the thread poller it left running"]}

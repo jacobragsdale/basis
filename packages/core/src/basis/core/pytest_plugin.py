@@ -51,6 +51,8 @@ class Gates:
         self.failed: set[str] = set()
         self._pairing = threading.local()
         self._replaced: dict[str, object] = {}
+        self._owners: dict[int, str] = {}
+        """The test each thread was started in, by the thread's ident, so a thread a test leaves running is its."""
 
     def install(self) -> None:
         for name in GUARDED:
@@ -58,6 +60,8 @@ class Gates:
             setattr(socket.socket, name, self._guard(name, getattr(socket.socket, name)))
         self._replaced["socketpair"] = socket.socketpair
         socket.socketpair = self._socketpair(socket.socketpair)  # ty: ignore[invalid-assignment] -- the same function, which the wrapper calls with what it is given
+        self._replaced["start"] = threading.Thread.start
+        threading.Thread.start = self._start(threading.Thread.start)  # ty: ignore[invalid-assignment] -- the same method, which the wrapper calls
 
     def uninstall(self) -> None:
         for name in GUARDED:
@@ -67,13 +71,19 @@ class Gates:
                 setattr(socket.socket, name, before)
         if (pair := self._replaced.get("socketpair")) is not None:
             socket.socketpair = pair  # ty: ignore[invalid-assignment] -- what it was before install
+        if (start := self._replaced.get("start")) is not None:
+            threading.Thread.start = start  # ty: ignore[invalid-assignment] -- what it was before install
         self._replaced.clear()
 
     def _guard(self, name: str, original: Callable[..., object]) -> Callable[..., object]:
         def guarded(sock: socket.socket, *args: object) -> object:
             if self.blocking and sock.family in _NETWORK and not getattr(self._pairing, "on", False):
                 reached = f"{name} {_address(args[-1] if name == 'sendto' else args[0])}"
-                self.pending.append(reached)
+                owner = self._owners.get(threading.get_ident())
+                if owner is not None and owner != self.test:  # a thread an earlier test left running: that test's socket
+                    self.sockets.setdefault(owner, []).append(f"{reached}, on the thread {threading.current_thread().name} it left running")
+                else:
+                    self.pending.append(reached)
                 sock.close()  # which the caller may never do, as `socket.create_connection` closes one only on an OSError
                 msg = f"a unit test opened a socket, {reached}, and reaches nothing outside its process: {FIX}"
                 raise SocketBlockedError(msg)
@@ -90,6 +100,14 @@ class Gates:
                 self._pairing.on = False
 
         return socketpair
+
+    def _start(self, original: Callable[[threading.Thread], None]) -> Callable[[threading.Thread], None]:
+        def start(thread: threading.Thread) -> None:
+            original(thread)
+            if self.test is not None and thread.ident is not None:
+                self._owners[thread.ident] = self.test
+
+        return start
 
     @contextmanager
     def running(self, item: pytest.Item) -> Generator[None]:
