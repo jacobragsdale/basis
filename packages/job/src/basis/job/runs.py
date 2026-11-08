@@ -22,7 +22,8 @@ a span under, exported where the settings say, and every record it logs carries 
 
 import logging
 import traceback
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from functools import cache
@@ -144,8 +145,8 @@ def run(  # noqa: PLR0913 -- what the run reads and where it saves, by keyword
     attributes = {"basis.job": job.name, "basis.run_id": run_id}
     with traces.trace("run", service=job.name, settings=settings.traces, version=settings.git_sha, environment=environment, given=provider, **attributes) as (tracer, _):
         opened = open_folder if open_folder is not None else folders.opener(settings)
-        this = _Run(params, params_text, run_id, snapshot_root, clock, databases, given, tracer, opened, mongo_opener(settings, given, tracer))
-        return _run(job, settings, request, this)
+        with mongo_opener(settings, given, tracer) as open_mongo:
+            return _run(job, settings, request, _Run(params, params_text, run_id, snapshot_root, clock, databases, given, tracer, opened, open_mongo))
 
 
 @dataclass(frozen=True)
@@ -164,9 +165,12 @@ class _Run:
     open_mongo: MongoOpener
 
 
-def mongo_opener(settings: Settings, faked: Mapping[str, fakes.Fake], tracer: Tracer) -> MongoOpener:
+@contextmanager
+def mongo_opener(settings: Settings, faked: Mapping[str, fakes.Fake], tracer: Tracer) -> Generator[MongoOpener]:
     """Each Mongo database a run names, as the settings configure it, or its fake, opened once however often asked,
-    with the most documents a read may return: the settings', or a million for a fake the settings do not name."""
+    with the most documents a read may return: the settings', or a million for a fake the settings do not name; each
+    real one's client closed on leaving."""
+    clients: list[mongo.MongoStore] = []
 
     @cache
     def opened(name: str) -> tuple[mongo.Store, int]:
@@ -174,9 +178,14 @@ def mongo_opener(settings: Settings, faked: Mapping[str, fakes.Fake], tracer: Tr
         limit = configured.max_documents if configured is not None else 1_000_000
         if isinstance(fake := faked.get(name), fakes.Mongo):
             return fake, limit
-        return mongo.store(name, settings, tracer), limit
+        clients.append(store := mongo.store(name, settings, tracer))
+        return store, limit
 
-    return opened
+    try:
+        yield opened
+    finally:
+        for client in clients:
+            client.close()
 
 
 def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
@@ -715,7 +724,8 @@ def _finish_files(  # noqa: PLR0913 -- the run, and how it reaches what it write
         return record
     written = record.written | write_reports(job, unwritten, {name: source.dataset(f"outputs/{name}/insert") for name in unwritten}, open_folder, clock)
     saved_rows = {name: source.dataset(f"outputs/{name}/insert") for name in unupserted}
-    upserted = record.upserted | upsert_all(job, unupserted, saved_rows, mongo_opener(settings, faked, tracer), clock)
+    with mongo_opener(settings, faked, tracer) as open_mongo:
+        upserted = record.upserted | upsert_all(job, unupserted, saved_rows, open_mongo, clock)
     sent = record.sent
     told = record.again or again
     if unsent and all(entry.status == "written" for entry in written.values()) and all(entry.status == "upserted" for entry in upserted.values()):
