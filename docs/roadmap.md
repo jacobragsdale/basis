@@ -436,3 +436,23 @@ Later, and not yet stepped:
 - output checks;
 - Azure Key Vault;
 - deleting the rows a lake archive holds from its source database, as an explicit step of its own.
+
+## Later: what the MVP leaves for the review
+
+Since 2026-11-08 the maintainer has the work go fast to the MVP, one agent committing to `main`, with the review after.
+These are left for it.
+
+- **Step 2.6, from its review.** These are not fixed yet:
+  - `basis review` prints a mutation record that holds only a failure as a clean run on a first commit.
+  - Schemathesis loads the service installed in the running environment, not the commit under check, so in the push
+    hook's worktree it can test other code.
+  - Purity is checked on modules named `domain`, not on every module inside a `domain` package.
+  - The socket plugin blames the unit test that is running for a socket a leftover thread opens.
+  - A hunk that only deletes lines marks the function above it as touched.
+  - `mutation.STATUSES` copies mutmut's exit-code table by hand, and -9 and -11 should be `segfault`.
+  - The folders basis never reads are listed in four places.
+  - `layers.DECLARATIONS` is unused.
+- **Schemathesis and mutmut are off by default.** `BASIS_FUZZ=1` turns Schemathesis on for `basis check`, and
+  `BASIS_MUTATE=1` turns mutation testing on for `basis check --full`. Their own tests are marked `heavy`, which the
+  default run leaves out; `uv run pytest -m heavy` runs them. Turning them back on is the review's call, and it moves
+  the fuzz into `check --full` and builds the app once.

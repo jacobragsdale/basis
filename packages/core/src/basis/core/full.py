@@ -14,6 +14,7 @@ its `ERROR` line, and the pieces after it still run and are recorded. `basis upg
 its relock is not yet a commit: the push runs it."""
 
 import logging
+import os
 import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -192,7 +193,14 @@ def _contracts(repo: Path, parts: Mapping[str, Part], report: Report) -> tuple[d
     return found, broken, None
 
 
+MUTATE = "BASIS_MUTATE"
+"""The variable that turns mutation testing on, `1`, for a run of `basis check --full`. It is off by default for now,
+while the MVP takes shape: it is slow, and its report waits for the later review (docs/roadmap.md, "Later")."""
+
+
 def _mutation(repo: Path) -> review.MutationRecord:
+    if os.environ.get(MUTATE) != "1":
+        return _skip_mutation(f"it is off for now; set {MUTATE}=1 to run it")
     try:
         found = mutation.mutate(repo)
     except Exception as error:

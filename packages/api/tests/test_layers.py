@@ -173,6 +173,21 @@ def test_a_parameter_given_as_its_default_is_held_too(repo: Path) -> None:
     assert len(reasons(repo)) == 1
 
 
+@pytest.mark.parametrize(
+    "parameter",
+    ["settings: Annotated[Settings, api.given(Settings)]", "user: Annotated[User | None, api.given(User)]", "user: User = api.given(User)"],
+    ids=["settings", "a-user", "a-user-as-its-default"],
+)
+def test_a_handler_may_call_the_methods_of_its_settings_and_its_user(repo: Path, parameter: str) -> None:
+    name = parameter.partition(":")[0]
+    handler = (
+        "from typing import Annotated\n\nfrom basis import api\n\n\nclass Settings(api.Settings):\n    pass\n\n\nclass User(api.User):\n    pass\n\n\n"
+        f"def mine({parameter}) -> object:\n    return {name}.model_dump()\n"
+    )
+    write(repo, CLEAN | {"accruals/handlers.py": handler})
+    assert layers.problems(repo) == []
+
+
 def test_a_module_that_is_no_handler_may_call_a_resource(repo: Path) -> None:
     write(repo, CLEAN | {"accruals/repository.py": "async def bond(warehouse, security):\n    return await warehouse.fetch_one(object, 'SELECT 1', security=security)\n"})
     assert layers.problems(repo) == []

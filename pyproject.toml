@@ -115,7 +115,7 @@ error-on-warning = true
 # another's tests; pytester's own sessions still load it. So does basis-core's, `basis`, which keeps a repo's unit tests
 # off sockets: this workspace's own tests serve and reach real servers on sockets, by design, and the example's run
 # under it as a repo's do, in the tests of basis-api's checks.
-addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration' --ignore-glob=packages/*/src/*/templates -p pytester -p no:optim -p no:basis"
+addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration and not heavy' --ignore-glob=packages/*/src/*/templates -p pytester -p no:optim -p no:basis"
 testpaths = ["packages/*/tests", "packages/*/src/*/example", "packages/*/src/basis/*/example", "scripts/tests"]  # every member's tests, its example's, and the release script's
 pythonpath = ["packages/job/tests", "packages/optim/tests", "scripts"]  # each member's shared test modules, such as basis-job's `builders`, and scripts/release.py; a missing path adds nothing
 xfail_strict = true  # An xfail that starts passing is a failure, not a silent pass.
@@ -126,6 +126,7 @@ filterwarnings = [
 ]
 markers = [
     "integration: needs a real SQL Server or Oracle (see packages/job/tests/integration/README.md); excluded from the default run",
+    "heavy: runs Schemathesis or mutmut, which stay out of routine runs while the MVP takes shape (`-m heavy` runs them); excluded from the default run",
 ]
 
 [tool.coverage.run]

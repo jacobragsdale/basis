@@ -206,7 +206,9 @@ def test_an_app_that_does_not_build_on_its_fakes_fails(repo: Path, monkeypatch: 
     ]
 
 
+@pytest.mark.heavy
 def test_a_route_that_answers_500_fails_with_the_request_that_shows_it(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setenv(fuzz.FUZZ, "1")
     edit(repo, "handlers.py", "    return domain.conventions()", "    return [domain.conventions()[3]]  # there are three")
     [line] = checked(repo, monkeypatch, capsys)
     assert line == (

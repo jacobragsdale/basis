@@ -82,6 +82,18 @@ def lines(capsys: pytest.CaptureFixture[str]) -> list[str]:
     return [line for line in capsys.readouterr().err.splitlines() if not line.startswith("{")]  # after any log records
 
 
+@pytest.fixture(autouse=True)
+def mutating(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mutation testing on, as `BASIS_MUTATE=1` turns it on, so each check here runs every piece."""
+    monkeypatch.setenv(full.MUTATE, "1")
+
+
+def test_without_basis_mutate_mutation_testing_is_skipped(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(full.MUTATE)
+    monkeypatch.setattr(full.mutation, "mutate", lambda _: pytest.fail("mutation testing ran without BASIS_MUTATE=1"))
+    assert full._mutation(repo).skipped == f"it is off for now; set {full.MUTATE}=1 to run it"  # noqa: SLF001 -- the one piece under test
+
+
 def test_without_a_run_store_or_a_qa_tier_each_piece_says_it_was_skipped_and_why(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     asked, runs = regressing()
     assert checked(repo, Part(runs=runs)) == 0
@@ -326,6 +338,7 @@ CLAMPED = "from rates import domain\n\n\ndef test_clamp() -> None:\n    assert d
 PYTEST = '\n[tool.pytest.ini_options]\naddopts = "-ra --import-mode=importlib -p no:randomly"\ntestpaths = ["rates"]\n'
 
 
+@pytest.mark.heavy
 @pytest.mark.skipif(sys.platform != "linux", reason="mutmut runs in WSL or on Linux only")
 def test_review_lists_a_mutant_of_a_domain_function_the_change_touches_that_survived(repo: Path, git: Git, capsys: pytest.CaptureFixture[str]) -> None:
     """The change's mutants survive or die by the repo's own unit tests, which mutmut runs; a survivor fails nothing."""

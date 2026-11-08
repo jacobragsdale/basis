@@ -156,6 +156,7 @@ def test_mutation_testing_says_how_to_install_mutmut(repo: Path, monkeypatch: py
 
 
 @linux
+@pytest.mark.heavy
 def test_mutmut_says_which_mutants_survived_and_leaves_the_repo_as_it_was(repo: Path, git: Git) -> None:
     found = mutation.mutate(repo)
     assert (found.skipped, found.failure, found.base) == (None, None, None)

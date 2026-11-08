@@ -163,8 +163,14 @@ def _handlers(repo: Path, relative: str) -> list[Problem]:
     return found
 
 
+RESOURCES = frozenset({"Reader", "Writer", "Client", "Cache", "Clock", "Ids", "Compute"})
+"""What a handler gets for a resource, by name: the parameters the rule holds. A handler's settings and its user, which
+`api.given` gives too, are its own to use."""
+
+
 def _given(function: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[str]:
-    """The names of `function`'s parameters that `api.given` gives, by their annotations or defaults."""
+    """The names of `function`'s parameters that `api.given` gives a resource, by their annotations or defaults: a
+    parameter given settings or a user is not one, and a given parameter with no annotation is held, as it may be one."""
     arguments = function.args
     positional = [*arguments.posonlyargs, *arguments.args]
     defaults: dict[str, ast.expr] = dict(zip([argument.arg for argument in positional[len(positional) - len(arguments.defaults) :]], arguments.defaults, strict=True))
@@ -172,15 +178,27 @@ def _given(function: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[str]:
     return frozenset(
         argument.arg
         for argument in [*positional, *arguments.kwonlyargs]
-        if (argument.annotation is not None and _asks(argument.annotation)) or (argument.arg in defaults and _gives(defaults[argument.arg]))
+        if (argument.annotation is not None and _asks(argument.annotation))
+        or (argument.arg in defaults and _gives(defaults[argument.arg]) and (argument.annotation is None or _resource(argument.annotation)))
     )
 
 
 def _asks(annotation: ast.expr) -> bool:
-    """Whether `annotation` is `Annotated[TYPE, api.given(...)]`."""
+    """Whether `annotation` is `Annotated[TYPE, api.given(...)]`, with TYPE what a handler gets for a resource."""
     match annotation:
-        case ast.Subscript(value=ast.Name(id="Annotated") | ast.Attribute(attr="Annotated"), slice=ast.Tuple(elts=[_, *metadata])):
-            return any(_gives(entry) for entry in metadata)
+        case ast.Subscript(value=ast.Name(id="Annotated") | ast.Attribute(attr="Annotated"), slice=ast.Tuple(elts=[given, *metadata])):
+            return _resource(given) and any(_gives(entry) for entry in metadata)
+        case _:
+            return False
+
+
+def _resource(annotation: ast.expr) -> bool:
+    """Whether `annotation` names what a handler gets for a resource, as `api.Reader` or `api.Cache[Bond]`."""
+    match annotation:
+        case ast.Subscript(value=value):
+            return _resource(value)
+        case ast.Attribute(attr=name) | ast.Name(id=name):
+            return name in RESOURCES
         case _:
             return False
 

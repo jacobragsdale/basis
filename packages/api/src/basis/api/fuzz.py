@@ -17,6 +17,7 @@ keeps no examples, and what else it keeps goes to a temporary folder, removed af
 
 import json
 import logging
+import os
 import shlex
 import tempfile
 from collections.abc import Callable, Generator, Mapping
@@ -47,6 +48,9 @@ EXAMPLES = 50
 """The requests Schemathesis makes to each operation, of each kind: enough to find a route's 500, within a second or
 two for a service the size of the example's."""
 ISSUER = "basis-check"
+FUZZ = "BASIS_FUZZ"
+"""The variable that turns Schemathesis on, `1`, for a run of `basis check`. It is off by default for now, while the MVP
+takes shape, so the commit hook checks only that the app builds and starts on its fakes (docs/roadmap.md, "Later")."""
 INSTALL = "add schemathesis to [dependency-groups] dev, and run `uv lock`"
 
 
@@ -70,6 +74,8 @@ def check(service: Service) -> list[Problem]:
     except Exception as error:  # noqa: BLE001 -- the repo's own code, its fakes or its app's startup, whatever it raises, which `basis dev` shows in full
         said = f"{type(error).__name__}: {' '.join(str(error).split())}"
         return [(f"service {service.name}'s app does not build on the fakes it declares, since it raised {said}", "fix it, as `uv run basis dev` shows it in full")]
+    if os.environ.get(FUZZ) != "1":
+        return []
     try:
         import schemathesis  # noqa: F401, PLC0415 -- the repo's own, from its development dependencies
     except ImportError:
