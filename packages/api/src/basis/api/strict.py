@@ -7,10 +7,8 @@ value has its own type in JSON: a string for a `str`, a number without a fractio
 `bool`, an array for a list. A type JSON has none for is a string of its standard form: a date as `"2026-11-06"`, a UUID
 as `"019a5c3e-..."`. Two rules go further than pydantic's strict mode:
 
-- A `Decimal` is a JSON string of its digits, as `"1000000.00"`, never a number: pydantic reads a JSON number through a
-  float, so `12345678901234567890.123456789` would arrive as `12345678901234567000`, and `1000000.00` without its scale.
-  Its digits read as a query's decimal does, below, so `"1e3"`, `"+1"` and `" 1"` are refused; `DECIMAL` is the
-  grammar, which the OpenAPI document gives as the string's pattern.
+- Every number is a JSON number, a `float` or an `int`, and a `Decimal` anywhere in a request or a response is refused
+  when the route is declared (`aware`; design.md, "Numbers").
 - A time carries its offset, as `"2026-11-06T14:30:00Z"`: a time without one could be any zone's. A time is pydantic's
   `AwareDatetime`, which refuses one without, in a request and a response alike; a plain `datetime`, which takes one
   without, or a time of day, `datetime.time`, whose offset pydantic cannot require, is refused when the route is
@@ -21,11 +19,9 @@ request says so, as `Content-Type: application/json`; a route takes at most one 
 handler's own parameters, and a route that declares none refuses one. The body is validated once, by basis: FastAPI
 gets the value it made, which it does not validate again, so a validator never runs twice.
 
-To check decimals and times against the JSON, basis matches each model's field to the JSON by one key, its plain
-`alias` or else its name, so a request model gives none other: no `validation_alias` of its own, `AliasChoices` or
-`AliasPath`, and no `populate_by_name`, `validate_by_name` or `validate_by_alias=False`. A set's items have no order to
-match to the JSON's, so a set in a body holds scalars, a set of decimals included, never models or tuples of decimals or
-times. Where a body's type holds no decimal and no time, that check, and the second parse it needs, are skipped.
+Each of a request model's fields reads from one key of the JSON, its plain `alias` or else its name, which a 422 names
+it by: no `validation_alias` of its own, `AliasChoices` or `AliasPath`, and no `populate_by_name`, `validate_by_name` or
+`validate_by_alias=False`. The body is parsed once.
 
 **Query and path parameters** arrive as text, so basis reads each by its type's grammar before FastAPI converts it,
 and FastAPI's conversion of what the grammar accepts is exact:
@@ -34,7 +30,6 @@ and FastAPI's conversion of what the grammar accepts is exact:
 |---|---|
 | `str` | any |
 | `int` | digits, with a minus sign only before them and no leading zero: `10`, `-3`, `0` |
-| `Decimal` | an `int`'s digits, and a point and digits after it: `0.045`, `100`, `-2.50`; no exponent |
 | `float` | a JSON number, `1.5` or `2e-3`, that is finite |
 | `bool` | `true` or `false` |
 | `date` | `2026-11-06` |
@@ -53,8 +48,7 @@ import re
 import types
 import typing
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator, Mapping, MutableSet, Sequence
-from collections.abc import Set as AbstractSet
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
@@ -65,7 +59,7 @@ from uuid import UUID
 from fastapi import params
 from fastapi.dependencies.models import Dependant
 from fastapi.dependencies.utils import get_dependant
-from pydantic import AwareDatetime, BaseModel, FutureDatetime, JsonValue, NaiveDatetime, PastDatetime, RootModel, TypeAdapter, ValidationError
+from pydantic import AwareDatetime, BaseModel, FutureDatetime, JsonValue, NaiveDatetime, PastDatetime, TypeAdapter, ValidationError
 from pydantic.fields import FieldInfo
 
 from basis.api.errors import DeclarationError
@@ -75,10 +69,6 @@ type ErrorEntry = dict[str, object]
 `FieldError`."""
 
 _DIGITS = r"-?(?:0|[1-9][0-9]*)"
-DECIMAL = _DIGITS + r"(?:\.[0-9]+)?"
-"""A decimal's text, in a body's string or a query's: digits, a point and digits after it, with a minus sign only
-before them and no exponent."""
-_IS_DECIMAL = re.compile(DECIMAL)
 
 
 @dataclass(frozen=True)
@@ -101,7 +91,6 @@ _SCALARS: tuple[tuple[type, Text], ...] = (
     (bool, Text("true or false", _matching("true|false"))),
     (int, Text("an integer, as 10 or -3: digits, with a minus sign only before them and no leading zero", _matching(_DIGITS))),
     (float, Text("a finite number, as 1.5 or 2e-3, written as JSON writes one", _matching(_DIGITS + r"(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?", finite=True))),
-    (Decimal, Text("a decimal, as 0.045 or 100: digits, a point and digits, with a minus sign only before them and no exponent", _matching(DECIMAL))),
     (
         datetime,
         Text(
@@ -130,8 +119,6 @@ class Parameter:
 class Body:
     adapter: TypeAdapter[object]
     """The body's type, read in strict mode from JSON."""
-    precise: bool
-    """Whether it can hold a decimal, which `body` then checks against the JSON."""
     info: FieldInfo | None = None
     """Its type and what it declares of its value, as FastAPI reads them; None for a body made without a route."""
 
@@ -184,52 +171,36 @@ def shape(path: str, handler: Callable[..., object], name: str) -> Shape:
             msg = f"{name}'s body {bodies[0].name} has no type: annotate it with the model it reads"
             raise DeclarationError(msg)
         aware(name, "body", info.annotation)
-        body = Body(TypeAdapter(info.annotation), _precise(name, info.annotation, frozenset()), info)
+        _keys(name, info.annotation, frozenset())
+        body = Body(TypeAdapter(info.annotation), info)
     return Shape(readable_path, tuple(query), body)
 
 
-def _precise(route: str, kind: object, within: frozenset[type]) -> bool:
-    """Whether a body of `kind` can hold a decimal or a time, after refusing what basis cannot match to the JSON to
-    check them: a model's field read by any key but one, and a set of anything but scalars that holds one. `within`
-    holds the models being walked, for one that refers to itself."""
+def _keys(route: str, kind: object, within: frozenset[type]) -> None:
+    """That every model and pydantic dataclass a body of `kind` holds reads each field from one key of the JSON.
+    `within` holds the models being walked, for one that refers to itself."""
     kind = bare(kind)
     if (origin := get_origin(kind)) is not None:
-        return _precise_of(route, kind, origin, within)
+        if origin is not Literal:
+            for argument in get_args(kind):
+                if argument is not Ellipsis:
+                    _keys(route, argument, within)
+        return
     if not isinstance(kind, type) or kind in within:
-        return False
-    if issubclass(kind, Decimal):
-        return True
+        return
     if issubclass(kind, BaseModel):
         _one_key(route, kind, kind.model_config, kind.model_fields)
-        held = [_precise(route, field.annotation, within | {kind}) for field in kind.model_fields.values()]  # every field's, so each model's keys are checked
-        return any(held)
-    if dataclasses.is_dataclass(kind):
+        for field in kind.model_fields.values():
+            _keys(route, field.annotation, within | {kind})
+    elif dataclasses.is_dataclass(kind):
         fields: object = getattr(kind, "__pydantic_fields__", None)
         if isinstance(fields, dict):
             config: object = getattr(kind, "__pydantic_config__", None)
             settled = {str(key): item for key, item in config.items()} if isinstance(config, Mapping) else {}
             _one_key(route, kind, settled, {str(name): info for name, info in fields.items() if isinstance(info, FieldInfo)})
         hints = typing.get_type_hints(kind, include_extras=True)
-        held = [_precise(route, hints[found.name], within | {kind}) for found in dataclasses.fields(kind)]
-        return any(held)
-    return False
-
-
-def _precise_of(route: str, kind: object, origin: object, within: frozenset[type]) -> bool:
-    """`_precise` for a generic type: a union, a list, a tuple, a mapping or a set, by each of its types; a `Literal`
-    holds values, which are neither."""
-    if origin is Literal:
-        return False
-    arguments = [argument for argument in get_args(kind) if argument is not Ellipsis]
-    if origin in {set, frozenset, AbstractSet, MutableSet}:
-        items = bare(arguments[0]) if arguments else object
-        holds = _precise(route, items, within)
-        if holds and not (isinstance(items, type) and issubclass(items, Decimal)):
-            msg = f"{route}'s body holds a {named(kind)}, whose items basis cannot match to the JSON's to check their decimals: hold a tuple or a list instead"
-            raise DeclarationError(msg)
-        return holds
-    held = [_precise(route, argument, within) for argument in arguments]
-    return any(held)
+        for found in dataclasses.fields(kind):
+            _keys(route, hints[found.name], within | {kind})
 
 
 def _one_key(route: str, model: type, config: Mapping[str, object], fields: Mapping[str, FieldInfo]) -> None:
@@ -379,10 +350,7 @@ def body(declared: Body, raw: bytes, content_type: str | None) -> tuple[object, 
         except ValidationError:  # not JSON, which its one error says
             sent = None
         return None, [_entry(entry, sent) for entry in error.errors(include_url=False)]
-    if not declared.precise:
-        return value, []
-    tree = _TREE.validate_json(raw)  # parsed again, to tell a decimal given as a string from one given as a number
-    return value, list(_inexact(value, tree, ("body",)))
+    return value, []
 
 
 def _entry(entry: Mapping[str, object], sent: JsonValue | None) -> ErrorEntry:
@@ -421,59 +389,6 @@ def _step(node: JsonValue | None, part: str | int) -> tuple[JsonValue] | None:
     if isinstance(node, list) and isinstance(part, int):
         return (node[part],) if 0 <= part < len(node) else None
     return None
-
-
-def _inexact(value: object, tree: JsonValue, at: tuple[str | int, ...]) -> Iterator[ErrorEntry]:
-    """Each decimal in `value` that its JSON `tree` gave as a number, and each time without an offset, walking the two
-    together: a value the strict mode read is where its JSON was, by each model's or dataclass's field alias, list index
-    or key. A set's items, scalars as `_precise` sees to, are each checked against every item of its JSON."""
-    match value:
-        case Decimal() if not isinstance(tree, str):
-            yield _as_number(at, tree)
-        case Decimal() if isinstance(tree, str) and _IS_DECIMAL.fullmatch(tree) is None:
-            yield _not_digits(at, tree)
-        case RootModel():
-            yield from _inexact(value.root, tree, at)
-        case BaseModel() if isinstance(tree, dict):
-            keys = {name: field.alias or name for name, field in type(value).model_fields.items()}
-            yield from _inexact_fields(value, keys, tree, at)
-        case list() | tuple() if isinstance(tree, list):
-            for index, (item, node) in enumerate(zip(value, tree, strict=False)):
-                yield from _inexact(item, node, (*at, index))
-        case set() | frozenset() if isinstance(tree, list):
-            yield from _inexact_set(value, tree, at)
-        case dict() if isinstance(tree, dict):
-            yield from (found for key, item in value.items() if str(key) in tree for found in _inexact(item, tree[str(key)], (*at, str(key))))
-        case _ if dataclasses.is_dataclass(value) and not isinstance(value, type) and isinstance(tree, dict):
-            fields: object = getattr(type(value), "__pydantic_fields__", None)
-            infos = {str(name): info for name, info in fields.items() if isinstance(info, FieldInfo)} if isinstance(fields, dict) else {}
-            keys = {found.name: alias if (info := infos.get(found.name)) is not None and (alias := info.alias) is not None else found.name for found in dataclasses.fields(value)}
-            yield from _inexact_fields(value, keys, tree, at)
-        case _:
-            return
-
-
-def _inexact_set(value: AbstractSet[object], tree: list[JsonValue], at: tuple[str | int, ...]) -> Iterator[ErrorEntry]:
-    if any(isinstance(item, Decimal) for item in value):  # a set of decimals: every item of its JSON is one
-        yield from (_as_number((*at, index), node) for index, node in enumerate(tree) if not isinstance(node, str))
-        yield from (_not_digits((*at, index), node) for index, node in enumerate(tree) if isinstance(node, str) and _IS_DECIMAL.fullmatch(node) is None)
-
-
-def _inexact_fields(value: object, keys: Mapping[str, str], tree: dict[str, JsonValue], at: tuple[str | int, ...]) -> Iterator[ErrorEntry]:
-    """A model's or a dataclass's fields, each the attribute named and the JSON at its key."""
-    for name, key in keys.items():
-        if key in tree:
-            yield from _inexact(getattr(value, name), tree[key], (*at, key))
-
-
-def _as_number(at: tuple[str | int, ...], given: JsonValue) -> ErrorEntry:
-    message = 'Input should be a string of the decimal, as "0.045": a JSON number reaches a decimal through a float, which can change it'
-    return {"type": "decimal_string", "loc": at, "msg": message, "input": given}
-
-
-def _not_digits(at: tuple[str | int, ...], given: JsonValue) -> ErrorEntry:
-    message = 'Input should be a decimal\'s digits, as "0.045" or "-2.50": a point and digits, with a minus sign only before them and no exponent'
-    return {"type": "decimal_digits", "loc": at, "msg": message, "input": given}
 
 
 AWARE: object = AwareDatetime

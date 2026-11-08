@@ -75,7 +75,7 @@ Paths are under `src/basis/api/`.
 - A request is read strictly before FastAPI sees it (`strict.py`): a key nothing declares is refused, a body's values
   have their own JSON types, every number is a JSON number and a `Decimal` is refused when the route is declared, a time has its offset, and query and path text reads by its type's
   grammar. A type basis cannot read strictly is refused when the route is declared, and so is a request model that
-  reads a field by any key but a plain alias or its name, a set of models in a body, and `BackgroundTasks`. The body is
+  reads a field by any key but a plain alias or its name, and `BackgroundTasks`. The body is
   validated once: FastAPI's handler gets basis's value through `routes._ValidatedOnce`, and never validates it again.
   A body sent to a route that declares none is a 422.
 - A route's deadline caps every call its request makes, the commit included; never the rollback, so a connection

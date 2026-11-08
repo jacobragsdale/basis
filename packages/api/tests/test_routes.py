@@ -17,7 +17,7 @@ import pytest
 from fastapi import BackgroundTasks, Body, FastAPI, Query
 from fastapi.testclient import TestClient
 from opentelemetry.trace import NoOpTracer
-from pydantic import AfterValidator, AliasChoices, AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, RootModel, TypeAdapter, field_validator
+from pydantic import AfterValidator, AliasChoices, AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, field_validator
 
 from basis import api
 from basis.api import deadlines, fakes, opened, strict
@@ -504,18 +504,6 @@ class ByName(BaseModel):
 def test_a_body_reads_each_field_by_one_key_and_holds_no_set_of_what_basis_checks(kind: type, message: str) -> None:
     with pytest.raises(api.DeclarationError, match=message):
         strict.shape("/a", _taking(kind), "taking")
-
-
-class Plain(BaseModel):
-    security: str
-    quantity: int
-
-
-@pytest.mark.parametrize("kind", [Plain, Order, Aliased, RootModel[list[int]]], ids=["plain", "an-order", "nested", "a-list-of-ints"])
-def test_a_body_holds_no_decimal_so_it_is_parsed_once(kind: type) -> None:
-    declared = strict.shape("/a", _taking(kind), "taking").body
-    assert declared is not None
-    assert declared.precise is False
 
 
 def later(tasks: BackgroundTasks) -> dict[str, str]:
