@@ -213,9 +213,11 @@ jobs:
       - name: Push a change through the hook, from a tree with changes of its own, and print what it found
         working-directory: ${{ runner.temp }}/pricing-etl
         run: |
-          sed -i 's/\["gross_notional"\]\.round(2)/["gross_notional"].round(0)/' jobs/positions/job.py
-          grep --quiet 'gross_notional"\]\.round(0)' jobs/positions/job.py
-          git add --all && git commit --quiet --message "Round gross notional to whole units"
+          sed -i 's/gross_notional=("notional", "sum")/gross_notional=("notional", "max")/' jobs/positions/job.py  # one position has two trades, so one row changes
+          grep --quiet 'gross_notional=("notional", "max")' jobs/positions/job.py
+          sed -i 's/\["gross_notional"\] == 14160\.0/["gross_notional"] == 10100.0/' jobs/positions/tests/test_transform.py
+          grep --quiet '"gross_notional"\] == 10100\.0' jobs/positions/tests/test_transform.py
+          git add --all && git commit --quiet --message "Gross notional is a position's largest trade"
           echo "A change not yet committed." >> README.md
           git init --quiet --bare "$RUNNER_TEMP/remote.git"
           BASIS_SNAPSHOT_ROOT="$RUNNER_TEMP/store" git push --quiet "$RUNNER_TEMP/remote.git" main 2> "$RUNNER_TEMP/push.log" || { cat "$RUNNER_TEMP/push.log"; exit 1; }

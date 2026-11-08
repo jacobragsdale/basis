@@ -442,7 +442,7 @@ def _outboxed_service(scratch: Scratch, table: str) -> api.Service:
 
     async def book(price: Price, warehouse_: Annotated[api.Writer, api.given(warehouse)], ledger: Annotated[api.Client, api.given(LEDGER)]) -> Price:
         await warehouse_.execute(insert, security=price.security, price=price.price)
-        await ledger.send("POST", "/bookings", {"security": price.security, "price": str(price.price), "note": NOTE}, key=f"booking-{price.security}")
+        await ledger.send("POST", "/bookings", {"security": price.security, "price": price.price, "note": NOTE}, key=f"booking-{price.security}")
         return price
 
     async def book_then_refuse(price: Price, warehouse_: Annotated[api.Writer, api.given(warehouse)], ledger: Annotated[api.Client, api.given(LEDGER)]) -> Price:

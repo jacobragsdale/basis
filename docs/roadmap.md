@@ -115,6 +115,9 @@ the pilot (2.8) confirms at the firm, fixing there whatever is wrong.
    identity in a pod, and with the Azure CLI on a desktop? Does the account have the hierarchical namespace, so a rename
    is atomic? Done when `docs/spikes/data-lake.md` gives a best guess for each, for step 5.7, and its checklist for the
    pilot.
+9. **0.9 berth fit.** Does a repo `basis-api new app` makes deploy through berth, the proposed deploy repository, as
+   berth stands? Done: `docs/spikes/berth.md` lists each mismatch with a fix on basis's side, and two decisions for the
+   maintainer (a relative interval for scheduled runs, and the service name Datadog sees).
 
 ## Phase 1: the repo and basis-core
 
