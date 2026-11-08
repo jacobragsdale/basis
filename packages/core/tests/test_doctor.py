@@ -25,6 +25,14 @@ def no_settings(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(name)
 
 
+@pytest.fixture(autouse=True)
+def own_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each test's own configuration folder, never the machine's: a CI runner sets XDG_CONFIG_HOME, which the user's
+    files for each environment are found under."""
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("APPDATA", raising=False)
+
+
 def desktop(home: Path, *, environ: Mapping[str, str] | None = None, system: str = "Linux", tools: Mapping[str, tuple[str, str]] = TOOLS) -> doctor.Desktop:
     """A desktop whose home is `home`, with `tools`, each its path and what its `--version` prints."""
     printed = dict(tools.values())

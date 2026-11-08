@@ -150,7 +150,7 @@ class Price(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     security: str
-    price: Decimal
+    price: float
 
 
 CACHED = api.cache("cached", Price, ttl_s=60, max_entries=10, deadline_s=1)
@@ -236,7 +236,7 @@ def _stored(scratch: Scratch) -> list[tuple[object, ...]]:
     return scratch.rows(f"SELECT security, price FROM {scratch.table} ORDER BY security")
 
 
-PRICE = {"security": "US912810TM64", "price": "101.25"}
+PRICE = {"security": "US912810TM64", "price": 101.25}
 
 
 def test_a_write_commits_once_the_response_validates(scratch: Scratch) -> None:
@@ -244,7 +244,7 @@ def test_a_write_commits_once_the_response_validates(scratch: Scratch) -> None:
         assert client.post("/prices", json=PRICE).status_code == HTTPStatus.OK
         read = client.get("/prices/US912810TM64").json()
     assert _stored(scratch) == [("US912810TM64", Decimal("101.250000"))]
-    assert read == {"security": "US912810TM64", "price": "101.250000"}
+    assert read == {"security": "US912810TM64", "price": 101.25}
 
 
 @pytest.mark.parametrize(("path", "status"), [("/refused", HTTPStatus.CONFLICT), ("/misanswered", HTTPStatus.INTERNAL_SERVER_ERROR)], ids=["handler-raises", "response-does-not-validate"])
@@ -256,7 +256,7 @@ def test_a_write_rolls_back_when_the_request_fails(scratch: Scratch, path: str, 
 
 def test_a_requests_reads_see_its_own_writes(scratch: Scratch) -> None:
     with _client(scratch) as client:
-        assert client.post("/read-your-writes", json=PRICE).json() == {"security": "US912810TM64", "price": "101.250000"}
+        assert client.post("/read-your-writes", json=PRICE).json() == {"security": "US912810TM64", "price": 101.25}
     assert _stored(scratch) == [("US912810TM64", Decimal("101.250000"))]
 
 
@@ -462,7 +462,7 @@ def outboxed(scratch: Scratch) -> Iterator[Outboxed]:
     scratch.drop(table)
 
 
-BOOKED = {"security": "US912810TM64", "price": "101.25", "note": NOTE}
+BOOKED = {"security": "US912810TM64", "price": 101.25, "note": NOTE}
 KEY = "booking-US912810TM64"
 
 
