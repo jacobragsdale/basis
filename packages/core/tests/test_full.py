@@ -82,14 +82,8 @@ def lines(capsys: pytest.CaptureFixture[str]) -> list[str]:
     return [line for line in capsys.readouterr().err.splitlines() if not line.startswith("{")]  # after any log records
 
 
-@pytest.fixture(autouse=True)
-def mutating(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mutation testing on, as `BASIS_MUTATE=1` turns it on, so each check here runs every piece."""
-    monkeypatch.setenv(full.MUTATE, "1")
-
-
 def test_without_basis_mutate_mutation_testing_is_skipped(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(full.MUTATE)
+    monkeypatch.delenv(full.MUTATE, raising=False)
     monkeypatch.setattr(full.mutation, "mutate", lambda _: pytest.fail("mutation testing ran without BASIS_MUTATE=1"))
     assert full._mutation(repo).skipped == f"it is off for now; set {full.MUTATE}=1 to run it"  # noqa: SLF001 -- the one piece under test
 
@@ -340,8 +334,9 @@ PYTEST = '\n[tool.pytest.ini_options]\naddopts = "-ra --import-mode=importlib -p
 
 @pytest.mark.heavy
 @pytest.mark.skipif(sys.platform != "linux", reason="mutmut runs in WSL or on Linux only")
-def test_review_lists_a_mutant_of_a_domain_function_the_change_touches_that_survived(repo: Path, git: Git, capsys: pytest.CaptureFixture[str]) -> None:
+def test_review_lists_a_mutant_of_a_domain_function_the_change_touches_that_survived(repo: Path, git: Git, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     """The change's mutants survive or die by the repo's own unit tests, which mutmut runs; a survivor fails nothing."""
+    monkeypatch.setenv(full.MUTATE, "1")
     with (repo / "pyproject.toml").open("a", encoding="utf-8") as file:
         file.write(PYTEST)
     for name, text in {"rates/__init__.py": "", "rates/domain.py": DOMAIN, "rates/tests/__init__.py": "", "rates/tests/test_domain.py": CLAMPED}.items():
@@ -361,7 +356,8 @@ def test_review_lists_a_mutant_of_a_domain_function_the_change_touches_that_surv
     assert "| `rates.domain.clamp` | `rates.domain.x_clamp__mutmut_1` | `if x < low: -> if x <= low:` |" in printed
 
 
-def test_without_a_domain_function_the_change_touches_mutation_testing_is_skipped(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_without_a_domain_function_the_change_touches_mutation_testing_is_skipped(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(full.MUTATE, "1")
     assert checked(repo, Part()) == 0
     why = "the change touches no domain function" if sys.platform == "linux" else "mutmut runs in WSL or on Linux only, since it forks a process for each mutant: push from WSL to have it run"
     assert f"SKIPPED: mutation testing: {why}" in lines(capsys)
@@ -370,6 +366,8 @@ def test_without_a_domain_function_the_change_touches_mutation_testing_is_skippe
 
 
 def test_a_defect_in_mutation_testing_fails_nothing_and_is_recorded(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(full.MUTATE, "1")
+
     def broken(_repo: Path) -> review.MutationRecord:
         msg = "no mutants today"
         raise RuntimeError(msg)
