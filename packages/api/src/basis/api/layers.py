@@ -37,11 +37,11 @@ from pathlib import Path
 import grimp
 import grimp.exceptions
 
+from basis.core.sync import UNREAD as _UNREAD
 from basis.core.sync import Problem
 
 RANKS: Mapping[str, int] = {"service": 4, "handlers": 3, "repository": 2, "resources": 1, "errors": 1, "domain": 0}
 """Each layer, by its module's name, and its height: a module imports only those of its height or below."""
-DECLARATIONS = frozenset({"resources", "errors"})
 PURE = (
     "basis", "fastapi", "starlette", "uvicorn", "pydantic_settings",
     "mssql_python", "oracledb", "pyodbc", "pymssql", "cx_Oracle", "sqlalchemy", "psycopg", "psycopg2", "snowflake",
@@ -54,7 +54,6 @@ client or storage, `pyarrow` among them for its file systems; and the standard l
 databases."""
 GIVEN = "given"
 """The name of what gives a handler its resources, `api.given`, as its parameters' annotations call it."""
-_UNREAD = frozenset({".git", ".venv", "venv", "node_modules", "__pycache__", ".ruff_cache", ".pytest_cache", ".mypy_cache", ".hypothesis", "mutants", "snapshots"})
 ORDER = "imports go down the layers alone: service, handlers, repository, then the declarations, resources and errors, then domain"
 
 

@@ -32,6 +32,7 @@ from pathlib import Path
 
 from basis.core import clone
 from basis.core.review import MutantRecord, MutationRecord
+from basis.core.sync import UNREAD as _UNREAD
 
 DOMAIN = "domain"
 """The name of a domain module, at any depth."""
@@ -56,7 +57,6 @@ STATUSES = {
 }
 """What mutmut's exit codes mean, but a killed or a surviving mutant's; any other is suspicious."""
 NO_MUTMUT = "add `mutmut>=3.8; sys_platform == 'linux'` to [dependency-groups] dev, and run `uv lock`"
-_UNREAD = frozenset({".git", ".venv", "venv", "node_modules", "__pycache__", ".ruff_cache", ".pytest_cache", ".mypy_cache", ".hypothesis", "mutants", "snapshots"})
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@", re.MULTILINE)
 _TABLE = re.compile(r"^\[tool\.mutmut\][^\n]*\n(?:(?!\[)[^\n]*\n?)*", re.MULTILINE)
 

@@ -98,7 +98,10 @@ _HEAD = 3
 """Lines a file's marker may be in: the first line can be one a format needs, such as a Dockerfile's `# syntax=`."""
 _LINE = 512
 """The most of a line read for its marker, so a large file with no line breaks is never read whole."""
-_UNREAD = {".git", ".venv", "venv", "node_modules", "__pycache__", ".ruff_cache", ".pytest_cache", ".mypy_cache", "snapshots"}
+UNREAD = frozenset({".git", ".venv", "venv", "node_modules", "__pycache__", ".ruff_cache", ".pytest_cache", ".mypy_cache", ".hypothesis", "mutants", "snapshots"})
+"""The folders basis never reads, in a repo it walks: version control, environments, caches, mutation testing's copy and
+the run store's local snapshots. sync, the gates, mutation testing and the layers share this one list."""
+_UNREAD = UNREAD
 """Folders whose files basis never writes, so no marker is looked for in them."""
 _BLOCK = re.compile(r"<!-- (?P<name>[\w.-]+):begin \(written by `[\w -]*sync`[^)]*\) -->.*?<!-- (?P=name):end -->(?P<tail>\n*)", re.DOTALL)
 

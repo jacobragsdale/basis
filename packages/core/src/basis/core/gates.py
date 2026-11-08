@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
 
+from basis.core.sync import UNREAD as _UNREAD
 from basis.core.sync import Problem
 from basis.core.verbs import ProjectError, basis_table
 
@@ -52,8 +53,6 @@ MOCKS = frozenset({"unittest.mock", "mock", "pytest_mock"})
 """The modules that make mocks, each refused with any module under it."""
 MOCKERS = frozenset({"mocker", "class_mocker", "module_mocker", "package_mocker", "session_mocker"})
 """pytest-mock's fixtures, which a test asks for by its parameter's name."""
-_UNREAD = frozenset({".git", ".venv", "venv", "node_modules", "__pycache__", ".ruff_cache", ".pytest_cache", ".mypy_cache", ".hypothesis", "mutants", "snapshots"})
-"""Folders that hold no test of the repo's own."""
 OMITTED = ("**/tests/**", "**/test_*.py", "**/*_test.py", "**/conftest.py", f"**/{REPOSITORY}.py", f"**/{REPOSITORY}/**", "**/.venv/**")
 EXCLUDED = ("if TYPE_CHECKING:", "raise NotImplementedError", "@overload", "if __name__ == .__main__.:")
 PLUGIN_OPTION = "--basis-gates"
