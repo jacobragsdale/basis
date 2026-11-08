@@ -450,10 +450,9 @@ These are left for it.
   `BASIS_MUTATE=1` turns mutation testing on for `basis check --full`. Their own tests are marked `heavy`, which the
   default run leaves out; `uv run pytest -m heavy` runs them. Turning them back on is the review's call, and it moves
   the fuzz into `check --full` and builds the app once.
-- **Step 2.11, left for the review.** `strict.py`'s decimal-string paths are removed: a body is parsed once, and a
-  query reads no `Decimal`, which is refused when the route is declared. `basis docs`
-  should run in a repo with no `[tool.basis]` table, as the design says; it is refused there today, and the change
-  is in `command.py`, which step 5.6 is changing.
+- **Step 2.11, done.** `strict.py`'s decimal-string paths are removed: a body is parsed once, and a query reads no
+  `Decimal`, which is refused when the route is declared. `basis docs` runs in a project with no `[tool.basis]`
+  table and lists every installed part's pages (`command._docs_outside`, checked 2026-11-07).
 - **Compression, measured.** 100,000 rows of eight columns (two text, a date, five random floats), on the development
   host, with zlib: Arrow 7.2 MB to 3.44 MB at level 1 in 63 ms, 3.28 MB at 6 in 290 ms, 3.23 MB at 9 in 1.76 s; JSON
   20.9 MB to 5.00 MB at 1 in 82 ms, 4.23 MB at 6 in 254 ms. The app gzips at level 1 (`app.COMPRESS_LEVEL`). Real desk
