@@ -394,6 +394,11 @@ malice: the real control is a read-only prod login for desktops. Desktops write 
 
 Settings are environment variables, which an environment's file holds, as `NAME=VALUE` lines.
 
+A block of settings can also be one JSON value at its own name, which merges with the variables beneath it:
+`BASIS_DATABASES__WAREHOUSE={"connection_string": "...", "write": {"connection_string": "...", "ledger": "etl.publishes"}}`
+beside `BASIS_DATABASES__WAREHOUSE__KIND=mssql` and the rest. A deployment whose vault limits a secret's name, as
+berth's 40 characters do, keeps a database's secret parts in one secret that way.
+
 | Variable | Description |
 |---|---|
 | `BASIS_SNAPSHOT_ROOT` | Where `basis run` saves snapshots and the other commands find runs: a path, or a URL `pyarrow.fs` reads and writes. Required by the commands. |

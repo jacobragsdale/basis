@@ -34,7 +34,7 @@ def app(path: Path, name: str, job: str | None, *, index: str | None, framework_
         raise core_new.NewError(msg)
     package = name.replace("-", "_")
     _, minor, *_ = VERSION.split(".")
-    values = {"repo": path.name, "app": name, "package": package, "version": VERSION, "next_minor": str(int(minor) + 1)}
+    values = {"repo": path.name, "app": name, "package": package, "job": job or "JOB", "version": VERSION, "next_minor": str(int(minor) + 1)}
     core_new.repo(path, templates=_TEMPLATES, values=values, distributions=_FOLDERS, version=VERSION, index=index, checkout=framework_path)
     _copy_example(path / package, package, name)
     (path / "jobs").mkdir()
