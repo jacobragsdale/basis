@@ -3,7 +3,7 @@
 This roadmap is the build order for basis: six phases, the steps in each, what each step needs first, and when it is
 done. Steps in different lanes run at the same time. For the reasons behind each piece, see [the design](design.md).
 basis-ui has [a roadmap of its own](https://github.com/jacobragsdale/basis-ui/blob/main/docs/roadmap.md), and the two
-meet at the contract (step 2.5) and the pilot (step 2.8).
+meet at the contract (step 2.5, which steps 2.11 and 2.13 change) and the pilot (step 2.8).
 
 Steps marked **(work)** need the firm's environment: a Citrix desktop, the Azure DevOps feed and pipelines, the AKS
 cluster, or the QA databases. They are the maintainer's to run or hand on, with the exact commands to run and what to
@@ -23,9 +23,10 @@ The critical path runs through lanes A and B: the namespace spike, the workspace
 extraction, the `basis` command, the repo files, the desktop gates, the API, and its resources' move into `basis-core`
 (step 5.1). From there it forks, through the service errors (5.8), the contract tests and gates (2.6) and the new app
 (2.7) on one side, and pandas (5.0b) and environments (5.6) on the other, and joins at `basis smoke` (2.10), before
-the pilot, which confirms spikes 0.5 to 0.8 at the firm; no step waits for those spikes. Steps 5.2 to 5.5 and 5.7 are
-off it. Optim is off the critical path, and runs alongside phase 2. Its design is provisional until the maintainer
-meets the firm's quant team, and nothing in lanes A and B may depend on it (see [the design](design.md#the-packages)).
+the pilot, which confirms spikes 0.5 to 0.8 at the firm; no step waits for those spikes. Step 2.11 is on it too, since
+the first release (1.8) waits for it. Steps 2.12 to 2.14, 5.2 to 5.5 and 5.7 are off it. Optim is off the critical
+path, and runs alongside phase 2. Its design is provisional until the maintainer meets the firm's quant team, and
+nothing in lanes A and B may depend on it (see [the design](design.md#the-packages)).
 
 ```mermaid
 flowchart TD
@@ -44,6 +45,10 @@ flowchart TD
   r7 --> r8
   r3 --> a1[2.1 API app] --> a2[2.2 resources] --> a3[2.3 routes] --> a5 --> c1[5.1 resources in core] --> c8[5.8 service errors] --> a6[2.6 contract tests and gates] --> a7[2.7 new app] --> a8
   a2 --> a4[2.4 identity]
+  a1 --> a14[2.14 serving a UI]
+  a6 --> a11[2.11 numbers in the API] --> r8
+  c0 --> a11
+  c0 --> a12[2.12 Arrow-table datasets] --> a13[2.13 display formats]
   a3 --> a9[2.9 after-commit calls]
   r7 --> a7
   r8 --> a8
@@ -56,7 +61,7 @@ flowchart TD
   a2 --> o3
   o3 --> o5[3.5 verbs, sync and docs] --> o6
   a8 --> g[4 records and upkeep]
-  c1 --> c0[5.0b pandas]
+  c1 --> c0[5.0b pandas and float64]
   c0 --> c2[5.2 calendars]
   c0 --> c3[5.3 messages]
   c0 --> c4[5.4 folders and Excel]
@@ -175,7 +180,9 @@ Lane A. Needs spike 0.2.
    `basis-core` at exactly that version, and attaches their wheels to a GitHub release. optim keeps the same version in
    the repo, built and green with the rest, but is not published until step 3.6. **(work)** Publish to the internal feed through Azure DevOps,
    with spike 0.1's steps. Point etl-framework's README at basis; archiving that repo is the maintainer's call. Needs
-   1.7. Done when `v0.1.0` is tagged, and installs from git here and from the internal feed at the firm.
+   1.7 and 2.11: the first tag, `v0.1.0`, comes after 2.11, so the first release already has the float contract and
+   basis-ui pins its sample once. Done when `v0.1.0` is tagged, and installs from git here and from the internal feed
+   at the firm.
 
 ## Phase 2: APIs
 
@@ -214,8 +221,8 @@ Lane B. Needs step 1.3. Steps 2.3 and 2.4 run at once, and so do 2.5 and 2.9.
    - mutmut on the domain functions a change touches, in `basis check --full`, reported in `basis review` and never
      blocking, in WSL or on Linux only.
 
-   Needs 2.5, 5.1 and 5.8. Done when the example API passes them all, a copy of it that breaks any one fails `basis
-   check` with that rule's fix, and `basis review` lists a mutant that survived.
+   Needs 2.5, 5.1 and 5.8, and step 2.11 needs it. Done when the example API passes them all, a copy of it that breaks
+   any one fails `basis check` with that rule's fix, and `basis review` lists a mutant that survived.
 7. **2.7 New app.** `basis-api new app NAME` writes the API part in its layers (`service.py`, `handlers.py`,
    `repository.py` and `domain.py`, with `resources.py` and `errors.py`) and `[tool.basis] coverage = 90`, adds jobs
    through `basis.job`'s generator, and writes `basis.core`'s repo files. Needs 1.7, 2.6 and 5.1. Done when a
@@ -246,6 +253,43 @@ Lane B. Needs step 1.3. Steps 2.3 and 2.4 run at once, and so do 2.5 and 2.9.
     the pilot (2.8) needs it. Done when it passes on a generated repo with an API and a job, against the containers
     standing in for QA, and fails, with its fix, when the served document differs from the committed one, an example's
     response does not validate, or a job's checks fail; and the generated pipeline runs it before promotion to prod.
+11. **2.11 Numbers in the API.** basis-api's side of [numbers](design.md#numbers), with what goes with it:
+    - every number is a JSON number, never a string, so the decimal-string parsing and `x-basis-decimal` go;
+    - dataset rows take `float` for every number, and refuse `int` and `Decimal` fields, with the fix, and an enum or
+      `Literal` of integers, whose fix says to use a `str` enum or a `Literal` of strings; other route models refuse
+      `Decimal`, and keep `int` as a JSON number;
+    - a dataset's float column is always nullable, in the Arrow schema and in the document;
+    - NaN and ±inf are null on the wire, in JSON and Arrow alike;
+    - the example service's numbers become floats, which changes the sample `openapi.json` basis-ui pins;
+    - `basis check`'s rounding gate, which refuses `round()`, `.round()`, `numpy.round`, `numpy.around`, `numpy.rint`
+      and the `decimal` module in user code, saying to leave rounding to the UI. How a business-rounding function is
+      marked is still open, pending the maintainer;
+    - a test that, in a repo whose `pyproject.toml` has no `[tool.basis]` table, `basis` refuses every verb that reads
+      or writes the repo's files, and allows `--version`, `doctor` and `docs`.
+
+    No release exists yet, so the breaking-change check passes, as having no earlier release, and the first release
+    (1.8) waits for this step. Needs 5.0b and 2.6. Done when the example's `openapi.json` shows numbers as numbers,
+    basis-ui is told, and the rounding gate refuses a `round()` with its fix.
+12. **2.12 Arrow-table datasets.** A dataset route may return a pandas frame or an Arrow table, declared as
+    `response=api.Table[Row]`, as [the design](design.md#apis-basisapi) has it: checked once against the row model's
+    names, types, nulls and time zones, never row by row, with a mismatch a 500 defect whose request's writes roll
+    back; a `Table` row model with value constraints refused when it is declared; `Reader.fetch_table(Row, SQL, ...)`,
+    reading Arrow straight from the driver; and the route's JSON rendered column-wise from the Arrow. `call` and `dev`
+    become library functions as well as verbs. Needs 5.0b. Done when a 100,000-row dataset is measured both ways:
+    through pydantic, and as a table.
+13. **2.13 Display formats.** A dataset's float field declares its display format, as
+    `Annotated[float, api.format.money("USD")]`, in the shape agreed with basis-ui
+    ([the contract](contract.md#display-formats)): basis-api writes it into the Arrow field's metadata as
+    `basis.format` and into `openapi.json` as `x-basis-format`, with ISO 4217's codes and minor units shipped as data,
+    and refuses an unknown kind, a bad currency or an out-of-range `decimals` when the route is declared. Needs 2.12. Done
+    when the example's dataset declares a format on its number columns, its Arrow and its `openapi.json` carry them,
+    each refusal fails with its fix, and basis-ui is told.
+14. **2.14 Serving a UI.** basis-api serves a built UI folder at `/` from the same app, so one container serves a UI
+    and its API on one origin. An app that serves one mounts its routes under `/api`; the document's paths stay
+    unprefixed, and its `servers` lists `/api`. Spike 0.4's ingress gives one origin by routing `/api` to the API's
+    service, removing the prefix, and the rest to the UI's; this gives it without an ingress split, as ctzd's apps
+    need. An app without a UI is unchanged. Needs 2.1. Done when one app serves a built folder at `/` and its routes
+    under `/api`, from one container.
 
 ## Phase 3: optim on basis-core
 
@@ -275,8 +319,9 @@ checks.
 
 Lanes A, B and D. Needs step 2.8.
 
-1. **4.1 Request records.** Record API requests to the run store under each route's record policy, with `basis replay`
-   of one request and `basis regress` over a sample of recorded requests, run on desktops.
+1. **4.1 Request records.** Record API requests to the run store under each route's record policy, off unless a
+   deployment turns it on, with `basis replay` of one request and `basis regress` over a sample of recorded requests,
+   run on desktops.
 2. **4.2 Records for UIs.** Add `basis records export`, writing chosen requests and responses in the format basis-ui's
    fixture mode reads.
 3. **4.3 Release gates.** Before a basis release, the maintainers run `basis upgrade` on representative repos, whose
@@ -292,8 +337,8 @@ Lanes A, B and D. Needs step 2.8.
 
 Lane A, with basis-api's side of 5.1 and 5.8 in lane B. Jobs and APIs share one set of tools: today basis-api alone has
 the HTTP client, the clock, ids and OpenTelemetry tracing, and jobs get only databases and logs. Steps 5.0b and 5.8
-need 5.1, steps 5.2 to 5.7 need 5.0b, and 5.7 needs 5.6 too. They run in parallel, and their pull requests to
-`basis-core` merge one at a time (rule 2). The reasons are in [the design](design.md#what-jobs-and-apis-share).
+need 5.1, steps 2.11, 2.12 and 5.2 to 5.7 need 5.0b, and 5.7 needs 5.6 too. They run in parallel, and their pull
+requests to `basis-core` merge one at a time (rule 2). The reasons are in [the design](design.md#what-jobs-and-apis-share).
 
 1. **5.1 Resources in core.** Move basis-api's resource model into `basis.core`: a declared resource, with a deadline,
    a trace span and a fake. The HTTP client (httpx2, with its proxy and CA bundle), the clock, ids and OpenTelemetry
@@ -307,20 +352,35 @@ need 5.1, steps 5.2 to 5.7 need 5.0b, and 5.7 needs 5.6 too. They run in paralle
    OpenTelemetry collector container or an in-process exporter. Steps 2.6 and 2.7 build on it. Done when a job's run and
    an API's request each make one trace, with a span for each SQL statement and HTTP call, and each of their log records
    carries its trace's and span's ids, in the format `docs/spikes/datadog.md` gives, which the pilot confirms.
-2. **5.0b pandas.** `basis.core` and `basis.job` hand frames to job code as pandas DataFrames, not polars ones. Each
-   column's dtype is chosen from the job's declared row type, among pandas' nullable and Arrow-backed dtypes, so an
-   integer with nulls stays an integer, a decimal stays exact, and a time keeps its zone. polars leaves the lock, and
-   pyarrow stays the I/O layer, for Parquet, the run store, Arrow responses and the lake. Needs 5.1, and steps 5.2 to
-   5.7 need it, so Excel, Mongo and the lake are written once, in pandas. Done when basis-job's unit and integration
-   tests pass on pandas frames, polars is gone from the lock, and an integer with nulls, a decimal and a zone-aware
-   time each reach SQL Server, Oracle and the run store, and come back, as they left.
+2. **5.0b pandas and float64.** `basis.core` and `basis.job` hand frames to job code as pandas DataFrames, not polars
+   ones, with numbers as [the design](design.md#numbers) has them:
+   - every number is a plain numpy float64 column, with NaN for missing, and identifiers are text; strings and dates
+     take pandas' nullable and Arrow-backed dtypes from the job's declared row type, so a time keeps its zone;
+   - the drivers cast every numeric type of Oracle and SQL Server to float64 at the Arrow level, widen BINARY_FLOAT and
+     real through their shortest decimal, and fail a query whose whole-number column holds a value beyond 2^53, naming
+     the column;
+   - row models take `float`, and refuse an `int` or `Decimal` field with the fix;
+   - a float publishes into a DECIMAL column as its `repr`; into an INT column, a whole float publishes as integer
+     text, and any other is refused; NaN publishes as NULL, and ±inf is refused;
+   - `basis ddl` emits SQL Server `float` and Oracle `BINARY_DOUBLE`, and column kinds lose int and decimal;
+   - `regress` compares numbers at 15 significant digits.
+
+   polars leaves the lock, and pyarrow stays the I/O layer, for Parquet, the run store, Arrow responses and the lake.
+   Needs 5.1, and steps 2.11, 2.12 and 5.2 to 5.7 need it, so Excel, Mongo and the lake are written once, in pandas.
+   Done when basis-job's unit and integration tests pass on pandas frames, polars is gone from the lock, every numeric
+   type the design lists reads as float64 from the SQL Server and Oracle containers, 2.675 publishes into a DECIMAL
+   column of scale 2 as 2.68, and a float, a NaN and a zone-aware time each reach SQL Server, Oracle and the run store,
+   and come back, as they left.
 3. **5.2 Calendars.** Ship `sifma-us`, with its full and early closes, and `target2` in `basis.core`, as data built from
    SIFMA's and the ECB's published schedules, with no pandas. Each states the last date it covers. A job names its
    calendar, which says whether a date is a business day, adds business days, and gives the previous business day and a
    day's early-close time. Needs 5.0b. Done when each function agrees with both published schedules, and a date after a
    calendar's last is an error, never a business day.
 4. **5.3 Messages.** Add Slack, through a channel's webhook, and email, through the firm's SMTP relay, each with a fake.
-   Needs 5.0b. Done when a job's tests send both through the fakes, and its replay, regress and QA runs send nothing.
+   Port parallax's number formatter to Python for their text, reading the same display format object as the UI
+   ([the contract](contract.md#display-formats)), which ctzd moves onto. Needs 5.0b. Done when a job's tests send both
+   through the fakes, its replay, regress and QA runs send nothing, and the port writes what parallax's Rust writes
+   for each of the 2,192 cases in basis-ui's `packages/parallax/crates/parallax-engine/tests/fixtures/format.json`.
 5. **5.4 Folders and Excel.** Add folders, each a named path, which each machine's settings give: `\\server\share` on
    Windows, and a mount path in WSL and in pods. Read and write Excel with pandas' `read_excel` (calamine) and
    `to_excel` (xlsxwriter), in an optional extra, `basis-core[excel]`. Each write goes to a temporary file, which is

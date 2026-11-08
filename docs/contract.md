@@ -17,34 +17,26 @@ document at `/openapi.json`.
 | First key | `` "x-basis": "managed by basis: `basis sync` rewrites it" ``, which the served document leaves out |
 | Operation ids | The handler's name, such as `bond_yield`; a service gives each handler a name of its own |
 | Paths | The route's path, with no `/api` prefix: see [One origin](#one-origin) |
+| Servers | `/api`, in an app that serves a UI: see [One origin](#one-origin) |
 | Models | Every model's schema has `additionalProperties: false` |
-| A request's decimal | A string, never a number, with a `pattern` and `x-basis-decimal`: see [Decimals](#decimals) |
-| A response's decimal | `{"type": "string"}` |
+| A number | A JSON number, never a string: see [Numbers](#numbers) |
+| A dataset's number column | Its display format, where it declares one, as `x-basis-format`: see [Display formats](#display-formats) |
 | A time | `{"type": "string", "format": "date-time"}`, which RFC 3339 gives an offset, and every time has one |
 | A date | `{"type": "string", "format": "date"}` |
 | Each error | Its status, under `application/problem+json`: a 422 as `ValidationProblem`, any other as `Problem` |
 | A dataset route | Its success lists `application/vnd.apache.arrow.stream` as `{"type": "string", "format": "binary"}` beside its JSON |
 
 A model that a request and a response share has one schema, unless the two differ, as they do for a model with a
-decimal or a default: then it has two, `NAME-Input` for requests and `NAME-Output` for responses, as FastAPI names them.
+default: then it has two, `NAME-Input` for requests and `NAME-Output` for responses, as FastAPI names them.
 
-### Decimals
+### Numbers
 
-A request's decimal is a JSON string of its digits, and the document gives what its type declares of it:
-
-```json
-{"type": "string", "pattern": "^-?(?:0|[1-9][0-9]{0,15})(?:\\.[0-9]{1,2}0*)?$", "x-basis-decimal": {"exclusiveMinimum": "0"}}
-```
-
-- `pattern` is the grammar the API reads it by: digits, a point and digits, with a minus sign only before them, and no
-  exponent, `+`, space or leading zero. Where the type declares `max_digits` or `decimal_places`, the pattern counts
-  them as the API does: a whole part of at most `max_digits - decimal_places` digits, at most `decimal_places` digits
-  after the point before zeros that end it, and with `max_digits` alone, at most that many digits in all.
-- `x-basis-decimal` is on every request's decimal, and holds its bounds, which JSON Schema cannot set for a string, each
-  a string of the decimal: `minimum`, `exclusiveMinimum`, `maximum`, `exclusiveMaximum` and `multipleOf`. A UI reads
-  them to check a value before it sends it; the API checks them either way.
-
-A response's decimal is a string too, with no pattern, since a decimal's text may be in exponent form, as `1E+3`.
+Every number is a JSON number, never a string, and NaN and ±inf are `null`, decided on 2026-11-08 and built in step
+2.11; [the design](design.md#numbers) gives the reasons. A dataset's row takes `float` for every number, and an `int`
+or `Decimal` field in one is refused when the route is declared, with the fix; any other model refuses `Decimal`, and
+takes an `int` as a JSON integer. This replaces the rule that a decimal is a JSON string: its `pattern` and
+`x-basis-decimal` go, and the sample `openapi.json` that basis-ui pins changes with them (see
+[The sample](#the-sample)).
 
 ## Requests
 
@@ -55,8 +47,7 @@ each field at fault (see [Errors](#errors)).
 |---|---|
 | A JSON body | Sent with `Content-Type: application/json`, or a JSON type such as `application/merge-patch+json` |
 | A key | Refused at any depth unless the model declares it |
-| A value | Of its own JSON type: a string for text, an integer without a fraction for an `int`, `true` or `false` for a boolean |
-| A decimal | A string of its digits, `"1000000.00"`: digits, a point and digits, with a minus sign only before them, and no exponent, `+`, space or leading zero |
+| A value | Of its own JSON type: a string for text, a number for a `float`, an integer without a fraction for an `int`, `true` or `false` for a boolean |
 | A time | A string with its offset, as `"2026-11-06T14:30:00Z"` or `"2026-11-06T09:30:00-05:00"` |
 | A route that takes no body | Refuses one |
 | A query key | Refused unless the route declares it; given twice for one value, refused |
@@ -67,10 +58,11 @@ and path text is in [`strict.py`](../packages/api/src/basis/api/strict.py)'s doc
 
 ## Responses
 
-A response that succeeds is JSON, the route's response model: a decimal as a string, a date as `2026-11-06`, and a time
-with its offset. Every time a route reads or answers is pydantic's `AwareDatetime`, which refuses one without, so a
-route whose request or response may hold a time without its offset, or a time of day, is refused when it is declared. A response holds only the fields its model declares, and a UI drops a field it does not know, so an API adds
-response fields without breaking one (see [Compatibility](#compatibility)).
+A response that succeeds is JSON, the route's response model: a number as a JSON number, or `null` for NaN and ±inf, a
+date as `2026-11-06`, and a time with its offset. Every time a route reads or answers is pydantic's `AwareDatetime`,
+which refuses one without, so a route whose request or response may hold a time without its offset, or a time of day,
+is refused when it is declared. A response holds only the fields its model declares, and a UI drops a field it does
+not know, so an API adds response fields without breaking one (see [Compatibility](#compatibility)).
 
 Every response carries `X-Request-Id`, the request's id, a UUIDv7, which every log line of the request carries too, and
 `traceparent`, the request's trace.
@@ -145,27 +137,59 @@ application/vnd.apache.arrow.stream` alone asks for Arrow. Both answers carry `V
 in JSON whichever was asked for.
 
 The stream holds one record batch of every row, or none when there are no rows, and its schema either way. Each field of
-the row's model is a column, named as the JSON names it, nullable only where the field may be null:
+the row's model is a column, named as the JSON names it, nullable only where the field may be null, but for a `float`:
+a float column is always nullable, in the Arrow schema and in the document, because NaN and ±inf travel as null.
 
 | Field | Column |
 |---|---|
 | `str`, `UUID`, or a `Literal` or `Enum` of strings | `utf8` |
-| `int`, or a `Literal` or `Enum` of integers | `int64` |
-| `float` | `float64` |
+| `float` | `float64`, always nullable |
 | `bool` | `bool` |
-| `Decimal` | `decimal128(max_digits, decimal_places)`, which the field declares |
 | `date` | `date32` |
 | `datetime` | `timestamp[us, tz=UTC]` |
 
-A row holds nothing else: no nested model, list or map, and no field it computes, so its JSON and its Arrow hold the same
-values. [`dataset.py`](../packages/api/src/basis/api/dataset.py) and [`arrow.py`](../packages/api/src/basis/api/arrow.py)
+A row holds nothing else: no `int` or `Decimal` (see [Numbers](#numbers)), no nested model, list or map, and no field it
+computes, so its JSON and its Arrow hold the same values. An enum or `Literal` in a row is text, so one of integers is
+refused, with the fix to use a `str` enum or a `Literal` of strings. A route declared `response=api.Table[Row]`, which
+returns a pandas frame or an Arrow table, answers the same JSON and Arrow, its JSON rendered column-wise from the Arrow
+(step 2.12). [`dataset.py`](../packages/api/src/basis/api/dataset.py) and [`arrow.py`](../packages/api/src/basis/api/arrow.py)
 are the reference.
+
+### Display formats
+
+A dataset's number column may declare its display format, which parallax and @basis/ui's number components format it
+by, so a page never chooses decimals. It is the shape agreed with basis-ui on 2026-11-08, which step 2.13 builds. In
+Python a column declares it on its field, as `Annotated[float, api.format.money("USD")]` or `api.format.pct(2)`. The
+format is a JSON object, written in Arrow as the field metadata key `basis.format`, whose value is the object as a JSON
+string, and in the document as `x-basis-format` on each numeric property's schema, the columns declared for an Arrow
+response among them.
+
+| Kind | The object |
+|---|---|
+| A number | `{"kind":"number","decimals":2}` |
+| Money | `{"kind":"money","currency":"USD"}`, with an optional `decimals` that defaults to the currency's ISO 4217 minor units |
+| A percentage | `{"kind":"pct","decimals":2}`, whose value is a fraction: 0.0525 is 5.25% |
+| Basis points | `{"kind":"bps","decimals":1}`, whose value is a fraction, shown ×10,000: 0.0525 is 525 bp |
+| A price | `{"kind":"price","decimals":3}` |
+| A price in 32nds | `{"kind":"price32","step":"32nd"}`, where `step` is `32nd`, `half`, `quarter` or `eighth`, and defaults to `32nd` |
+
+- `decimals` is optional, an integer from 0 to 15, and each kind has parallax's default.
+- `currency` is upper-case ISO 4217. basis ships the code list, with each code's minor units, as data.
+- A column without the key gets the formatter's default for its type.
+- A UI ignores fields it does not know, and treats an unknown kind as no format.
+- basis refuses an unknown kind, a bad currency or an out-of-range `decimals` when the route is declared.
+
+The Python port of parallax's formatter, for Slack and email text (step 5.3), reads the same object.
 
 ## One origin
 
 A UI and its API sit behind one host: the ingress routes `/api` to the API, removing the prefix, and the rest to the UI.
 The document's paths and the API's routes carry no `/api`, and a UI's client adds it. The browser makes no cross-origin
 call, and the API allows none.
+
+An app can serve a built UI folder itself, from step 2.14, which gives one origin without an ingress split. Its routes
+then mount under `/api` and the UI at `/`. The document's paths stay unprefixed, as above, and its `servers` lists
+`/api`. An app without a UI is unchanged, and the ingress strips `/api` as before.
 
 Where that routing is not possible, the API's settings name each other origin whose pages may call it, per environment,
 as the browser sends it: a scheme, `https` or `http`, and a host, with a port only where it is not the scheme's own, in
@@ -225,8 +249,9 @@ bound.
 The example API's document is
 [`packages/api/src/basis/api/example/openapi.json`](../packages/api/src/basis/api/example/openapi.json), the sample
 basis-ui generates its client from and tests against, pinned to a commit of this repo. It holds every part of the
-contract: query and path parameters, a JSON body with decimals and dates, a time with its offset, a dataset route,
+contract: query and path parameters, a JSON body with numbers and dates, a time with its offset, a dataset route,
 `coupons`, with its Arrow, a 422 a handler names its fields in, a route that writes and books its write with another
 service through its database's outbox, `record_settlement`, and the errors basis adds, that route's 502 among them. `uv run python -m
 basis.api.example` writes it, and the example's tests fail when it differs from the example's service, or when it
-breaks its contract with this repo's last `v*` release.
+breaks its contract with this repo's last `v*` release. Step 2.11 changes it: the example's decimals become floats,
+which the document gives as JSON numbers, and `x-basis-decimal` goes, so basis-ui's pinned copy changes with it.
