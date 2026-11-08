@@ -23,10 +23,10 @@ The critical path runs through lanes A and B: the namespace spike, the workspace
 extraction, the `basis` command, the repo files, the desktop gates, the API, and its resources' move into `basis-core`
 (step 5.1). From there it forks, through the service errors (5.8), the contract tests and gates (2.6) and the new app
 (2.7) on one side, and pandas (5.0b) and environments (5.6) on the other, and joins at `basis smoke` (2.10), before
-the pilot, which confirms spikes 0.5 to 0.8 at the firm; no step waits for those spikes. Steps 2.11 to 2.14, 5.2 to
-5.5 and 5.7 are off it. Optim is off the critical path, and runs alongside phase 2. Its design is provisional until
-the maintainer meets the firm's quant team, and nothing in lanes A and B may depend on it (see [the
-design](design.md#the-packages)).
+the pilot, which confirms spikes 0.5 to 0.8 at the firm; no step waits for those spikes. Step 2.11 is on it too, since
+the first release (1.8) waits for it. Steps 2.12 to 2.14, 5.2 to 5.5 and 5.7 are off it. Optim is off the critical
+path, and runs alongside phase 2. Its design is provisional until the maintainer meets the firm's quant team, and
+nothing in lanes A and B may depend on it (see [the design](design.md#the-packages)).
 
 ```mermaid
 flowchart TD
@@ -46,7 +46,7 @@ flowchart TD
   r3 --> a1[2.1 API app] --> a2[2.2 resources] --> a3[2.3 routes] --> a5 --> c1[5.1 resources in core] --> c8[5.8 service errors] --> a6[2.6 contract tests and gates] --> a7[2.7 new app] --> a8
   a2 --> a4[2.4 identity]
   a1 --> a14[2.14 serving a UI]
-  a6 --> a11[2.11 numbers in the API]
+  a6 --> a11[2.11 numbers in the API] --> r8
   c0 --> a11
   c0 --> a12[2.12 Arrow-table datasets] --> a13[2.13 display formats]
   a3 --> a9[2.9 after-commit calls]
@@ -180,7 +180,9 @@ Lane A. Needs spike 0.2.
    `basis-core` at exactly that version, and attaches their wheels to a GitHub release. optim keeps the same version in
    the repo, built and green with the rest, but is not published until step 3.6. **(work)** Publish to the internal feed through Azure DevOps,
    with spike 0.1's steps. Point etl-framework's README at basis; archiving that repo is the maintainer's call. Needs
-   1.7. Done when `v0.1.0` is tagged, and installs from git here and from the internal feed at the firm.
+   1.7 and 2.11: the first tag, `v0.1.0`, comes after 2.11, so the first release already has the float contract and
+   basis-ui pins its sample once. Done when `v0.1.0` is tagged, and installs from git here and from the internal feed
+   at the firm.
 
 ## Phase 2: APIs
 
@@ -253,18 +255,21 @@ Lane B. Needs step 1.3. Steps 2.3 and 2.4 run at once, and so do 2.5 and 2.9.
     response does not validate, or a job's checks fail; and the generated pipeline runs it before promotion to prod.
 11. **2.11 Numbers in the API.** basis-api's side of [numbers](design.md#numbers), with what goes with it:
     - every number is a JSON number, never a string, so the decimal-string parsing and `x-basis-decimal` go;
-    - dataset rows take `float` for every number, and refuse `int` and `Decimal` fields, with the fix; other route
-      models refuse `Decimal`, and keep `int` as a JSON number;
+    - dataset rows take `float` for every number, and refuse `int` and `Decimal` fields, with the fix, and an enum or
+      `Literal` of integers, whose fix says to use a `str` enum or a `Literal` of strings; other route models refuse
+      `Decimal`, and keep `int` as a JSON number;
+    - a dataset's float column is always nullable, in the Arrow schema and in the document;
     - NaN and ±inf are null on the wire, in JSON and Arrow alike;
     - the example service's numbers become floats, which changes the sample `openapi.json` basis-ui pins;
     - `basis check`'s rounding gate, which refuses `round()`, `.round()`, `numpy.round`, `numpy.around`, `numpy.rint`
       and the `decimal` module in user code, saying to leave rounding to the UI. How a business-rounding function is
       marked is still open, pending the maintainer;
-    - a test that `basis` refuses every verb but `--version` in a repo whose `pyproject.toml` has no `[tool.basis]`
-      table.
+    - a test that, in a repo whose `pyproject.toml` has no `[tool.basis]` table, `basis` refuses every verb that reads
+      or writes the repo's files, and allows `--version`, `doctor` and `docs`.
 
-    Needs 5.0b and 2.6. Done when the example's `openapi.json` shows numbers as numbers, basis-ui is told, and the
-    rounding gate refuses a `round()` with its fix.
+    No release exists yet, so the breaking-change check passes, as having no earlier release, and the first release
+    (1.8) waits for this step. Needs 5.0b and 2.6. Done when the example's `openapi.json` shows numbers as numbers,
+    basis-ui is told, and the rounding gate refuses a `round()` with its fix.
 12. **2.12 Arrow-table datasets.** A dataset route may return a pandas frame or an Arrow table, declared as
     `response=api.Table[Row]`, as [the design](design.md#apis-basisapi) has it: checked once against the row model's
     names, types, nulls and time zones, never row by row, with a mismatch a 500 defect whose request's writes roll
@@ -279,10 +284,12 @@ Lane B. Needs step 1.3. Steps 2.3 and 2.4 run at once, and so do 2.5 and 2.9.
     and refuses an unknown kind, a bad currency or an out-of-range `decimals` when the route is declared. Needs 2.12. Done
     when the example's dataset declares a format on its number columns, its Arrow and its `openapi.json` carry them,
     each refusal fails with its fix, and basis-ui is told.
-14. **2.14 Serving a UI.** basis-api serves a built UI folder at `/` from the same app, beside the routes, so one
-    container serves a UI and its API on one origin. Spike 0.4's ingress gives one origin by routing `/api` to the API's
-    service and the rest to the UI's; this gives it without an ingress split, as ctzd's apps need. Needs 2.1. Done
-    when one app serves a built folder at `/` and its routes beside it, from one container.
+14. **2.14 Serving a UI.** basis-api serves a built UI folder at `/` from the same app, so one container serves a UI
+    and its API on one origin. An app that serves one mounts its routes under `/api`; the document's paths stay
+    unprefixed, and its `servers` lists `/api`. Spike 0.4's ingress gives one origin by routing `/api` to the API's
+    service, removing the prefix, and the rest to the UI's; this gives it without an ingress split, as ctzd's apps
+    need. An app without a UI is unchanged. Needs 2.1. Done when one app serves a built folder at `/` and its routes
+    under `/api`, from one container.
 
 ## Phase 3: optim on basis-core
 

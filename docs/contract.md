@@ -17,6 +17,7 @@ document at `/openapi.json`.
 | First key | `` "x-basis": "managed by basis: `basis sync` rewrites it" ``, which the served document leaves out |
 | Operation ids | The handler's name, such as `bond_yield`; a service gives each handler a name of its own |
 | Paths | The route's path, with no `/api` prefix: see [One origin](#one-origin) |
+| Servers | `/api`, in an app that serves a UI: see [One origin](#one-origin) |
 | Models | Every model's schema has `additionalProperties: false` |
 | A number | A JSON number, never a string: see [Numbers](#numbers) |
 | A dataset's number column | Its display format, where it declares one, as `x-basis-format`: see [Display formats](#display-formats) |
@@ -136,20 +137,22 @@ application/vnd.apache.arrow.stream` alone asks for Arrow. Both answers carry `V
 in JSON whichever was asked for.
 
 The stream holds one record batch of every row, or none when there are no rows, and its schema either way. Each field of
-the row's model is a column, named as the JSON names it, nullable only where the field may be null:
+the row's model is a column, named as the JSON names it, nullable only where the field may be null, but for a `float`:
+a float column is always nullable, in the Arrow schema and in the document, because NaN and ±inf travel as null.
 
 | Field | Column |
 |---|---|
 | `str`, `UUID`, or a `Literal` or `Enum` of strings | `utf8` |
-| `float` | `float64`, with NaN and ±inf as null |
+| `float` | `float64`, always nullable |
 | `bool` | `bool` |
 | `date` | `date32` |
 | `datetime` | `timestamp[us, tz=UTC]` |
 
 A row holds nothing else: no `int` or `Decimal` (see [Numbers](#numbers)), no nested model, list or map, and no field it
-computes, so its JSON and its Arrow hold the same values. A route declared `response=api.Table[Row]`, which returns a
-pandas frame or an Arrow table, answers the same JSON and Arrow, its JSON rendered column-wise from the Arrow (step
-2.12). [`dataset.py`](../packages/api/src/basis/api/dataset.py) and [`arrow.py`](../packages/api/src/basis/api/arrow.py)
+computes, so its JSON and its Arrow hold the same values. An enum or `Literal` in a row is text, so one of integers is
+refused, with the fix to use a `str` enum or a `Literal` of strings. A route declared `response=api.Table[Row]`, which
+returns a pandas frame or an Arrow table, answers the same JSON and Arrow, its JSON rendered column-wise from the Arrow
+(step 2.12). [`dataset.py`](../packages/api/src/basis/api/dataset.py) and [`arrow.py`](../packages/api/src/basis/api/arrow.py)
 are the reference.
 
 ### Display formats
@@ -183,6 +186,10 @@ The Python port of parallax's formatter, for Slack and email text (step 5.3), re
 A UI and its API sit behind one host: the ingress routes `/api` to the API, removing the prefix, and the rest to the UI.
 The document's paths and the API's routes carry no `/api`, and a UI's client adds it. The browser makes no cross-origin
 call, and the API allows none.
+
+An app can serve a built UI folder itself, from step 2.14, which gives one origin without an ingress split. Its routes
+then mount under `/api` and the UI at `/`. The document's paths stay unprefixed, as above, and its `servers` lists
+`/api`. An app without a UI is unchanged, and the ingress strips `/api` as before.
 
 Where that routing is not possible, the API's settings name each other origin whose pages may call it, per environment,
 as the browser sends it: a scheme, `https` or `http`, and a host, with a port only where it is not the scheme's own, in

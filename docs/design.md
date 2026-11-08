@@ -217,8 +217,8 @@ of the `openapi.json` that this repo's example API produces. [The contract page]
   removing the prefix, and the rest to the UI, so the browser makes no cross-origin calls. The document's paths carry no
   `/api`, and a UI's client adds it. Where that routing is not possible, the API's settings declare the origins it
   allows, per environment; an empty list, the default, means the same origin only. basis-api can also serve a built UI
-  folder at `/` from the same app, beside its routes, which gives one origin with no ingress split; ctzd's apps do this
-  (see [ctzd](#ctzd-a-consumer)).
+  folder at `/` from the same app, with its routes under `/api`, which gives one origin with no ingress split; ctzd's
+  apps do this (see [ctzd](#ctzd-a-consumer)). The document's paths stay unprefixed either way.
 - **Recorded responses.** `basis records export` writes chosen recorded requests and responses as JSON files in the
   format basis-ui's fixture mode reads. They hold client data, so they go in a folder git ignores, never in a commit.
 
@@ -465,8 +465,9 @@ implements. This replaces the rules that kept integers and decimals exact, in fr
   Oracle `BINARY_DOUBLE`, and column kinds lose int and decimal.
 - **`regress`** compares numbers at 15 significant digits, so a sum done in another order is not a change.
 - **APIs.** Numbers are JSON numbers, never strings, and NaN and ±inf are null, in JSON and Arrow alike. Dataset rows
-  take `float` for every number, and refuse `int` and `Decimal` fields, with the fix. Outside datasets, route models
-  refuse `Decimal`, and `int` stays allowed, as a JSON number.
+  take `float` for every number, and refuse `int` and `Decimal` fields, with the fix; an enum or `Literal` in one is
+  text, and one of integers is refused, with the fix to use a `str` enum or a `Literal` of strings. Outside datasets,
+  route models refuse `Decimal`, and `int` stays allowed, as a JSON number.
 - **Rounding.** Python never rounds numbers. A `basis check` gate refuses `round()`, `.round()`, `numpy.round`,
   `numpy.around`, `numpy.rint` and the `decimal` module in user code, with a message that says to leave rounding to the
   UI. Business rounding, such as lot and tick sizes, stays in named, tested functions. How such a function is marked is
@@ -484,15 +485,17 @@ The surface ctzd uses is basis-api's `Service`, dataset routes and `basis.api.bu
 the drivers; and later the calendars, messages and the lake. A change to that surface needs a note to ctzd. basis gives
 ctzd:
 
-- **A UI at `/`.** basis-api can serve a built UI folder at `/` from the same app, beside the routes, so one container
-  serves the UI and its API on one origin.
+- **A UI at `/`.** basis-api can serve a built UI folder at `/` from the same app, with the routes under `/api`, so one
+  container serves the UI and its API on one origin.
 - **Library functions.** `call` and `dev` are callable as functions, not only as verbs.
 - **Settings in code.** `build(...)` with `Settings` made in code stays a supported seam. ctzd builds Settings from its
   own variables, so a ctzd app has no `BASIS_*` variables.
 - **No recording by default.** Request recording to the run store is off unless a deployment turns it on.
-- **No `basis` verbs.** In a repo whose `pyproject.toml` has no `[tool.basis]` table, `basis` refuses every verb but
-  `--version`, so no agent can run `basis sync` over a ctzd app's files. `sync`, `check`, `new` and `run` already
-  refused there on 2026-11-08, and step 2.11 adds a test that holds every verb to it.
+- **Nothing that touches its files.** In a repo whose `pyproject.toml` has no `[tool.basis]` table, `basis` refuses
+  every verb that reads or writes the repo's files, `sync`, `check`, `new`, `run`, `upgrade`, `review` and the rest,
+  because ctzd's concern is an agent writing over its files. It allows `--version`, `doctor`, which checks the desktop
+  only, as it does today, and `docs`, which prints the packaged docs, since those three write nothing. `sync`, `check`,
+  `new` and `run` already refused there on 2026-11-08, and step 2.11 adds a test that holds every verb to it.
 - **A number formatter.** The Python port of parallax's formatter, for Slack and email text (see
   [Messages](#what-jobs-and-apis-share)), which ctzd moves onto.
 
