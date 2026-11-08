@@ -102,14 +102,14 @@ def test_a_bonds_terms_are_read_from_the_warehouse(warehouse: Warehouse) -> None
     with TestClient(app(warehouse, Ledger()).asgi) as client:
         bond = client.get(f"/bonds/{ISIN}").json()
         unknown = client.get("/bonds/US0000000000")
-    assert bond == {"security_id": ISIN, "coupon_rate": "0.045000", "convention": "30/360", "frequency": 2, "issued": "2024-11-15", "maturity": "2034-11-15"}
+    assert bond == {"security_id": ISIN, "coupon_rate": 0.045, "convention": "30/360", "frequency": 2, "issued": "2024-11-15", "maturity": "2034-11-15"}
     assert (unknown.status_code, unknown.json()["type"]) == (HTTPStatus.NOT_FOUND, "unknown-bond")
 
 
 def test_a_settlement_and_its_booking_commit_together_and_the_booking_is_made_after(warehouse: Warehouse) -> None:
     ledger = Ledger()
     with TestClient(app(warehouse, ledger).asgi) as client:
-        recorded = client.post("/settlements", json={"security_id": ISIN, "face": "1000000.00", "settle": "2026-11-06"})
+        recorded = client.post("/settlements", json={"security_id": ISIN, "face": 1000000.0, "settle": "2026-11-06"})
     assert recorded.status_code == HTTPStatus.CREATED
     [(settlement_id, security, face, settle, accrued, recorded_at)] = warehouse.rows("SELECT settlement_id, security_id, face, settle, accrued, recorded_at FROM settlements")
     assert (UUID(str(settlement_id)), security, face, settle, accrued) == (UUID("00000000-0000-7000-8000-000000000001"), ISIN, 1000000.00, date(2026, 11, 6), 21375.00)
@@ -121,6 +121,6 @@ def test_a_settlement_and_its_booking_commit_together_and_the_booking_is_made_af
 def test_a_settlement_on_a_bond_the_warehouse_does_not_hold_writes_nothing(warehouse: Warehouse) -> None:
     ledger = Ledger()
     with TestClient(app(warehouse, ledger).asgi) as client:
-        refused = client.post("/settlements", json={"security_id": "US0000000000", "face": "100.00", "settle": "2026-11-06"})
+        refused = client.post("/settlements", json={"security_id": "US0000000000", "face": 100.0, "settle": "2026-11-06"})
     assert (refused.status_code, refused.json()["type"]) == (HTTPStatus.NOT_FOUND, "unknown-bond")
     assert (warehouse.rows("SELECT COUNT(*) FROM settlements"), warehouse.rows("SELECT COUNT(*) FROM accruals_outbox"), ledger.keys) == ([(0,)], [(0,)], [])
