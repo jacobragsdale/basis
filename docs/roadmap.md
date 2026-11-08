@@ -446,12 +446,10 @@ Since 2026-11-08 the maintainer has the work go fast to the MVP, one agent commi
 These are left for it.
 
 - **Step 2.6, from its review.** These are not fixed yet:
-  - `basis review` prints a mutation record that holds only a failure as a clean run on a first commit.
   - Schemathesis loads the service installed in the running environment, not the commit under check, so in the push
     hook's worktree it can test other code.
   - Purity is checked on modules named `domain`, not on every module inside a `domain` package.
   - The socket plugin blames the unit test that is running for a socket a leftover thread opens.
-  - A hunk that only deletes lines marks the function above it as touched.
   - The folders basis never reads are listed in four places.
   - `layers.DECLARATIONS` is unused.
 - **Schemathesis and mutmut are off by default.** `BASIS_FUZZ=1` turns Schemathesis on for `basis check`, and

@@ -208,6 +208,8 @@ def _mutation(found: MutationRecord) -> list[str]:
     since = f"since `{found.base}`" if found.base is not None else "in the first commit"
     made = f"mutmut made {found.mutants} mutant{'' if found.mutants == 1 else 's'} of the domain functions the change {since} touches, {', '.join(f'`{name}`' for name in found.functions)}"
     failed = [f"mutmut failed, which fails nothing: {found.failure}", ""] if found.failure is not None else []
+    if found.failure is not None and not found.mutants:  # a failure before any mutant ran is no clean run
+        return [f"mutmut failed before it tested a mutant, which fails nothing: {found.failure}"]
     outcome = f"the tests killed {found.killed}" + "".join(f", {count} {status}" for status, count in sorted(found.unsettled.items()))
     if not found.survived:
         return [*failed, f"{made}: {outcome}, and none survived."]

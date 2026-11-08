@@ -107,6 +107,18 @@ def test_a_removed_line_touches_its_function(repo: Path, git: Git) -> None:
     assert touched(repo) == ["rates.domain.clamp"]
 
 
+def test_a_deleted_function_touches_none_of_its_neighbours(repo: Path, git: Git) -> None:
+    write(repo, {"rates/domain.py": DOMAIN.replace("\n\nclass Rate:\n    def doubled(self, n: int) -> int:\n        return n * 2\n", "")})
+    commit(repo, git, "Remove Rate")
+    assert touched(repo) == []  # git puts the deletion right after clamp's last line, which it leaves alone
+
+
+def test_a_function_s_deleted_tail_touches_it(repo: Path, git: Git) -> None:
+    write(repo, {"rates/domain.py": DOMAIN.replace("        return low\n    return x\n", "        return low\n")})
+    commit(repo, git, "Fall through")
+    assert touched(repo) == ["rates.domain.clamp"]
+
+
 def test_the_change_is_everything_since_the_branch_left_the_remotes_default(repo: Path, git: Git) -> None:
     git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
     git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")

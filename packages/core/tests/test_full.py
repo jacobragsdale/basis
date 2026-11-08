@@ -406,14 +406,18 @@ def test_a_defect_in_mutation_testing_fails_nothing_and_is_recorded(repo: Path, 
         ),
         (
             review.MutationRecord(functions=["rates.domain.clamp"], failure="mutmut stopped"),
+            ["mutmut failed before it tested a mutant, which fails nothing: mutmut stopped"],  # never "none survived"
+        ),
+        (
+            review.MutationRecord(functions=["rates.domain.clamp"], mutants=2, killed=2, failure="mutmut stopped"),
             [
                 "mutmut failed, which fails nothing: mutmut stopped",
                 "",
-                "mutmut made 0 mutants of the domain functions the change in the first commit touches, `rates.domain.clamp`: the tests killed 0, and none survived.",
+                "mutmut made 2 mutants of the domain functions the change in the first commit touches, `rates.domain.clamp`: the tests killed 2, and none survived.",
             ],
         ),
     ],
-    ids=["all-killed", "survivors", "mutmut-failed"],
+    ids=["all-killed", "survivors", "mutmut-failed-first", "mutmut-failed-after"],
 )
 def test_review_says_what_mutation_testing_found(found: review.MutationRecord, printed: list[str]) -> None:
     record = review.Record(commit="c", folder="", checked_at=AT, checked=True, passed=True, versions={}, regress=review.RegressRecord(skipped="x"), qa=review.QaRecord(skipped="y"), mutation=found)

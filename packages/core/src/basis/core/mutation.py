@@ -164,8 +164,26 @@ def touched(repo: Path, found: clone.Clone, base: str | None) -> list[Function]:
         if relative in added:
             continue
         diff = clone.output(found.git, repo, "diff", "--unified=0", "--no-color", "--no-ext-diff", base, "--", relative, raw=True) or ""
-        changed[relative] = [(int(hunk["start"]), int(hunk["start"]) + max(int(hunk["count"] or 1), 1) - 1) for hunk in _HUNK.finditer(diff)]
+        changed[relative] = _changed(diff)
     return [function for function in every if function.path in added or any(first <= function.lines[1] and last >= function.lines[0] for first, last in changed.get(function.path, ()))]
+
+
+def _changed(diff: str) -> list[tuple[int, int]]:
+    """The lines of the new file each hunk of `diff`, made with no context, changes, first and last. A hunk that only
+    deletes, after line N, changes the function that holds both N and N + 1, the deletion inside it, or, where the first
+    line it deletes is indented, the one that ends at N, whose tail it was; never the function above a deleted one."""
+    hunks = list(_HUNK.finditer(diff))
+    found: list[tuple[int, int]] = []
+    for index, hunk in enumerate(hunks):
+        start, count = int(hunk["start"]), int(hunk["count"] or 1)
+        if count:
+            found.append((start, start + count - 1))
+            continue
+        body = diff[hunk.end() : hunks[index + 1].start() if index + 1 < len(hunks) else len(diff)]
+        removed = [line[1:] for line in body.splitlines() if line.startswith("-")]
+        tail = bool(removed) and removed[0][:1] in {" ", "\t"}
+        found.append((start, start) if tail else (start + 1, start))  # an empty span after N meets only a function holding N and N + 1
+    return found
 
 
 def _copy(repo: Path, copy: Path, functions: Sequence[Function]) -> None:
