@@ -35,6 +35,7 @@ from fastapi.exceptions import RequestValidationError
 from opentelemetry.sdk.trace import TracerProvider
 from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -90,6 +91,16 @@ class App:
     lifecycle: Lifecycle
     provider: TracerProvider
     """The app's own tracer provider, every span of the app's on it, to which a test may add a processor of its own."""
+
+
+COMPRESS_FROM = 1024
+"""The smallest response body, in bytes, the app compresses for a client that accepts gzip: its JSON, its Arrow, and a
+UI file the build wrote no compressed copy of. One already compressed, as a UI file's copy is, is sent as it is."""
+COMPRESS_LEVEL = 1
+"""gzip's level 1, measured on 100,000 rows (docs/roadmap.md, Later): Arrow 7.2 MB to 3.44 MB in 63 ms, where level 6
+gives 3.28 MB in 290 ms and level 9, Starlette's default, 3.23 MB in 1.76 s; JSON 20.9 MB to 5.00 MB in 82 ms, 4.23 MB
+in 254 ms at 6. Over a slow link the bytes cost more than the CPU at every level but 1, and a body over 128 KiB is
+compressed off the event loop."""
 
 
 class Health(Model):
@@ -157,6 +168,7 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | 
         lifespan=lifespan,
         middleware=[
             *origins.middleware(configured.allowed_origins),
+            Middleware(GZipMiddleware, minimum_size=COMPRESS_FROM, compresslevel=COMPRESS_LEVEL),  # outside the request boundary, which logs what the handler answered
             Middleware(Requests),
             *([Middleware(tokens.Bearer, verifier=identity)] if identity is not None else []),  # Bearer inside Requests
         ],

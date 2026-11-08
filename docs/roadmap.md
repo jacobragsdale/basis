@@ -462,6 +462,11 @@ These are left for it.
   of a body) are unreachable now that a `Decimal` is refused when a route is declared; remove them. `basis docs`
   should run in a repo with no `[tool.basis]` table, as the design says; it is refused there today, and the change
   is in `command.py`, which step 5.6 is changing.
+- **Compression, measured.** 100,000 rows of eight columns (two text, a date, five random floats), on the development
+  host, with zlib: Arrow 7.2 MB to 3.44 MB at level 1 in 63 ms, 3.28 MB at 6 in 290 ms, 3.23 MB at 9 in 1.76 s; JSON
+  20.9 MB to 5.00 MB at 1 in 82 ms, 4.23 MB at 6 in 254 ms. The app gzips at level 1 (`app.COMPRESS_LEVEL`). Real desk
+  data, with fewer distinct values, compresses further. Brotli or zstd for the API's own answers would need a
+  dependency, and Safari's zstd support; not done.
 - **Step 2.12, measured.** 100,000 rows, on the development host: through pydantic (`list[Row]`), JSON 59 ms and
   Arrow 121 ms; as an `api.Table`, Arrow 7 ms and JSON 286 ms. A table's JSON goes through `to_pylist`, so a
   column-wise JSON writer would cut its 286 ms; Arrow, which basis-ui's grids read, is already the fast path.

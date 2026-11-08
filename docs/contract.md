@@ -206,6 +206,19 @@ The API then answers those origins' preflight requests, and lets their pages sen
 and a browser keeps its answer to a preflight request for 600 seconds. Without the setting, or with `[]`, every other origin's page is refused. A `*` is refused when the
 settings are read.
 
+## Compression and caching
+
+Every answer over 1,024 bytes, JSON and Arrow alike, is gzipped for a request whose `Accept-Encoding` takes gzip, with
+`Content-Encoding: gzip` and `Vary: Accept-Encoding`, at gzip's level 1, which costs a quarter of level 6's CPU for a
+few percent more bytes. A browser decodes it itself.
+
+A UI the app serves is sent as its build left it: a file's `FILE.br` where the request accepts Brotli, else its
+`FILE.gz` where it accepts gzip, else the file itself, with the file's own `Content-Type`, the copy's
+`Content-Encoding` and `Vary: Accept-Encoding`. basis-ui's build writes both copies beside every file over 1 KB of its
+text, script, style, data and wasm types. A file under `assets/`, whose name the build hashes, is
+`Cache-Control: public, max-age=31536000, immutable`; every other file, `index.html` and a client-side route's answer
+among them, is `no-cache`, with an `ETag` and a `Last-Modified`, so a reload of an unchanged file is a 304.
+
 ## Compatibility
 
 `basis check --full`, which the push hook runs, compares the repo's `openapi.json` with the one at its last release, and

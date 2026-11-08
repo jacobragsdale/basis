@@ -139,7 +139,7 @@ def test_each_field_is_a_column_of_its_type_nullable_only_where_it_may_be_none()
 
 def test_a_request_that_asks_for_arrow_gets_the_rows_it_would_get_as_json(client: TestClient) -> None:
     response = client.get("/exposures", headers={"accept": ARROW})
-    assert (response.status_code, response.headers["content-type"], response.headers["vary"]) == (HTTPStatus.OK, ARROW, "Accept")
+    assert (response.status_code, response.headers["content-type"], response.headers["vary"]) == (HTTPStatus.OK, ARROW, "Accept, Accept-Encoding")  # gzipped too, as the client accepts it
     table = pa.ipc.open_stream(response.content).read_all()
     assert table.to_pylist()[1] == {
         "book": "RATES-2", "desk": "rates", "side": "long", "lots": 7.0, "weight": 0.25, "hedged": True, "exposure": 1692406.25,

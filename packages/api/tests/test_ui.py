@@ -85,3 +85,41 @@ def test_an_app_without_a_ui_is_unchanged() -> None:
 def test_a_ui_folder_outside_the_apps_own_is_refused(folder: str) -> None:
     with pytest.raises(api.DeclarationError, match="give the built UI's folder as a relative path inside the app's own folder"):
         service(folder)
+
+
+def raw(client: TestClient, path: str, **headers: str) -> tuple[dict[str, str], bytes]:
+    """The response to a GET of `path` with `headers`, its body as it was sent, never decoded."""
+    with client.stream("GET", path, headers=headers) as response:
+        return dict(response.headers), b"".join(response.iter_raw())
+
+
+@pytest.fixture
+def compressed(built: Path) -> Path:
+    """The UI's script, with the copies its build compresses: stand-ins, whose bytes say which was sent."""
+    (built / "assets" / "app.js.br").write_bytes(b"brotli bytes")
+    (built / "assets" / "app.js.gz").write_bytes(b"gzip bytes")
+    return built
+
+
+@pytest.mark.parametrize(
+    ("accepts", "encoding", "body"),
+    [("gzip, deflate, br, zstd", "br", b"brotli bytes"), ("gzip", "gzip", b"gzip bytes"), ("br;q=0, gzip;q=0.8", "gzip", b"gzip bytes"), ("identity", None, b"console.log('hi')")],
+)
+def test_a_file_is_sent_as_the_compressed_copy_the_request_accepts(compressed: Path, client: TestClient, accepts: str, encoding: str | None, body: bytes) -> None:
+    del compressed
+    headers, sent = raw(client, "/assets/app.js", **{"accept-encoding": accepts})
+    assert (headers.get("content-encoding"), headers["content-type"].split(";")[0], headers["vary"], sent) == (encoding, "text/javascript", "Accept-Encoding", body)
+
+
+def test_a_hashed_asset_is_immutable_and_every_other_file_is_revalidated(client: TestClient) -> None:
+    assert client.get("/assets/app.js").headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert client.get("/").headers["cache-control"] == "no-cache"
+    assert client.get("/positions/7").headers["cache-control"] == "no-cache"  # the UI's index.html, for a client-side route
+
+
+def test_a_reload_of_an_unchanged_file_is_a_304(compressed: Path, client: TestClient) -> None:
+    del compressed
+    for path, accepts in [("/", "identity"), ("/assets/app.js", "gzip")]:
+        first, _ = raw(client, path, **{"accept-encoding": accepts})
+        again = client.get(path, headers={"accept-encoding": accepts, "if-none-match": first["etag"]})
+        assert (again.status_code, again.headers["cache-control"], again.content) == (HTTPStatus.NOT_MODIFIED, first["cache-control"], b"")
