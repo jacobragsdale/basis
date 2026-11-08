@@ -113,10 +113,10 @@ def _checks(repo: Path) -> list[Problem]:
     return [*layers.problems(repo), *fuzz.problems()]
 
 
-def _smoke(repo: Path, env: str) -> list[Problem]:
+def _smoke(repo: Path, env: str, commit: str | None) -> list[Problem]:
     from basis.api import smoke  # noqa: PLC0415 -- the client loads when the verb runs
 
-    return smoke.smoke(repo, env)
+    return smoke.smoke(repo, env, commit=commit)
 
 
 def _contract(repo: Path) -> str | None:

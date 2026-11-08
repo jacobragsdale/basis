@@ -35,10 +35,15 @@ def test_ready_only_between_startup_and_shutdown() -> None:
 def test_alive_whatever_the_readiness() -> None:
     app = api.build(SERVICE, settings=api.Settings.given())
     client = TestClient(app.asgi)
-    assert client.get("/health/live").json() == {"status": "live"}
+    assert client.get("/health/live").json() == {"status": "live", "commit": None}
     with client:
         app.lifecycle.drain()
-        assert client.get("/health/live").json() == {"status": "live"}
+        assert client.get("/health/live").json() == {"status": "live", "commit": None}
+
+
+def test_health_says_which_commit_the_app_runs() -> None:
+    with TestClient(api.build(SERVICE, settings=api.Settings.given(git_sha="3f1c2a9e")).asgi) as client:
+        assert [client.get(f"/health/{which}").json() for which in ("live", "ready")] == [{"status": "live", "commit": "3f1c2a9e"}, {"status": "ready", "commit": "3f1c2a9e"}]
 
 
 def test_not_ready_is_a_problem() -> None:

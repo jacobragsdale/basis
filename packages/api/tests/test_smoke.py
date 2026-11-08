@@ -43,11 +43,11 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return folder
 
 
-def deployed(document: object = DOCUMENT, *, ready: int = 200, body: object = None) -> httpx2.MockTransport:
-    """QA's deploy: its document, its readiness and its answer to the example."""
+def deployed(document: object = DOCUMENT, *, ready: int = 200, body: object = None, commit: str | None = "3f1c2a9e") -> httpx2.MockTransport:
+    """QA's deploy: its document, its readiness, the commit it runs and its answer to the example."""
     answers: dict[str, Callable[[], httpx2.Response]] = {
         "/api/openapi.json": lambda: httpx2.Response(200, json=document),
-        "/api/health/ready": lambda: httpx2.Response(ready, json={"status": "ready"}),
+        "/api/health/ready": lambda: httpx2.Response(ready, json={"status": "ready", "commit": commit}),
         "/api/quotes/UST10Y": lambda: httpx2.Response(200, json=body if body is not None else {"security": "UST10Y", "price": 99.5}),
     }
     return httpx2.MockTransport(lambda request: answers.get(request.url.path, lambda: httpx2.Response(HTTPStatus.NOT_FOUND))())
@@ -55,6 +55,17 @@ def deployed(document: object = DOCUMENT, *, ready: int = 200, body: object = No
 
 def test_a_deploy_of_the_committed_document_that_is_ready_and_answers_its_examples_passes(repo: Path) -> None:
     assert smoke.smoke(repo, "qa", service=SERVICE, transport=deployed()) == []
+    assert smoke.smoke(repo, "qa", commit="3f1c2a9e", service=SERVICE, transport=deployed()) == []
+
+
+@pytest.mark.parametrize(
+    ("served", "reason"),
+    [("0aa1b2c3", "https://qa.example.com/api serves commit 0aa1b2c3, not 3f1c2a9e"), (None, "https://qa.example.com/api serves no commit (its image sets no BASIS_GIT_SHA), not 3f1c2a9e")],
+)
+def test_a_deploy_of_another_commit_fails_the_smoke_that_names_its_commit(repo: Path, served: str | None, reason: str) -> None:
+    assert smoke.smoke(repo, "qa", commit="3f1c2a9e", service=SERVICE, transport=deployed(commit=served)) == [
+        (reason, "wait until the deploy of 3f1c2a9e finishes, and check that its release reached the environment")
+    ]
 
 
 def test_a_deploy_of_another_document_fails_saying_to_deploy_this_commit(repo: Path) -> None:

@@ -616,21 +616,22 @@ def test_a_part_reads_its_table_as_basis_reads_the_parts(tmp_path: Path) -> None
 
 
 def test_smoke_runs_each_parts_checks_of_the_environment_and_fails_on_any(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    asked: list[tuple[Path, str]] = []
+    asked: list[tuple[Path, str, str | None]] = []
 
-    def checks(found: Path, env: str) -> list[tuple[str, str]]:
-        asked.append((found, env))
+    def checks(found: Path, env: str, commit: str | None) -> list[tuple[str, str]]:
+        asked.append((found, env, commit))
         return [("the served document is another commit's", "deploy this commit")]
 
     installed: dict[str, Callable[[], Part]] = {"alpha": lambda: Part(smoke=checks), "beta": lambda: Part(verbs=(verb("render"),))}
     folder = repo(tmp_path, BOTH)
     assert basis(folder, "smoke", "--env", "qa", installed=installed) == 1
-    assert asked == [(folder, "qa")]
     assert error_line(capsys) == "ERROR: the served document is another commit's: deploy this commit"
+    assert basis(folder, "smoke", "--env", "qa", "--commit", "3f1c2a9e", installed=installed) == 1
+    assert asked == [(folder, "qa", None), (folder, "qa", "3f1c2a9e")]
 
 
 def test_smoke_needs_an_environment_and_a_part_that_smokes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    installed: dict[str, Callable[[], Part]] = {"alpha": lambda: Part(smoke=lambda _repo, _env: [])}
+    installed: dict[str, Callable[[], Part]] = {"alpha": lambda: Part(smoke=lambda _repo, _env, _commit: [])}
     folder = repo(tmp_path)
     assert basis(folder, "smoke", "--env", "qa", installed=installed) == 0
     capsys.readouterr()

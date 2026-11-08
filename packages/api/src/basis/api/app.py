@@ -94,6 +94,8 @@ class App:
 
 class Health(Model):
     status: Literal["live", "ready"]
+    commit: str | None = None
+    """The commit the app runs, `BASIS_GIT_SHA`, which `basis smoke --commit` checks; None where it is not set."""
 
 
 def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | None = None, environment: str | None = None) -> App:
@@ -170,13 +172,13 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | 
     )
 
     async def live() -> Health:
-        return Health(status="live")
+        return Health(status="live", commit=configured.git_sha)
 
     async def ready() -> Health:
         if lifecycle.stage is not Stage.READY:
             msg = f"the service is {lifecycle.stage}"
             raise errors.NotReadyError(msg)
-        return Health(status="ready")
+        return Health(status="ready", commit=configured.git_sha)
 
     _health(app, service, live, ready)
     _routes(app, service)

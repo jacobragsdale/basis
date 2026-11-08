@@ -24,9 +24,10 @@ DOCUMENT = "openapi.json"
 TIMEOUT_S = 30.0
 
 
-def smoke(repo: Path, env: str, *, service: Service | None = None, transport: httpx2.BaseTransport | None = None) -> list[Problem]:
-    """Each way the API, as environment `env` serves it, is not what the repo at `repo` commits: the repo's one
-    service, or `service`, reached over the network, or through `transport`, as a test stands in for the deploy."""
+def smoke(repo: Path, env: str, *, commit: str | None = None, service: Service | None = None, transport: httpx2.BaseTransport | None = None) -> list[Problem]:
+    """Each way the API, as environment `env` serves it, is not what the repo at `repo` commits, nor, with `commit`, the
+    commit it must run: the repo's one service, or `service`, reached over the network, or through `transport`, as a
+    test stands in for the deploy."""
     service = service if service is not None else load()
     environment = environments.load(env, service.settings)
     reached = getattr(environment.settings, "smoke", None)
@@ -42,7 +43,7 @@ def smoke(repo: Path, env: str, *, service: Service | None = None, transport: ht
     found: list[Problem] = []
     with httpx2.Client(base_url=base, verify=verify, trust_env=False, timeout=TIMEOUT_S, follow_redirects=False, transport=transport) as client:
         found += _document(client, repo, base)
-        found += _ready(client, base)
+        found += _ready(client, base, commit)
         for route in service.routes:
             if route.smoke is not None:
                 found += _example(client, route, base)
@@ -67,13 +68,17 @@ def _document(client: httpx2.Client, repo: Path, base: str) -> list[Problem]:
     return []
 
 
-def _ready(client: httpx2.Client, base: str) -> list[Problem]:
+def _ready(client: httpx2.Client, base: str, commit: str | None) -> list[Problem]:
     try:
         response = client.get("/health/ready")
     except httpx2.HTTPError as error:
         return [(f"{base}/health/ready cannot be reached: {error}", "check that the deploy finished")]
     if response.status_code != 200:  # noqa: PLR2004 -- OK
         return [(f"{base}/health/ready answered {response.status_code}, so the API is not ready", "look at its logs for why its startup failed, as its pod's show them")]
+    served = response.json().get("commit") if commit is not None else None
+    if commit is not None and served != commit:
+        what = f"commit {served}" if served is not None else "no commit (its image sets no BASIS_GIT_SHA)"
+        return [(f"{base} serves {what}, not {commit}", f"wait until the deploy of {commit} finishes, and check that its release reached the environment")]
     return []
 
 

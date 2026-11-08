@@ -56,21 +56,29 @@ stages:
               tags: $(Build.SourceVersion)
               arguments: --build-arg GIT_SHA=$(Build.SourceVersion)
 
-  - stage: smoke_qa
-    displayName: basis smoke --env qa, before promotion to prod
+  - stage: release
+    displayName: Release the image to dev, through the deploy repository
     dependsOn: image
     condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
     jobs:
-      - job: smoke
+      - job: release
         pool:
           vmImage: ubuntu-latest  # STUB: the team's agent pool
         steps:
-          - checkout: self
-          # STUB: the team's template that deploys the image to QA, before this check
-          - script: |
-              export PATH="$HOME/.local/bin:$PATH"
-              uv sync --locked
-              uv run --locked basis smoke --env qa
-            displayName: basis smoke --env qa
-            env:
-              BASIS_ENV: qa  # STUB: QA's settings, BASIS_SMOKE__URL among them, as the team's variable groups give them
+          # STUB: the team's template that opens the deploy repository's release pull request for the image the image
+          # stage pushed, by its commit tag and digest, such as berth's `berth release APP --env dev --version
+          # $(Build.SourceVersion)@sha256:DIGEST` and `berth pr`, as its release bot. Promotion to QA and prod is a
+          # pull request there too, reviewed by its owners.
+          - script: echo "STUB, release $(image) at $(Build.SourceVersion) to dev"
+            displayName: Open the release pull request
+
+# `basis smoke --env qa --commit COMMIT` checks QA once it serves the commit: its document is the committed one, it
+# is ready and running COMMIT, and each route's read-only example answers. It runs after the deploy repository has
+# deployed the commit to QA, so the deploy pipeline triggers it, and its failure blocks the promotion to prod:
+#
+#   - script: |
+#       uv sync --locked
+#       uv run --locked basis smoke --env qa --commit "$COMMIT"
+#     env:
+#       BASIS_ENV: qa  # STUB: QA's settings, BASIS_SMOKE__URL among them, as the team's variable groups give them
+#       COMMIT: STUB   # the commit QA was deployed with, as the deploy pipeline passes it

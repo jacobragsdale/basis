@@ -123,7 +123,7 @@ def part() -> Part:
     )
 
 
-def _smoke(repo: Path, env: str) -> list[Problem]:
+def _smoke(repo: Path, env: str, commit: str | None) -> list[Problem]:  # noqa: ARG001 -- a job's dry run is of the checkout's code, whatever commit an environment serves
     from basis.job import smoke  # noqa: PLC0415 -- the databases load when the verb runs
 
     return smoke.smoke(repo, env)

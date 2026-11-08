@@ -267,9 +267,10 @@ class Part:
     """The part's own checks of the repo's code, which `basis check` runs on the repo beside its tests, such as
     basis-api's layers: each problem one `ERROR` line, its reason and its fix. A check the repo's code cannot pass
     raises nothing, and returns the problem; a `BasisError` it raises is one line too."""
-    smoke: Callable[[Path, str], Sequence[Problem]] | None = None
-    """The part's checks of a deployed environment, which `basis smoke --env ENV` runs after each deploy and from a
-    desktop, given the repo and the environment's name: such as basis-api's, that the served document is the committed
+    smoke: Callable[[Path, str, str | None], Sequence[Problem]] | None = None
+    """The part's checks of a deployed environment, which `basis smoke --env ENV [--commit SHA]` runs after each deploy
+    and from a desktop, given the repo, the environment's name and the commit it must serve, where `--commit` names
+    one: such as basis-api's, that the served document is the committed
     one, the API is ready and each route's read-only example answers, and basis-job's dry run of a job. Each problem is
     one `ERROR` line, its reason and its fix, and any fails the command, which blocks promotion to prod."""
 
