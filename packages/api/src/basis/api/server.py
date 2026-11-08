@@ -26,6 +26,9 @@ from basis.core import logs
 
 log = logging.getLogger(__name__)
 
+LOCAL = "127.0.0.1"
+"""Where `basis dev` serves: this machine alone."""
+
 
 def serve(service: Service | str | None = None, *, settings: Settings | None = None, fakes: Fakes | None = None, host: str | None = None) -> None:
     """Serve `service`, or the service a reference names (see `api.load`), or the one the installed packages list,
@@ -53,6 +56,15 @@ def serve(service: Service | str | None = None, *, settings: Settings | None = N
         _Server(config, app.lifecycle, drain_s=serving.drain_s).run()
     except KeyboardInterrupt:  # Ctrl+C, which uvicorn raises again once it has shut down: the stop that was asked for
         return
+
+
+def serve_on_fakes(service: Service | str | None = None, *, settings: Settings | None = None) -> None:
+    """`api.serve_on_fakes`: serve `service` on its fakes, on this machine alone, as `basis dev` does: with `settings`, or its settings read
+    from the environment, so a caller in Python, such as a platform's own command, gives them in code."""
+    from basis.api import dev as fakes_of  # noqa: PLC0415 -- the fakes load when it runs
+
+    found = service if isinstance(service, Service) else load(service)
+    serve(found, settings=settings, fakes=fakes_of.fakes(found), host=LOCAL)
 
 
 def logged(service: Service) -> None:

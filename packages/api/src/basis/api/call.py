@@ -17,6 +17,7 @@ alone, with its status and its content type."""
 
 import json
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Literal
@@ -29,8 +30,10 @@ from basis.api import dev, errors, strict
 from basis.api.app import build
 from basis.api.compute import ComputeFunction
 from basis.api.fakes import Compute, Fake, Faked
+from basis.api.resources import DatabaseResource, HttpResource
 from basis.api.server import logged
 from basis.api.service import DeclarationError, Route, Service
+from basis.api.settings import Settings
 from basis.core.verbs import fail
 
 type Scalar = str | int | float | bool
@@ -53,23 +56,43 @@ class Called:
     """The response's JSON, or None when it has no body."""
 
 
-def call(service: Service, name: str, request: str, *, resources: Literal["real", "fake"]) -> int:
-    """Run the route of `service` named `name` on `request`, print its response, and return the exit code."""
+def call(service: Service, name: str, request: str, *, resources: Literal["real", "fake"], settings: Settings | None = None) -> int:
+    """Run the route of `service` named `name` on `request`, print its response, and return the exit code: `basis call`."""
+    route, called = _called(service, name, request, resources=resources, settings=settings)
+    if called.body is not None:
+        sys.stdout.write(f"{json.dumps(called.body, indent=2)}\n")
+    if called.status < errors.FIRST_ERROR:
+        return 0
+    return _failed(route, called)
+
+
+def answer(service: Service, name: str, request: str | Mapping[str, object], *, resources: Literal["real", "fake"] = "fake", settings: Settings | None = None) -> Called:
+    """`api.call_route`: one request to the route of `service` named `name`, in this process, and its answer, as `basis call`
+    makes it, for a caller in Python, such as a platform's own command or a test."""
+    return _called(service, name, request, resources=resources, settings=settings)[1]
+
+
+def _called(service: Service, name: str, request: str | Mapping[str, object], *, resources: Literal["real", "fake"], settings: Settings | None = None) -> tuple[Route, Called]:
+    """One request to the route of `service` named `name`, in this process: `request` a JSON object, as text or a
+    mapping, of `path`, `query`, `headers` and `body`; on the service's fakes or its real resources; with `settings`, or
+    its settings read from the environment. Its answer, its status and its JSON, which `api.call` gives a caller in
+    Python, as a library, and `basis call` prints."""
     route = next((found for found in service.routes if found.name == name), None)
     if route is None:
         msg = f"service {service.name} has no route named {name}: give one of {', '.join(found.name for found in service.routes)}, its handler's name"
         raise DeclarationError(msg)
     try:
-        given = Request.model_validate_json(request)
+        given = Request.model_validate_json(request) if isinstance(request, str) else Request.model_validate(request)
     except ValidationError as error:
         wrong = "; ".join(f"{'.'.join(map(str, entry['loc'])) or 'the request'}: {entry['msg']}" for entry in error.errors(include_url=False, include_input=False))
         msg = f'the request to {name} is not valid: {wrong}: give one JSON object of "path", "query", "headers" and "body", each where the route needs it'
         raise DeclarationError(msg) from None
     logged(service)
-    faked: dict[Faked, Fake] = dev.fakes(service) if resources == "fake" else {}
+    reaches = any(isinstance(resource, DatabaseResource | HttpResource) for resource in service.resources)
+    faked: dict[Faked, Fake] = dev.fakes(service) if resources == "fake" and (service.fakes is not None or reaches) else {}  # a service that reaches nothing needs no fakes
     for other in service.routes:  # another route's compute functions are never called here, so they start no process
         faked |= {ask.given: Compute() for ask in other.asks if isinstance(ask.given, ComputeFunction) and ask.given not in {found.given for found in route.asks}}
-    app = build(service, fakes=faked)
+    app = build(service, settings=settings, fakes=faked)
     with TestClient(app.asgi, raise_server_exceptions=False) as client:  # runs the lifespan, as `basis serve` does
         response = client.request(
             route.method,
@@ -80,16 +103,10 @@ def call(service: Service, name: str, request: str, *, resources: Literal["real"
         )
     kind = response.headers.get("content-type")
     if response.content and not strict.is_json(kind):
-        return fail(
-            f"{route.name} answered {response.status_code} with {kind or 'a body of no content type'}, not JSON",
-            "basis call prints JSON alone: serve the API with basis dev, and request the route there",
-        )
-    called = Called(response.status_code, response.json() if response.content else None)
-    if called.body is not None:
-        sys.stdout.write(f"{json.dumps(called.body, indent=2)}\n")
-    if called.status < errors.FIRST_ERROR:
-        return 0
-    return _failed(route, called)
+        fix = "basis call gives JSON alone, so serve the API with basis dev, and request the route there"
+        msg = f"{route.name} answered {response.status_code} with {kind or 'a body of no content type'}, not JSON: {fix}"
+        raise DeclarationError(msg)
+    return route, Called(response.status_code, response.json() if response.content else None)
 
 
 def _url(route: Route, given: Request) -> str:

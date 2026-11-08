@@ -43,9 +43,9 @@ from uuid import uuid7
 import httpx2
 import pyarrow as pa
 from opentelemetry.trace import Span, SpanKind, Tracer
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
-from basis.api import deadlines, fakes, outboxes
+from basis.api import arrow, dataset, deadlines, fakes, outboxes
 from basis.api.compute import ComputeFunction
 from basis.api.pool import Call, InProcess, Pool, Runs
 from basis.api.resources import Bind, Body, CacheResource, ClockResource, DatabaseResource, HttpMethod, HttpResource, IdsResource, Query, Resource, SendMethod
@@ -408,6 +408,11 @@ class DatabaseSession:
         except ValidationError as error:
             error.add_note(f"the rows database {self._database.resource.name} returned are not {getattr(row, '__qualname__', row)}: match the query's columns, in lower case, to its fields")
             raise
+
+    async def fetch_table(self, row: type[BaseModel], sql: str, /, **binds: Bind) -> pa.Table:
+        table = await self._call("fetch", sql, lambda statements, timeout_s: statements.query(sql, binds, timeout_s=timeout_s))
+        found = dataset.rows(list[row], f"fetch_table of {row.__qualname__}", table=True)  # ty: ignore[invalid-type-form] -- the row model, a value
+        return await asyncio.to_thread(arrow.conform, found, table, f"the rows database {self._database.resource.name} returned")
 
     async def fetch_one[R](self, row: type[R], sql: str, /, **binds: Bind) -> R | None:
         rows = await self.fetch(row, sql, **binds)

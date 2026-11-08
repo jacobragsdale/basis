@@ -106,7 +106,7 @@ class Served(APIRoute):
             once = _ValidatedOnce(field_info=field.field_info, name=field.name, mode=field.mode, config=field.config)
             dependant.body_params[0] = once
         if declared.rows is not None and dependant.call is declared.handler:  # the endpoint stays the handler, which `given` finds the route's writes by
-            dependant.call = _answering_arrow(declared, declared.rows)
+            dependant.call = _answering_table(declared, declared.rows) if declared.table else _answering_arrow(declared, declared.rows)
         handle = super().get_route_handler()
         meanings: dict[type, type[DomainError]] = {error.exception: error for error in declared.errors if issubclass(error, DomainError)}
 
@@ -187,6 +187,35 @@ def _answering_arrow(declared: Route, rows: Rows) -> Callable[..., object]:
     return answer_sync
 
 
+def _answering_table(declared: Route, rows: Rows) -> Callable[..., object]:
+    """`declared`'s handler, as FastAPI calls it, for a route that answers an `api.Table[Row]`: the frame or table it
+    returns checked once against the rows' columns, then answered as Arrow, or as JSON written from the Arrow, in a
+    thread when the handler is async. A table that does not hold the columns raises, a defect, so the request's writes
+    roll back."""
+    handler = declared.handler
+    media = {True: arrow.MEDIA_TYPE, False: "application/json"}
+
+    def answer(found: object) -> Response:
+        table = arrow.conform(rows, found, f"the table {declared.name} returned")
+        wanted = _ARROW.get()
+        return Response(arrow.write(table) if wanted else arrow.as_json(table), status_code=declared.status, media_type=media[wanted])
+
+    if inspect.iscoroutinefunction(handler):
+
+        @functools.wraps(handler)
+        async def answer_async(**values: object) -> object:
+            found = await handler(**values)
+            return await asyncio.to_thread(answer, found)
+
+        return answer_async
+
+    @functools.wraps(handler)
+    def answer_sync(**values: object) -> object:
+        return answer(handler(**values))
+
+    return answer_sync
+
+
 async def _sent_a_body(request: Request) -> bool:
     """Whether the request has a body, read only as far as its first byte."""
     async for chunk in request.stream():
@@ -232,9 +261,15 @@ def add(app: FastAPI, service: Service, *, prefix: str = "") -> None:
     `prefix`: `API` in an app that serves a UI, and nothing in its document."""
     for route in service.routes:
         app.router.add_api_route(
-            prefix + route.path, route.handler, methods=[route.method], status_code=route.status, name=route.name, response_model=route.response,
+            prefix + route.path, route.handler, methods=[route.method], status_code=route.status, name=route.name, response_model=_documented(route),
             responses=responses(route), route_class_override=route_class(route), generate_unique_id_function=_operation_id,
         )  # fmt: skip
+
+
+def _documented(route: Route) -> object:
+    """The response FastAPI documents for `route`: its rows' list for a route that answers an `api.Table`, whose JSON
+    they are, and its response for any other."""
+    return list[route.rows.model] if route.table and route.rows is not None else route.response  # ty: ignore[invalid-type-form] -- the row model, a value
 
 
 def _operation_id(route: APIRoute) -> str:

@@ -206,7 +206,8 @@ forbidden_modules = [
 ]
 ignore_imports = [
     "basis.api -> basis.api.app",  # `api.build` loads on first use, which a service's modules never make
-    "basis.api -> basis.api.server",  # as does `api.serve`
+    "basis.api -> basis.api.server",  # as does `api.serve`, and `api.serve_on_fakes`
+    "basis.api -> basis.api.call",  # as does `api.call_route`
 ]
 
 [[tool.importlinter.contracts]]

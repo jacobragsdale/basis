@@ -30,6 +30,7 @@ from enum import Enum
 from typing import Annotated, Literal, cast, get_args, get_origin
 from uuid import UUID
 
+import annotated_types
 from pydantic import BaseModel, RootModel, TypeAdapter
 from pydantic.fields import FieldInfo
 
@@ -74,9 +75,10 @@ _KINDS: tuple[tuple[type, Kind], ...] = (
 )
 
 
-def rows(response: object, route: str) -> Rows:
+def rows(response: object, route: str, *, table: bool = False) -> Rows:
     """The rows of the dataset `route` answers with `response`, after checking that each is a flat row of columns
-    Arrow holds."""
+    Arrow holds; with `table`, rows of an `api.Table`, which declare no value constraints, since no row is checked by
+    itself."""
     kind = strict.bare(response)
     arguments = [argument for argument in get_args(kind) if argument is not Ellipsis]
     model = strict.bare(arguments[0]) if get_origin(kind) in {list, tuple} and len(arguments) == 1 else None
@@ -89,13 +91,17 @@ def rows(response: object, route: str) -> Rows:
     if model.model_computed_fields:
         msg = f"{route}'s dataset rows, {model.__qualname__}, compute {', '.join(model.model_computed_fields)}, which no column holds: make each a field"
         raise DeclarationError(msg)
-    columns = tuple(_column(route, model, name, field) for name, field in model.model_fields.items() if field.exclude is not True)
+    columns = tuple(_column(route, model, name, field, table=table) for name, field in model.model_fields.items() if field.exclude is not True)
     return Rows(model, columns, TypeAdapter(cast("type[Sequence[BaseModel]]", kind)))  # a value's type, which ty cannot read as one
 
 
-def _column(route: str, model: type[BaseModel], name: str, field: FieldInfo) -> Column:
+def _column(route: str, model: type[BaseModel], name: str, field: FieldInfo, *, table: bool) -> Column:
     where = f"{route}'s dataset column {model.__qualname__}.{name}"
-    annotation, nullable, _ = _unwrapped(field.annotation, list(field.metadata))
+    annotation, nullable, metadata = _unwrapped(field.annotation, list(field.metadata))
+    if table and (constraints := [found for found in metadata if _constrains(found)]):
+        fix = "drop the constraint, and keep the rule in the domain or the query"
+        msg = f"{where} declares {', '.join(repr(found) for found in constraints)}, and an api.Table is checked by its columns' types, never row by row: {fix}"
+        raise DeclarationError(msg)
     key = field.serialization_alias or field.alias or name
     if (choice := _choice(where, annotation)) is not None:
         return Column(key, name, "utf8", nullable, enum=choice)
@@ -108,6 +114,11 @@ def _column(route: str, model: type[BaseModel], name: str, field: FieldInfo) -> 
         msg = f"{where} is {strict.named(annotation)}, which Arrow's columns do not hold: give it str, float, bool, date, AwareDatetime, UUID, a Literal or an Enum of strings, or T | None"
         raise DeclarationError(msg)
     return Column(key, name, kind, nullable or kind == "float64", text=isinstance(annotation, type) and issubclass(annotation, UUID))
+
+
+def _constrains(metadata: object) -> bool:
+    """Whether a field's metadata is a value constraint, such as `Field(gt=0)`'s or a pattern's."""
+    return isinstance(metadata, annotated_types.BaseMetadata) or type(metadata).__name__ == "_PydanticGeneralMetadata"
 
 
 def _unwrapped(annotation: object, metadata: list[object]) -> tuple[object, bool, list[object]]:

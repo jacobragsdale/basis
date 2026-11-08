@@ -73,7 +73,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.routing import Route as StarletteRoute
 
-from basis.api import strict
+from basis.api import strict, tables
 from basis.api.compute import Compute, ComputeFunction
 from basis.api.dataset import Rows, rows
 from basis.api.errors import Answerable, DeclarationError, DomainError, Error, NotReadyError
@@ -143,6 +143,8 @@ class Route:
     """What it reads from a request, strictly."""
     rows: Rows | None = field(init=False)
     """The columns of the dataset it answers; None for a route that answers no dataset, as its `dataset=` declares."""
+    table: bool = field(init=False)
+    """Whether it answers an `api.Table[Row]`, a frame or an Arrow table, rather than rows its handler returns as models."""
 
     def __post_init__(self, dataset: bool) -> None:
         if not self.path.startswith("/"):
@@ -170,7 +172,12 @@ class Route:
             msg = f"{self.name}'s deadline is {deadline!r}: give it deadline_s, the seconds the route has to answer, above 0"
             raise DeclarationError(msg)
         _check_response(self)
-        object.__setattr__(self, "rows", rows(self.response, self.name) if dataset else None)
+        table_row = tables.row_of(self.response)
+        object.__setattr__(self, "table", table_row is not None)
+        if table_row is not None:
+            object.__setattr__(self, "rows", rows(list[table_row], self.name, table=True))
+        else:
+            object.__setattr__(self, "rows", rows(self.response, self.name) if dataset else None)
         object.__setattr__(self, "errors", _declared_errors(self.name, self.errors))
         for path, asked in _asked_within(handler, (), set()):
             msg = (

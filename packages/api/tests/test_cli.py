@@ -232,4 +232,4 @@ def test_a_reply_that_is_not_json_is_one_error_line_with_its_status_and_type(rep
     assert basis(repo, "call", "plain", "{}", "--real", "--service", f"{__name__}:PLAIN") == 1
     out, err = capsys.readouterr()
     assert out == ""
-    assert err.splitlines()[-1] == "ERROR: plain answered 200 with text/plain; charset=utf-8, not JSON: basis call prints JSON alone: serve the API with basis dev, and request the route there"
+    assert err.splitlines()[-1] == "ERROR: plain answered 200 with text/plain; charset=utf-8, not JSON: basis call gives JSON alone, so serve the API with basis dev, and request the route there"

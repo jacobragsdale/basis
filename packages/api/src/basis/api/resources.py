@@ -50,7 +50,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
-from typing import Annotated, Generic, Literal, Protocol, TypeAliasType, TypeVar, get_args, get_origin
+from typing import TYPE_CHECKING, Annotated, Generic, Literal, Protocol, TypeAliasType, TypeVar, get_args, get_origin
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -60,6 +60,9 @@ from basis.api.errors import DeclarationError
 from basis.core import resources as core
 from basis.core.resources import NAME, Body, ClockResource, HttpMethod, HttpResource, IdsResource, Query, QueryValue
 from basis.core.settings import LEDGER as TABLE
+
+if TYPE_CHECKING:
+    import pyarrow as pa
 
 __all__ = [
     "NAME", "TABLE", "TABLE_LENGTH", "Bind", "Body", "Cache", "CacheResource", "Client", "Clock", "ClockResource", "DatabaseResource", "HttpMethod",
@@ -274,6 +277,11 @@ class Reader(Protocol):
 
     async def fetch_one[R](self, row: type[R], sql: str, /, **binds: Bind) -> R | None:
         """The one row a query returns, or None when it returns none; more than one is an error."""
+        ...
+
+    async def fetch_table(self, row: type[BaseModel], sql: str, /, **binds: Bind) -> pa.Table:
+        """A query's rows as the Arrow table of `row`'s columns, read straight from the driver and checked once against
+        them, never row by row, as a route that answers `api.Table[Row]` returns: see `basis.api.tables`."""
         ...
 
 

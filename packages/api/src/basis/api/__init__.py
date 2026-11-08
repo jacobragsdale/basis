@@ -55,12 +55,14 @@ from basis.api.identity import SignInRequiredError, User
 from basis.api.resources import Bind, Cache, Client, Clock, Ids, Outbox, Reader, Resource, Writer, cache, clock, database, http, ids, outbox
 from basis.api.service import Route, Service, delete, get, given, load, patch, post, put
 from basis.api.settings import Serve, Settings, SettingsError
+from basis.api.tables import Table
 from basis.core.errors import BadReply, Conflict, Denied, Failed, NotFound, Rejected, ServiceError, Timeout, Unavailable
 from basis.core.settings import Traces
 
 if TYPE_CHECKING:
     from basis.api.app import App, build
-    from basis.api.server import serve
+    from basis.api.call import answer as call_route
+    from basis.api.server import serve, serve_on_fakes
 
 __all__ = [
     "App",
@@ -94,6 +96,7 @@ __all__ = [
     "Settings",
     "SettingsError",
     "SignInRequiredError",
+    "Table",
     "Timeout",
     "Traces",
     "Unavailable",
@@ -102,6 +105,7 @@ __all__ = [
     "Writer",
     "build",
     "cache",
+    "call_route",
     "clock",
     "compute",
     "database",
@@ -118,6 +122,7 @@ __all__ = [
     "post",
     "put",
     "serve",
+    "serve_on_fakes",
 ]
 
 
@@ -126,9 +131,13 @@ def __getattr__(name: str) -> object:
         from basis.api import app  # noqa: PLC0415 -- the app's machinery loads on first use, which a service's modules never make
 
         return getattr(app, name)
-    if name == "serve":
+    if name in {"serve", "serve_on_fakes"}:
         from basis.api import server  # noqa: PLC0415 -- uvicorn loads on first use
 
-        return server.serve
+        return getattr(server, name)
+    if name == "call_route":
+        from basis.api.call import answer  # noqa: PLC0415 -- the app loads on first use
+
+        return answer
     msg = f"module 'basis.api' has no attribute {name!r}"
     raise AttributeError(msg)

@@ -17,8 +17,11 @@ from collections.abc import Mapping, Sequence
 from enum import Enum
 
 import pyarrow as pa
+import pyarrow.compute as pc
+import pydantic_core
 
 from basis.api.dataset import Column, Kind, Rows
+from basis.core import frames
 
 MEDIA_TYPE = "application/vnd.apache.arrow.stream"
 _JSON_RANGES = frozenset({"application/json", "application/*", "*/*"})
@@ -76,3 +79,83 @@ def _value(column: Column, value: object) -> object:
     if isinstance(value, Enum):
         return value.value
     return str(value) if column.text else value
+
+
+class TableError(ValueError):
+    """A table a route answers, or a query's, that does not hold its row's columns: a defect, a 500."""
+
+
+def conform(rows: Rows, found: object, what: str) -> pa.Table:
+    """`found`, a pandas frame or an Arrow table, as the Arrow table of `rows`'s columns, checked once: each column by
+    its row's field's name or its JSON name, in any case a database gives it; numbers as floats, each the nearest
+    double, through text for a decimal; NaN and ±inf as null; a column that may not be null holding none; and every
+    time with its zone, in UTC. A column missing, one the row does not declare, or one of another type raises
+    `TableError`, naming it."""
+    table = _arrow(found, what)
+    declared = schema(rows)
+    names = {name.lower(): name for name in table.column_names}
+    if len(names) != len(table.column_names):
+        msg = f"{what} names a column twice, in any case: {table.column_names}"
+        raise TableError(msg)
+    wanted = {column.attribute.lower(): column for column in rows.columns} | {column.name.lower(): column for column in rows.columns}
+    if extra := sorted(name for lowered, name in names.items() if lowered not in wanted):
+        msg = f"{what} has columns {rows.model.__qualname__} does not declare: {', '.join(extra)}: drop them, or declare them as its fields"
+        raise TableError(msg)
+    arrays: list[pa.ChunkedArray | pa.Array] = []
+    for column, field in zip(rows.columns, declared, strict=True):
+        given = names.get(column.name.lower()) or names.get(column.attribute.lower())
+        if given is None:
+            if table.num_columns == 0 and table.num_rows == 0:  # no rows, as a fake or a query of nothing gives them
+                arrays.append(pa.array([], field.type))
+                continue
+            msg = f"{what} has no column {column.name}, which {rows.model.__qualname__} declares"
+            raise TableError(msg)
+        arrays.append(_column(table.column(given), column, field, what))
+    return pa.Table.from_arrays(arrays, schema=declared)
+
+
+def _arrow(found: object, what: str) -> pa.Table:
+    if isinstance(found, pa.Table):
+        return found
+    if type(found).__module__.partition(".")[0] == "pandas" and type(found).__name__ == "DataFrame":
+        return pa.Table.from_pandas(found, preserve_index=False)
+    msg = f"{what} is a {type(found).__qualname__}: return a pandas DataFrame or a pyarrow Table of the row's columns"
+    raise TableError(msg)
+
+
+def _column(values: pa.ChunkedArray, column: Column, field: pa.Field, what: str) -> pa.ChunkedArray:
+    where = f"{what}'s column {column.name}"
+    if column.kind == "float64":
+        if not (pa.types.is_floating(values.type) or pa.types.is_integer(values.type) or pa.types.is_decimal(values.type) or pa.types.is_null(values.type)):
+            msg = f"{where} is {values.type}, and the row declares a float"
+            raise TableError(msg)
+        floats = frames.floats(pa.table({column.name: values}), what=what).column(0) if not pa.types.is_null(values.type) else values.cast(pa.float64())
+        if pa.types.is_floating(floats.type) and floats.type != pa.float64():
+            floats = pc.cast(pc.cast(floats, pa.string()), pa.float64())  # a float32 through its shortest text, so 0.1 stays 0.1
+        return pc.call_function("if_else", [pc.call_function("is_finite", [floats]), floats, pa.scalar(None, pa.float64())])  # by name: pyarrow's stubs list neither
+    if column.kind == "timestamp" and pa.types.is_timestamp(values.type) and values.type.tz is None:
+        msg = f"{where} holds times without their zone, and every time basis gives carries one: give them a zone, as UTC"
+        raise TableError(msg)
+    try:
+        cast = values.cast(field.type, safe=True)
+    except (pa.ArrowInvalid, pa.ArrowNotImplementedError) as error:
+        msg = f"{where} is {values.type}, which is not {field.type}, as the row declares: {error}"
+        raise TableError(msg) from error
+    if not field.nullable and cast.null_count:
+        msg = f"{where} holds {cast.null_count} nulls, and the row's field may not be None"
+        raise TableError(msg)
+    return cast
+
+
+def write(table: pa.Table) -> bytes:
+    """`table` as an Arrow IPC stream."""
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, table.schema) as writer:
+        writer.write_table(table)
+    return bytes(sink.getvalue())
+
+
+def as_json(table: pa.Table) -> bytes:
+    """`table` as the JSON a dataset route answers: a list of rows, a time with its offset, a date as its ISO date, and
+    null where a value is missing, written by pydantic's serializer with no model to validate."""
+    return pydantic_core.to_json(table.to_pylist())
