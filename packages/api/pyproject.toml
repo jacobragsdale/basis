@@ -13,6 +13,9 @@ dependencies = [
     "uvicorn>=0.54.0",
 ]
 
+[project.scripts]
+basis-api = "basis.api.cli:scaffold"  # `uvx basis-api new app NAME` makes an API repo, with a job beside it
+
 [project.entry-points."basis.verbs"]
 api = "basis.api.cli:part"  # basis-api's verbs, in a repo whose [tool.basis] parts include "api"
 

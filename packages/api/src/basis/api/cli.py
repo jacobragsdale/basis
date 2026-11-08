@@ -20,7 +20,9 @@ value the API needs, or a call whose response is an error. uvicorn loads when a 
 
 import argparse
 import json
+import logging
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from importlib.metadata import entry_points
 from pathlib import Path
@@ -29,7 +31,7 @@ from typing import Literal
 from basis.api import sync
 from basis.api.resources import DatabaseResource
 from basis.api.service import GROUP, load
-from basis.core import hooks
+from basis.core import command, hooks
 from basis.core.destination import Dialect
 from basis.core.sync import Problem
 from basis.core.verbs import Part, Runs, Shared, Verb, fail
@@ -180,4 +182,42 @@ def _ddl(args: DdlArgs) -> int:
             "declare one where a route sends a call after its commit, as api.database(NAME, ..., outbox=api.outbox(TABLE, ...)); an API's requests write no ledger",
         )
     sys.stdout.write("\n".join(outboxes.ddl(database, declared_outbox.table, args.dialect) for database, declared_outbox in declared))
+    return 0
+
+
+log = logging.getLogger(__name__)
+
+FIRST_JOB = "positions"
+"""The job `basis-api new app` makes beside the API, a copy of basis-job's example."""
+
+
+@dataclass(frozen=True)
+class NewArgs:
+    name: str
+    job: str | None
+    directory: Path
+    index: str | None
+    framework_path: Path | None
+
+
+def scaffold(argv: Sequence[str] | None = None) -> int:
+    """The `basis-api` console script, which `uvx basis-api new app NAME` runs."""
+    return command.standalone("basis-api", "Make a repo of a basis API and its jobs.", [Verb("new", "make an API repo: basis-api new app NAME [JOB]", _new_arguments, _new_from)], argv)
+
+
+def _new_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("what", metavar="app", choices=["app"], help="what to make: an app")
+    parser.add_argument("name", metavar="NAME", help="the app's name, and its repo's folder")
+    parser.add_argument("job", metavar="JOB", nargs="?", default=FIRST_JOB, help=f"the first job beside it, a copy of basis-job's example (default: {FIRST_JOB})")
+    parser.add_argument("--dir", type=Path, default=Path(), help="where to make the repo")
+    parser.add_argument("--index", help="the package index basis is published to, written into the repo")
+    parser.add_argument("--framework-path", type=Path, help="a checkout of basis, whose packages the repo installs editable")
+
+
+def _new_from(namespace: argparse.Namespace) -> int:
+    from basis.api import new  # noqa: PLC0415 -- the generator loads when the verb runs
+
+    args = NewArgs(namespace.name, namespace.job, namespace.dir, namespace.index, namespace.framework_path)
+    path = new.app(args.directory / args.name, args.name, args.job, index=args.index, framework_path=args.framework_path)
+    log.info("made %s: run `uv run basis check` in it", path)
     return 0
