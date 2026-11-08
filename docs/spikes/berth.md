@@ -6,6 +6,13 @@ filesystem, the probes and the scheduled relay fit with no change on either side
 a fix on basis's side below; berth is unchanged. Run on 2026-11-07, by reading berth's docs and its renderer and by
 making a repo with the generator. Nothing was deployed: no cluster, Airflow or Control-M was reached.
 
+## Status
+
+Decided by t18 for the maintainer on 2026-11-07, and done: decision 1 (relative intervals, 95b3e9a), decision 2
+(`OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`, 2e8d7f3), fixes A and B (the generated READMEs' specs and the JSON
+secret, 6f0446c, which `berth check` passes, a26bf90), and fix C (`basis smoke --commit` and the pipeline stub,
+df57057).
+
 ## Versions
 
 basis at fef6930 (main), with a repo made by `uv run basis-api new app quote-board --framework-path .`; berth 0.1.0 at
