@@ -55,3 +55,22 @@ stages:
               repository: $(image)
               tags: $(Build.SourceVersion)
               arguments: --build-arg GIT_SHA=$(Build.SourceVersion)
+
+  - stage: smoke_qa
+    displayName: basis smoke --env qa, before promotion to prod
+    dependsOn: image
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: smoke
+        pool:
+          vmImage: ubuntu-latest  # STUB: the team's agent pool
+        steps:
+          - checkout: self
+          # STUB: the team's template that deploys the image to QA, before this check
+          - script: |
+              export PATH="$HOME/.local/bin:$PATH"
+              uv sync --locked
+              uv run --locked basis smoke --env qa
+            displayName: basis smoke --env qa
+            env:
+              BASIS_ENV: qa  # STUB: QA's settings, BASIS_SMOKE__URL among them, as the team's variable groups give them

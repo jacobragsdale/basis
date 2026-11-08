@@ -127,6 +127,9 @@ class Route:
     status: int = HTTPStatus.OK
     """The status of a response that succeeds."""
     dataset: InitVar[bool] = False
+    smoke: Mapping[str, object] | None = None
+    """A read-only example of a request, which `basis smoke` sends the deployed API and whose response it validates:
+    `{"path": {...}, "query": {...}, "headers": {...}}`, as `basis call` takes one; a GET's alone."""
     """Whether it answers a dataset, rows of one model, which it gives as Arrow when the request asks for it: see
     `dataset.py`. `rows` keeps what it declares."""
     name: str = field(init=False)
@@ -172,6 +175,7 @@ class Route:
             msg = f"{self.name}'s deadline is {deadline!r}: give it deadline_s, the seconds the route has to answer, above 0"
             raise DeclarationError(msg)
         _check_response(self)
+        _check_smoke(self)
         table_row = tables.row_of(self.response)
         object.__setattr__(self, "table", table_row is not None)
         if table_row is not None:
@@ -203,15 +207,32 @@ class Route:
 
 class _Declare(Protocol):
     def __call__(  # noqa: PLR0913 -- what a route declares, each by keyword
-        self, path: str, handler: FunctionType, *, deadline_s: float, response: object, errors: Sequence[type[Error]], status: int = HTTPStatus.OK, dataset: bool = False
+        self,
+        path: str,
+        handler: FunctionType,
+        *,
+        deadline_s: float,
+        response: object,
+        errors: Sequence[type[Error]],
+        status: int = HTTPStatus.OK,
+        dataset: bool = False,
+        smoke: Mapping[str, object] | None = None,
     ) -> Route: ...
 
 
 def _route(method: Method) -> _Declare:
     def declare(  # noqa: PLR0913 -- by keyword
-        path: str, handler: FunctionType, *, deadline_s: float, response: object, errors: Sequence[type[Error]], status: int = HTTPStatus.OK, dataset: bool = False
+        path: str,
+        handler: FunctionType,
+        *,
+        deadline_s: float,
+        response: object,
+        errors: Sequence[type[Error]],
+        status: int = HTTPStatus.OK,
+        dataset: bool = False,
+        smoke: Mapping[str, object] | None = None,
     ) -> Route:
-        return Route(method, path, handler, deadline_s, response, errors, status, dataset)
+        return Route(method, path, handler, deadline_s, response, errors, status, dataset, smoke)
 
     declare.__name__ = declare.__qualname__ = method.lower()
     declare.__doc__ = (
@@ -219,6 +240,18 @@ def _route(method: Method) -> _Declare:
         " with `dataset=True`, `response` is rows, which it answers as Arrow when the request asks for it."
     )
     return declare
+
+
+def _check_smoke(route: Route) -> None:
+    """That a route's read-only example is a GET's, and holds only what a request gives."""
+    if route.smoke is None:
+        return
+    if route.method != "GET":
+        msg = f"{route.name} declares a smoke example, and is a {route.method}: basis smoke sends read-only requests alone, so give the example to a GET"
+        raise DeclarationError(msg)
+    if not isinstance(route.smoke, Mapping) or (sorted(set(route.smoke) - {"path", "query", "headers"})):
+        msg = f"{route.name}'s smoke example is not a request: give a mapping of path, query and headers, as basis call takes one"
+        raise DeclarationError(msg)
 
 
 def _check_response(route: Route) -> None:

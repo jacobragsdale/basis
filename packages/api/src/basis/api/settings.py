@@ -7,6 +7,7 @@ and a missing or invalid one stops it there, with one line that names the variab
 
 import re
 from contextvars import ContextVar
+from pathlib import Path
 from typing import Annotated, Self, override
 
 from pydantic import Field, PrivateAttr, ValidationError
@@ -39,8 +40,20 @@ class Pool(Model):
     their deadlines. Each is a Python process of its own, with the service's compute modules imported."""
 
 
+class Smoke(Model):
+    """Where `basis smoke --env ENV` reaches the API as that environment serves it."""
+
+    url: str
+    """The base its document's paths are under there, as a client calls it: `https://qa.example.com/api`, where its
+    document is `openapi.json` and its readiness `health/ready`."""
+    ca_bundle: Path | None = None
+    """The certificates its TLS is checked against, where they are not the system's."""
+
+
 class Settings(core.Settings):
     serve: Serve = Field(default_factory=Serve)
+    smoke: Smoke | None = None
+    """Where `basis smoke` reaches the deployed API, in an environment's settings: `BASIS_SMOKE__URL`."""
     compute: Pool | None = None
     """The process pool, `BASIS_COMPUTE__WORKERS`, which a service whose routes ask for a compute function must give."""
     identity: Identity | None = None

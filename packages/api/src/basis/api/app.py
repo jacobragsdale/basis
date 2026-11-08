@@ -23,7 +23,7 @@
 
 import asyncio
 import logging
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import StrEnum
@@ -36,7 +36,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 from basis.api import errors, openapi, opened, origins, routes, tokens, ui
 from basis.api.fakes import Fakes
@@ -177,10 +177,23 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | 
             raise errors.NotReadyError(msg)
         return Health(status="ready")
 
-    app.add_api_route(f"{HEALTH}live", live, methods=["GET"], include_in_schema=False)
-    app.add_api_route(f"{HEALTH}ready", ready, methods=["GET"], include_in_schema=False)
+    _health(app, service, live, ready)
     _routes(app, service)
     return App(service, configured, app, lifecycle, provider)
+
+
+def _health(app: openapi.Application, service: Service, live: Callable[[], Awaitable[Health]], ready: Callable[[], Awaitable[Health]]) -> None:
+    """The health endpoints, and for an app that serves a UI, them and the document under /api too, the base its
+    document's paths are under, where `basis smoke` reaches them."""
+
+    async def document() -> JSONResponse:
+        return JSONResponse(app.openapi())
+
+    for prefix in ("", routes.API) if service.ui is not None else ("",):
+        app.add_api_route(f"{prefix}{HEALTH}live", live, methods=["GET"], include_in_schema=False)
+        app.add_api_route(f"{prefix}{HEALTH}ready", ready, methods=["GET"], include_in_schema=False)
+    if service.ui is not None:
+        app.add_api_route(f"{routes.API}/openapi.json", document, methods=["GET"], include_in_schema=False)
 
 
 def _routes(app: openapi.Application, service: Service) -> None:

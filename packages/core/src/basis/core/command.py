@@ -40,7 +40,7 @@ from basis.core.errors import BasisError
 from basis.core.logs import utc_now
 from basis.core.verbs import GROUP, Part, ProjectError, Runs, Shared, Verb, basis_table, error_line, fail, holding, not_a_table
 
-CORE = ("check", "review", "new", "sync", "upgrade", "doctor", "docs")
+CORE = ("check", "review", "new", "sync", "upgrade", "doctor", "docs", "smoke")
 """Core's verbs, which no part may add: in the order `basis --help` lists them. `check`, `review`, `sync`, `upgrade`
 and `doctor` are always listed, since every repo has basis's own files and gates, and each of the others when a
 declared part gives it something to do."""
@@ -308,6 +308,7 @@ def _core(repo: Repo) -> list[Verb]:
         "new": Verb("new", f"add a {' or a '.join(kinds)} to the repo", partial(_new_arguments, kinds), lambda n: _new(repo, kinds[str(n.kind)], str(n.name))),
         "sync": Verb("sync", "rewrite the repo's framework and agent files from the installed version", _sync_arguments, run_sync),
         "docs": Verb("docs", "list the docs of the installed parts, or print one", _docs_arguments, lambda n: _docs(_pages(repo.parts), n.page)),
+        "smoke": Verb("smoke", SMOKE, _smoke_arguments, lambda n: _smoke(repo, str(n.env))),
     }
     given = ALWAYS.union(*map(_gives, parts))
     return [offered[name] for name in CORE if name in given]
@@ -315,7 +316,7 @@ def _core(repo: Repo) -> list[Verb]:
 
 def _gives(part: Part) -> set[str]:
     """The core verbs `part` gives something to do, the shared verbs among them."""
-    fields = {"docs": part.docs is not None, "new": bool(part.new)}
+    fields = {"docs": part.docs is not None, "new": bool(part.new), "smoke": part.smoke is not None}
     shared: set[str] = set(_sides(part.runs)) if part.runs is not None else set()
     return {name for name, given in fields.items() if given} | shared
 
@@ -555,6 +556,26 @@ def _upgrade(repo: Repo) -> int:
         sys.stdout.write(f"{line}\n")
 
     return upgrade.upgrade(repo.root, packages, run=check.run_command, write=write)
+
+
+SMOKE = "check a deployed environment, after each deploy and from a desktop: an API's document, readiness and examples, and a job's dry run"
+
+
+def _smoke_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--env", metavar="ENV", choices=environments.NAMES, required=True, help=f"{', '.join(environments.NAMES)}: the environment to check")
+
+
+def _smoke(repo: Repo, env: str) -> int:
+    """`basis smoke --env ENV`: each declared part's checks of the environment, each problem one `ERROR` line."""
+    failures = 0
+    for name, part in repo.parts.items():
+        if part.smoke is None:
+            continue
+        problems = list(part.smoke(repo.root, env))
+        failures += sum(fail(*problem) for problem in problems)
+        if not problems:
+            log.info("the %s part's smoke checks of %s passed", name, env, extra={"part": name, "env": env})
+    return 1 if failures else 0
 
 
 DOCTOR = "check this desktop's uv, git, hooks, feed and settings, and with --env an environment's logins and run store, with the fix for each problem"

@@ -261,12 +261,12 @@ def add(app: FastAPI, service: Service, *, prefix: str = "") -> None:
     `prefix`: `API` in an app that serves a UI, and nothing in its document."""
     for route in service.routes:
         app.router.add_api_route(
-            prefix + route.path, route.handler, methods=[route.method], status_code=route.status, name=route.name, response_model=_documented(route),
+            prefix + route.path, route.handler, methods=[route.method], status_code=route.status, name=route.name, response_model=documented(route),
             responses=responses(route), route_class_override=route_class(route), generate_unique_id_function=_operation_id,
         )  # fmt: skip
 
 
-def _documented(route: Route) -> object:
+def documented(route: Route) -> object:
     """The response FastAPI documents for `route`: its rows' list for a route that answers an `api.Table`, whose JSON
     they are, and its response for any other."""
     return list[route.rows.model] if route.table and route.rows is not None else route.response  # ty: ignore[invalid-type-form] -- the row model, a value

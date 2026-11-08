@@ -613,3 +613,27 @@ def test_a_part_reads_its_table_as_basis_reads_the_parts(tmp_path: Path) -> None
     (folder / "pyproject.toml").write_text('[tool.basis]\nparts = ["alpha"]\nalpha = 1\n', encoding="utf-8")
     with pytest.raises(ProjectError, match=r"\[tool.basis\] alpha is not a table: give the alpha part's own as \[tool.basis.alpha\], or remove it$"):
         table(folder, "alpha")
+
+
+def test_smoke_runs_each_parts_checks_of_the_environment_and_fails_on_any(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    asked: list[tuple[Path, str]] = []
+
+    def checks(found: Path, env: str) -> list[tuple[str, str]]:
+        asked.append((found, env))
+        return [("the served document is another commit's", "deploy this commit")]
+
+    installed: dict[str, Callable[[], Part]] = {"alpha": lambda: Part(smoke=checks), "beta": lambda: Part(verbs=(verb("render"),))}
+    folder = repo(tmp_path, BOTH)
+    assert basis(folder, "smoke", "--env", "qa", installed=installed) == 1
+    assert asked == [(folder, "qa")]
+    assert error_line(capsys) == "ERROR: the served document is another commit's: deploy this commit"
+
+
+def test_smoke_needs_an_environment_and_a_part_that_smokes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    installed: dict[str, Callable[[], Part]] = {"alpha": lambda: Part(smoke=lambda _repo, _env: [])}
+    folder = repo(tmp_path)
+    assert basis(folder, "smoke", "--env", "qa", installed=installed) == 0
+    capsys.readouterr()
+    assert basis(folder, "smoke", installed=installed) == 2  # --env is required, as argparse says
+    capsys.readouterr()
+    assert basis(folder, "smoke", "--env", "qa", installed={"alpha": lambda: Part(verbs=(verb("serve"),))}) == 2  # no part smokes, so basis offers no smoke

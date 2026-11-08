@@ -86,6 +86,7 @@ def part() -> Part:
             ddl=Shared("print the CREATE TABLE of each outbox the service's databases declare", lambda n: _ddl(DdlArgs(n.name, "mssql" if n.dialect == "mssql" else "oracle")), _ddl_arguments),
         ),
         contract=_contract,
+        smoke=_smoke,
         checks=_checks,
     )
 
@@ -94,6 +95,12 @@ def _checks(repo: Path) -> list[Problem]:
     from basis.api import fuzz, layers  # noqa: PLC0415 -- grimp, FastAPI and Schemathesis load when the check runs, not for every `basis --help`
 
     return [*layers.problems(repo), *fuzz.problems()]
+
+
+def _smoke(repo: Path, env: str) -> list[Problem]:
+    from basis.api import smoke  # noqa: PLC0415 -- the client loads when the verb runs
+
+    return smoke.smoke(repo, env)
 
 
 def _contract(repo: Path) -> str | None:

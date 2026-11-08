@@ -22,6 +22,7 @@ from basis.core.interval import Interval
 from basis.core.settings import Settings
 from basis.core.snapshots import Snapshot
 from basis.core.storage import Root
+from basis.core.sync import Problem
 from basis.core.tables import Column
 from basis.core.verbs import Difference, Part, Regress, Regressed, Regressions, Runs, Shared, Verb, fail
 from basis.job import ddl, docs, new, qa, runs, sync
@@ -116,7 +117,14 @@ def part() -> Part:
             regressions=_regress_jobs,
         ),
         qa=qa.plan,
+        smoke=_smoke,
     )
+
+
+def _smoke(repo: Path, env: str) -> list[Problem]:
+    from basis.job import smoke  # noqa: PLC0415 -- the databases load when the verb runs
+
+    return smoke.smoke(repo, env)
 
 
 def scaffold(argv: Sequence[str] | None = None) -> int:
