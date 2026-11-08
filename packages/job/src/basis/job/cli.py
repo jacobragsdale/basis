@@ -12,13 +12,14 @@ import os
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from basis.core import command, environments, logs, snapshots
+from basis.core import command, environments, interval, logs, snapshots
 from basis.core.destination import Dialect
 from basis.core.errors import BasisError, deliberate
-from basis.core.interval import Interval
+from basis.core.interval import Interval, Relative
 from basis.core.settings import Settings
 from basis.core.snapshots import Snapshot
 from basis.core.storage import Root
@@ -39,7 +40,8 @@ FIRST_JOB = "positions"
 class RunArgs:
     job: str
     params: Path
-    interval: Interval | None
+    interval: Interval | Relative | None
+    """The interval `--interval` gives: dates or instants, or relative to the run's start, resolved in the job's calendar."""
     data: Path | None
     labels: dict[str, str]
     publish: bool
@@ -138,16 +140,18 @@ def _run_from(n: argparse.Namespace) -> int:
 
 def _run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--params", type=command.existing_file, required=True, help="the params JSON file")
-    parser.add_argument("--interval", type=_interval, help="START..END, dates or ISO datetimes with an offset")
+    parser.add_argument(
+        "--interval", type=_interval, help="START..END of dates or ISO datetimes with an offset; or, in the job's CALENDAR, previous-business-day, today, yesterday, previous-month, or today-7d..today"
+    )
     parser.add_argument("--data", type=command.existing_folder, help="a folder of files that replace the datasets they name")
     parser.add_argument("--label", type=command.label, action="append", default=[], help="KEY=VALUE, recorded in the run's manifest; repeatable")
     parser.add_argument("--publish", action="store_true", help="write the changes to their databases, if every check passes")
     parser.add_argument("--again", action="store_true", help="publish a plain insert for an interval the ledger has already")
 
 
-def _interval(text: str) -> Interval:
+def _interval(text: str) -> Interval | Relative:
     try:
-        return Interval.parse(text)
+        return interval.given(text)
     except ValueError as error:  # argparse prints an ArgumentTypeError's message, and only a generic one for a ValueError
         raise argparse.ArgumentTypeError(str(error)) from error
 
@@ -184,6 +188,11 @@ def _new_from(namespace: argparse.Namespace) -> int:
     return _new(NewArgs(namespace.what, namespace.name, namespace.job, namespace.dir, namespace.index, namespace.framework_path))
 
 
+def _now() -> datetime:
+    """The moment a run starts, which a relative interval is resolved at."""
+    return datetime.now(UTC)
+
+
 def _run(args: RunArgs) -> int:
     job = jobs.load(args.job)
     logs.include(job.module.partition(".")[0])
@@ -191,7 +200,8 @@ def _run(args: RunArgs) -> int:
     if args.publish:
         environment.refuse_writes(f"basis run {job.name} --publish")
     settings = environment.settings
-    request = runs.Request(args.params, args.interval, args.data, args.labels, publish=args.publish, again=args.again, git_sha=os.environ.get("BASIS_GIT_SHA"))
+    given = args.interval.resolve(_now(), job.calendar, job=job.name) if isinstance(args.interval, Relative) else args.interval
+    request = runs.Request(args.params, given, args.data, args.labels, publish=args.publish, again=args.again, git_sha=os.environ.get("BASIS_GIT_SHA"))
     result = runs.run(job, settings, request, snapshot_root=settings.snapshots(), environment=environment.name)
     return fail(*found) if (found := runs.failure_of(result.record, publish=args.publish)) is not None else 0
 

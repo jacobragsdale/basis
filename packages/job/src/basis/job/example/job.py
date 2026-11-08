@@ -12,6 +12,9 @@ import basis.job as etl
 
 from basis.job.example.rows import Account, AccountActivity, DailyPosition, Trade
 
+CALENDAR = etl.calendar("sifma-us")
+"""The bond market's business days, which a scheduled run's `--interval previous-business-day` is resolved in."""
+
 
 class Params(etl.Params):
     include_closed_accounts: bool = False

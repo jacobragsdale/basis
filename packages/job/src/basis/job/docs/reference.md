@@ -15,6 +15,7 @@ not listed is named by its module path. The module exports:
 | `Outputs` | yes | A subclass of `etl.Outputs`: one `Table` attribute per table written. |
 | `transform(inputs, params)` | yes | Returns an instance of `Outputs`, with every declared output by name. |
 | `check(inputs, outputs, params)` | no | Returns a list of reasons not to write; an empty list writes. |
+| `CALENDAR` | no | The job's business days, as `CALENDAR = etl.calendar("sifma-us")`, which a relative `--interval` resolves in (see [Interval](#interval)). |
 
 The module, and everything it imports, must not reach a database driver, an HTTP client, storage, pyarrow, or the run
 loop's modules; the contract tests list the import chain if it does. `main.py` and tests are not job code.
@@ -213,6 +214,22 @@ one JSON file of params. A field's docstring is its description in `basis descri
 `2026-11-05..2026-11-06` or `2026-11-05T06:00Z..2026-11-05T07:00Z`. A job that has no notion of an interval runs
 without one.
 
+`basis run --interval` also takes an interval relative to the moment the run starts, so a scheduler's command never
+changes. It resolves in the zone and business days of the job's `CALENDAR`, which it needs, to dates, and the run's
+manifest records those dates, so `replay` and `regress` rerun exactly the interval it ran for. On Tuesday 2026-11-10 in
+New York, with `sifma-us`:
+
+| Given | Resolves to |
+|---|---|
+| `today` | `2026-11-10..2026-11-11` |
+| `yesterday` | `2026-11-09..2026-11-10` |
+| `previous-business-day` | `2026-11-09..2026-11-10`; on a Monday, the Friday before, or the last business day before it |
+| `previous-month` | `2026-10-01..2026-11-01` |
+| `today-7d..today` | `2026-11-03..2026-11-10`: each end is `today`, `today-Nd` (N days before), `today-Nbd` (N business days before) or a date |
+
+A business day before today is counted from today, which need not be one: on a Saturday, `today-1bd` is the Friday.
+`etl.run` and the QA tier take dates only.
+
 ## Calendars
 
 `etl.calendar(NAME)` is a business-day calendar, which a transform or a check calls as it is, since it is data in basis
@@ -265,7 +282,7 @@ basis's.
 | `basis review [--commit REF]` | Prints, as Markdown for a pull request's description, what the latest `basis check --full` of `REF` (default `HEAD`) found: the outputs `regress` saw change, the QA tier's runs, the mutants that survived, the basis versions, and the commit. Exits 1 when no check of the commit is recorded in this clone, or when it failed. |
 | `basis doctor [--env ENV]` | Checks this desktop, on Windows and in WSL, in a repo or outside one: uv and its version, git, that the clone runs the repo's hooks, the feed (the default index of the user's `uv.toml`, which must be the repo's index where `pyproject.toml` names one), and the settings: the process's, and the user's `qa.env` where the repo declares a QA tier. With `--env`, also where that environment's settings come from, whether each database's read login, and its write login where it has one, answers a query that reads no table, whether its run store is reachable, and, in prod, whether this machine may write. Prints `ok:` for each check passed and one `ERROR` line, ending with its fix, for each problem. |
 | `basis upgrade` | With nothing uncommitted, relocks basis's packages within what `pyproject.toml` allows, runs `basis sync` and `basis check --full --no-qa` with the newly locked version, and prints each package's version before and after and each file it changed. The QA tier runs when the upgrade is committed and pushed, so QA publishes it once, with a record for `basis review`. |
-| `basis run JOB --env ENV --params FILE [--interval START..END] [--data DIR] [--label KEY=VALUE]... [--publish] [--again]` | Runs a job in an environment (see [Environments](#environments)), saves its snapshot, and with `--publish` writes its changes, which prod refuses unless the deployment allows it. `--again` publishes an `Append()` table for an interval the ledger already has. |
+| `basis run JOB --env ENV --params FILE [--interval INTERVAL] [--data DIR] [--label KEY=VALUE]... [--publish] [--again]` | Runs a job in an environment (see [Environments](#environments)), saves its snapshot, and with `--publish` writes its changes, which prod refuses unless the deployment allows it. `--again` publishes an `Append()` table for an interval the ledger already has. |
 | `basis replay [JOB] RUN_ID --env ENV [--params FILE]` | Runs a saved run's transform again on its inputs; prints the replay's status, reasons and differences as JSON. Without `JOB`, the run is found by its id alone. |
 | `basis resume [JOB] RUN_ID --env ENV [--again]` | Writes a partly published run's changes to each database whose ledger lacks the run, told `--again` if the run was, or if given now. Without `JOB`, the run is found by its id alone. |
 | `basis regress [JOB] (--env ENV \| --snapshots ROOT) [--last N] [--label KEY=VALUE]...` | Replays the last `N` (default 10) published runs of `JOB`, or of every job the repo lists, whose labels include every `--label`, from the environment's run store or `ROOT`; prints each run's job, reasons and differences as JSON: rows added, removed and changed, by column, and each column added, removed or retyped, the rows comparing by the columns both runs hold alike. |

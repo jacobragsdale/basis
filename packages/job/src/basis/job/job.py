@@ -1,6 +1,7 @@
 """Finding a job and reading its contract. A job is a module, its `job.py`, that exports `Params`, `Inputs`, `Outputs`
 and `transform(inputs, params) -> Outputs`, and may export `check(inputs, outputs, params) -> list[str]`, its own
-reasons not to write. A repo lists each job as an entry point in the `basis.jobs` group, whose name is the
+reasons not to write, and `CALENDAR`, the business days it runs on, as `CALENDAR = etl.calendar("sifma-us")`, which a
+relative `--interval` such as `previous-business-day` is resolved in (`basis.core.interval`). A repo lists each job as an entry point in the `basis.jobs` group, whose name is the
 job's name in snapshots, logs and the ledger; a module that is not listed is named by its module path."""
 
 import importlib
@@ -11,6 +12,7 @@ from importlib.metadata import entry_points
 from pathlib import Path
 from types import ModuleType
 
+from basis.core.calendars import Calendar
 from basis.core.errors import BasisError
 from basis.job.inputs import Inputs
 from basis.job.outputs import Outputs
@@ -34,6 +36,8 @@ class Job:
     check: Callable[..., object] | None
     directory: Path
     """The folder of the job's module, which its params and fixture paths are relative to."""
+    calendar: Calendar | None = None
+    """The business days the job runs on, its module's `CALENDAR`, which a relative interval resolves in."""
 
     def run_transform(self, inputs: Inputs, params: Params) -> Outputs:
         outputs = self.transform(inputs, params)
@@ -102,6 +106,10 @@ def read(module: ModuleType) -> Job:
     if module.__file__ is None:
         msg = f"{where} is not a file"
         raise JobError(msg)
+    calendar = getattr(module, "CALENDAR", None)
+    if calendar is not None and not isinstance(calendar, Calendar):
+        msg = f'{where}\'s CALENDAR is {calendar!r}, not a calendar: give one by name, as CALENDAR = etl.calendar("sifma-us")'
+        raise JobError(msg)
     return Job(
         name=names.get(where, where),
         module=where,
@@ -111,4 +119,5 @@ def read(module: ModuleType) -> Job:
         transform=transform,
         check=check,
         directory=Path(module.__file__).resolve().parent,
+        calendar=calendar,
     )

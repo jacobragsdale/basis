@@ -96,6 +96,21 @@ def test_a_run_reads_the_user_s_file_for_the_environment_it_names(repo: Path, tm
     assert not (tmp_path / "snapshots").exists()
 
 
+def test_a_scheduled_run_resolves_a_relative_interval_in_the_job_s_calendar_and_records_the_dates(repo: Path, snapshot_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "_now", lambda: datetime(2026, 11, 6, 15, tzinfo=UTC))  # Friday in New York, the day after the fixture's trades
+    assert basis(repo, *RUN[:-1], "previous-business-day") == 0
+    [manifest] = snapshot_root.rglob("*.json")
+    assert json.loads(manifest.read_text(encoding="utf-8"))["interval"] == "2026-11-05..2026-11-06"  # the dates, as a replay reads them
+
+
+def test_a_relative_interval_for_a_job_with_no_calendar_is_one_error_line(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delattr(job, "CALENDAR")
+    assert basis(repo, *RUN[:-1], "today") == 1
+    assert only_error(capsys.readouterr().err) == (
+        'ERROR: basis.job.example.job declares no calendar, which --interval today is resolved in: declare one in the job\'s module, as CALENDAR = etl.calendar("sifma-us"), or give dates'
+    )
+
+
 @pytest.mark.parametrize("verb", [[*RUN, "--publish"], ["resume", "basis.job.example.job", "0193f2d4-0000-7000-8000-000000000001"]], ids=["run --publish", "resume"])
 def test_a_run_that_would_write_to_prod_is_refused_unless_the_deployment_sets_the_flag(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, verb: list[str]) -> None:
     monkeypatch.setenv("BASIS_ENV", "prod")
