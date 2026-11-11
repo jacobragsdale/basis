@@ -10,6 +10,7 @@ from basis.api.service import load
 from basis.api.version import VERSION
 from basis.core.errors import BasisError
 from basis.core.sync import AgentFiles, SyncError
+from basis.core.tools import Tools
 
 _PACKAGE = Path(__file__).parent
 DOCUMENT = "openapi.json"
@@ -24,7 +25,11 @@ log = logging.getLogger(__name__)
 
 def agent_files() -> AgentFiles:
     block = (_PACKAGE / "templates" / "agents.md").read_text(encoding="utf-8").replace("{version}", VERSION)
-    return AgentFiles("basis-api", block, {}, image=IMAGE, made={DOCUMENT: document})
+    return AgentFiles("basis-api", block, {}, image=IMAGE, made={DOCUMENT: document}, tools=TOOLS)
+
+
+TOOLS = Tools(testpaths=("tests", "*/tests"))
+"""basis-api's share of a repo's tool settings: an API's tests are in its package's `tests/`, by layer."""
 
 
 def document() -> str:

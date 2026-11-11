@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from basis.core import calendars, gates, hooks, hygiene, sync
+from basis.core import calendars, gates, hooks, hygiene, sync, tools
 from basis.core.errors import BasisError
 from basis.core.sync import AgentFiles, Problem
 from basis.core.verbs import Part, error_line, fail
@@ -68,12 +68,24 @@ def check(repo: Path, files: Sequence[AgentFiles], *, run: Runner, staged: bool 
         failures += fail(f"{names} {'does' if len(stale) == 1 else 'do'} not match what the installed basis writes", "run `uv run basis sync`, which rewrites or removes each")
     if (found := hooks.problem(repo)) is not None:
         failures += fail(*found)
+    if tools.owned([part.tools for part in files]) and (pyproject := repo / "pyproject.toml").is_file():
+        for name in tools.tables(pyproject):
+            file = tools.FILES[tools.OWNED.index(name)]
+            failures += fail(
+                f"pyproject.toml has [tool.{name}], and basis writes the repo's {name} settings in {file}, which would read beside it",
+                "delete the table, and give each exception the repo needs as [tool.basis] exceptions, with its reason",
+            )
     failures += sum(_part_checks(repo, checks))
     failures += sum(fail(*problem) for problem in gates.mocks(repo))
     failures += sum(fail(*problem) for problem in gates.rounding(repo))
     floor, missing = gates.floor(repo), gates.installed()
     if isinstance(floor, tuple):
         failures += fail(*floor)
+    elif floor < tools.FLOOR and tools.owned([part.tools for part in files]) and not _floor_excepted(repo):
+        failures += fail(
+            f"[tool.basis] coverage is {floor}, under the {tools.FLOOR} basis holds a repo's unit tests to",
+            f'raise it, or say why as [tool.basis] exceptions, {{ rule = "{tools.COVERAGE}", path = ".", reason = "..." }}, which basis review lists',
+        )
     elif missing is not None:
         failures += fail(*missing)
     if run(LOCK.argv, repo) != 0:
@@ -88,6 +100,15 @@ def check(repo: Path, files: Sequence[AgentFiles], *, run: Runner, staged: bool 
     if code != 0 and not tested.explained:
         failures += fail(PYTEST.reason, PYTEST.fix)
     return 1 if failures else 0
+
+
+def _floor_excepted(repo: Path) -> bool:
+    """Whether the repo gives its reason for a coverage floor under basis's; an exceptions list it cannot read is
+    `basis sync`'s problem to report, and lowers nothing."""
+    try:
+        return any(exception.rule == tools.COVERAGE for exception in tools.exceptions(repo / "pyproject.toml"))
+    except tools.ToolsError:
+        return False
 
 
 def checks_of(parts: Mapping[str, Part]) -> list[tuple[str, Callable[[Path], Sequence[Problem]]]]:

@@ -26,6 +26,13 @@ excel = [  # basis.core.folders reads and writes workbooks with pandas, through 
     "xlsxwriter>=3.3.1",  # to_excel's engine for .xlsx
 ]
 
+dev = [  # the tools `basis check` runs, at the versions basis.core.tools names, which a repo takes through its parts' dev extra, so they move with basis
+    "mutmut>=3.8.1; sys_platform == 'linux'",  # `basis check --full`'s mutants, which need fork: WSL or Linux
+    "pytest>=9.2.0",
+    "pytest-cov>=7.1.0",  # the coverage `basis check` holds the unit tests to
+    "ruff==0.17.4",  # basis.core.tools.RUFF
+    "ty==0.0.99",  # basis.core.tools.TY: its diagnostics may change between any two versions
+]
 mongo = [  # basis.core.mongo reads and upserts documents through it: a repo that does takes basis-core[mongo]
     "pymongo>=4.19.0",
 ]

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from basis.core import sync as core_sync
 from basis.core.sync import AgentFiles
+from basis.core.tools import Tools
 from basis.job.version import VERSION
 
 _PACKAGE = Path(__file__).parent
@@ -13,7 +14,12 @@ _PACKAGE = Path(__file__).parent
 
 def agent_files() -> AgentFiles:
     block = (_PACKAGE / "templates" / "agents.md").read_text(encoding="utf-8").replace("{version}", VERSION)
-    return AgentFiles("basis-job", block, core_sync.skills(_PACKAGE / "skills"), image=IMAGE, formerly=("etl-framework",), retired=RETIRED)
+    return AgentFiles("basis-job", block, core_sync.skills(_PACKAGE / "skills"), image=IMAGE, formerly=("etl-framework",), retired=RETIRED, tools=TOOLS)
+
+
+TOOLS = Tools(testpaths=("tests", "jobs"), per_file_ignores={"**/job.py": ("ARG001",)})
+"""basis-job's share of a repo's tool settings: a job's tests are in its folder of `jobs/`, and a job's hooks share
+one signature, so a hook may leave an argument unused."""
 
 
 IMAGE = "#   a job: run JOB --params jobs/JOB/params/default.json --interval START..END --publish\n"

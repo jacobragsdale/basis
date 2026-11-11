@@ -38,14 +38,8 @@ accruals = "accruals.service:service"
 [tool.basis]
 parts = ["api"]
 coverage = 90
-
-[tool.pytest.ini_options]
-addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration' -p no:randomly"
-testpaths = ["accruals"]
-xfail_strict = true
-filterwarnings = ["error"]
-markers = ["integration: needs a real database; excluded from the default run"]
 """
+"""An API repo's own: pytest's settings are basis's, in the pytest.ini `basis sync` writes."""
 
 
 class Steps:

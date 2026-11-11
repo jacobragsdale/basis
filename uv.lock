@@ -89,15 +89,26 @@ dependencies = [
     { name = "uvicorn" },
 ]
 
+[package.optional-dependencies]
+dev = [
+    { name = "basis-core", extra = ["dev"] },
+    { name = "hypothesis" },
+    { name = "schemathesis" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "basis-core", editable = "packages/core" },
+    { name = "basis-core", extras = ["dev"], marker = "extra == 'dev'", editable = "packages/core" },
     { name = "cryptography", specifier = ">=50.0.2" },
     { name = "fastapi", specifier = ">=0.162.0" },
+    { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.170.0" },
     { name = "pyarrow", specifier = ">=26.0.1" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.15.1" },
+    { name = "schemathesis", marker = "extra == 'dev'", specifier = ">=4.33.1" },
     { name = "uvicorn", specifier = ">=0.54.0" },
 ]
+provides-extras = ["dev"]
 
 [[package]]
 name = "basis-core"
@@ -120,6 +131,13 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+dev = [
+    { name = "mutmut", marker = "sys_platform == 'linux'" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+    { name = "ty" },
+]
 excel = [
     { name = "python-calamine" },
     { name = "xlsxwriter" },
@@ -133,6 +151,7 @@ requires-dist = [
     { name = "grimp", specifier = ">=3.19" },
     { name = "httpx2", specifier = ">=2.16.0" },
     { name = "mssql-python", specifier = ">=1.17.0" },
+    { name = "mutmut", marker = "sys_platform == 'linux' and extra == 'dev'", specifier = ">=3.8.1" },
     { name = "opentelemetry-api", specifier = ">=1.45.2" },
     { name = "opentelemetry-exporter-otlp-proto-common", specifier = ">=1.45.2" },
     { name = "opentelemetry-sdk", specifier = ">=1.45.2" },
@@ -142,12 +161,16 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.14.3" },
     { name = "pydantic-settings", specifier = ">=2.16.2" },
     { name = "pymongo", marker = "extra == 'mongo'", specifier = ">=4.19.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.2.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.1.0" },
     { name = "python-calamine", marker = "extra == 'excel'", specifier = ">=0.9.1" },
     { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = "==0.17.4" },
+    { name = "ty", marker = "extra == 'dev'", specifier = "==0.0.99" },
     { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2025.2" },
     { name = "xlsxwriter", marker = "extra == 'excel'", specifier = ">=3.3.1" },
 ]
-provides-extras = ["excel", "mongo"]
+provides-extras = ["excel", "dev", "mongo"]
 
 [[package]]
 name = "basis-job"
@@ -161,14 +184,21 @@ dependencies = [
     { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
 
+[package.optional-dependencies]
+dev = [
+    { name = "basis-core", extra = ["dev"] },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "basis-core", editable = "packages/core" },
+    { name = "basis-core", extras = ["dev"], marker = "extra == 'dev'", editable = "packages/core" },
     { name = "pandas", specifier = ">=3.1.1" },
     { name = "pydantic", specifier = ">=2.14.3" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2025.2" },
 ]
+provides-extras = ["dev"]
 
 [[package]]
 name = "basis-workspace"

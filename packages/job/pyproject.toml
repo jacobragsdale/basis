@@ -14,6 +14,9 @@ dependencies = [
     "tzdata>=2025.2; sys_platform == 'win32'",  # zoneinfo has no time zone database of its own on Windows
 ]
 
+[project.optional-dependencies]
+dev = ["basis-core[dev]"]  # what a repo's dev group takes, as basis-job[dev]: basis-core's tools, at the versions basis checks with
+
 [project.scripts]
 basis-job = "basis.job.cli:scaffold"  # `uvx basis-job new repo NAME` makes a job repo
 

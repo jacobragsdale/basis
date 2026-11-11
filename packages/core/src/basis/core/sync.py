@@ -46,8 +46,10 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
+from basis.core import tools
 from basis.core.errors import BasisError
 from basis.core.hooks import FOLDER, HOOKS
+from basis.core.tools import Tools
 
 MARKER = "managed by basis: `basis sync` rewrites it"
 """What a file basis writes carries in its first lines, in a comment of the file's own syntax, or for a skill, in its
@@ -131,6 +133,9 @@ class AgentFiles:
     retired: tuple[str, ...] = ()
     """Files and folders, relative to the repo, that an earlier version of the part wrote without `MARKER`, and this
     one does not write: `sync` removes them."""
+    tools: Tools | None = None
+    """The part's share of the repo's ruff, ty and pytest settings, which `sync` writes where every declared part
+    gives one (`basis.core.tools`); None leaves a repo of the part its own settings."""
     made: Mapping[str, Callable[[], str]] = field(default_factory=dict[str, Callable[[], str]])
     """Each file the part makes from the repo's own code, such as an API's `openapi.json`, by its path in the repo,
     `/`-separated, and the function that makes its text, whose first lines carry `MARKER`. Only `plan` calls it, once
@@ -225,6 +230,8 @@ def plan(repo: Path, parts: Sequence[AgentFiles]) -> Plan:
         repo / "CLAUDE.md": lambda: (CLAUDE_MD, not (repo / "CLAUDE.md").exists() or _read(repo / "CLAUDE.md").replace("\r\n", "\n") == CLAUDE_MD),
         repo / CLAUDE_SETTINGS: lambda: _claude_settings(repo / CLAUDE_SETTINGS),
     }
+    if tools.owned([files.tools for files in parts]):
+        made.update(_tool_files(repo, [files.tools for files in parts if files.tools is not None]))
     for files in parts:
         for name, text in files.skills.items():
             for path in (repo / folder / name / "SKILL.md" for folder in (SKILLS, CLAUDE_SKILLS)):
@@ -321,6 +328,24 @@ def _template(repo: Path, path: Path, template: str, image: str) -> Callable[[],
         return text, _carries_marker(path)
 
     return make
+
+
+def _tool_files(repo: Path, shares: Sequence[Tools]) -> dict[Path, Callable[[], tuple[str, bool]]]:
+    """`ruff.toml`, `ty.toml` and `pytest.ini`, from basis's settings, the parts' shares and the repo's exceptions; a
+    file of the repo's own at one of their paths is left alone, as any is."""
+
+    def made(name: str) -> Callable[[], tuple[str, bool]]:
+        def make() -> tuple[str, bool]:
+            try:
+                found = tools.exceptions(repo / "pyproject.toml") if (repo / "pyproject.toml").is_file() else []
+            except tools.ToolsError as error:
+                raise SyncError(str(error).rpartition(": ")[0], str(error).rpartition(": ")[2]) from error
+            text = {"ruff.toml": tools.ruff_toml(MARKER, shares, found), "ty.toml": tools.ty_toml(MARKER, found), "pytest.ini": tools.pytest_ini(MARKER, shares)}[name]
+            return text, _carries_marker(repo / name)
+
+        return make
+
+    return {repo / name: made(name) for name in tools.FILES}
 
 
 def stamped(text: str) -> str:

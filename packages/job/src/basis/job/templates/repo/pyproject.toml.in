@@ -32,55 +32,8 @@ module-root = ""
 
 {source}
 [dependency-groups]
-# pytest-cov measures the coverage `basis check` holds the unit tests to, and mutmut tests mutants in `basis check
-# --full`, which needs fork: WSL or Linux.
-dev = ["mutmut>=3.8.1; sys_platform == 'linux'", "pytest>=9.2.0", "pytest-cov>=7.1.0", "ruff==0.17.4", "ty==0.0.99"]
-
-[tool.ruff]
-line-length = 200
-required-version = ">=0.17.4"
-force-exclude = true
-show-fixes = true
-unsafe-fixes = false
-
-[tool.ruff.lint]
-select = ["ALL"]  # Every stable rule; preview rules stay off. Upgrades are deliberate because the version is pinned.
-ignore = [
-    "COM812",  # Conflicts with the formatter.
-    "ISC001",  # Conflicts with the formatter.
-    "S603",  # Flags every subprocess call; there is no fix, only review.
-    "TC001",  # Moving imports under TYPE_CHECKING breaks code that reads annotations at runtime.
-    "TC002",
-    "TC003",
-    "CPY001",  # A copyright header is a legal decision per repository, not a lint fix.
-    "D",  # Write a docstring only where it says what code and types cannot.
-]
-
-[tool.ruff.lint.per-file-ignores]
-"**/tests/**" = ["S101", "PLR2004", "DTZ001"]  # pytest's assert; literal expectations; a naive datetime is a database's value, in its column's zone
-"**/job.py" = ["ARG001"]  # a job's hooks share their signatures, so a hook may leave an argument unused
-
-[tool.ruff.lint.isort]
-split-on-trailing-comma = false
-
-[tool.ruff.format]
-docstring-code-format = true
-skip-magic-trailing-comma = true
-
-[tool.ty.rules]
-all = "error"
-
-[tool.ty.analysis]
-respect-type-ignore-comments = false
-strict-generic-narrowing = true
-strict-equality-semantics = true
-
-[tool.ty.terminal]
-error-on-warning = true
-
-[tool.pytest.ini_options]
-addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration'"
-testpaths = ["tests", "jobs"]
-xfail_strict = true
-filterwarnings = ["error"]
-markers = ["integration: needs a real database; excluded from the default run"]
+# The tools `basis check` runs, at the versions basis checks with, which `basis upgrade` moves with basis: ruff, ty,
+# pytest and pytest-cov, and mutmut, which tests mutants in `basis check --full` and needs fork: WSL or Linux. Their
+# settings are basis's too, in ruff.toml, ty.toml and pytest.ini, which `basis sync` writes; the repo's own exceptions
+# go in [tool.basis] exceptions, each with its reason.
+dev = ["basis-job[dev]"]

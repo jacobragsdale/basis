@@ -610,6 +610,15 @@ a developer runs on a clone (`basis check`, `sync` and `new`, and `dev` and `doc
 `core.hooksPath` when it is unset, so a fresh clone has them after its first check, and `basis check` fails, with that
 fix, when they are missing. The verbs a container or a scheduler runs, such as `basis run`, leave git alone.
 
+The gates are only as strong as the settings they run with, so basis owns them (the review's step 8.1): `basis sync`
+writes each repo's `ruff.toml`, `ty.toml` and `pytest.ini` from basis's settings and each part's share, as framework
+files, and `basis check` refuses a `[tool.ruff]`, `[tool.ty]` or `[tool.pytest]` table in `pyproject.toml`, which would
+sit beside them; a repo that ignored whole rule families, turned ty off and lowered its floor to 10 passed every check
+before. The tools arrive pinned through each part's `dev` extra, as `basis-job[dev]`, so `basis upgrade` moves them with
+basis. A repo takes an exception only as one rule at one path with its reason, `[tool.basis] exceptions`, and a coverage
+floor under 90 only as such an exception too; `basis review` lists every one. A part whose design is provisional, as
+optim's, gives no share, and a repo of it keeps its own settings until it does.
+
 The QA tier runs a repo's parts against the QA databases from the desktop, with the safeguards of optim's and
 etl-framework's end-to-end suites: it refuses to run unless every configured source carries the QA marker, and writes
 only to an allowlist of QA tables and the QA store. With no Docker on the desktops, it is also the only place a repo's

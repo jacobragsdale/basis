@@ -15,7 +15,7 @@ from pathlib import Path
 
 from pydantic import Field
 
-from basis.core import clone
+from basis.core import clone, gates, tools
 from basis.core.model import Model
 from basis.core.verbs import GROUP, fail
 
@@ -149,6 +149,7 @@ def review(repo: Path, ref: str) -> int:
         return fail(f"commit {commit} has no `basis check --full` recorded in this clone", "push it, which runs the check, or run `uv run basis check --full` with every change committed")
     record = Record.model_validate_json(kept.read_bytes())
     sys.stdout.write(markdown(record))
+    sys.stdout.write(exceptions_markdown(found.root / "pyproject.toml"))
     if not record.passed:
         return fail(f"commit {commit} failed basis check --full, as the summary says", "fix what it says, commit, and push again")
     return 0
@@ -170,6 +171,25 @@ def markdown(record: Record) -> str:
         lines += ["", f"### The {part} contract", "", diff if diff is not None else "Unchanged since the last release."]
     lines += ["", "### Mutation testing", "", *_mutation(record.mutation)]
     lines += ["", "### Versions", "", *(f"- {name} {number}" for name, number in record.versions.items())]
+    return "\n".join(lines) + "\n"
+
+
+def exceptions_markdown(pyproject: Path) -> str:
+    """The repo's exceptions to basis's checks, each rule at its path with its reason, and a coverage floor under
+    basis's, for a reviewer to weigh."""
+    lines = ["", "### Exceptions to basis's checks", ""]
+    try:
+        found = tools.exceptions(pyproject) if pyproject.is_file() else []
+    except tools.ToolsError as error:
+        return "\n".join([*lines, f"The repo's exceptions cannot be read: {error}."]) + "\n"
+    floor = gates.floor(pyproject.parent)
+    if isinstance(floor, int) and floor < tools.FLOOR:
+        lines.append(f"The coverage floor is {floor}%, under basis's {tools.FLOOR}%.")
+        lines.append("")
+    if not found:
+        lines.append("None.")
+    else:
+        lines += ["| Rule | Path | Reason |", "|---|---|---|", *(f"| {_cell(item.rule)} | `{_cell(item.path)}` | {_cell(item.reason)} |" for item in found)]
     return "\n".join(lines) + "\n"
 
 

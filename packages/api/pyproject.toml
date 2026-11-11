@@ -13,6 +13,9 @@ dependencies = [
     "uvicorn>=0.54.0",
 ]
 
+[project.optional-dependencies]
+dev = ["basis-core[dev]", "hypothesis>=6.170.0", "schemathesis>=4.33.1"]  # what a repo's dev group takes, as basis-api[dev]: basis-core's tools, at the versions basis checks with, and the fuzz's
+
 [project.scripts]
 basis-api = "basis.api.cli:scaffold"  # `uvx basis-api new app NAME` makes an API repo, with a job beside it
 

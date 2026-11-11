@@ -102,7 +102,9 @@ holds the interface, and its docstring is the reference.
   builtin error on purpose, such as a lookup that finds no run, goes in `with deliberate(LookupError):`. Results a
   caller reads are JSON on stdout.
 - `basis sync` owns the framework files (`basis.core.sync.REPO_FILES`: the Dockerfile, `azure-pipelines.yml`, the
-  hooks in `.githooks/` and `.gitattributes`, from `packages/core/src/basis/core/templates/sync/`), basis's own block
+  hooks in `.githooks/` and `.gitattributes`, from `packages/core/src/basis/core/templates/sync/`), the repo's
+  `ruff.toml`, `ty.toml` and `pytest.ini` where every declared part gives its share of them (`basis.core.tools`), with
+  the repo's `[tool.basis] exceptions`, each a rule at a path with its reason, basis's own block
   of `AGENTS.md` and each part's, `CLAUDE.md`, the deny rules in `.claude/settings.json`, and each file whose first
   lines carry `basis.core.sync.MARKER`: each skill in `.agents/skills/` and its copy in `.claude/skills/` among them,
   whose front matter's `metadata` starts with the marker (`sync.SKILL_KEY`), so a skill is basis's whatever its name
