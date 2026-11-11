@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from importlib.metadata import EntryPoint
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import JsonValue, TypeAdapter
 
 from basis import api
-from basis.api import dev, fakes, openapi, service
+from basis.api import dev, fakes, openapi, service, tokens
 from basis.api import sync as api_sync
 from basis.api.example import resources as declared
 from basis.api.example import service as example
@@ -219,12 +220,25 @@ def test_call_on_its_fakes_reaches_nothing_and_needs_no_environment(repo: Path, 
     assert basis(repo, "call", "bond", json.dumps({"path": {"security": ISIN}}), "--fake", *EXAMPLE) == 0
 
 
+@pytest.mark.usefixtures("clean")
+def test_call_on_its_fakes_takes_a_token_the_development_key_signs_for_it(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Where the settings name no identity: the app is on its fakes alone, in this process, so no one else signs in."""
+    settlement = {"body": {"security_id": ISIN, "face": 100.0, "settle": "2026-11-06"}}
+    assert basis(repo, "call", "record_settlement", json.dumps(settlement), "--fake", *EXAMPLE) == 1
+    assert _called(capsys)[1].startswith("ERROR: record_settlement answered 401 sign-in-required, Sign-in is required")
+    identity = dev.settings(example.service).identity
+    assert identity is not None
+    now = datetime.now(UTC)
+    token = tokens.sign(identity, "jsmith", issued=now, expires=now + timedelta(minutes=5))
+    assert basis(repo, "call", "record_settlement", json.dumps(settlement | {"headers": {"authorization": f"Bearer {token}"}}), "--fake", *EXAMPLE) == 0
+
+
 def test_call_chooses_its_resources_out_loud(repo: Path) -> None:
     assert basis(repo, "call", "bond", "{}", *EXAMPLE) == 2  # a command line that does not parse
 
 
 def _with_fakes(reference: str | None) -> api.Service:
-    return api.Service(name="accruals", settings=declared.Settings, resources=example.service.resources, routes=example.service.routes, fakes=reference)
+    return api.Service(name="accruals", settings=declared.Settings, resources=example.service.resources, routes=example.service.routes, user=api.User, fakes=reference)
 
 
 def without_pricing() -> dict[fakes.Faked, fakes.Fake]:

@@ -51,12 +51,18 @@ Rules to keep:
   the repo's scheduler runs, makes it again until it is accepted or ages out. A 4xx but 408, 409, 425 or 429 refuses
   it for good, and fails the next relay, as an aged-out call does. Never make such a call with `post` in a route that
   writes: one made before the commit cannot be rolled back. `basis ddl` prints the outbox's table.
+- A path to another service is a template, and each value in it a segment basis encodes, as
+  `await pricing.get("/prices/{security}", CleanPrice, segments={"security": security})`, so a request's value never
+  reaches another of its endpoints; a path put together by hand that holds a query, a fragment or a dot segment is
+  refused.
 - Another service's URL, CA bundle and proxy are its settings, `BASIS_HTTP__NAME__URL`, `__CA_BUNDLE` and `__PROXY`;
   basis reads no `SSL_CERT_FILE` or `HTTP_PROXY`.
 - A service whose callers sign in declares `user=User`, its subclass of `api.User` with a field for each claim it
   needs beside the subject, and a handler asks for `Annotated[User | None, api.given(User)]`: None is an anonymous
   request, and a route that needs a user raises `api.SignInRequiredError`, which basis adds to the errors of every
-  route that asks for the user, so it is never declared. basis verifies every request's bearer token from the
+  route that asks for the user, so it is never declared. A route that is not a GET asks for the user, or declares `anonymous=True`
+  where anyone may make it; `basis dev` and `basis call --fake` verify tokens the development key signs for the issuer
+  `basis-dev` and the service's name, where the settings name no identity. basis verifies every request's bearer token from the
   `BASIS_IDENTITY__*` settings; a handler never reads the `Authorization` header or decodes a token itself.
 - A domain's errors are plain exceptions in `domain.py`, as `class Matured(Exception)`, raised by its rules and its
   repositories alike; `errors.py` gives each its HTTP meaning once, as

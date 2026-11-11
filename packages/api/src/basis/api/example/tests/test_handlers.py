@@ -3,7 +3,7 @@ and each error a route declares, its own and the kinds of service error basis ad
 problem. A resource's failure is made with its fake's `fails`, as a real one would fail."""
 
 from collections.abc import Iterator, Mapping
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from http import HTTPStatus
 from uuid import UUID
 
@@ -11,7 +11,8 @@ import httpx2  # the responses TestClient gives
 import pyarrow as pa
 import pytest
 from basis import api
-from basis.api import fakes
+from basis.api import fakes, tokens
+from basis.api.identity import Identity
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
@@ -31,6 +32,15 @@ HOLDING = {"face": 100, "settle": "2026-11-06"}
 QUERIES = {"dirty-price": HOLDING, "yield": {"settle": "2026-11-06"}}
 """What each route that prices a bond reads, by its path's end."""
 SETTLEMENT = {"security_id": ISIN, "face": 1000000.0, "settle": "2026-11-06"}
+IDENTITY = {"issuer": "https://sign-in.example", "audience": "accruals", "algorithms": ["ES256"], "leeway_s": 0, "keys": {"kind": "development"}}
+"""Tokens signed with basis's published development key, which only a test's own settings take off a desktop."""
+
+
+def signed_in(subject: str = "trader-1") -> dict[str, str]:
+    """The headers of a request a signed-in user makes."""
+    now = datetime.now(UTC)
+    token = tokens.sign(Identity.model_validate(IDENTITY), subject, issued=now, expires=now + timedelta(hours=1))
+    return {"authorization": f"Bearer {token}"}
 
 
 def _bonds(binds: Mapping[str, api.Bind]) -> list[Mapping[str, object]]:
@@ -94,7 +104,7 @@ def built(warehouse: fakes.Database, pricing: fakes.Http, ledger: Ledger, terms:
         resources.WAREHOUSE: warehouse, resources.PRICING: pricing, resources.LEDGER: fakes.Http(ledger.app), resources.TERMS: terms, resources.CLOCK: fakes.Clock(at=AT),
         resources.IDS: fakes.Ids(), resources.SOLVE: fakes.Compute(),
     }  # fmt: skip
-    return api.build(service.service, settings=Settings.given(**settings), fakes=given)
+    return api.build(service.service, settings=Settings.given(identity=IDENTITY, **settings), fakes=given)
 
 
 @pytest.fixture
@@ -281,7 +291,7 @@ def test_a_bond_it_has_no_coupons_for_is_a_problem_whatever_was_asked_for(client
 
 
 def test_a_settlement_is_recorded_with_a_new_id_and_the_time(client: TestClient, warehouse: fakes.Database) -> None:
-    response = client.post("/settlements", json=SETTLEMENT)
+    response = client.post("/settlements", json=SETTLEMENT, headers=signed_in())
     settlement_id = "00000000-0000-7000-8000-000000000001"
     assert (response.status_code, response.json()) == (
         HTTPStatus.CREATED,
@@ -291,8 +301,14 @@ def test_a_settlement_is_recorded_with_a_new_id_and_the_time(client: TestClient,
     assert warehouse.committed == [fakes.Statement(RECORD, binds)]
 
 
+def test_only_a_signed_in_user_records_a_settlement(client: TestClient, warehouse: fakes.Database, ledger: Ledger) -> None:
+    response = client.post("/settlements", json=SETTLEMENT)
+    assert (kind(response), response.headers["www-authenticate"]) == ((HTTPStatus.UNAUTHORIZED, "sign-in-required"), "Bearer")
+    assert (warehouse.committed, warehouse.outbox, ledger.booked) == ([], [], [])
+
+
 def test_a_settlement_is_booked_with_the_ledger_by_its_id_once_its_row_commits(client: TestClient, warehouse: fakes.Database, ledger: Ledger) -> None:
-    settlement = client.post("/settlements", json=SETTLEMENT).json()
+    settlement = client.post("/settlements", json=SETTLEMENT, headers=signed_in()).json()
     [row] = warehouse.outbox
     assert (row.service, row.method, row.path, row.idempotency_key, row.status) == ("ledger", "POST", "/bookings", settlement["settlement_id"], "done")
     assert [(settlement["settlement_id"], settlement)] == ledger.booked
@@ -308,13 +324,13 @@ def test_a_settlement_is_booked_with_the_ledger_by_its_id_once_its_row_commits(c
     ids=["matured", "not-issued", "unknown-bond"],
 )
 def test_a_settlement_it_refuses_records_nothing_and_books_nothing(client: TestClient, warehouse: fakes.Database, ledger: Ledger, settlement: dict[str, str], problem: tuple[int, str]) -> None:
-    assert kind(client.post("/settlements", json=settlement)) == problem
+    assert kind(client.post("/settlements", json=settlement, headers=signed_in())) == problem
     assert (warehouse.committed, warehouse.outbox, ledger.booked) == ([], [], [])
 
 
 def test_a_settlement_the_warehouse_refuses_records_nothing_and_books_nothing(client: TestClient, warehouse: fakes.Database, ledger: Ledger) -> None:
     warehouse.fails(api.Conflict, statement=RECORD)
-    assert kind(client.post("/settlements", json=SETTLEMENT)) == (HTTPStatus.BAD_GATEWAY, "service-conflict")
+    assert kind(client.post("/settlements", json=SETTLEMENT, headers=signed_in())) == (HTTPStatus.BAD_GATEWAY, "service-conflict")
     assert (warehouse.committed, warehouse.outbox, ledger.booked) == ([], [], [])
 
 
@@ -325,8 +341,8 @@ def test_a_settlement_is_recorded_while_the_ledger_is_down_and_its_booking_waits
         resources.WAREHOUSE: warehouse, resources.PRICING: fakes.Http(_pricing()), resources.LEDGER: ledger_down, resources.TERMS: fakes.Cache(), resources.CLOCK: fakes.Clock(at=AT),
         resources.IDS: fakes.Ids(), resources.SOLVE: fakes.Compute(),
     }  # fmt: skip
-    with TestClient(api.build(service.service, settings=Settings.given(), fakes=given).asgi) as down:
-        assert down.post("/settlements", json=SETTLEMENT).status_code == HTTPStatus.CREATED
+    with TestClient(api.build(service.service, settings=Settings.given(identity=IDENTITY), fakes=given).asgi) as down:
+        assert down.post("/settlements", json=SETTLEMENT, headers=signed_in()).status_code == HTTPStatus.CREATED
     [row] = warehouse.outbox
     assert (row.status, ledger.booked) == ("pending", [])
 
@@ -336,10 +352,10 @@ def test_a_settlement_is_recorded_while_the_ledger_is_down_and_its_booking_waits
 
 def test_the_services_own_fakes_run_it() -> None:
     """What `basis dev` and `basis call --fake` run it on, with the solver run here rather than in the pool."""
-    app = api.build(service.service, settings=Settings.given(), fakes=dev.fakes() | {resources.SOLVE: fakes.Compute()})
+    app = api.build(service.service, settings=Settings.given(identity=IDENTITY), fakes=dev.fakes() | {resources.SOLVE: fakes.Compute()})
     with TestClient(app.asgi) as client:
         assert client.get("/bonds/XS2010030836").json()["convention"] == "ACT/360"
         assert client.get("/bonds/XS2010030836/yield", params={"settle": "2026-11-06"}).status_code == HTTPStatus.OK
         assert kind(client.get("/bonds/DE0001102580/dirty-price", params=HOLDING)) == (HTTPStatus.NOT_FOUND, "unpriced")
         assert kind(client.get("/bonds/US0000000000")) == (HTTPStatus.NOT_FOUND, "unknown-bond")
-        assert client.post("/settlements", json={"security_id": "US912810TM64", "face": 100.0, "settle": "2026-11-06"}).status_code == HTTPStatus.CREATED
+        assert client.post("/settlements", json={"security_id": "US912810TM64", "face": 100.0, "settle": "2026-11-06"}, headers=signed_in()).status_code == HTTPStatus.CREATED

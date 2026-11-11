@@ -35,6 +35,7 @@ from basis.api import fakes
 from basis.api.app import Stage
 from basis.api.opened import MemoryCache, adapter
 from basis.core.databases.base import Statements
+from basis.core.databases.failures import failure
 from basis.core.settings import SettingsError
 
 type Records = Callable[[], list[dict[str, object]]]  # the `logged` fixture's
@@ -184,7 +185,8 @@ def _route(declare: Callable[..., api.Route], path: str, handler: FunctionType, 
     """A route of these tests, which are of resources: it answers what its handler returns, and its deadline is longer than
     any resource's, so that each resource's own deadline is the one that binds."""
     returns = inspect.signature(handler, eval_str=True).return_annotation
-    return declare(path, handler, deadline_s=10, response=returns, errors=list(errors), status=HTTPStatus.NO_CONTENT if returns is None else HTTPStatus.OK)
+    status = HTTPStatus.NO_CONTENT if returns is None else HTTPStatus.OK
+    return declare(path, handler, deadline_s=10, response=returns, errors=list(errors), status=status, **({} if declare is api.get else {"anonymous": True}))
 
 
 SERVICE = api.Service(
@@ -578,15 +580,62 @@ class _Holding(fakes.Database):
         return _Held(self, writes=writes, release=self.release, holds=self.holds)
 
 
-def test_a_commit_past_its_deadline_is_a_504_and_the_log_says_how_it_ended(logged: Records) -> None:
+def test_a_commit_past_its_deadline_is_an_unknown_outcome_and_the_log_says_how_it_ended(logged: Records) -> None:
     quick = _Holding("commit")
     with TestClient(_app(quick=quick).asgi) as client:
         response = client.post("/quick", json=PRICE)
         quick.release.set()
     detail = "quick's commit did not finish within its deadline of 1s: whether the request's writes there committed, the log says when it ends"
-    assert (response.status_code, response.json()["detail"]) == (HTTPStatus.GATEWAY_TIMEOUT, detail)
+    assert (response.status_code, response.json()["type"], response.json()["detail"]) == (HTTPStatus.INTERNAL_SERVER_ERROR, "outcome-unknown", detail)
     assert quick.committed == [_statement()]
     assert [record["message"] for record in logged() if record.get("ended") == "commit"] == ["quick's commit finished after its deadline, and committed the request's writes"]
+
+
+@dataclasses.dataclass
+class _LostAtCommit(fakes.Transaction):
+    """A transaction whose connection is lost during its COMMIT, as a driver raises it: whether the database committed
+    is not known."""
+
+    @override
+    def commit(self) -> None:
+        cause = ConnectionResetError("the connection was reset during COMMIT")
+        raise failure(self.database.name, api.Unavailable, cause) from cause
+
+
+class _Losing(fakes.Database):
+    @override
+    def transaction(self, *, writes: bool) -> fakes.Transaction:
+        return _LostAtCommit(self, writes=writes) if writes else super().transaction(writes=writes)
+
+
+def test_a_connection_lost_during_the_commit_is_an_unknown_outcome_which_a_ui_does_not_retry(logged: Records) -> None:
+    quick = _Losing(answers={INSERT: 1})
+    with TestClient(_app(quick=quick).asgi) as client:
+        response = client.post("/quick", json=PRICE)
+    problem = response.json()
+    assert (response.status_code, problem["type"], problem["title"]) == (HTTPStatus.INTERNAL_SERVER_ERROR, "outcome-unknown", "Whether the request's writes committed is not known")
+    assert problem["detail"] == "quick's commit failed, and may have committed the request's writes there or not: do not make the request again until you know which"
+    [record] = [record for record in logged() if record.get("outcome") == "unknown"]
+    assert (record["level"], record["resource"]) == ("error", "quick")
+    assert "the connection was reset during COMMIT" in str(record["reason"])
+
+
+def test_a_route_that_writes_lists_the_unknown_outcome() -> None:
+    document = _app().asgi.openapi()
+    assert "outcome-unknown: Whether the request's writes committed is not known" in document["paths"]["/quick"]["post"]["responses"]["500"]["description"]
+    assert "500" not in document["paths"]["/quotes/{security}"]["get"]["responses"]
+
+
+def test_a_database_failures_reason_is_logged_though_its_problem_never_says_it(logged: Records) -> None:
+    warehouse = fakes.Database(answers={INSERT: 1})
+    warehouse.fails(api.Rejected, statement=INSERT)
+    with TestClient(_app(warehouse).asgi) as client:
+        response = client.post("/prices", json=PRICE)
+    assert (response.status_code, response.json()["type"]) == (HTTPStatus.BAD_GATEWAY, "service-rejected")
+    assert "fake database" not in response.json()["detail"]
+    [record] = [record for record in logged() if "reason" in record and record.get("resource") == "warehouse"]
+    assert record["level"] == "warning"
+    assert "the test made the fake database fail" in str(record["reason"])
 
 
 def test_a_rollback_past_its_deadline_leaves_the_requests_own_answer_and_the_log_says_how_it_ended(logged: Records) -> None:

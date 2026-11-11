@@ -274,7 +274,11 @@ response (see [Numbers](#numbers)), and a time in one carries its offset. Query 
 text, are read by each type's grammar. Every route declares its deadline, which caps every
 call its request makes, its response model and its errors, and an error it does not declare answers 500. Database writes
 in a request commit only after the handler returns and its response validates, and calls to other services that change
-state go after that commit. A declared pure compute function runs in a process pool, off the event loop, because
+state go after that commit. A commit that fails or passes its deadline once it has begun may have committed or not, so
+it answers its own problem, `outcome-unknown`, which a UI does not retry as it may a 503, and its log says so with why.
+A path to another service is a template whose values basis encodes, each as one segment, as
+`pricing.get("/prices/{security}", CleanPrice, segments={"security": security})`, so a request's value never reaches
+another of its endpoints, and a path that holds a query, a fragment or a dot segment is refused. A declared pure compute function runs in a process pool, off the event loop, because
 CPU-bound quant code inside an `async def` stalls every request on that worker. An unexpected error is logged once, with
 its traceback.
 
@@ -306,8 +310,12 @@ answers as its kind of service error does (see [What jobs and APIs share](#what-
 Identity is optional. A request with a token has it verified (signature, expiry, issuer and audience), and an invalid or
 expired token is refused rather than treated as anonymous, so a broken sign-in in a UI fails loudly. A handler sees the
 user as `User | None`, so the type checker makes it handle the anonymous case, and the user goes into every log record,
-trace and request record. Tests and `basis dev` sign tokens with a development key that the settings refuse anywhere but
-a developer's desktop.
+trace and request record. A route that is not a GET changes what the service holds, so its handler asks for the user,
+or the route declares `anonymous=True`, that anyone may make it, decided on 2026-11-09 (step 7.10); the example's write
+asks for a signed-in user. Tests and `basis dev` sign tokens with a development key that the settings refuse anywhere
+but a developer's desktop, and that no app serves on a socket other machines reach. A refused token's 401, and a 503
+while the keys cannot be fetched, name nothing of the API's sign-in, its issuer, audience or keys' URL, which the log
+line names instead.
 
 A service that verifies tokens declares its user, `api.Service(..., user=User)`: a subclass of `api.User`, which holds
 the subject, `sub`, with a field for each other claim the service needs, and a token without one is refused. The claims
@@ -319,8 +327,11 @@ accepted, never `none` or HMAC, whose key would let every API that verifies a to
 only an algorithm it fits. The development key is one fixed ES256 key, published, so that tests, `basis dev` and a UI's
 development mode all sign with it; every app refuses it unless the machine is declared a desktop, by `desktop = true` in
 `basis/desktop.toml` in the user's own configuration folder, which no repo, image or deployment's variables hold, and
-refuses it in a pod or a container even then, but for an app built from a test's own settings. Tokens are verified with
-PyJWT, which every basis environment already holds.
+refuses it in a pod or a container even then, but for an app built from a test's own settings, and for an app on its
+fakes alone in `basis dev`, on 127.0.0.1, and `basis call --fake`, in its process, which verify with it, for the issuer
+`basis-dev` and the service's name, where their settings name no identity, as `basis check`'s does: no one else can
+reach one, and its data is the fakes'. `api.serve` refuses the development key on any host but this machine's loopback,
+whatever settings it is given. Tokens are verified with PyJWT, which every basis environment already holds.
 
 `basis call ROUTE` runs a handler in-process with its real or fake resources and prints the response, so an agent
 exercises an endpoint without starting a server, and `call` and `dev` are library functions too. Where a deployment

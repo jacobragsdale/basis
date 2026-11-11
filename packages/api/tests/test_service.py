@@ -61,7 +61,7 @@ def _service(**changed: object) -> Callable[[], api.Service]:
         (lambda: _get("/health/prices", price), "one the app answers itself"),
         (lambda: _get("/openapi.json", price), "one the app answers itself"),
         (lambda: _get("/prices/{security}", lambda security: {"security": security}), "not a named function"),
-        (lambda: api.post("/prices", price, deadline_s=1, response=dict[str, str], errors=[], status=404), "give a 2xx"),
+        (lambda: api.post("/prices", price, deadline_s=1, response=dict[str, str], errors=[], status=404, anonymous=True), "give a 2xx"),
         (lambda: api.given(BaseModel), "basis gives a handler its service's settings"),  # ty: ignore[invalid-argument-type] -- wrong on purpose
     ],
     ids=[
@@ -83,7 +83,7 @@ def test_a_handler_may_ask_for_a_base_of_its_services_settings() -> None:
 
 @pytest.mark.parametrize(("declare", "method"), [(api.get, "GET"), (api.post, "POST"), (api.put, "PUT"), (api.patch, "PATCH"), (api.delete, "DELETE")])
 def test_each_method_declares_its_own_routes(declare: Callable[..., api.Route], method: str) -> None:
-    route = declare("/prices/{security}", price, deadline_s=1, response=dict[str, str], errors=[])
+    route = declare("/prices/{security}", price, deadline_s=1, response=dict[str, str], errors=[], **({} if method == "GET" else {"anonymous": True}))
     assert (route.method, route.name) == (method, "price")
 
 

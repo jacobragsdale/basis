@@ -60,7 +60,7 @@ SERVICE = api.Service(
     settings=api.Settings,
     routes=[
         api.get("/prices/{security}", price, deadline_s=1, response=dict[str, str], errors=[Unpriced]),
-        api.post("/orders", order, deadline_s=1, response=Order, errors=[]),
+        api.post("/orders", order, deadline_s=1, response=Order, errors=[], anonymous=True),
         api.get("/conflict", conflict, deadline_s=1, response=dict[str, str], errors=[]),
         api.get("/broken", broken, deadline_s=1, response=dict[str, str], errors=[]),
     ],

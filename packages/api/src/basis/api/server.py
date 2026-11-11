@@ -9,6 +9,7 @@ drain, as a desktop has no load balancer to wait for. A second signal, of either
 flight are cut off, and the lifespan's shutdown is skipped."""
 
 import asyncio
+import ipaddress
 import logging
 import signal
 import socket
@@ -20,9 +21,11 @@ import uvicorn
 
 from basis.api.app import Lifecycle, build
 from basis.api.fakes import Fakes
+from basis.api.identity import Development
 from basis.api.service import Service, load
 from basis.api.settings import Settings
 from basis.core import logs
+from basis.core.settings import SettingsError, variable
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +43,7 @@ def serve(service: Service | str | None = None, *, settings: Settings | None = N
     app = build(found, settings=settings, fakes=fakes, environment=environment)
     serving = app.settings.serve
     host = host if host is not None else serving.host
+    _refuse_development(app.settings, host)
     config = uvicorn.Config(
         app.asgi,
         host=host,
@@ -58,13 +62,36 @@ def serve(service: Service | str | None = None, *, settings: Settings | None = N
         return
 
 
+def _refuse_development(settings: Settings, host: str) -> None:
+    """Refuse to serve on `host` with the development key, whose tokens anyone can sign, unless only this machine
+    reaches it: whatever else the settings say, a test's own among them."""
+    identity = settings.identity
+    if identity is None or not isinstance(identity.keys, Development) or _loopback(host):
+        return
+    kind = variable(("identity", "keys", "kind"))
+    msg = (
+        f"{kind} is development, whose key anyone can sign tokens with, and the API would serve on {host}, which other machines reach:"
+        f" serve on {LOCAL}, as basis dev does, with {variable(('serve', 'host'))}={LOCAL}, or verify with the sign-in system's keys, setting {kind} to jwks or public_key"
+    )
+    raise SettingsError(msg)
+
+
+def _loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:  # a name, which may resolve to any address
+        return False
+
+
 def serve_on_fakes(service: Service | str | None = None, *, settings: Settings | None = None) -> None:
     """`api.serve_on_fakes`: serve `service` on its fakes, on this machine alone, as `basis dev` does: with `settings`, or its settings read
     from the environment, so a caller in Python, such as a platform's own command, gives them in code."""
     from basis.api import dev as fakes_of  # noqa: PLC0415 -- the fakes load when it runs
 
     found = service if isinstance(service, Service) else load(service)
-    serve(found, settings=settings, fakes=fakes_of.fakes(found), host=LOCAL)
+    serve(found, settings=fakes_of.settings(found, settings), fakes=fakes_of.fakes(found), host=LOCAL)
 
 
 def logged(service: Service) -> None:

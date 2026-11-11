@@ -44,13 +44,14 @@ import math
 import re
 import types
 import typing
-from collections.abc import Awaitable, Callable, Generator, Iterable
+from collections.abc import Awaitable, Callable, Generator, Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
-from typing import TYPE_CHECKING, Annotated, Generic, Literal, Protocol, TypeAliasType, TypeVar, get_args, get_origin
+from typing import TYPE_CHECKING, Annotated, Generic, Literal, Protocol, TypeAliasType, TypeVar, get_args, get_origin, override
+from urllib.parse import quote
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -66,8 +67,8 @@ if TYPE_CHECKING:
 
 __all__ = [
     "NAME", "TABLE", "TABLE_LENGTH", "Bind", "Body", "Cache", "CacheResource", "Client", "Clock", "ClockResource", "DatabaseResource", "HttpMethod",
-    "HttpResource", "Ids", "IdsResource", "Opened", "Outbox", "Query", "QueryValue", "Reader", "Resource", "SendMethod", "Session", "Writer", "cache",
-    "check_outboxes", "clock", "database", "http", "ids", "outbox",
+    "HttpResource", "Ids", "IdsResource", "Opened", "Outbox", "Query", "QueryValue", "Reader", "Resource", "Segment", "SendMethod", "Session", "Writer", "cache",
+    "check_outboxes", "checked_path", "clock", "database", "filled", "http", "ids", "outbox",
 ]  # fmt: skip
 
 type Bind = str | int | float | Decimal | bool | date | datetime | UUID | bytes | None
@@ -294,15 +295,36 @@ class Writer(Reader, Protocol):
         ...
 
 
+type Segment = str | int
+"""A value a path template's parameter takes, which is one segment of the path, encoded."""
+
+
 class Client(core.Client, Protocol):
     """Another HTTP service, as basis-core's `Client` calls it, and `send`. Each call's reply is validated as `reply`,
     from JSON, and a call that fails raises the kind of `api.ServiceError` its failure is, as basis-core's `Client`
     says: a handler, or the repository it passes the client to, catches a kind that means something to it, as
-    `api.NotFound` for a thing the service does not have, and lets the rest answer their problems. `path` is the
-    service's own, after its base URL, and anything in it that a request supplied must be validated first: a path
-    parameter's pattern, say. Each call carries the request's trace on, as `traceparent`."""
+    `api.NotFound` for a thing the service does not have, and lets the rest answer their problems. Each call carries
+    the request's trace on, as `traceparent`.
 
-    async def send(self, method: SendMethod, path: str, body: Body = None, /, *, key: str) -> None:
+    `path` is the service's own, after its base URL, and a template: each `{name}` in it is the value `segments` gives
+    it, encoded as one segment, so a value a request supplied never reaches another of the service's endpoints, its
+    query or a fragment, whatever it holds (`filled`):
+
+        await pricing.get("/prices/{security}", CleanPrice, segments={"security": security})
+
+    A path is refused, as a defect, when it holds a query, a fragment or a dot segment, as one put together by hand
+    from a request's values can."""
+
+    @override
+    async def call[T](self, method: HttpMethod, path: str, reply: type[T], /, *, query: Query | None = None, body: Body = None, segments: Mapping[str, Segment] | None = None) -> T: ...
+
+    @override
+    async def get[T](self, path: str, reply: type[T], /, *, query: Query | None = None, segments: Mapping[str, Segment] | None = None) -> T: ...
+
+    @override
+    async def post[T](self, path: str, reply: type[T], /, *, query: Query | None = None, body: Body = None, segments: Mapping[str, Segment] | None = None) -> T: ...
+
+    async def send(self, method: SendMethod, path: str, body: Body = None, /, *, key: str, segments: Mapping[str, Segment] | None = None) -> None:
         """A call that changes the other service's state, with `key` as its `Idempotency-Key`: the service drops a call
         whose key it has seen, so the call is safe to make more than once. `key` is one to 255 visible ASCII characters,
         such as the id of what the call is about.
@@ -314,6 +336,58 @@ class Client(core.Client, Protocol):
         the call was made either way, and a call whose writes roll back is never made. In a route that writes no
         database, the call is made at once, and fails as `call` does. The reply's body is never read."""
         ...
+
+
+_TEMPLATE = re.compile(r"\{([^{}]*)\}")
+_DOTS = frozenset({".", ".."})
+
+
+def filled(template: str, segments: Mapping[str, Segment] | None) -> str:
+    """The path `template` names, each `{name}` in it the value `segments` gives, percent-encoded as one segment: a
+    `/`, `?`, `#` or `%` in a value is encoded, and a value that is empty or a dot segment refused. A template that
+    holds a query, a fragment or a dot segment is refused too, so that a path put together by hand cannot reach
+    another endpoint. A refusal is a defect in the handler, a `ValueError` whose message ends with the fix."""
+    given = dict(segments or {})
+    if not isinstance(template, str) or not template.startswith("/"):
+        msg = f"the path {template!r} is not the service's own, after its base URL: give a path that starts with /"
+        raise ValueError(msg)
+    named = _TEMPLATE.findall(template)
+    if missing := [name for name in named if name not in given]:
+        msg = f"the path {template!r} names {{{missing[0]}}}, which segments does not give: give segments={{{missing[0]!r}: ...}}, which basis encodes as one segment"
+        raise ValueError(msg)
+    if unused := sorted(set(given) - set(named)):
+        msg = f"the path {template!r} gives segments the template does not name, {', '.join(unused)}: name each as {{{unused[0]}}} in the path, where its value goes"
+        raise ValueError(msg)
+    _check_path(template, _TEMPLATE.sub("x", template))
+
+    def value(found: re.Match[str]) -> str:
+        segment = given[found.group(1)]
+        if isinstance(segment, bool) or not isinstance(segment, str | int):
+            msg = f"the path {template!r} is given {found.group(1)}={segment!r}: give each segment as a str or an int"
+            raise ValueError(msg)  # noqa: TRY004 -- a defect in the handler, as each refusal here is
+        text = str(segment)
+        if not text or text in _DOTS:
+            what = "a dot segment" if text else "an empty segment"
+            msg = f"the path {template!r} is given {found.group(1)}={text!r}, {what}, which would reach another of the service's paths: refuse the value before the call"
+            raise ValueError(msg)
+        return quote(text, safe="")
+
+    return _TEMPLATE.sub(value, template)
+
+
+def checked_path(path: str) -> None:
+    """Refuse a path, as a call is made with it, that holds a query, a fragment or a dot segment."""
+    _check_path(path, path)
+
+
+def _check_path(shown: str, path: str) -> None:
+    """Refuse `path`, as `shown` names it, where it holds a query, a fragment or a dot segment."""
+    if "?" in path or "#" in path:
+        msg = f"the path {shown!r} holds a query or a fragment: give the query as query={{...}}, and each value in the path as one of segments={{...}}"
+        raise ValueError(msg)
+    if any(part in _DOTS for part in path.split("/")):
+        msg = f"the path {shown!r} holds a dot segment, which reaches another of the service's paths: give each value in the path as one of segments={{...}}, which basis encodes"
+        raise ValueError(msg)
 
 
 class Cache[V](Protocol):

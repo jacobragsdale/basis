@@ -54,7 +54,12 @@ async def marked_then_wrong(warehouse: Annotated[api.Writer, api.given(WAREHOUSE
 
 
 def service(*handlers: Callable[..., object]) -> api.Service:
-    routes = [(api.post if handler is marked_then_wrong else api.get)(f"/{getattr(handler, '__name__', '')}", handler, deadline_s=5, response=api.Table[Position], errors=[]) for handler in handlers]  # ty: ignore[invalid-argument-type] -- each a named function
+    routes = [
+        api.post(f"/{getattr(handler, '__name__', '')}", handler, deadline_s=5, response=api.Table[Position], errors=[], anonymous=True)
+        if handler is marked_then_wrong
+        else api.get(f"/{getattr(handler, '__name__', '')}", handler, deadline_s=5, response=api.Table[Position], errors=[])  # ty: ignore[invalid-argument-type] -- each a named function
+        for handler in handlers
+    ]
     return api.Service(name="positions", settings=api.Settings, resources=[WAREHOUSE], routes=routes)
 
 

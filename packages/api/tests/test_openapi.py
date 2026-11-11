@@ -77,7 +77,7 @@ SERVICE = api.Service(
     name="orders",
     settings=api.Settings,
     routes=[
-        api.post("/orders", place_order, deadline_s=1, response=Placed, errors=[Rejected, Gone], status=HTTPStatus.CREATED),
+        api.post("/orders", place_order, deadline_s=1, response=Placed, errors=[Rejected, Gone], status=HTTPStatus.CREATED, anonymous=True),
         api.get("/window", window, deadline_s=1, response=Placed, errors=[]),
         api.get("/exposures", exposures, deadline_s=1, response=list[Row], errors=[], dataset=True),
     ],

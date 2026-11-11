@@ -125,15 +125,21 @@ async def coupons(security: Security, warehouse: Annotated[api.Reader, api.given
     return pd.DataFrame([coupon.model_dump() for coupon in schedule], columns=list(CouponRow.model_fields))
 
 
-async def record_settlement(
+async def record_settlement(  # noqa: PLR0913 -- the request, and each thing the route reaches, as api.given gives it
     request: SettlementRequest,
+    *,
+    user: Annotated[api.User | None, api.given(api.User)],
     warehouse: Annotated[api.Writer, api.given(WAREHOUSE)],
     ledger: Annotated[api.Client, api.given(LEDGER)],
     clock: Annotated[api.Clock, api.given(CLOCK)],
     ids: Annotated[api.Ids, api.given(IDS)],
 ) -> Settlement:
     """Record a settlement, with the interest accrued to its date, and book it with the ledger: the row and the booking
-    commit once the response validates, and the ledger is called after, by its id, as many times as it takes."""
+    commit once the response validates, and the ledger is called after, by its id, as many times as it takes. Only a
+    signed-in user records one, whom the request's log line names."""
+    if user is None:
+        msg = "sign in to record a settlement"
+        raise api.SignInRequiredError(msg)
     found = await repository.bond(warehouse, request.security_id)
     accrued = domain.accrued_at(found, request.face, request.settle)
     settlement_id, recorded_at = repository.stamp(ids, clock)

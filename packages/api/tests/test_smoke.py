@@ -96,4 +96,4 @@ def changes() -> Quote:
 
 def test_only_a_get_takes_an_example() -> None:
     with pytest.raises(api.DeclarationError, match="basis smoke sends read-only requests alone"):
-        api.post("/quotes", changes, deadline_s=1, response=Quote, errors=[], smoke={"query": {}})
+        api.post("/quotes", changes, deadline_s=1, response=Quote, errors=[], smoke={"query": {}}, anonymous=True)

@@ -30,6 +30,10 @@ class Serve(Model):
     shutdown_s: Annotated[int, Field(ge=1)] = 15
     """Seconds the requests still in flight then have to finish, before they are cancelled. With `drain_s` and the
     last export of spans, which `traces.timeout_s` bounds, the defaults fit in Kubernetes' 30-second grace period."""
+    docs: bool = False
+    """Whether the app serves `/docs`, Swagger UI's page of its document, which loads Swagger UI's script and style
+    from a public CDN, at an exact version, into the page of the API's own origin: off unless a developer turns it on,
+    as `BASIS_SERVE__DOCS=true`, since on an origin that serves a UI that script runs beside the UI's token."""
     max_body_bytes: Annotated[int, Field(ge=1)] = 1_048_576
     """The largest request body a route takes, in bytes: a larger one answers 413 `body-too-large`, refused by its
     `Content-Length` before any of it is read, or once that many bytes have arrived. A body is read whole and parsed
@@ -84,6 +88,13 @@ class Settings(core.Settings):
             return cls.model_validate(values)
         finally:
             _ARGUMENTS_ONLY.reset(token)
+
+    def verifying(self, identity: Identity) -> Self:
+        """These settings, verifying tokens as `identity` says, as settings made in code are: for an app on its fakes
+        alone, which `basis dev` serves on this machine and `basis call --fake` calls in its process (`dev.settings`)."""
+        copied = self.model_copy(update={"identity": identity})
+        copied._given = True  # noqa: SLF001 -- the class's own mark, on its copy
+        return copied
 
     @override
     def model_post_init(self, context: object, /) -> None:

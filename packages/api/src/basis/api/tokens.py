@@ -155,11 +155,11 @@ class Verifier:
             msg = f"the token has no {error.claim} claim"
             raise InvalidTokenError(msg) from error
         except jwt.InvalidIssuerError as error:
-            msg = f"the token is not from this API's issuer, {identity.issuer}"
-            raise InvalidTokenError(msg) from error
+            msg = "the token is not from this API's issuer"
+            raise _withheld(InvalidTokenError(msg), f"this API's issuer is {identity.issuer}") from error
         except jwt.InvalidAudienceError as error:
-            msg = f"the token is not for this API, whose audience is {identity.audience}"
-            raise InvalidTokenError(msg) from error
+            msg = "the token is not for this API"
+            raise _withheld(InvalidTokenError(msg), f"this API's audience is {identity.audience}") from error
         except jwt.InvalidKeyError as error:
             log.warning("the issuer's key does not verify %s: %s", algorithm, error, extra={"kid": kid, "algorithm": algorithm})
             msg = f"the issuer's key does not verify {algorithm}: {error}"
@@ -242,6 +242,18 @@ class _JwkSet(BaseModel):
     keys: tuple[dict[str, JsonValue], ...]
 
 
+def _withheld[E: InvalidTokenError | KeysUnavailableError](refused: E, why: str) -> E:
+    """`refused`, whose problem a caller who has not signed in sees, with `why`, what it does not say of this API's
+    sign-in, for its log line alone (`Bearer`)."""
+    refused.add_note(why)
+    return refused
+
+
+def _unavailable(failure: KeysUnavailableError) -> KeysUnavailableError:
+    """What a request whose token's key cannot be looked up answers: the 503 a UI retries, naming no URL."""
+    return _withheld(KeysUnavailableError("the sign-in system's keys cannot be fetched now, to look up the token's key: make the request again soon"), failure.detail)
+
+
 class KeySet:
     """The sign-in system's JWK set, fetched when the app opens, and fetched again when a token names a key the set
     does not hold, by one request while the others wait for it, or in the background when the set is stale."""
@@ -290,11 +302,14 @@ class KeySet:
         if (found := self._find(kid, algorithm)) is not None:
             return found
         if self._may_fetch():
-            await self._refresh()  # a key the set did not hold, perhaps one the sign-in system has just added
+            try:
+                await self._refresh()  # a key the set did not hold, perhaps one the sign-in system has just added
+            except KeysUnavailableError as error:
+                raise _unavailable(error) from error
             if (found := self._find(kid, algorithm)) is not None:
                 return found
         elif self._failure is not None:  # the set may lack a key the sign-in system has added since it was fetched
-            raise KeysUnavailableError(self._failure.detail)
+            raise _unavailable(self._failure)
         named = f"key {kid}" if kid is not None else "key, as it names none"
         msg = f"the sign-in system's JWK set holds no {named} that verifies {algorithm}"
         raise InvalidTokenError(msg)
@@ -506,7 +521,8 @@ class Bearer:
             user = await self._user(scope)
         except (InvalidTokenError, KeysUnavailableError) as refused:
             level = logging.INFO if isinstance(refused, InvalidTokenError) else logging.WARNING
-            log.log(level, "refused the bearer token: %s", refused.detail, extra={"refused": refused.type})
+            why = {"why": "; ".join(refused.__notes__)} if getattr(refused, "__notes__", None) else {}
+            log.log(level, "refused the bearer token: %s", refused.detail, extra={"refused": refused.type, **why})
             span.set_attribute("basis.identity.refused", refused.detail)
             request_id = scope.get(REQUEST_ID)
             await errors.response(refused, request_id if isinstance(request_id, UUID) else None)(scope, receive, send)

@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict
 
 from basis import api
 from basis.api import fakes
-from basis.api.errors import BodyTooLargeError
+from basis.api.errors import BodyTooLargeError, OutcomeUnknownError
 from basis.core import fakes as core_fakes
 from basis.core.errors import KINDS
 
@@ -106,9 +106,9 @@ SERVICE = api.Service(
         api.get("/quotes/{security}", quote, deadline_s=5, response=Price, errors=[]),
         api.get("/priced/{security}", quote_or_unpriced, deadline_s=5, response=Price, errors=[Unpriced]),
         api.get("/stored/{security}", stored, deadline_s=5, response=list[Price], errors=[]),
-        api.post("/record", record, deadline_s=5, response=Price, errors=[]),
-        api.post("/record-once", record_once, deadline_s=5, response=Price, errors=[AlreadyRecorded]),
-        api.post("/book", book, deadline_s=5, response=Price, errors=[]),
+        api.post("/record", record, deadline_s=5, response=Price, errors=[], anonymous=True),
+        api.post("/record-once", record_once, deadline_s=5, response=Price, errors=[AlreadyRecorded], anonymous=True),
+        api.post("/book", book, deadline_s=5, response=Price, errors=[], anonymous=True),
         api.get("/stray", stray, deadline_s=5, response=Price, errors=[]),
     ],
 )
@@ -243,8 +243,8 @@ def test_a_kind_nothing_the_route_asks_for_raises_is_a_defect() -> None:
 def test_each_route_lists_the_kinds_what_it_asks_for_can_raise() -> None:
     answers = {route.name: route.answers for route in SERVICE.routes}
     assert answers["quote"] == KINDS
-    assert answers["record"] == (api.Timeout, api.Unavailable, api.Conflict, api.Rejected, api.Denied, api.Failed, BodyTooLargeError)  # it takes a body
-    assert answers["book"] == (*KINDS, BodyTooLargeError)
+    assert answers["record"] == (api.Timeout, api.Unavailable, api.Conflict, api.Rejected, api.Denied, api.Failed, BodyTooLargeError, OutcomeUnknownError)  # it takes a body, and writes
+    assert answers["book"] == (*KINDS, BodyTooLargeError, OutcomeUnknownError)
     assert answers["stray"] == ()
 
 

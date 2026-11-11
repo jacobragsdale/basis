@@ -490,7 +490,7 @@
     "/settlements": {
       "post": {
         "summary": "Record Settlement",
-        "description": "Record a settlement, with the interest accrued to its date, and book it with the ledger: the row and the booking\ncommit once the response validates, and the ledger is called after, by its id, as many times as it takes.",
+        "description": "Record a settlement, with the interest accrued to its date, and book it with the ledger: the row and the booking\ncommit once the response validates, and the ledger is called after, by its id, as many times as it takes. Only a\nsigned-in user records one, whom the request's log line names.",
         "operationId": "record_settlement",
         "requestBody": {
           "content": {
@@ -509,6 +509,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Settlement"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "sign-in-required: Sign-in is required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }
@@ -539,6 +549,16 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "outcome-unknown: Whether the request's writes committed is not known",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
                 }
               }
             }

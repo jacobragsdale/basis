@@ -7,14 +7,15 @@ served."""
 import os
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from http import HTTPStatus
 from uuid import UUID
 
 import mssql_python
 import pytest
 from basis import api
-from basis.api import fakes, outboxes
+from basis.api import fakes, outboxes, tokens
+from basis.api.identity import Identity
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -78,6 +79,16 @@ def warehouse() -> Iterator[Warehouse]:
     found.execute(*drop)
 
 
+IDENTITY = {"issuer": "https://sign-in.example", "audience": "accruals", "algorithms": ["ES256"], "leeway_s": 0, "keys": {"kind": "development"}}
+"""Tokens signed with basis's published development key, which only a test's own settings take off a desktop."""
+
+
+def signed_in() -> dict[str, str]:
+    """The headers of a request a signed-in user makes."""
+    now = datetime.now(UTC)
+    return {"authorization": f"Bearer {tokens.sign(Identity.model_validate(IDENTITY), 'trader-1', issued=now, expires=now + timedelta(hours=1))}"}
+
+
 class Ledger:
     """The ledger service, which takes every booking, with its `Idempotency-Key`."""
 
@@ -95,7 +106,7 @@ def app(warehouse: Warehouse, ledger: Ledger) -> api.App:
         resources.SOLVE: fakes.Compute(), resources.PRICING: fakes.Http(FastAPI()), resources.LEDGER: fakes.Http(ledger.app), resources.TERMS: fakes.Cache(),
         resources.CLOCK: fakes.Clock(at=AT), resources.IDS: fakes.Ids(),
     }  # fmt: skip
-    return api.build(service.service, settings=resources.Settings.given(databases={"warehouse": warehouse.settings}), fakes=given)
+    return api.build(service.service, settings=resources.Settings.given(databases={"warehouse": warehouse.settings}, identity=IDENTITY), fakes=given)
 
 
 def test_a_bonds_terms_are_read_from_the_warehouse(warehouse: Warehouse) -> None:
@@ -109,7 +120,7 @@ def test_a_bonds_terms_are_read_from_the_warehouse(warehouse: Warehouse) -> None
 def test_a_settlement_and_its_booking_commit_together_and_the_booking_is_made_after(warehouse: Warehouse) -> None:
     ledger = Ledger()
     with TestClient(app(warehouse, ledger).asgi) as client:
-        recorded = client.post("/settlements", json={"security_id": ISIN, "face": 1000000.0, "settle": "2026-11-06"})
+        recorded = client.post("/settlements", json={"security_id": ISIN, "face": 1000000.0, "settle": "2026-11-06"}, headers=signed_in())
     assert recorded.status_code == HTTPStatus.CREATED
     [(settlement_id, security, face, settle, accrued, recorded_at)] = warehouse.rows("SELECT settlement_id, security_id, face, settle, accrued, recorded_at FROM settlements")
     assert (UUID(str(settlement_id)), security, face, settle, accrued) == (UUID("00000000-0000-7000-8000-000000000001"), ISIN, 1000000.00, date(2026, 11, 6), 21375.00)
@@ -121,6 +132,6 @@ def test_a_settlement_and_its_booking_commit_together_and_the_booking_is_made_af
 def test_a_settlement_on_a_bond_the_warehouse_does_not_hold_writes_nothing(warehouse: Warehouse) -> None:
     ledger = Ledger()
     with TestClient(app(warehouse, ledger).asgi) as client:
-        refused = client.post("/settlements", json={"security_id": "US0000000000", "face": 100.0, "settle": "2026-11-06"})
+        refused = client.post("/settlements", json={"security_id": "US0000000000", "face": 100.0, "settle": "2026-11-06"}, headers=signed_in())
     assert (refused.status_code, refused.json()["type"]) == (HTTPStatus.NOT_FOUND, "unknown-bond")
     assert (warehouse.rows("SELECT COUNT(*) FROM settlements"), warehouse.rows("SELECT COUNT(*) FROM accruals_outbox"), ledger.keys) == ([(0,)], [(0,)], [])

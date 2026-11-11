@@ -48,7 +48,7 @@ from typing import Annotated, Literal, Protocol
 
 from pydantic import AfterValidator
 
-from basis.api.resources import Outbox, SendMethod
+from basis.api.resources import Outbox, SendMethod, checked_path
 from basis.core import ddl as core_ddl
 from basis.core.databases.base import Bind, Statements, naive_in_zone
 from basis.core.destination import Dialect
@@ -80,6 +80,7 @@ def checked(path: object, key: object) -> None:
         shown = path[:100] if isinstance(path, str) else path
         msg = f"the path {shown!r} is not the service's own path of at most {PATH_LENGTH} characters, after its base URL: give a str that starts with /"
         raise ValueError(msg)
+    checked_path(path)
 
 
 def _utc(moment: datetime) -> datetime:

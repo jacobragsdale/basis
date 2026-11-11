@@ -103,6 +103,7 @@ The errors basis answers itself, besides each API's own:
 |---|---|---|---|
 | `invalid-request` | 422 | The request is not read: see [Requests](#requests) | |
 | `body-too-large` | 413 | The body is larger than the API takes: see [Requests](#requests) | |
+| `outcome-unknown` | 500 | The route's commit failed, or passed its deadline, once it had begun, so its writes may have committed or not; a UI does not make the request again until it knows which | |
 | `sign-in-required` | 401 | A route that needs a user has an anonymous request | `WWW-Authenticate: Bearer` |
 | `invalid-token` | 401 | The bearer token does not verify, or has expired | `WWW-Authenticate: Bearer error="invalid_token"` |
 | `keys-unavailable` | 503 | The sign-in system's keys cannot be fetched, for a token whose key the API does not hold; a UI retries, and does not sign the user out | |
@@ -123,14 +124,19 @@ as `unpriced`, answers its own error instead. Its
 `detail` names what was called, as `pricing answered 503 to GET /prices/US0001`, and never holds what a database's
 driver said. An operation lists the kinds that what its route asks for can raise: every kind for another service, all
 but `service-not-found` and `service-bad-reply` for a database, and `service-timeout` for a cache or a compute
-function; and `body-too-large` for every route that takes a body.
+function; `body-too-large` for every route that takes a body; and `outcome-unknown` for every route that writes a
+database.
 
 Each operation lists, under each status, the type and title of every error it may answer, in its description.
 
 ## Identity
 
 A UI sends the user's JWT as `Authorization: Bearer TOKEN`; a request without the header is anonymous. In development,
-a UI signs its tokens with basis's published development key, which every API refuses except on a declared desktop.
+a UI signs its tokens with basis's published development key, which every API refuses except on a declared desktop, and
+on a socket only that machine reaches. A route that is not a GET asks for the user, and answers an anonymous request
+`sign-in-required` where it needs one, unless it declares that anyone may make it; the sample's `record_settlement`
+needs a user. The `detail` of an `invalid-token` or `keys-unavailable` problem names nothing of the API's sign-in, its
+issuer, audience or keys' URL.
 [The design](design.md#apis-basisapi) says what a token is checked for.
 
 ## Datasets as Arrow

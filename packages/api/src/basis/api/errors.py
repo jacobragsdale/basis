@@ -265,6 +265,15 @@ class NotReadyError(Error):
     title = "The service is not ready"
 
 
+class OutcomeUnknownError(Error):
+    """A commit that failed or passed its deadline once it had begun, which may have committed the request's writes or
+    not: a UI does not make the request again, as it may a 503's, until it knows which. Every route that writes a
+    database may answer it."""
+
+    status = HTTPStatus.INTERNAL_SERVER_ERROR
+    title = "Whether the request's writes committed is not known"
+
+
 class BodyTooLargeError(Error):
     """A request body over the settings' `serve.max_body_bytes`, which every route that takes a body may answer."""
 

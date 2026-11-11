@@ -56,7 +56,10 @@ async def note(noted: Noted) -> int:
 
 
 SERVICE = api.Service(
-    name="orders", settings=api.Settings, resources=[], routes=[api.post("/orders", place, deadline_s=1, response=Order, errors=[]), api.post("/notes", note, deadline_s=1, response=int, errors=[])]
+    name="orders",
+    settings=api.Settings,
+    resources=[],
+    routes=[api.post("/orders", place, deadline_s=1, response=Order, errors=[], anonymous=True), api.post("/notes", note, deadline_s=1, response=int, errors=[], anonymous=True)],
 )
 
 

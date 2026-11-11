@@ -32,12 +32,13 @@ from uuid import UUID
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.docs import get_swagger_ui_html
 from opentelemetry.sdk.trace import TracerProvider
 from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from basis.api import errors, openapi, opened, origins, routes, tokens, ui
 from basis.api.fakes import Fakes
@@ -166,6 +167,8 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | 
     app = openapi.Application(
         title=service.name,
         lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
         middleware=[
             *origins.middleware(configured.allowed_origins),
             Middleware(GZipMiddleware, minimum_size=COMPRESS_FROM, compresslevel=COMPRESS_LEVEL),  # outside the request boundary, which logs what the handler answered
@@ -193,7 +196,7 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | 
         return Health(status="ready", commit=configured.git_sha)
 
     _health(app, service, live, ready)
-    _routes(app, service)
+    _routes(app, service, docs=configured.serve.docs)
     return App(service, configured, app, lifecycle, provider)
 
 
@@ -211,9 +214,26 @@ def _health(app: openapi.Application, service: Service, live: Callable[[], Await
         app.add_api_route(f"{routes.API}/openapi.json", document, methods=["GET"], include_in_schema=False)
 
 
-def _routes(app: openapi.Application, service: Service) -> None:
+SWAGGER_UI = "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.17.14"
+"""Swagger UI's files, at one exact version, so a page of `/docs` loads the script it loaded when the version was
+chosen, never whatever the CDN calls the latest."""
+
+
+def _docs(app: openapi.Application, service: Service) -> None:
+    """`/docs`, Swagger UI's page of the app's document, for a developer who turns it on (`serve.docs`)."""
+    document = f"{routes.API}/openapi.json" if service.ui is not None else "/openapi.json"
+
+    async def docs() -> HTMLResponse:
+        return get_swagger_ui_html(openapi_url=document, title=f"{service.name} docs", swagger_js_url=f"{SWAGGER_UI}/swagger-ui-bundle.js", swagger_css_url=f"{SWAGGER_UI}/swagger-ui.css")
+
+    app.add_api_route("/docs", docs, methods=["GET"], include_in_schema=False)
+
+
+def _routes(app: openapi.Application, service: Service, *, docs: bool) -> None:
     """The service's routes on `app`: at their own paths, or, for an app that serves a UI, under /api, with the
-    document theirs as the repo commits it, and the UI at / after every route."""
+    document theirs as the repo commits it, and the UI at / after every route; and `/docs` where the settings ask."""
+    if docs:
+        _docs(app, service)
     if service.ui is None:
         routes.add(app, service)
         return
@@ -223,6 +243,8 @@ def _routes(app: openapi.Application, service: Service) -> None:
 
 
 async def _problem(request: Request, error: Exception) -> Response:
+    if isinstance(error, ServiceError) and (cause := error.__cause__) is not None:  # what a driver said, which the problem never holds
+        log.warning("%s: %s", error, cause, extra={"resource": error.resource, "kind": type(error).__name__, "reason": f"{type(cause).__qualname__}: {cause}"})
     request_id = request.scope.get(REQUEST_ID)
     return errors.response(error, request_id if isinstance(request_id, UUID) else None)
 

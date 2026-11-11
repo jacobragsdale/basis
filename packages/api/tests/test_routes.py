@@ -123,13 +123,13 @@ def _service(*routes: api.Route) -> api.Service:
 SERVICE = _service(
     api.get("/quotes/{security}", quote, deadline_s=1, response=Quote, errors=[]),
     api.get("/lots/{number}", lot, deadline_s=1, response=Quote, errors=[]),
-    api.post("/orders", place, deadline_s=1, response=Order, errors=[]),
+    api.post("/orders", place, deadline_s=1, response=Order, errors=[], anonymous=True),
     api.get("/stale/{security}", stale, deadline_s=1, response=Quote, errors=[Stale]),
     api.get("/unlisted/{security}", unlisted, deadline_s=1, response=Quote, errors=[Stale]),
     api.get("/warehouse", from_the_warehouse, deadline_s=0.05, response=list[Quote], errors=[]),
     api.get("/pricing", from_pricing, deadline_s=0.05, response=Quote, errors=[]),
     api.get("/cache", from_the_cache, deadline_s=0.05, response=Quote, errors=[]),
-    api.post("/write", write, deadline_s=0.1, response=Order, errors=[]),
+    api.post("/write", write, deadline_s=0.1, response=Order, errors=[], anonymous=True),
 )
 
 
@@ -234,8 +234,8 @@ def embedded(security: str, order: Annotated[Order, Body(embed=True)]) -> Quote:
         (lambda: api.get("/lots/{number:int}", lot, deadline_s=1, response=Quote, errors=[]), r"converts \{number:int\} in its path: name the parameter alone, as \{number\}"),
         (_ok(by_time), "query parameter at holds time, a time of day, whose offset pydantic cannot require"),
         (_ok(by_mixed), r"query parameter pair is tuple\[int, str\]"),
-        (lambda: api.post("/q/{security}", two_bodies, deadline_s=1, response=Quote, errors=[]), "takes 2 bodies, order, other"),
-        (lambda: api.post("/q/{security}", embedded, deadline_s=1, response=Quote, errors=[]), "drop embed=True"),
+        (lambda: api.post("/q/{security}", two_bodies, deadline_s=1, response=Quote, errors=[], anonymous=True), "takes 2 bodies, order, other"),
+        (lambda: api.post("/q/{security}", embedded, deadline_s=1, response=Quote, errors=[], anonymous=True), "drop embed=True"),
     ],
     ids=[
         "no-deadline", "endless-deadline", "deadline-as-a-bool", "deadline-as-text", "no-return-annotation", "another-response", "none-without-204", "204-with-a-body",
@@ -246,6 +246,30 @@ def embedded(security: str, order: Annotated[Order, Body(embed=True)]) -> Quote:
 def test_a_route_cannot_skip_its_declarations(declare: Callable[[], object], message: str) -> None:
     with pytest.raises(api.DeclarationError, match=message):
         declare()
+
+
+def signed(order: Order, user: Annotated[api.User | None, api.given(api.User)]) -> Order:
+    del user
+    return order
+
+
+@pytest.mark.parametrize(("declare", "method"), [(api.post, "POST"), (api.put, "PUT"), (api.patch, "PATCH"), (api.delete, "DELETE")], ids=["post", "put", "patch", "delete"])
+def test_a_route_that_is_not_a_get_asks_for_the_user_or_says_it_is_anonymous(declare: Callable[..., api.Route], method: str) -> None:
+    message = (
+        f"place is a {method}, which changes what the service holds, and asks for no user: ask for it in its parameters,"
+        r" as Annotated\[User \| None, api.given\(User\)\], or declare anonymous=True where anyone may make it"
+    )
+    with pytest.raises(api.DeclarationError, match=message):
+        declare("/orders", place, deadline_s=1, response=Order, errors=[])
+    assert declare("/orders", place, deadline_s=1, response=Order, errors=[], anonymous=True).anonymous
+    assert not declare("/orders", signed, deadline_s=1, response=Order, errors=[]).anonymous
+
+
+def test_anonymous_is_declared_only_where_it_says_something() -> None:
+    with pytest.raises(api.DeclarationError, match="signed asks for the user, and declares anonymous=True: drop anonymous=True"):
+        api.post("/orders", signed, deadline_s=1, response=Order, errors=[], anonymous=True)
+    with pytest.raises(api.DeclarationError, match="quote is a GET, which asks for no user unless it says so: drop anonymous=True"):
+        api.get("/quotes/{security}", quote, deadline_s=1, response=Quote, errors=[], anonymous=True)
 
 
 def test_basis_adds_the_errors_a_route_can_meet_to_those_it_declares() -> None:
@@ -382,7 +406,7 @@ def test_a_write_whose_routes_deadline_passed_before_its_commit_is_rolled_back()
     """The commit's own check of the route's deadline, with no race: the statement runs under the database's own
     deadline, and the commit under a route's deadline of 0s, which has passed before it begins."""
     warehouse = fakes.Database(answers={INSERT: 1})
-    service = _service(api.post("/write", write, deadline_s=1, response=Order, errors=[]))
+    service = _service(api.post("/write", write, deadline_s=1, response=Order, errors=[], anonymous=True))
 
     async def main() -> None:
         given: fakes.Fakes = {WAREHOUSE: warehouse, PRICING: fakes.Http(_pricing()), PRICES: fakes.Cache()}
@@ -453,7 +477,7 @@ def book(booking: Booked) -> Quote:
 
 
 def test_a_body_is_validated_once() -> None:
-    service = _service(api.post("/bookings", book, deadline_s=1, response=Quote, errors=[]))
+    service = _service(api.post("/bookings", book, deadline_s=1, response=Quote, errors=[], anonymous=True))
     with TestClient(api.build(service, settings=api.Settings.given(), fakes={WAREHOUSE: fakes.Database(), PRICING: fakes.Http(_pricing())}).asgi) as client:
         assert client.post("/bookings", json={"price": 1.5}).json() == {"security": "X", "price": 150.0}  # not 15000.0
 
@@ -575,7 +599,7 @@ def tree() -> Tree:
         (lambda: api.get("/noon", at_noon_naively, deadline_s=1, response=NaiveStamp, errors=[]), "at_noon_naively's response holds NaiveStamp.at, a datetime, which takes a time without its offset"),
         (lambda: api.get("/by-desk", by_desk, deadline_s=1, response=dict[str, datetime], errors=[]), "by_desk's response holds dict[str, datetime.datetime], a datetime"),
         (lambda: api.get("/naive", naive_query, deadline_s=1, response=Stamp, errors=[]), "naive_query's query parameter at holds datetime, a datetime"),
-        (lambda: api.post("/naive", naive_body, deadline_s=1, response=Stamp, errors=[]), "naive_body's body holds NaiveStamp.at, a datetime"),
+        (lambda: api.post("/naive", naive_body, deadline_s=1, response=Stamp, errors=[], anonymous=True), "naive_body's body holds NaiveStamp.at, a datetime"),
         (lambda: api.get("/opening", opening, deadline_s=1, response=Opening, errors=[]), "opening's response holds Opening.opens, a time of day, whose offset pydantic cannot require"),
     ],
     ids=["a-response-model", "a-mapping", "a-query-parameter", "a-body", "a-time-of-day"],
@@ -595,7 +619,7 @@ def test_a_recursive_alias_is_walked_once() -> None:
 
 
 def test_a_time_without_its_offset_is_refused_as_the_request_is_read() -> None:
-    service = _service(api.post("/stamps", stamped, deadline_s=1, response=Stamp, errors=[]))
+    service = _service(api.post("/stamps", stamped, deadline_s=1, response=Stamp, errors=[], anonymous=True))
     with TestClient(api.build(service, settings=api.Settings.given(), fakes={WAREHOUSE: fakes.Database(), PRICING: fakes.Http(_pricing())}).asgi) as client:
         assert client.post("/stamps", json={"at": "2026-11-06T12:00:00Z"}).json() == {"at": "2026-11-06T12:00:00Z"}
         [error] = client.post("/stamps", json={"at": "2026-11-06T12:00:00"}).json()["errors"]
@@ -633,7 +657,7 @@ class Hedged(BaseModel):
     ids=["a-union", "a-union-in-a-list", "a-validators-tag"],
 )
 def test_a_body_errors_pointer_names_the_bodys_own_keys_never_a_unions_tags(raw: bytes, pointers: set[str]) -> None:
-    service = _service(api.post("/hedges", hedge, deadline_s=1, response=Quote, errors=[]))
+    service = _service(api.post("/hedges", hedge, deadline_s=1, response=Quote, errors=[], anonymous=True))
     with TestClient(api.build(service, settings=api.Settings.given(), fakes={WAREHOUSE: fakes.Database(), PRICING: fakes.Http(_pricing())}).asgi) as client:
         response = client.post("/hedges", content=raw, headers={"content-type": "application/json"})
     assert {error["pointer"] for error in response.json()["errors"]} == pointers

@@ -47,8 +47,9 @@ from pydantic import BaseModel, ValidationError
 
 from basis.api import arrow, dataset, deadlines, fakes, outboxes
 from basis.api.compute import ComputeFunction
+from basis.api.errors import OutcomeUnknownError
 from basis.api.pool import Call, InProcess, Pool, Runs
-from basis.api.resources import Bind, Body, CacheResource, ClockResource, DatabaseResource, HttpMethod, HttpResource, IdsResource, Query, Resource, SendMethod
+from basis.api.resources import Bind, Body, CacheResource, ClockResource, DatabaseResource, HttpMethod, HttpResource, IdsResource, Query, Resource, Segment, SendMethod, filled
 from basis.api.service import DeclarationError, Service
 from basis.api.settings import Settings
 from basis.core import logs, opened
@@ -569,10 +570,13 @@ class DatabaseSession:
                 route = limit.enclosing
                 whose = f"what was left of {route.whose}'s deadline of {route.seconds:g}s" if route is not None else f"its deadline of {resource.deadline_s:g}s"
                 detail = f"{resource.name}'s commit did not finish within {whose}: whether the request's writes there committed, the log says when it ends"
-                raise Timeout(detail, resource=resource.name) from error
+                raise _unknown(resource.name, detail, error) from error
             except asyncio.CancelledError:
                 self._database.outlive(_fate(committing, resource.name, "commit"))
                 raise
+            except ServiceError as error:  # the commit began, and its acknowledgement never came: it may have committed
+                detail = f"{resource.name}'s commit failed, and may have committed the request's writes there or not: do not make the request again until you know which"
+                raise _unknown(resource.name, detail, error) from error
 
     async def _roll_back(self, stack: ExitStack) -> None:
         """End the transaction and give back the connection. It never raises but when cancelled: the request already
@@ -709,6 +713,13 @@ async def _fate(finishing: asyncio.Future[None], name: str, what: Literal["commi
         log.warning("%s's rollback failed after its deadline; its connection is closed, which ends it", name, exc_info=error, extra=extra)
 
 
+def _unknown(name: str, detail: str, error: BaseException) -> OutcomeUnknownError:
+    """A request's answer whose commit in database `name` began and did not end as it should, logged with why."""
+    cause = error.__cause__ if error.__cause__ is not None else error
+    log.error("%s: the outcome is unknown", detail, extra={"resource": name, "outcome": "unknown", "reason": f"{type(cause).__qualname__}: {cause}"})
+    return OutcomeUnknownError(detail)
+
+
 def _commit(statements: Statements, stack: ExitStack) -> None:
     with stack:
         statements.commit()
@@ -729,16 +740,19 @@ class HttpClient:
     def deadline_s(self) -> float:
         return self._calls.deadline_s
 
-    async def get[T](self, path: str, reply: type[T], /, *, query: Query | None = None) -> T:
-        return await self.call("GET", path, reply, query=query)
+    async def get[T](self, path: str, reply: type[T], /, *, query: Query | None = None, segments: Mapping[str, Segment] | None = None) -> T:
+        return await self.call("GET", path, reply, query=query, segments=segments)
 
-    async def post[T](self, path: str, reply: type[T], /, *, query: Query | None = None, body: Body = None) -> T:
-        return await self.call("POST", path, reply, query=query, body=body)
+    async def post[T](self, path: str, reply: type[T], /, *, query: Query | None = None, body: Body = None, segments: Mapping[str, Segment] | None = None) -> T:
+        return await self.call("POST", path, reply, query=query, body=body, segments=segments)
 
-    async def call[T](self, method: HttpMethod, path: str, reply: type[T], /, *, query: Query | None = None, body: Body = None) -> T:
-        return await self._calls.call(method, path, reply, query=query, body=body)
+    async def call[T](  # noqa: PLR0913 -- the request's parts, by keyword
+        self, method: HttpMethod, path: str, reply: type[T], /, *, query: Query | None = None, body: Body = None, segments: Mapping[str, Segment] | None = None
+    ) -> T:
+        return await self._calls.call(method, filled(path, segments), reply, query=query, body=body)
 
-    async def send(self, method: SendMethod, path: str, body: Body = None, /, *, key: str) -> None:
+    async def send(self, method: SendMethod, path: str, body: Body = None, /, *, key: str, segments: Mapping[str, Segment] | None = None) -> None:
+        path = filled(path, segments)
         outboxes.checked(path, key)
         sent = content(body)
         writing, serving = _WRITING.get(), deadlines.serving()

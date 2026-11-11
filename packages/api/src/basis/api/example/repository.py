@@ -41,7 +41,7 @@ async def cached_bond(warehouse: api.Reader, terms: api.Cache[Bond], security: s
 async def clean_price(pricing: api.Client, security: str) -> float:
     """The pricing service's clean price of the bond, per 100 of face."""
     try:
-        return (await pricing.get(f"/prices/{security}", CleanPrice)).clean
+        return (await pricing.get("/prices/{security}", CleanPrice, segments={"security": security})).clean
     except api.NotFound as missing:  # every other kind of failure answers its own problem
         msg = f"the pricing service has no price for {security}"
         raise Unpriced(msg) from missing

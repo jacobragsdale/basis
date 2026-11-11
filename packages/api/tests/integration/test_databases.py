@@ -213,12 +213,12 @@ def _service(scratch: Scratch) -> api.Service:
     long = 30  # seconds: longer than any resource's deadline, which is the one these tests reach
     routes = [
         api.get("/prices/{security}", read, deadline_s=long, response=Price, errors=[Missing]),
-        api.post("/prices", write, deadline_s=long, response=Price, errors=[]),
-        api.post("/read-your-writes", write_and_read, deadline_s=long, response=Price, errors=[Missing]),
-        api.post("/refused", refuse, deadline_s=long, response=Price, errors=[Refused]),
-        api.post("/misanswered", misanswer, deadline_s=long, response=Price, errors=[]),
-        api.post("/slowly", write_slowly, deadline_s=long, response=Price, errors=[]),
-        api.post("/cached-write", write_then_cache, deadline_s=long, response=Price, errors=[]),
+        api.post("/prices", write, deadline_s=long, response=Price, errors=[], anonymous=True),
+        api.post("/read-your-writes", write_and_read, deadline_s=long, response=Price, errors=[Missing], anonymous=True),
+        api.post("/refused", refuse, deadline_s=long, response=Price, errors=[Refused], anonymous=True),
+        api.post("/misanswered", misanswer, deadline_s=long, response=Price, errors=[], anonymous=True),
+        api.post("/slowly", write_slowly, deadline_s=long, response=Price, errors=[], anonymous=True),
+        api.post("/cached-write", write_then_cache, deadline_s=long, response=Price, errors=[], anonymous=True),
     ]
     return api.Service(name="scratch", settings=api.Settings, resources=[WAREHOUSE, QUICK, CACHED], routes=routes)
 
@@ -345,15 +345,16 @@ class _Slowed:
         self.statements.commit()
 
 
-def test_a_commit_past_its_deadline_is_a_504_and_the_log_says_it_committed(mssql: Scratch, logged: Records) -> None:
+def test_a_commit_past_its_deadline_is_an_unknown_outcome_and_the_log_says_it_committed(mssql: Scratch, logged: Records) -> None:
     app = _app(mssql, {QUICK: _SlowCommit(mssql, wait_s=1.5)})
     spans = InMemorySpanExporter()
     app.provider.add_span_processor(SimpleSpanProcessor(spans))
     with TestClient(app.asgi) as client:
         response = client.post("/slowly", json=PRICE)
         read = client.get("/prices/US0000000000")  # a read, which ends in a rollback, of a security nothing wrote
-    assert (response.status_code, response.json()["detail"]) == (
-        HTTPStatus.GATEWAY_TIMEOUT,
+    assert (response.status_code, response.json()["type"], response.json()["detail"]) == (
+        HTTPStatus.INTERNAL_SERVER_ERROR,
+        "outcome-unknown",
         "quick's commit did not finish within its deadline of 1s: whether the request's writes there committed, the log says when it ends",
     )
     assert _stored(mssql) == [("US912810TM64", Decimal("101.250000"))]
@@ -450,7 +451,10 @@ def _outboxed_service(scratch: Scratch, table: str) -> api.Service:
         msg = f"{price.security} is refused after all"
         raise Refused(msg)
 
-    routes = [api.post("/book", book, deadline_s=30, response=Price, errors=[]), api.post("/refused", book_then_refuse, deadline_s=30, response=Price, errors=[Refused])]
+    routes = [
+        api.post("/book", book, deadline_s=30, response=Price, errors=[], anonymous=True),
+        api.post("/refused", book_then_refuse, deadline_s=30, response=Price, errors=[Refused], anonymous=True),
+    ]
     return api.Service(name="booking", settings=api.Settings, resources=[warehouse, LEDGER], routes=routes)
 
 

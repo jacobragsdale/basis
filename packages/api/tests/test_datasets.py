@@ -102,7 +102,7 @@ SERVICE = api.Service(
         api.get("/exposures", exposures, deadline_s=1, response=list[Exposure], errors=[], dataset=True),
         api.get("/none-yet", none_yet, deadline_s=1, response=tuple[Exposure, ...], errors=[], dataset=True),
         api.get("/held", held, deadline_s=1, response=list[Lot], errors=[], dataset=True),
-        api.post("/marks", mark, deadline_s=1, response=list[Lot], errors=[], dataset=True),
+        api.post("/marks", mark, deadline_s=1, response=list[Lot], errors=[], dataset=True, anonymous=True),
         api.get("/plain", plain, deadline_s=1, response=list[Lot], errors=[]),
     ],
 )

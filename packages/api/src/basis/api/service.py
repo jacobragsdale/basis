@@ -76,7 +76,7 @@ from starlette.routing import Route as StarletteRoute
 from basis.api import strict, tables
 from basis.api.compute import Compute, ComputeFunction
 from basis.api.dataset import Rows, rows
-from basis.api.errors import Answerable, BodyTooLargeError, DeclarationError, DomainError, Error, NotReadyError
+from basis.api.errors import Answerable, BodyTooLargeError, DeclarationError, DomainError, Error, NotReadyError, OutcomeUnknownError
 from basis.api.identity import GivenUser, SignInRequiredError, User, annotation_refusal
 from basis.api.resources import Cache, CacheResource, Client, Clock, ClockResource, DatabaseResource, HttpResource, Ids, IdsResource, Opened, Reader, Resource, Session, Writer, check_outboxes
 from basis.api.settings import Settings
@@ -90,10 +90,10 @@ RESERVED = ("/health", "/docs", "/redoc", "/openapi.json")
 NAME = re.compile(r"[a-z][a-z0-9-]{0,62}")
 _PARAMETER = re.compile(r"\{[^}]*\}")
 _REFERENCE = re.compile(r"[A-Za-z_][\w.]*:[A-Za-z_]\w*")
-BASIS_ERRORS: tuple[Answerable, ...] = (*KINDS, NotReadyError, BodyTooLargeError)
+BASIS_ERRORS: tuple[Answerable, ...] = (*KINDS, NotReadyError, BodyTooLargeError, OutcomeUnknownError)
 """The errors basis raises itself, which a route never declares: `Route.answers` adds each where the route can meet it:
 every kind another service's calls can raise, those a database's statements can (`DATABASE_KINDS`), a cache's read's
-or a compute call's `Timeout`, and `BodyTooLargeError` where it takes a body."""
+or a compute call's `Timeout`, `BodyTooLargeError` where it takes a body, and `OutcomeUnknownError` where it writes."""
 
 type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
 _RESOURCES = (DatabaseResource, HttpResource, CacheResource, ClockResource, IdsResource)
@@ -127,11 +127,14 @@ class Route:
     status: int = HTTPStatus.OK
     """The status of a response that succeeds."""
     dataset: InitVar[bool] = False
+    """Whether it answers a dataset, rows of one model, which it gives as Arrow when the request asks for it: see
+    `dataset.py`. `rows` keeps what it declares."""
     smoke: Mapping[str, object] | None = None
     """A read-only example of a request, which `basis smoke` sends the deployed API and whose response it validates:
     `{"path": {...}, "query": {...}, "headers": {...}}`, as `basis call` takes one; a GET's alone."""
-    """Whether it answers a dataset, rows of one model, which it gives as Arrow when the request asks for it: see
-    `dataset.py`. `rows` keeps what it declares."""
+    anonymous: bool = False
+    """That anyone may make the route's requests, which a route that is not a GET says, where it does not ask for the
+    user: a route that changes what the service holds knows who asked, or says that it need not."""
     name: str = field(init=False)
     """The handler's name, which is the route's."""
     asks: tuple[Ask, ...] = field(init=False)
@@ -195,9 +198,12 @@ class Route:
                 msg = f"{self.name}'s parameter {ask.parameter} asks for the user: {fix}"
                 raise DeclarationError(msg)
         object.__setattr__(self, "asks", asks)
+        _check_anonymous(self, asks)
         object.__setattr__(self, "writes", _written(self, asks))
         object.__setattr__(self, "reads", strict.shape(self.path, handler, self.name))
-        object.__setattr__(self, "answers", (*self.errors, *_met(asks), *((BodyTooLargeError,) if self.reads.body is not None else ())))
+        body = (BodyTooLargeError,) if self.reads.body is not None else ()
+        unknown = (OutcomeUnknownError,) if self.writes is not None else ()
+        object.__setattr__(self, "answers", (*self.errors, *_met(asks), *body, *unknown))
 
     @property
     def shape(self) -> tuple[Method, str]:
@@ -217,6 +223,7 @@ class _Declare(Protocol):
         status: int = HTTPStatus.OK,
         dataset: bool = False,
         smoke: Mapping[str, object] | None = None,
+        anonymous: bool = False,
     ) -> Route: ...
 
 
@@ -231,15 +238,39 @@ def _route(method: Method) -> _Declare:
         status: int = HTTPStatus.OK,
         dataset: bool = False,
         smoke: Mapping[str, object] | None = None,
+        anonymous: bool = False,
     ) -> Route:
-        return Route(method, path, handler, deadline_s, response, errors, status, dataset, smoke)
+        return Route(method, path, handler, deadline_s, response, errors, status, dataset, smoke, anonymous)
 
     declare.__name__ = declare.__qualname__ = method.lower()
     declare.__doc__ = (
         f"A route that answers {method} requests to `path` with `handler`: within `deadline_s` seconds, with `response` and `status` when it succeeds, and with one of `errors` when it fails;"
         " with `dataset=True`, `response` is rows, which it answers as Arrow when the request asks for it."
+        + ("" if method == "GET" else " Its handler asks for the user, or the route declares `anonymous=True`, that anyone may make it.")
     )
     return declare
+
+
+def _check_anonymous(route: Route, asks: Sequence[Ask]) -> None:
+    """That a route which is not a GET asks for the user or declares that it is anonymous, and that one which declares
+    it is anonymous is neither a GET nor asks for the user."""
+    signed = any(isinstance(ask.given, type) and issubclass(ask.given, User) for ask in asks)
+    anonymous: object = route.anonymous
+    if not isinstance(anonymous, bool):
+        msg = f"{route.name} declares anonymous={anonymous!r}: give anonymous=True, or leave it out"
+        raise DeclarationError(msg)
+    if anonymous and route.method == "GET":
+        msg = f"{route.name} is a GET, which asks for no user unless it says so: drop anonymous=True"
+        raise DeclarationError(msg)
+    if anonymous and signed:
+        msg = f"{route.name} asks for the user, and declares anonymous=True: drop anonymous=True, since the handler sees who asked, or None"
+        raise DeclarationError(msg)
+    if not anonymous and not signed and route.method != "GET":
+        msg = (
+            f"{route.name} is a {route.method}, which changes what the service holds, and asks for no user: ask for it in its parameters,"
+            " as Annotated[User | None, api.given(User)], or declare anonymous=True where anyone may make it"
+        )
+        raise DeclarationError(msg)
 
 
 def _check_smoke(route: Route) -> None:

@@ -139,7 +139,15 @@ Paths are under `src/basis/api/`.
   it never reads a key the token carries. Every check it makes is in `tokens.py`'s docstring, and each has a test.
 - The development key is published, so every app refuses it on any machine that is not a declared desktop
   (`identity.Machine`), in `tokens.plan`, which every app passes through; only settings from `Settings.given`, which a
-  test makes in code and no variable can mark, take it anywhere.
+  test makes in code and no variable can mark, take it anywhere, and those `dev.settings` makes for an app on its fakes
+  alone, in `basis dev` and `basis call --fake`. `api.serve` refuses it on any host but loopback, whatever the settings.
+- A route that is not a GET asks for the user or declares `anonymous=True` (`service._check_anonymous`).
+- A path to another service is a template, its values given as `segments=` and encoded each as one segment
+  (`resources.filled`); a path with a query, a fragment or a dot segment is refused, and the outbox holds none.
+- A commit that fails or passes its deadline once begun answers `OutcomeUnknownError`, logged with `outcome: unknown`
+  and its reason; a service error's cause, which its problem never holds, is logged when it answers.
+- `/docs` is served only with `serve.docs`, its Swagger UI pinned to one version; a refused token's problem names
+  nothing of the API's sign-in, which its log line's `why` does.
 - A token whose key the JWK set holds never waits for a fetch; only one naming a key it does not hold does.
 - A test builds its app with `Settings.given(...)`, so the developer's environment never changes what it checks.
 

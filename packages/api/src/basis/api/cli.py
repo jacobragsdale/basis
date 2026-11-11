@@ -191,7 +191,7 @@ def _dev(args: DevArgs) -> int:
 
     hooks.ensure(args.repo)
     found = load(args.service)
-    serve(found, fakes=dev.fakes(found), host=LOCAL)
+    serve(found, settings=dev.settings(found), fakes=dev.fakes(found), host=LOCAL)
     return 0
 
 

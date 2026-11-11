@@ -155,8 +155,8 @@ def public_key(tmp_path_factory: pytest.TempPathFactory) -> dict[str, object]:
         (lambda: token(SIGNING, nbf=253402300799), "refused: the token is not valid until 9999-12-31T23:59:59+00:00"),
         (lambda: token(SIGNING, exp=None), "refused: the token has no exp claim"),
         (lambda: token(SIGNING, sub=None), "refused: the token has no sub claim"),
-        (lambda: token(SIGNING, iss="https://elsewhere.example"), f"refused: the token is not from this API's issuer, {ISSUER}"),
-        (lambda: token(SIGNING, aud="pricing"), f"refused: the token is not for this API, whose audience is {AUDIENCE}"),
+        (lambda: token(SIGNING, iss="https://elsewhere.example"), "refused: the token is not from this API's issuer"),
+        (lambda: token(SIGNING, aud="pricing"), "refused: the token is not for this API"),
         (lambda: token(SIGNING, desk=None), "refused: the token has no desk claim, which this API needs"),
         (lambda: token(SIGNING, roles=7), "refused: the token's roles claim is not valid: Input should be a valid tuple"),
         (lambda: token(OTHER), "refused: the token's signature does not verify"),
@@ -419,7 +419,8 @@ def test_a_stale_set_is_fetched_again_in_the_background_and_kept_when_that_fails
         finally:
             await verifying.close()
 
-    assert asyncio.run(main()) == ["jsmith of rates", f"unavailable: {signin.url} answered 500", "jsmith of rates"]
+    unavailable = "unavailable: the sign-in system's keys cannot be fetched now, to look up the token's key: make the request again soon"
+    assert asyncio.run(main()) == ["jsmith of rates", unavailable, "jsmith of rates"]
     assert signin.fetches == 2
     assert [record["message"] for record in logged() if record["level"] == "warning"] == [
         f"the sign-in system's JWK set could not be fetched again, and the one fetched before is kept: {signin.url} answered 500"

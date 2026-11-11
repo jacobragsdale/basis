@@ -92,7 +92,7 @@ def _called(service: Service, name: str, request: str | Mapping[str, object], *,
     faked: dict[Faked, Fake] = dev.fakes(service) if resources == "fake" and (service.fakes is not None or reaches) else {}  # a service that reaches nothing needs no fakes
     for other in service.routes:  # another route's compute functions are never called here, so they start no process
         faked |= {ask.given: Compute() for ask in other.asks if isinstance(ask.given, ComputeFunction) and ask.given not in {found.given for found in route.asks}}
-    app = build(service, settings=settings, fakes=faked)
+    app = build(service, settings=dev.settings(service, settings) if resources == "fake" else settings, fakes=faked)
     with TestClient(app.asgi, raise_server_exceptions=False) as client:  # runs the lifespan, as `basis serve` does
         response = client.request(
             route.method,

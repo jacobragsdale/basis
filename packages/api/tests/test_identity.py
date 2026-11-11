@@ -132,7 +132,7 @@ def test_every_request_with_a_token_that_does_not_verify_is_refused_and_never_an
 def test_a_token_for_another_audience_is_refused() -> None:
     with TestClient(_app(audience="pricing").asgi) as client:
         response = client.get("/greeting", headers=_signed())
-    assert (response.status_code, response.json()["detail"]) == (HTTPStatus.UNAUTHORIZED, "the token is not for this API, whose audience is pricing")
+    assert (response.status_code, response.json()["detail"]) == (HTTPStatus.UNAUTHORIZED, "the token is not for this API")
 
 
 def test_a_health_check_is_left_alone() -> None:

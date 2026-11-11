@@ -154,7 +154,7 @@ def get_bond(response: type[BaseModel] = Bond, path: str = "/bonds/{security}") 
 
 
 def post_order(body: type[BaseModel] | None = Order, *, name: str = "place", status: int = HTTPStatus.OK) -> api.Route:
-    return api.post("/orders", _place(body, name), deadline_s=1, response=Bond, errors=[], status=status)  # ty: ignore[invalid-argument-type] -- a handler made for the test
+    return api.post("/orders", _place(body, name), deadline_s=1, response=Bond, errors=[], status=status, anonymous=True)  # ty: ignore[invalid-argument-type] -- a handler made for the test
 
 
 def get_rows(*, dataset: bool) -> api.Route:
@@ -382,7 +382,7 @@ def _taking(body: type[BaseModel]) -> api.Route:
         raise NotImplementedError
 
     take.__annotations__["order"] = body
-    return api.post("/take", take, deadline_s=1, response=Bond, errors=[])
+    return api.post("/take", take, deadline_s=1, response=Bond, errors=[], anonymous=True)
 
 
 def _giving(response: type[BaseModel]) -> api.Route:

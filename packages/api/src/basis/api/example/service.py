@@ -2,7 +2,8 @@
 convention, which a buyer pays the seller at settlement. Given a bond's terms, the service accrues over any period;
 for a bond in its warehouse, it accrues since the last coupon, prices the bond with the pricing service's clean price,
 solves for its yield to maturity in the service's process pool, lists its coupons, a dataset that a UI's grid can take
-as Arrow, and records settlements, booking each with the ledger service through the warehouse's outbox.
+as Arrow, and records settlements for a signed-in user, booking each with the ledger service through the warehouse's
+outbox.
 
 This file is the service, the declaration basis builds its app from, in which each route declares its deadline, its
 response and its errors. Its code sits in layers, each a module basis knows by its name, and each importing only those
@@ -26,6 +27,7 @@ service = api.Service(
     name="accruals",
     settings=Settings,
     resources=[WAREHOUSE, PRICING, LEDGER, TERMS, CLOCK, IDS],
+    user=api.User,
     routes=[
         api.get("/accrued-interest", handlers.accrued_interest, deadline_s=1, response=Accrual, errors=[PeriodReversed, PeriodTooLong]),
         api.get("/conventions", handlers.conventions, deadline_s=1, response=list[DayCount], errors=[]),

@@ -108,7 +108,7 @@ async def book_twice(price: Price, warehouse: Annotated[api.Writer, api.given(WA
 
 
 def _post(path: str, handler: Callable[..., object], *errors: type[api.Error], deadline_s: float = 10) -> api.Route:
-    return api.post(path, handler, deadline_s=deadline_s, response=Price, errors=list(errors))  # ty: ignore[invalid-argument-type] -- each handler is a function
+    return api.post(path, handler, deadline_s=deadline_s, response=Price, errors=list(errors), anonymous=True)  # ty: ignore[invalid-argument-type] -- each handler is a function
 
 
 SERVICE = api.Service(
