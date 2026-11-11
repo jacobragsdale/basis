@@ -2,6 +2,9 @@
 failure one line with its fix."""
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -190,3 +193,26 @@ def test_tests_may_round_and_code_that_does_not_round_passes(tmp_path: Path) -> 
     (tmp_path / "tests" / "test_rates.py").write_text("assert round(2.5) == 2\n", encoding="utf-8")
     (tmp_path / "rates.py").write_text("def rate(a: float, b: float) -> float:\n    return a / b\n", encoding="utf-8")
     assert gates.rounding(tmp_path) == []
+
+
+def test_a_module_no_test_imports_counts_against_the_floor_whatever_package_it_is_in(tmp_path: Path) -> None:
+    """`src/app` has no `__init__.py`, a namespace package, whose untested module coverage leaves out unless told
+    otherwise; a job's `main.py`, which runs it and which no test imports, is no code to cover."""
+    (tmp_path / "src" / "app").mkdir(parents=True)
+    (tmp_path / "src" / "app" / "core.py").write_text("def untested(x: int) -> int:\n    if x:\n        return x\n    return 0\n", encoding="utf-8")
+    (tmp_path / "jobs" / "prices").mkdir(parents=True)
+    (tmp_path / "jobs" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "jobs" / "prices" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "jobs" / "prices" / "main.py").write_text("from jobs.prices import job\n\nif __name__ == '__main__':\n    job.run()\n", encoding="utf-8")
+    (tmp_path / "jobs" / "prices" / "job.py").write_text("def run() -> int:\n    return 1\n", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_job.py").write_text("from jobs.prices import job\n\n\ndef test_run() -> None:\n    assert job.run() == 1\n", encoding="utf-8")
+    with gates.measured(90) as measured:
+        environment = {name: value for name, value in os.environ.items() if not name.startswith("COVERAGE")}
+        argv = [sys.executable, "-m", "pytest", "-q", "-p", "no:randomly", "-p", "no:basis", "--rootdir", str(tmp_path), *measured.argv()[1:], "tests"]
+        subprocess.run(argv, cwd=tmp_path, env=environment | {"PYTHONPATH": str(tmp_path)}, capture_output=True, check=False)
+        report = json.loads(measured.report.read_text(encoding="utf-8"))
+    files = set(report["files"])
+    assert "src/app/core.py" in files
+    assert "jobs/prices/main.py" not in files
+    assert report["totals"]["percent_covered"] < 100

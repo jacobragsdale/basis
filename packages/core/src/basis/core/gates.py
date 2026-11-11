@@ -53,7 +53,9 @@ MOCKS = frozenset({"unittest.mock", "mock", "pytest_mock"})
 """The modules that make mocks, each refused with any module under it."""
 MOCKERS = frozenset({"mocker", "class_mocker", "module_mocker", "package_mocker", "session_mocker"})
 """pytest-mock's fixtures, which a test asks for by its parameter's name."""
-OMITTED = ("**/tests/**", "**/test_*.py", "**/*_test.py", "**/conftest.py", f"**/{REPOSITORY}.py", f"**/{REPOSITORY}/**", "**/.venv/**")
+OMITTED = ("**/tests/**", "**/test_*.py", "**/*_test.py", "**/conftest.py", f"**/{REPOSITORY}.py", f"**/{REPOSITORY}/**", "**/.venv/**", "**/main.py")
+"""What coverage leaves out: the tests, repository modules, which the integration tier covers, and a job's or a
+model's `main.py`, which runs it from an editor and which no test imports."""
 EXCLUDED = ("if TYPE_CHECKING:", "raise NotImplementedError", "@overload", "if __name__ == .__main__.:")
 PLUGIN_OPTION = "--basis-gates"
 """What `basis check` gives pytest, with a file, for basis's plugin to write what it found in."""
@@ -335,5 +337,5 @@ def measured(floor: int | None) -> Generator[Measured]:
 def _settings(folder: Path) -> str:
     """coverage.py's settings, as basis measures by: its own, so a repo's `[tool.coverage]` cannot leave code out."""
     lines = ["[run]", "branch = True", "source = .", f"data_file = {folder / '.coverage'}", "omit =", *(f"    {pattern}" for pattern in OMITTED)]
-    lines += ["", "[report]", "exclude_also =", *(f"    {pattern}" for pattern in EXCLUDED)]
+    lines += ["", "[report]", "include_namespace_packages = True", "exclude_also =", *(f"    {pattern}" for pattern in EXCLUDED)]  # a module in a folder with no __init__.py counts too
     return "\n".join(lines) + "\n"
