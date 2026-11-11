@@ -51,7 +51,7 @@ jobs:
           uv run python -c 'from optim import run; from models.ladder import model; run(model, data="tests/fixture")'
           uv run --env-file .env basis run ladder --params models/ladder/params/default.json --data models/ladder/tests/fixture
           uv run --env-file .env optim run ladder --params models/ladder/params/default.json --data models/ladder/tests/fixture
-          run=$(ls snapshots/runs/optim/ladder | head -n 1)
+          run=$(ls snapshots/runs/optim/*.ladder | head -n 1)  # runs/optim/REPO.NAME/, since 7.14
           uv run --env-file .env basis replay ladder "${run%.json}" --portfolios P1
           uv run --env-file .env basis regress
           uv run basis describe ladder > /dev/null
