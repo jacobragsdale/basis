@@ -10,18 +10,26 @@ __init__.py` are both a handlers module:
 | `resources`, `errors` | The declarations: the resources and settings, and the errors, a domain exception's meaning among them | each other, domains |
 | `domain` | Pure types and rules | domains alone |
 
-Three rules hold them, each failure one `ERROR` line with its fix:
+A module of a `tests` package, a test module, and the repo's jobs, under `jobs/`, are no layer, whatever their names.
+
+Five rules hold them, each failure one `ERROR` line with its fix:
 
 - **Imports go down the table only**, directly or through modules of the repo's that are no layer, such as a
   helper: a domain module never imports a handlers module, nor a declaration a repository.
-- **A domain module stays pure**, as a compute module is, `domain.py` or any module of a `domain` package: it imports, directly or through modules of the repo's that
-  are no layer, nothing of basis, no web framework, server or settings (`fastapi`, `starlette`, `uvicorn`,
-  `pydantic_settings`), no database driver, HTTP client or storage, and none of the standard library's sockets,
-  processes or databases (`PURE`), so the same domain code runs in a job, which has no HTTP.
+- **No layer reaches the outside but through what `api.given` gives it**: none imports, directly or through modules
+  of the repo's that are no layer, a database driver, an HTTP client or storage, as basis-core's purity check lists
+  them (`basis.core.testing.FORBIDDEN`), nor the standard library's sockets, processes, databases or HTTP (`OUTSIDE`).
+- **A domain module stays pure**, as a compute module is, `domain.py` or any module of a `domain` package: it imports,
+  directly or through modules of the repo's that are no layer, nothing of basis, no web framework, server or settings
+  (`fastapi`, `starlette`, `uvicorn`, `pydantic_settings`), and nothing else the rule above refuses (`PURE`), so the
+  same domain code runs in a job, which has no HTTP.
+- **No layer reads the environment, the clock or new ids itself**: `os.environ` and `os.getenv`, `datetime.now`,
+  `date.today` and `time.time`, and `uuid.uuid4` and its kin, which settings, `api.clock` and `api.ids` give a handler.
 - **A handler passes a resource on, and never calls its methods**: in a handlers module, a function's parameter that
   `api.given` gives may be passed as an argument, read as an attribute, or called itself, as a compute function is, but
   never have a method called on it, `warehouse.fetch_one(...)`, so the SQL stays in repositories. The check reads the
-  code as it is written, a parameter by its own name.
+  code as it is written, a parameter by its own name, its annotation as written or through a type alias the module
+  defines or imports from the repo's own modules.
 
 grimp builds the graph of the repo's packages, each folder at its root with an `__init__.py`, with its cache off, so
 no folder appears in the repo; an import under `TYPE_CHECKING` is no import."""
@@ -39,19 +47,33 @@ import grimp.exceptions
 
 from basis.core.sync import UNREAD as _UNREAD
 from basis.core.sync import Problem
+from basis.core.testing import FORBIDDEN
 
 RANKS: Mapping[str, int] = {"service": 4, "handlers": 3, "repository": 2, "resources": 1, "errors": 1, "domain": 0}
 """Each layer, by its module's name, and its height: a module imports only those of its height or below."""
-PURE = (
-    "basis", "fastapi", "starlette", "uvicorn", "pydantic_settings",
-    "mssql_python", "oracledb", "pyodbc", "pymssql", "cx_Oracle", "sqlalchemy", "psycopg", "psycopg2", "snowflake",
-    "httpx", "httpx2", "requests", "urllib3", "aiohttp", "pyarrow", "boto3", "azure",
+JOBS = "jobs"
+"""The package of a repo's jobs, basis-job's, whose modules are no API layer whatever their names."""
+OUTSIDE = (
+    *dict.fromkeys(name.partition(".")[0] for name in FORBIDDEN if not name.startswith("basis.") and name != "pyarrow"),
     "socket", "ssl", "subprocess", "sqlite3", "smtplib", "ftplib", "socketserver",
 )  # fmt: skip
-"""What a domain module may not reach through its imports, each by its top-level name, as an import graph records an
-installed package: all of basis, which is plumbing; a web framework, server or settings; a database driver, an HTTP
-client or storage, `pyarrow` among them for its file systems; and the standard library's sockets, processes and
-databases."""
+"""What no layer reaches through its imports, each by its top-level name, as an import graph records an installed
+package: a database driver, an HTTP client or storage, as basis-core lists them for every part's pure code, and the
+standard library's sockets, processes and databases. pyarrow, which a repository's `fetch_table` answers, is the
+domain's alone to refuse."""
+OUTSIDE_MODULES = ("urllib.request", "http.client", "http.server", "xmlrpc.client", "asyncio.subprocess")
+"""The standard library's HTTP and processes, by the module a layer imports, since the graph records only `urllib`,
+`http` or `asyncio`, whose other modules are pure."""
+PURE = ("basis", "fastapi", "starlette", "uvicorn", "pydantic_settings", "pyarrow", *OUTSIDE)
+"""What a domain module may not reach through its imports: all of basis, which is plumbing; a web framework, server or
+settings; `pyarrow`, for its file systems; and what no layer reaches."""
+READS: Mapping[str, str] = {
+    "os.environ": "the environment", "os.getenv": "the environment", "os.environb": "the environment",
+    "datetime.now": "the clock", "datetime.utcnow": "the clock", "datetime.today": "the clock", "date.today": "the clock",
+    "time.time": "the clock", "time.time_ns": "the clock",
+    "uuid.uuid1": "a new id", "uuid.uuid4": "a new id", "uuid.uuid6": "a new id", "uuid.uuid7": "a new id",
+}  # fmt: skip
+"""What no layer reads itself, by its dotted name as the code writes it or imports it."""
 GIVEN = "given"
 """The name of what gives a handler its resources, `api.given`, as its parameters' annotations call it."""
 ORDER = "imports go down the layers alone: service, handlers, repository, then the declarations, resources and errors, then domain"
@@ -93,8 +115,10 @@ class _Graph:
 
 def layer(module: str) -> str | None:
     """The layer of the module `module`, by its own name; every module of a `domain` package is the domain too, as
-    `domain.py` is, so each stays pure; None for a module that is no layer."""
+    `domain.py` is, so each stays pure; None for a module that is no layer, a test's and a job's among them."""
     parts = module.split(".")
+    if parts[0] == JOBS or "tests" in parts or parts[-1].startswith("test_") or parts[-1] == "conftest":
+        return None
     if parts[-1] in RANKS:
         return parts[-1]
     return "domain" if "domain" in parts[1:-1] else None
@@ -122,9 +146,100 @@ def problems(repo: Path) -> list[Problem]:
                 problems.append(_upward(found, chain, own, theirs))
             elif own == "domain" and imported not in found.internal and imported.partition(".")[0] in PURE:
                 problems.append(_impure(found, chain))
-        if own == "handlers":
-            problems += _handlers(repo, found.path(module))
+            elif imported not in found.internal and imported.partition(".")[0] in OUTSIDE:
+                problems.append(_outside(found, chain, own))
+        tree = _tree(repo, found.path(module))
+        if tree is not None:
+            problems += _stdlib(found.path(module), module, own, tree)
+            problems += _reads(found.path(module), own, tree)
+            if own == "handlers":
+                problems += _handlers(repo, found.path(module), tree, packages)
     return problems
+
+
+def _outside(found: _Graph, chain: tuple[str, ...], own: str) -> Problem:
+    importer, imported = chain[0], chain[-1]
+    where = f"{found.path(importer)}:{found.line(importer, chain[1]) or 1}"
+    through = f", through {' -> '.join(chain[1:-1])}," if len(chain) > 2 else ""  # noqa: PLR2004 -- a chain of more than its ends
+    reason = f"{where} imports {imported}{through} into {importer}, and a {own} module reaches the outside only through what api.given gives it"
+    fix = "declare the database or the service it reaches as a resource, with api.database or api.http, and ask for it in the handler's parameters, as Annotated[api.Client, api.given(PRICING)]"
+    return reason, fix
+
+
+def _tree(repo: Path, relative: str) -> ast.Module | None:
+    try:
+        return ast.parse((repo / relative).read_text(encoding="utf-8"), filename=relative)
+    except OSError, UnicodeDecodeError, SyntaxError, ValueError:  # ruff and ty say what is wrong with it
+        return None
+
+
+def _stdlib(relative: str, module: str, own: str, tree: ast.Module) -> list[Problem]:
+    """Each import of the standard library's HTTP or processes in a layer's module, by the module it names."""
+    found: list[Problem] = []
+    for node in (found for found in ast.walk(tree) if isinstance(found, ast.Import | ast.ImportFrom)):
+        names: list[str] = []
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif node.module is not None and node.level == 0:
+            names = [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
+        for name in names:
+            if name in OUTSIDE_MODULES:
+                if own == "domain":
+                    reason = f"{relative}:{node.lineno} imports {name} into {module}, and a domain module stays pure: no I/O, no web framework and nothing of basis"
+                    fix = f"take what it needs from {name} as arguments, from a handler or a repository, which import it, so the same rules run in a job"
+                else:
+                    reason = f"{relative}:{node.lineno} imports {name} into {module}, and a {own} module reaches the outside only through what api.given gives it"
+                    fix = "declare the service it reaches as a resource, with api.http, and ask for it in the handler's parameters, as Annotated[api.Client, api.given(PRICING)]"
+                found.append((reason, fix))
+    return found
+
+
+def _reads(relative: str, own: str, tree: ast.Module) -> list[Problem]:
+    """Each read of the environment, the clock or a new id in a layer's module, as `READS` names them, through the
+    names the module imports them by."""
+    imported: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            imported |= {alias.asname or alias.name: alias.name for alias in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.module is not None and node.level == 0:
+            imported |= {alias.asname or alias.name: f"{node.module}.{alias.name}" for alias in node.names}
+    found: list[Problem] = []
+    for owner, node in _within(tree):
+        if not isinstance(node, ast.Attribute | ast.Name) or isinstance(getattr(node, "ctx", None), ast.Store):
+            continue
+        name = _dotted(node, imported)
+        shown = name.removeprefix("datetime.") if name is not None and name.startswith(("datetime.datetime.", "datetime.date.")) else name
+        if shown is None or (what := READS.get(shown)) is None:
+            continue
+        if what == "the environment":
+            reason = f"{relative}:{node.lineno}: {owner} reads {shown}, and a {own} module reads its settings through api.given(Settings)"
+            fix = "declare the value as a field of the service's Settings, which reads it from its BASIS_ variable, and ask for the settings in the handler's parameters"
+        else:
+            reason = f"{relative}:{node.lineno}: {owner} reads {shown}, and a {own} module reads no clock and makes no id"
+            fix = "ask for api.clock or api.ids in the handler's parameters, and pass the time or the id it gives to what needs it, so a recorded request replays it"
+        found.append((reason, fix))
+    return found
+
+
+def _within(tree: ast.Module) -> Iterator[tuple[str, ast.AST]]:
+    """Each node of `tree`, with the top-level function or class it is in, or `the module`."""
+    for statement in tree.body:
+        owner = statement.name if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) else "the module"
+        for node in ast.walk(statement):
+            yield owner, node
+
+
+def _dotted(node: ast.Attribute | ast.Name, imported: Mapping[str, str]) -> str | None:
+    """`node`'s dotted name, as the module's imports resolve its first part, where it is the outermost attribute read:
+    `datetime.now` for `datetime.now` after `from datetime import datetime`, never `datetime` alone."""
+    parts: list[str] = []
+    current: ast.expr = node
+    while isinstance(current, ast.Attribute):
+        parts.insert(0, current.attr)
+        current = current.value
+    if not isinstance(current, ast.Name) or current.id not in imported:
+        return None
+    return ".".join([imported[current.id], *parts])
 
 
 def _upward(found: _Graph, chain: tuple[str, ...], own: str, theirs: str) -> Problem:
@@ -145,16 +260,13 @@ def _impure(found: _Graph, chain: tuple[str, ...]) -> Problem:
     return reason, fix
 
 
-def _handlers(repo: Path, relative: str) -> list[Problem]:
-    try:
-        tree = ast.parse((repo / relative).read_text(encoding="utf-8"), filename=relative)
-    except OSError, UnicodeDecodeError, SyntaxError, ValueError:  # ruff and ty say what is wrong with it
-        return []
+def _handlers(repo: Path, relative: str, tree: ast.Module, packages: Sequence[str]) -> list[Problem]:
+    aliases = _aliases(repo, tree, packages)
     found: list[Problem] = []
     for node in tree.body:
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
-        given = _given(node)
+        given = _given(node, aliases)
         for call in (child for statement in node.body for child in ast.walk(statement) if isinstance(child, ast.Call)):
             if (called := _method_of(call.func, given)) is None:
                 continue
@@ -170,9 +282,34 @@ RESOURCES = frozenset({"Reader", "Writer", "Client", "Cache", "Clock", "Ids", "C
 `api.given` gives too, are its own to use."""
 
 
-def _given(function: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[str]:
-    """The names of `function`'s parameters that `api.given` gives a resource, by their annotations or defaults: a
-    parameter given settings or a user is not one, and a given parameter with no annotation is held, as it may be one."""
+def _aliases(repo: Path, tree: ast.Module, packages: Sequence[str]) -> dict[str, ast.expr]:
+    """The type aliases a module can name, by the name it gives each: its own, `type X = ...` or `X: TypeAlias = ...`,
+    and those it imports from the repo's own modules, read from their source."""
+    found = _defined(tree)
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module is not None and node.level == 0 and node.module.partition(".")[0] in packages:
+            relative = Path(*node.module.split("."))
+            source = repo / relative / "__init__.py" if (repo / relative).is_dir() else (repo / relative).with_suffix(".py")
+            if (other := _tree(repo, source.relative_to(repo).as_posix())) is not None:
+                theirs = _defined(other)
+                found |= {alias.asname or alias.name: theirs[alias.name] for alias in node.names if alias.name in theirs}
+    return found
+
+
+def _defined(tree: ast.Module) -> dict[str, ast.expr]:
+    found: dict[str, ast.expr] = {}
+    for node in tree.body:
+        if isinstance(node, ast.TypeAlias):
+            found[node.name.id] = node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value is not None and ast.unparse(node.annotation).endswith("TypeAlias"):
+            found[node.target.id] = node.value
+    return found
+
+
+def _given(function: ast.FunctionDef | ast.AsyncFunctionDef, aliases: Mapping[str, ast.expr]) -> frozenset[str]:
+    """The names of `function`'s parameters that `api.given` gives a resource, by their annotations, as written or
+    through a type alias `aliases` holds, or by their defaults: a parameter given settings or a user is not one, and a
+    given parameter with no annotation is held, as it may be one."""
     arguments = function.args
     positional = [*arguments.posonlyargs, *arguments.args]
     defaults: dict[str, ast.expr] = dict(zip([argument.arg for argument in positional[len(positional) - len(arguments.defaults) :]], arguments.defaults, strict=True))
@@ -180,9 +317,18 @@ def _given(function: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[str]:
     return frozenset(
         argument.arg
         for argument in [*positional, *arguments.kwonlyargs]
-        if (argument.annotation is not None and _asks(argument.annotation))
+        if (argument.annotation is not None and _asks(_through(argument.annotation, aliases)))
         or (argument.arg in defaults and _gives(defaults[argument.arg]) and (argument.annotation is None or _resource(argument.annotation)))
     )
+
+
+def _through(annotation: ast.expr, aliases: Mapping[str, ast.expr]) -> ast.expr:
+    """`annotation`, or the type its alias names, where it is a name `aliases` holds."""
+    seen: set[str] = set()
+    while isinstance(annotation, ast.Name) and annotation.id in aliases and annotation.id not in seen:
+        seen.add(annotation.id)
+        annotation = aliases[annotation.id]
+    return annotation
 
 
 def _asks(annotation: ast.expr) -> bool:

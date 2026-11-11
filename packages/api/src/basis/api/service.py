@@ -66,7 +66,7 @@ from http import HTTPStatus
 from importlib.metadata import EntryPoint, entry_points
 from pathlib import PurePosixPath, PureWindowsPath
 from types import FunctionType
-from typing import Annotated, Literal, Protocol, assert_never, get_args, get_origin
+from typing import Annotated, Literal, Protocol, TypeAliasType, assert_never, get_args, get_origin
 
 from fastapi import params
 from starlette.applications import Starlette
@@ -526,12 +526,25 @@ def given(kind: type[Settings | User] | Resource | ComputeFunction[..., object])
     raise DeclarationError(msg)
 
 
+def _annotated(annotation: object) -> tuple[object, tuple[object, ...]]:
+    """`annotation`'s type and its metadata, through type aliases, as `type Warehouse = Annotated[api.Reader,
+    api.given(WAREHOUSE)]` names one, and nested `Annotated`s, as FastAPI reads them."""
+    metadata: list[object] = []
+    while True:
+        if isinstance(annotation, TypeAliasType):
+            annotation = annotation.__value__
+        elif get_origin(annotation) is Annotated:
+            metadata.extend(get_args(annotation)[1:])
+            annotation = get_args(annotation)[0]
+        else:
+            return annotation, tuple(metadata)
+
+
 def _asks_for(handler: FunctionType) -> Iterator[Ask]:
     """What each of `handler`'s parameters asks basis for, through `given`, its annotations evaluated even where they
     are strings, as FastAPI evaluates them."""
     for parameter in inspect.signature(handler, eval_str=True).parameters.values():
-        annotation: object = parameter.annotation
-        base, metadata = (get_args(annotation)[0], get_args(annotation)[1:]) if get_origin(annotation) is Annotated else (annotation, ())
+        base, metadata = _annotated(parameter.annotation)
         for marker in (*metadata, parameter.default):
             if isinstance(marker, params.Depends) and isinstance(marker.dependency, _Given | GivenUser):
                 yield Ask(parameter.name, base, marker.dependency.kind)
@@ -553,8 +566,7 @@ def _asked_within(call: object, path: tuple[str, ...], seen: set[int]) -> Iterat
     except TypeError, ValueError:  # a builtin, whose parameters FastAPI does not read either
         return
     for parameter in signature.parameters.values():
-        annotation: object = parameter.annotation
-        base, metadata = (get_args(annotation)[0], get_args(annotation)[1:]) if get_origin(annotation) is Annotated else (annotation, ())
+        base, metadata = _annotated(parameter.annotation)
         for marker in (*metadata, parameter.default):
             if not isinstance(marker, params.Depends):
                 continue

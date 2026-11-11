@@ -10,11 +10,13 @@ The API's code sits in layers, each a module basis knows by its own name, at any
 handlers module too: `service.py`, the routes; `handlers.py`, one function per route, the only place resources
 arrive; `repository.py`, all the SQL and every call to another service, each function taking the resource it needs
 and returning domain types; and `domain.py`, pure types and rules. Beside them, `resources.py` declares the settings
-and the resources, and `errors.py` the errors. `basis check` holds three rules, each failure one `ERROR` line with its
-fix: imports go down that list only, each layer importing the declarations, which import only domain modules; a
-domain module imports nothing of basis, no FastAPI, settings, driver, client or socket, directly or through a helper,
-so a job can run it too; and a handler passes each resource `api.given` gives it on to a repository function, and
-never calls its methods itself.
+and the resources, and `errors.py` the errors. `basis check` holds these rules, each failure one `ERROR` line with its
+fix: imports go down that list only, each layer importing the declarations, which import only domain modules; no
+layer imports a driver, an HTTP client or a socket, or reads `os.environ`, `datetime.now` or `uuid.uuid4`, which the
+settings, `api.clock` and `api.ids` give; a domain module imports nothing of basis, no FastAPI or settings either,
+directly or through a helper, so a job can run it too; and a handler passes each resource `api.given` gives it on to a
+repository function, and never calls its methods itself, whether it annotates the parameter as written or through a
+type alias. A module of `tests/` and a job's are no layer.
 
 Rules to keep:
 

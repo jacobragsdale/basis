@@ -253,8 +253,10 @@ handlers module too:
 
 Beside them, two modules declare: `resources.py` the resources and settings, and `errors.py` the errors. `basis check`
 holds the layers with grimp, which core already uses, and no configuration file to keep: imports go down the table
-only; a domain module stays pure, as a compute module is today; and a handler passes a resource on and never calls its
-methods itself, so the SQL stays in repositories. Every API repo then has the same shape, and the checks keep it. The
+only; no layer imports a database driver, an HTTP client or storage, as basis-core's purity check lists them, nor reads
+the environment, the clock or new ids itself, in every API repo and not only in this workspace's example; a domain
+module stays pure, as a compute module is today; and a handler passes a resource on and never calls its methods
+itself, so the SQL stays in repositories. A test's module and a job's are no layer. Every API repo then has the same shape, and the checks keep it. The
 declarations sit between the repository and the domain: every layer imports them, and they import only domain modules,
 as `errors.py` imports the exceptions it gives a meaning and `resources.py` a cache's domain type. An import counts
 directly or through a module of the repo's that is no layer, such as a helper. Pure means what it means for a compute

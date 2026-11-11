@@ -272,6 +272,19 @@ def test_anonymous_is_declared_only_where_it_says_something() -> None:
         api.get("/quotes/{security}", quote, deadline_s=1, response=Quote, errors=[], anonymous=True)
 
 
+type WarehouseReader = Annotated[api.Reader, api.given(WAREHOUSE)]
+
+
+async def through_an_alias(warehouse: WarehouseReader) -> list[Quote]:
+    return await warehouse.fetch(Quote, SLOW)
+
+
+def test_a_resource_asked_for_through_a_type_alias_is_asked_for() -> None:
+    route = api.get("/aliased", through_an_alias, deadline_s=1, response=list[Quote], errors=[])
+    assert [ask.given for ask in route.asks] == [WAREHOUSE]
+    assert api.Unavailable in route.answers
+
+
 def test_basis_adds_the_errors_a_route_can_meet_to_those_it_declares() -> None:
     routes = {route.name: route.answers for route in SERVICE.routes}
     every = (api.Timeout, api.Unavailable, api.NotFound, api.Conflict, api.Rejected, api.Denied, api.BadReply, api.Failed)

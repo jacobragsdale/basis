@@ -215,3 +215,80 @@ def test_the_repos_own_package_is_read_whatever_this_process_imported_of_the_sam
 def test_a_module_that_does_not_parse_is_left_to_ruff_and_ty(repo: Path) -> None:
     write(repo, CLEAN | {"accruals/domain.py": "def (:\n"})
     assert layers.problems(repo) == []
+
+
+ALIASED = """from typing import Annotated
+
+from basis import api
+
+from accruals.resources import WAREHOUSE, Warehouse
+
+type Read = Annotated[api.Reader, api.given(WAREHOUSE)]
+
+
+async def here(warehouse: Read) -> object:
+    return await warehouse.fetch_one(object, "SELECT 1")
+
+
+async def imported(warehouse: Warehouse) -> object:
+    return await warehouse.fetch_one(object, "SELECT 1")
+"""
+RESOURCES_WITH_AN_ALIAS = CLEAN["accruals/resources.py"] + "\ntype Warehouse = Annotated[api.Reader, api.given(WAREHOUSE)]\n"
+
+
+def test_a_resource_asked_for_through_a_type_alias_is_held_too(repo: Path) -> None:
+    resources = "from typing import Annotated\n\n" + RESOURCES_WITH_AN_ALIAS
+    write(repo, CLEAN | {"accruals/handlers.py": ALIASED, "accruals/resources.py": resources})
+    assert [reason.partition(": ")[2].partition(",")[0] for reason in reasons(repo)] == ["here calls warehouse.fetch_one", "imported calls warehouse.fetch_one"]
+
+
+@pytest.mark.parametrize(
+    ("module", "text", "reason"),
+    [
+        ("handlers", "import httpx2\n", "accruals/handlers.py:1 imports httpx2 into accruals.handlers, and a handlers module reaches the outside only through what api.given gives it"),
+        (
+            "repository",
+            "from urllib.request import urlopen\n",
+            "accruals/repository.py:1 imports urllib.request into accruals.repository, and a repository module reaches the outside only through what api.given gives it",
+        ),
+        ("service", "import oracledb\n", "accruals/service.py:1 imports oracledb into accruals.service, and a service module reaches the outside only through what api.given gives it"),
+        ("domain", "import urllib.request\n", "accruals/domain.py:1 imports urllib.request into accruals.domain, and a domain module stays pure"),
+        ("domain", "import pymongo\n", "accruals/domain.py:1 imports pymongo into accruals.domain, and a domain module stays pure"),
+    ],
+    ids=["an-http-client-in-a-handler", "urllib-in-a-repository", "a-driver-in-a-service", "urllib-in-a-domain", "a-driver-core-lists-in-a-domain"],
+)
+def test_no_layer_reaches_the_outside_but_through_what_api_given_gives_it(repo: Path, module: str, text: str, reason: str) -> None:
+    write(repo, CLEAN | {f"accruals/{module}.py": text})
+    assert reasons(repo)[0].startswith(reason)
+
+
+@pytest.mark.parametrize(
+    ("module", "text", "reason"),
+    [
+        (
+            "handlers",
+            "import os\n\n\ndef key() -> str:\n    return os.environ['KEY']\n",
+            "accruals/handlers.py:5: key reads os.environ, and a handlers module reads its settings through api.given(Settings)",
+        ),
+        (
+            "repository",
+            "import os\n\n\ndef key() -> str | None:\n    return os.getenv('KEY')\n",
+            "accruals/repository.py:5: key reads os.getenv, and a repository module reads its settings through api.given(Settings)",
+        ),
+        ("domain", "from datetime import datetime\n\n\ndef stamp() -> object:\n    return datetime.now()\n", "accruals/domain.py:5: stamp reads datetime.now, and a domain module reads no clock"),
+        ("handlers", "import uuid\n\n\ndef made() -> object:\n    return uuid.uuid4()\n", "accruals/handlers.py:5: made reads uuid.uuid4, and a handlers module reads no clock and makes no id"),
+    ],
+    ids=["the-environment", "a-variable", "the-clock-in-a-domain", "an-id-in-a-handler"],
+)
+def test_no_layer_reads_the_environment_the_clock_or_new_ids_itself(repo: Path, module: str, text: str, reason: str) -> None:
+    write(repo, CLEAN | {f"accruals/{module}.py": text})
+    assert any(found.startswith(reason) for found in reasons(repo)), reasons(repo)
+
+
+def test_a_test_and_a_job_are_no_layers(repo: Path) -> None:
+    files = {
+        "accruals/tests/domain/__init__.py": "", "accruals/tests/domain/test_rates.py": "import fastapi\nimport socket\n\nfrom accruals import handlers\n",
+        "jobs/__init__.py": "", "jobs/positions/__init__.py": "", "jobs/positions/errors.py": "from jobs.positions import job\n",
+        "jobs/positions/job.py": "import oracledb\n\nfrom accruals import repository\n",
+    }  # fmt: skip
+    assert layers.problems(write(repo, CLEAN | files)) == []
