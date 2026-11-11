@@ -323,7 +323,9 @@ def _column(row: Sequence[object], sets: Mapping[str, str]) -> DestColumn:
     """A column as `all_tab_cols` describes it, its text stored in the database's character set (`CHAR`, `VARCHAR2`,
     `CLOB`) or its national one (`NCHAR`, `NVARCHAR2`, `NCLOB`), from `sets`, by their `nls_database_parameters`."""
     name, data_type, char_length, precision, scale, nullable, default, identity, virtual, data_length, char_used = row
-    kind = str(data_type).upper().split("(", 1)[0] + (" WITH TIME ZONE" if "WITH TIME ZONE" in str(data_type).upper() else "")
+    written = str(data_type).upper()
+    zoned = " WITH LOCAL TIME ZONE" if "WITH LOCAL TIME ZONE" in written else " WITH TIME ZONE" if "WITH TIME ZONE" in written else ""
+    kind = written.split("(", 1)[0] + zoned  # a local time zone's instants follow the session's zone, so no kind of column takes it
     national, text = kind in {"NCHAR", "NVARCHAR2", "NCLOB"}, kind in {"CHAR", "VARCHAR2", "CLOB"}
     charset = sets.get("NLS_NCHAR_CHARACTERSET" if national else "NLS_CHARACTERSET") if national or text else None
     bounded = kind in {"CHAR", "NCHAR", "VARCHAR2", "NVARCHAR2"}

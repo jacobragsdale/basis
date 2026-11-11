@@ -47,6 +47,14 @@ names a dtype through its row: `Row.dtypes()` gives each column's by name, for `
 starting with a letter or an underscore. `Zone` names the zone a datetime's naive values are in, in sources and
 destinations; in a frame, every datetime is UTC.
 
+A zone with daylight saving shows an hour twice as its clocks go back, and skips one as they go forward. A naive
+source time it shows twice, or never, fails the run, unless the column says how to read it:
+`etl.Zone("America/New_York", ambiguous="earliest", nonexistent="latest")`, each `"raise"` (the default), `"earliest"`
+or `"latest"`. A value written to a zoned column at a time its zone shows twice is refused, whatever the `Zone` says,
+since the naive value cannot hold which instant it was; so is a `ReplaceWhere(interval=...)` on a zoned column whose
+interval starts or ends inside that hour. Store such a column in UTC, as `etl.Zone("UTC")`, where it needs those
+hours.
+
 A JSON column's values are checked as SQL Server's `json` type would: an object or an array at the top, numbers with
 at most 38 digits before the point, nesting at most 128 deep. `etl.json_text(value)` writes a dict or a list so,
 numbers in plain notation and NaN refused. `basis ddl` gives it SQL Server's `json`, which SQL Server 2025 and Azure
@@ -67,7 +75,7 @@ Every frame that enters or leaves a job is conformed to its row:
 
 ## Inputs
 
-### `etl.Query(row, *, database, sql, empty)`
+### `etl.Query(row, *, database, sql, empty, zone=None)`
 
 Rows a SQL file selects from a database.
 
@@ -77,9 +85,13 @@ Rows a SQL file selects from a database.
 | `database` | `str` | The database's name, as `BASIS_DATABASES__NAME__*` configures it. |
 | `sql` | `str` | The SQL file, relative to the file that declares the query. |
 | `empty` | `"fail"` or `"allow"` | Whether a run may continue when the query returns no rows. |
+| `zone` | `str` or `None` | The zone the interval binds in: None for naive UTC, or the zone of the naive times the query compares them with. |
 
-A query binds only the run's interval, as naive UTC datetimes: `%(interval_start)s` and `%(interval_end)s` in SQL
-Server, `:interval_start` and `:interval_end` in Oracle. A query that names them in a run without an interval fails.
+A query binds only the run's interval, as naive UTC datetimes, or naive times in its `zone`: `%(interval_start)s` and
+`%(interval_end)s` in SQL Server, `:interval_start` and `:interval_end` in Oracle. A query that filters a column of naive
+New York times gives `zone="America/New_York"`, so it reads the run's span and not one shifted by the offset; an
+interval that starts or ends inside the hour that zone shows twice is refused. A query that names them in a run
+without an interval fails.
 An Oracle `NUMBER` without a precision arrives as a float; cast it in the query for a `Decimal` column.
 
 ### `etl.Fetch(row, *, http, path, deadline_s, empty)`

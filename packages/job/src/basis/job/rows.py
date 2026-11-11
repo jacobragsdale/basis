@@ -33,7 +33,7 @@ import pandas as pd
 from basis.core import frames, jsontext
 from basis.core.errors import BasisError
 from basis.core.frames import Naive
-from basis.core.tables import IDENTIFIER, Column, Kind
+from basis.core.tables import IDENTIFIER, Column, Fold, Kind
 
 _KINDS: dict[type, Kind] = {float: "float", str: "str", bool: "bool", date: "date", datetime: "datetime"}
 _NUMBERS = (int, Decimal)
@@ -49,9 +49,14 @@ class MaxLength:
 
 @dataclass(frozen=True)
 class Zone:
-    """The IANA time zone a `datetime` column's naive values are in, in its sources and destinations."""
+    """The IANA time zone a `datetime` column's naive values are in, in its sources and destinations, and how a naive
+    source time it shows twice, as its clocks go back, or never, as they go forward, reads: refused (`raise`), or as the
+    earlier or later instant it could be (`earliest`, `latest`). A value written there that the zone shows twice is
+    refused whatever these say, since a naive value cannot hold which instant it was."""
 
     name: str
+    ambiguous: Fold = "raise"
+    nonexistent: Fold = "raise"
 
 
 @dataclass(frozen=True)
@@ -133,13 +138,18 @@ def _column(row: type, name: str, hint: object) -> Column:
 def _with_metadata(where: str, name: str, kind: Kind, *, nullable: bool, metadata: list[object]) -> Column:
     max_length = zone = None
     json = False
+    ambiguous: Fold = "raise"
+    nonexistent: Fold = "raise"
     for item in metadata:
         match item:
             case MaxLength(chars=chars) if kind == "str" and chars >= 1:
                 max_length = chars
             case Json() if kind == "str":
                 json = True
-            case Zone(name=zone_name) if kind == "datetime":
+            case Zone(name=zone_name, ambiguous=ambiguous, nonexistent=nonexistent) if kind == "datetime":
+                if not {ambiguous, nonexistent} <= {"raise", "earliest", "latest"}:
+                    msg = f"{where}: a Zone reads a time it shows twice or never as 'raise', 'earliest' or 'latest', not {ambiguous!r} and {nonexistent!r}"
+                    raise RowError(msg)
                 try:
                     ZoneInfo(zone_name)
                 except (ZoneInfoNotFoundError, ValueError) as error:
@@ -152,7 +162,7 @@ def _with_metadata(where: str, name: str, kind: Kind, *, nullable: bool, metadat
     if kind == "datetime" and zone is None:
         msg = f"{where}: a datetime column names the zone its naive values are in, as Annotated[datetime, etl.Zone('UTC')]"
         raise RowError(msg)
-    return Column(name, kind, nullable, max_length=max_length, zone=zone, json=json)
+    return Column(name, kind, nullable, max_length=max_length, zone=zone, json=json, ambiguous=ambiguous, nonexistent=nonexistent)
 
 
 class SchemaError(ValueError):

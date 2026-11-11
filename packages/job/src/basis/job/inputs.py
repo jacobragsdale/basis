@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Literal, Protocol, Self, overload, override
 from urllib.parse import quote
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pandas as pd
 
@@ -81,15 +82,25 @@ class Dataset:
 
 class Query(Dataset):
     """Rows that a SQL file, in the database's own dialect, selects from a named database: `:interval_start` and
-    `:interval_end` bind the interval in Oracle, `%(interval_start)s` and `%(interval_end)s` in SQL Server."""
+    `:interval_end` bind the interval in Oracle, `%(interval_start)s` and `%(interval_end)s` in SQL Server, as naive
+    UTC, or, with `zone`, as naive times in that zone, as a column of naive times there compares: a query that filters
+    `booked_at`, in New York's time, gives `zone="America/New_York"`. An interval whose end that zone shows twice, as
+    its clocks go back, is refused, since the query would read another span than the run's."""
 
-    def __init__(self, row: type[Row], *, database: str, sql: str, empty: Empty) -> None:
+    def __init__(self, row: type[Row], *, database: str, sql: str, empty: Empty, zone: str | None = None) -> None:
         super().__init__(row, empty=empty, base=_caller_folder())
         if not IDENTIFIER.match(database):
             msg = f"database {database!r}: a database's name is lower-case letters, digits and underscores, as in BASIS_DATABASES__{database.upper()}__KIND"
             raise ValueError(msg)
+        if zone is not None:
+            try:
+                ZoneInfo(zone)
+            except (ZoneInfoNotFoundError, ValueError) as error:
+                msg = f"zone {zone!r}: the zone a query's interval binds are in is an IANA time zone, such as 'UTC' or 'America/New_York'"
+                raise ValueError(msg) from error
         self.database = database
         self.sql = sql
+        self.zone = zone
 
     @property
     def path(self) -> Path:

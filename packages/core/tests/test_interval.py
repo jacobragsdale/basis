@@ -68,3 +68,24 @@ def test_a_relative_interval_needs_the_job_s_calendar() -> None:
 def test_an_interval_basis_cannot_read_is_refused_when_it_is_given(text: str, error: str) -> None:
     with pytest.raises(ValueError, match=f"^{re.escape(error)}$"):
         given(text)
+
+
+NEW_YORK = "America/New_York"
+
+
+def test_an_interval_binds_in_a_zone_as_its_naive_local_times() -> None:
+    day = Interval.parse("2026-11-01T04:00Z..2026-11-02T05:00Z")  # New York's day, which is 25 hours long
+    assert day.binds() == {"interval_start": datetime(2026, 11, 1, 4), "interval_end": datetime(2026, 11, 2, 5)}
+    assert day.in_zone(NEW_YORK).binds() == {"interval_start": datetime(2026, 11, 1), "interval_end": datetime(2026, 11, 2)}
+    assert day.in_zone(NEW_YORK) == day
+
+
+@pytest.mark.parametrize("text", ["2026-11-01T05:30Z..2026-11-01T07:00Z", "2026-11-01T04:00Z..2026-11-01T06:00Z", "2026-11-01T06:00Z..2026-11-01T08:00Z"])
+def test_an_interval_whose_end_its_zone_shows_twice_is_refused_in_that_zone(text: str) -> None:
+    with pytest.raises(IntervalError, match=r"in America/New_York, which shows .* twice as its clocks go back: start and end the interval outside that hour"):
+        Interval.parse(text).in_zone(NEW_YORK).binds()
+
+
+@pytest.mark.parametrize("text", ["2026-11-01T05:00Z..2026-11-01T07:00Z", "2026-11-01T04:00Z..2026-11-01T05:00Z", "2026-11-01T07:00Z..2026-11-01T08:00Z"])
+def test_an_interval_that_begins_or_ends_where_the_repeated_hour_does_binds_exactly(text: str) -> None:
+    assert Interval.parse(text).in_zone(NEW_YORK).first_unsound() is None

@@ -19,9 +19,10 @@ written by hand would be, so the run's manifest records the dates it ran for, an
 A business day before today is counted from today, which need not be one: on a Saturday, `today-1bd` is the Friday."""
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
 from typing import override
+from zoneinfo import ZoneInfo
 
 from basis.core.calendars import Calendar
 from basis.core.errors import BasisError
@@ -35,6 +36,8 @@ class IntervalError(BasisError, ValueError):
 class Interval:
     start: datetime
     end: datetime
+    zone: str | None = field(default=None, compare=False)
+    """The zone its binds are in, as naive times there (`in_zone`): None for naive UTC."""
 
     def __post_init__(self) -> None:
         if self.start.tzinfo is None or self.end.tzinfo is None:
@@ -57,8 +60,32 @@ class Interval:
         return cls(_instant(start), _instant(end))
 
     def binds(self) -> dict[str, datetime]:
-        """The interval as query binds: naive UTC, which every driver binds without a zone conversion of its own."""
-        return {"interval_start": self.start.replace(tzinfo=None), "interval_end": self.end.replace(tzinfo=None)}
+        """The interval as query binds: naive UTC, which every driver binds without a zone conversion of its own, or,
+        `in_zone`, naive times in that zone, as a column of them compares; an end whose time there names two instants
+        is refused, since the query would select a different span than the run's."""
+        if self.zone is None:
+            return {"interval_start": self.start.replace(tzinfo=None), "interval_end": self.end.replace(tzinfo=None)}
+        if (unsound := self.first_unsound()) is not None:
+            raise IntervalError(unsound)
+        zone = ZoneInfo(self.zone)
+        return {"interval_start": self.start.astimezone(zone).replace(tzinfo=None), "interval_end": self.end.astimezone(zone).replace(tzinfo=None)}
+
+    def in_zone(self, zone: str) -> Interval:
+        """The same interval, binding its ends as naive times in `zone`."""
+        return replace(self, zone=zone)
+
+    def first_unsound(self) -> str | None:
+        """Why the interval's ends, as naive times in its zone, would not mark out the same span, or None: an end whose
+        naive time the zone shows twice, as its clocks go back, but for the instant the repeated hour begins."""
+        if self.zone is None:
+            return None
+        for name, moment in (("start", self.start), ("end", self.end)):
+            if (local := unsound_end(moment, self.zone)) is not None:
+                return (
+                    f"the interval's {name}, {moment}, is {local:%H:%M} in {self.zone}, which shows that time twice as its clocks go back:"
+                    " start and end the interval outside that hour, or compare the column in UTC"
+                )
+        return None
 
     @override
     def __str__(self) -> str:
@@ -150,3 +177,20 @@ def _instant(text: str) -> datetime:
 
 def _text(moment: datetime) -> str:
     return moment.date().isoformat() if moment.time() == time() else moment.isoformat().replace("+00:00", "Z")
+
+
+def names_two(naive: datetime, zone: ZoneInfo) -> bool:
+    """Whether `zone` shows the naive time `naive` twice, as its clocks go back."""
+    return naive.replace(tzinfo=zone, fold=0).utcoffset() != naive.replace(tzinfo=zone, fold=1).utcoffset()
+
+
+def unsound_end(moment: datetime, zone: str) -> datetime | None:
+    """`moment`'s naive time in `zone`, where a range of naive times ending or starting there would not mark out the
+    same instants: a time the zone shows twice, unless `moment` is the first instant of that repeated hour, which a
+    range of naive times starts or ends at exactly. None where it is sound."""
+    found = ZoneInfo(zone)
+    local = moment.astimezone(found).replace(tzinfo=None)
+    if not names_two(local, found):
+        return None
+    first = local.replace(tzinfo=found, fold=0).astimezone(UTC) == moment.astimezone(UTC)
+    return None if first and not names_two(local - timedelta(microseconds=1), found) else local

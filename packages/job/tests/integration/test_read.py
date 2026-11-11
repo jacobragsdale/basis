@@ -79,6 +79,15 @@ def test_a_query_reads_the_intervals_rows_as_the_row_declares_them(source: Scrat
     assert frame["booked_at"].tolist()[0] == datetime(2026, 11, 5, 14, 30, tzinfo=UTC)
 
 
+def test_a_naive_time_its_zone_shows_twice_fails_the_run_with_the_fix(source: Scratch, tmp_path: Path) -> None:
+    insert(source, (date(2026, 11, 5), "S1", Decimal(1), None, datetime(2026, 11, 1, 1, 30)))  # New York shows 1:30 twice that day
+    result = load(source, tmp_path)
+    assert result.record.status == "failed"
+    assert result.record.error is not None
+    assert "naive times America/New_York shows twice, as its clocks go back, such as 2026-11-01 01:30:00" in result.record.error
+    assert "etl.Zone('America/New_York', ambiguous='earliest')" in result.record.error
+
+
 def test_a_query_that_returns_more_than_its_cap_fails_the_run(source: Scratch, tmp_path: Path) -> None:
     insert(source, *((date(2026, 11, 5), f"S{index}", Decimal(1), None, None) for index in range(3)))
     result = load(source, tmp_path, max_rows=2)

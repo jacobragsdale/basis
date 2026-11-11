@@ -3,13 +3,14 @@ once, a failure anywhere in a database's transaction writes nothing there, a dri
 loads, and a run that committed to one database and failed on another resumes from its snapshot."""
 
 import dataclasses
+import uuid
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated
 
 import pytest
 from builders import Price, prices
-from integration.scratch import Scratch, run
+from integration.scratch import Scratch, configured, oracle, run
 
 import basis.job as etl
 from basis.core import command, environments, snapshots
@@ -127,6 +128,20 @@ def test_a_table_that_has_drifted_from_its_row_stops_the_run_before_it_loads(scr
     assert result.record.inputs == {}
     text = "VARCHAR" if scratch.dialect == "mssql" else "VARCHAR2"
     assert sorted(result.record.reasons) == [f"prices: note: {table} has no such column", f"prices: price: a {text} column cannot hold a row's float values exactly"]
+
+
+def test_an_oracle_timestamp_with_local_time_zone_is_refused_since_its_instants_follow_the_session(tmp_path: Path) -> None:
+    scratch = oracle(configured(), uuid.uuid4().hex[:8]).with_ledger()
+    table = f"prices_{scratch.suffix}"
+    try:
+        scratch.execute(
+            f"CREATE TABLE {table} (day DATE NOT NULL, security_id VARCHAR2(8 CHAR) NOT NULL, price BINARY_DOUBLE NOT NULL, note VARCHAR2(40 CHAR), booked_at TIMESTAMP WITH LOCAL TIME ZONE)"
+        )
+        result = run(price_job(table, etl.Upsert()), {"warehouse": scratch}, TODAY, tmp_path)
+        assert result.record.status == "failed"
+        assert result.record.reasons == ["prices: booked_at: a TIMESTAMP WITH LOCAL TIME ZONE column cannot hold a row's datetime values exactly"]
+    finally:
+        scratch.drop(scratch.ledger(), table)
 
 
 def test_a_value_that_does_not_fit_its_column_is_refused_before_any_write(scratch: Scratch, tmp_path: Path) -> None:

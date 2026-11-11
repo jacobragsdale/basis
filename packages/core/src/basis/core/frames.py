@@ -285,8 +285,43 @@ def _to_utc(array: Array, column: Column, naive: Naive) -> _Converted:
     if found.tz is None:
         if naive == "reject" or column.zone is None:
             return None, f"naive datetimes: give them a zone, as .dt.tz_localize({column.zone!r}), or convert them to UTC"
-        array = _call("assume_timezone", _microseconds(array), options=pc.AssumeTimezoneOptions(column.zone, ambiguous="raise", nonexistent="raise"))
+        local = _microseconds(array)
+        for fold, says in (("ambiguous", "twice, as its clocks go back"), ("nonexistent", "never, as its clocks go forward")):
+            other = "nonexistent" if fold == "ambiguous" else "ambiguous"
+            try:
+                _call("assume_timezone", local, options=pc.AssumeTimezoneOptions(column.zone, **{fold: "raise", other: "earliest"}))
+            except pa.ArrowInvalid:
+                if getattr(column, fold) == "raise":
+                    return None, (
+                        f"naive times {column.zone} shows {says}, such as {_unread(local, column.zone, fold)}, which name no one instant:"
+                        f" declare how to read them, as etl.Zone({column.zone!r}, {fold}='earliest'), or 'latest'"
+                    )
+        array = _call("assume_timezone", local, options=pc.AssumeTimezoneOptions(column.zone, ambiguous=column.ambiguous, nonexistent=column.nonexistent))
     return pc.cast(_microseconds(array), arrow_type(column)), None
+
+
+def _unread(local: Array, zone: str, fold: str) -> str:
+    """The first of `local`'s naive times that `zone` shows twice (`ambiguous`) or never (`nonexistent`)."""
+    early = _call("assume_timezone", local, options=pc.AssumeTimezoneOptions(zone, ambiguous="earliest", nonexistent="earliest"))
+    late = _call("assume_timezone", local, options=pc.AssumeTimezoneOptions(zone, ambiguous="latest", nonexistent="latest"))
+    round_trip = _call("local_timestamp", early)
+    flags = _call("not_equal", early, late) if fold == "ambiguous" else _call("not_equal", pc.cast(round_trip, local.type), local)
+    index = flags.to_pylist().index(True)
+    return str(local[index].as_py())
+
+
+def twice_named(values: pd.Series, zone: str) -> pd.Series:
+    """Whether each instant, in a frame of UTC datetimes, is at a time its column's `zone` shows twice, as its clocks
+    go back, so its naive value there names two instants. A null is not."""
+    array = _microseconds(_array(values))
+    if array.type.tz is None:
+        msg = "twice_named reads instants: give the values a zone"
+        raise ValueError(msg)
+    local = _call("local_timestamp", pc.cast(array, pa.timestamp("us", zone)))
+    early = _call("assume_timezone", local, options=pc.AssumeTimezoneOptions(zone, ambiguous="earliest", nonexistent="earliest"))
+    late = _call("assume_timezone", local, options=pc.AssumeTimezoneOptions(zone, ambiguous="latest", nonexistent="latest"))
+    flags = _call("coalesce", _call("not_equal", early, late), pa.scalar(value=False))
+    return pd.Series(flags.to_pylist(), index=values.index, dtype=bool)
 
 
 def _microseconds(array: Array) -> Array:

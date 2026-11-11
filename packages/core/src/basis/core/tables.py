@@ -17,6 +17,10 @@ IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,127}$")
 
 type Kind = Literal["float", "str", "bool", "date", "datetime"]
 """What a column holds. A number of any kind is a float: an amount or a count is one, and an identifier is text."""
+type Fold = Literal["raise", "earliest", "latest"]
+"""How a naive source time its zone shows twice, as its clocks go back, or never, as they go forward, reads: refused,
+or as the earlier or the later instant it could be; for a time never shown, the last instant before the clocks moved
+past it, or the first after."""
 
 
 @dataclass(frozen=True)
@@ -31,6 +35,10 @@ class Column:
     json: bool = False
     """A `str` column whose every value is JSON text, an object or an array, as a database's JSON type holds it
     (`basis.core.jsontext`): never a key, and never matched on, since such a type cannot be compared."""
+    ambiguous: Fold = "raise"
+    """How a `datetime` column reads a naive source time its zone shows twice."""
+    nonexistent: Fold = "raise"
+    """How a `datetime` column reads a naive source time its zone never shows."""
 
 
 @dataclass(frozen=True)

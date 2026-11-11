@@ -15,7 +15,7 @@ import pytest
 from basis.core import frames
 from basis.core.frames import NumberError
 from basis.core.storage import digest
-from basis.core.tables import Column
+from basis.core.tables import Column, Fold
 
 COLUMNS = (
     Column("trade_date", "date", nullable=False),
@@ -184,3 +184,42 @@ def test_a_value_that_would_change_is_refused_with_what_would_change(column: Col
     _, found = frames.convert(given, column, "reject")
     assert found is not None
     assert problem in found
+
+
+FALL_BACK = pd.Series([datetime(2026, 11, 1, 1, 30)])
+"""A naive time New York shows twice on 2026-11-01, as its clocks go back from 2:00 to 1:00."""
+SPRING_FORWARD = pd.Series([datetime(2026, 3, 8, 2, 30)])
+"""A naive time New York never shows, on 2026-03-08, as its clocks go forward from 2:00 to 3:00."""
+
+
+@pytest.mark.parametrize(("given", "reads"), [(FALL_BACK, "twice, as its clocks go back"), (SPRING_FORWARD, "never, as its clocks go forward")], ids=["ambiguous", "missing"])
+def test_a_naive_source_time_its_zone_shows_twice_or_never_is_refused_with_the_fix(given: pd.Series, reads: str) -> None:
+    _, problem = frames.convert(given, Column("t", "datetime", nullable=True, zone="America/New_York"), "in_zone")
+    assert problem is not None
+    assert reads in problem
+    assert "etl.Zone('America/New_York', ambiguous=" in problem or "etl.Zone('America/New_York', nonexistent=" in problem
+
+
+@pytest.mark.parametrize(
+    ("given", "how", "instant"),
+    [
+        (FALL_BACK, "earliest", datetime(2026, 11, 1, 5, 30, tzinfo=UTC)),
+        (FALL_BACK, "latest", datetime(2026, 11, 1, 6, 30, tzinfo=UTC)),
+        (SPRING_FORWARD, "earliest", datetime(2026, 3, 8, 6, 59, 59, 999_999, tzinfo=UTC)),
+        (SPRING_FORWARD, "latest", datetime(2026, 3, 8, 7, tzinfo=UTC)),
+    ],
+)
+def test_a_zone_says_how_a_source_time_it_shows_twice_or_never_reads(given: pd.Series, how: Fold, instant: datetime) -> None:
+    ambiguous: Fold = how if given is FALL_BACK else "raise"
+    nonexistent: Fold = how if given is SPRING_FORWARD else "raise"
+    column = Column("t", "datetime", nullable=True, zone="America/New_York", ambiguous=ambiguous, nonexistent=nonexistent)
+    converted, problem = frames.convert(given, column, "in_zone")
+    assert problem is None
+    assert converted.tolist() == [instant]
+
+
+def test_the_values_whose_time_in_their_zone_names_two_instants_are_found() -> None:
+    at = [datetime(2026, 11, 1, 4, 59, tzinfo=UTC), datetime(2026, 11, 1, 5, tzinfo=UTC), datetime(2026, 11, 1, 6, 59, tzinfo=UTC), datetime(2026, 11, 1, 7, tzinfo=UTC), None]
+    values = pd.Series(at, dtype=frames.dtype(Column("t", "datetime", nullable=True, zone="UTC")))
+    assert frames.twice_named(values, "America/New_York").tolist() == [False, True, True, False, False]
+    assert not frames.twice_named(values, "UTC").any()

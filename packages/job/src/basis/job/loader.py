@@ -107,7 +107,8 @@ def _read_database(database: Database, queries: Mapping[str, Query], interval: I
             start = time.perf_counter()
             what = f"dataset {name} ({query.sql})"
             try:
-                frame = conform(reader.fetch(query.text(), interval, what=what), query.row, what=what, naive="in_zone")
+                bound = interval.in_zone(query.zone) if interval is not None and query.zone is not None else interval
+                frame = conform(reader.fetch(query.text(), bound, what=what), query.row, what=what, naive="in_zone")
             except Exception as error:
                 error.add_note(f"while loading {what} from database {database.name}")
                 raise

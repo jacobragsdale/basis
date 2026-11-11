@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pandas as pd
 import pytest
@@ -131,3 +131,26 @@ def test_outputs_take_every_declared_table_and_nothing_else() -> None:
         Outputs(prices=prices({}), other=prices({}))
     with pytest.raises(TypeError, match="its value is a DataFrame, not a Changes"):
         Outputs(prices=Changes())
+
+
+def test_a_datetime_its_zone_shows_twice_is_refused_since_a_naive_value_would_name_two_instants() -> None:
+    first, second = datetime(2026, 11, 1, 5, 30, tzinfo=UTC), datetime(2026, 11, 1, 6, 30, tzinfo=UTC)  # both 1:30 in New York
+    found = planned(etl.Upsert(), prices({"security_id": "S1", "booked_at": first}, {"security_id": "S2", "booked_at": second}))
+    assert found.reasons == [
+        (
+            "prices: booked_at: 2 values are at a time America/New_York shows twice as its clocks go back, such as 2026-11-01 05:30:00+00:00,"
+            " which a naive value cannot tell apart: store the column in UTC, as Annotated[datetime, etl.Zone('UTC')], or leave those rows out"
+        )
+    ]
+
+
+def test_a_delete_range_on_a_zoned_column_whose_end_its_zone_shows_twice_is_refused() -> None:
+    hour = etl.Interval.parse("2026-11-01T05:00Z..2026-11-01T06:00Z")  # 1:00 to 1:00 in New York, which deletes nothing
+    found = planned(etl.ReplaceWhere(interval="booked_at"), prices({"booked_at": datetime(2026, 11, 1, 5, 30, tzinfo=UTC)}), interval=hour)
+    assert any("the delete's range on booked_at ends at 2026-11-01 06:00:00+00:00, 01:00 in America/New_York, which shows that time twice" in reason for reason in found.reasons)
+
+
+def test_a_delete_range_across_the_repeated_hour_whose_ends_are_outside_it_is_sound() -> None:
+    day = etl.Interval.parse("2026-11-01T04:00Z..2026-11-02T05:00Z")
+    found = planned(etl.ReplaceWhere(interval="booked_at"), prices({"booked_at": datetime(2026, 11, 1, 4, 30, tzinfo=UTC)}), interval=day)
+    assert found.reasons == []

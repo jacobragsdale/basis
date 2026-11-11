@@ -176,3 +176,18 @@ def test_a_fetchs_nan_or_infinity_is_refused_as_no_json_number() -> None:
         json_rows(b'[{"day": "2026-11-05", "security_id": "S1", "price": NaN}]', Price, what="dataset prices")
     with pytest.raises(ValueError, match="has -Infinity, which is no JSON number"):
         json_rows(b'[{"day": "2026-11-05", "security_id": "S1", "price": -Infinity}]', Price, what="dataset prices")
+
+
+@pytest.mark.parametrize(("zone", "start"), [(None, datetime(2026, 11, 5)), ("America/New_York", datetime(2026, 11, 4, 19))], ids=["utc", "new-york"])
+def test_a_query_binds_its_interval_in_the_zone_it_says_its_column_compares_in(tmp_path: Path, zone: str | None, start: datetime) -> None:
+    sql = tmp_path / "prices.sql"
+    sql.write_text("SELECT * FROM prices WHERE booked_at >= %(interval_start)s AND booked_at < %(interval_end)s", encoding="utf-8")
+
+    class Inputs(etl.Inputs):
+        prices = etl.Query(Price, database="source", sql=str(sql), empty="allow", zone=zone)
+
+    bound: list[object] = []
+    source = fakes.Database("source")
+    source.answers[sql.read_text(encoding="utf-8")] = lambda binds: bound.append(binds["interval_start"]) or prices({})
+    load(Inputs.declared(), DAY, open_database=lambda _: source, data=None)
+    assert bound == [start]
