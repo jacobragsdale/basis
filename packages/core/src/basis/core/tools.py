@@ -16,8 +16,8 @@ A repo's exception is one rule at one path, with its reason, in `[tool.basis]`:
 A ruff rule's code goes into `ruff.toml`'s per-file ignores, and a ty rule's name into an override of `ty.toml`, for
 the path alone; a coverage floor under the generators' 90 is one too, `{ rule = "coverage", path = ".", reason = "..." }`,
 without which `basis check` refuses it; `basis review` lists every exception. Basis owns a
-repo's settings only where every part it declares gives its share; a part that gives none, as optim, which is
-provisional, leaves the repo's own settings as they are."""
+repo's settings only where every part it declares gives its share; a part that gives none, one whose design is
+still provisional, say, leaves the repo's own settings as they are."""
 
 import re
 import tomllib
