@@ -83,7 +83,8 @@ def exporter(traces: Traces | None) -> SpanProcessor | None:
 
 class Otlp(SpanExporter):
     """Spans, in OTLP's protobuf encoding, posted to `endpoint` within `timeout_s`, and posted again after a 429 or
-    a 502, 503 or 504, or a failure to connect, while time is left. A batch that is not accepted then is dropped, which
+    a 502, 503 or 504, or a timeout, while time is left; a refused connection, no Agent at the endpoint, is never
+    waited for, and fails every later export at once. A batch that is not accepted then is dropped, which
     fails nothing: each kind of failure is logged once."""
 
     def __init__(self, endpoint: str, timeout_s: float) -> None:
@@ -92,9 +93,14 @@ class Otlp(SpanExporter):
         self._client = httpx2.Client(timeout=timeout_s, trust_env=False)
         self._stopped = threading.Event()
         self._reported: set[str] = set()
+        self._absent = False
+        """Whether the endpoint refused a connection: no Agent listens there, which no wait brings up, so every later
+        export of the process fails at once rather than hold a run's exit."""
 
     @override
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        if self._absent:
+            return SpanExportResult.FAILURE
         body = encode_spans(spans).SerializeToString()
         until, wait_s = time.monotonic() + self._timeout_s, 0.5
         while (failure := self._post(body, until)) is not None:
@@ -110,7 +116,10 @@ class Otlp(SpanExporter):
         """Why the endpoint did not accept `body`, and whether to try again, or None when it did."""
         try:
             response = self._client.post(self._endpoint, content=body, headers={"content-type": "application/x-protobuf"}, timeout=max(until - time.monotonic(), 0.001))
-        except httpx2.TransportError as error:  # a connection refused, or a timeout
+        except httpx2.ConnectError as error:  # refused, or no such host: nothing to wait for
+            self._absent = True
+            return type(error).__name__, False
+        except httpx2.TransportError as error:  # a timeout, or a connection dropped: the Agent may be busy
             return type(error).__name__, True
         if response.is_success:
             return None

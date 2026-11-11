@@ -241,3 +241,13 @@ def test_it_refuses_a_moment_for_a_date_and_anything_but_whole_days(call: Callab
 def test_its_reason_names_why_a_day_is_irregular() -> None:
     assert [SIFMA.reason(day) for day in (date(2026, 11, 26), date(2026, 11, 27), date(2026, 11, 28), date(2026, 11, 25))] == ["Thanksgiving Day", "After Thanksgiving Day", "Weekend", None]
     assert SIFMA.early_close(date(1999, 12, 31)) == datetime.combine(date(1999, 12, 31), time(13), NEW_YORK)
+
+
+def test_a_calendar_nearing_its_last_date_is_noted_and_one_far_from_it_is_not() -> None:
+    last = calendar("sifma-us").last
+    assert calendars.nearing_end(last - timedelta(days=400)) == []
+    [note] = [note for note in calendars.nearing_end(last - timedelta(days=30)) if "sifma-us" in note]
+    assert note == (
+        f"the calendar sifma-us covers business days to {last}, 30 days from today: what resolves an interval or a business day on it fails from"
+        f" {last + timedelta(days=1)} until a release of basis covers {last.year + 1}, which `basis upgrade` takes"
+    )

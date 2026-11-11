@@ -1,6 +1,7 @@
 import os
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
+from datetime import timedelta
 from pathlib import Path
 from typing import cast
 
@@ -8,6 +9,7 @@ import pyarrow.fs as pafs
 import pytest
 
 from basis.core import command, doctor, hooks, lake, sync
+from basis.core.calendars import calendar
 from basis.core.databases import Database, Statements
 from basis.core.errors import Denied
 from basis.core.settings import Settings
@@ -304,3 +306,9 @@ def test_doctor_with_an_environment_checks_each_lake_s_container_and_that_a_fold
         f"ERROR: dev's lake gone cannot be archived to (the lake gone has no container lakedev/gone: create it, or correct BASIS_LAKES__GONE__CONTAINER): check BASIS_LAKES__GONE__* in {path}"
     ]
     assert sorted(child.name for child in (tmp_path / "lake" / "archive").iterdir()) == []
+
+
+def test_doctor_notes_a_calendar_nearing_its_last_date(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    last = calendar("sifma-us").last
+    doctor.doctor(None, {}, desktop(tmp_path), describe=str, today=last - timedelta(days=30))
+    assert f"note: the calendar sifma-us covers business days to {last}, 30 days from today" in capsys.readouterr().out

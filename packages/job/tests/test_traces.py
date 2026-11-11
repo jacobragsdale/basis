@@ -248,12 +248,12 @@ def test_a_service_the_settings_do_not_configure_fails_the_run_naming_its_variab
 
 @pytest.mark.parametrize("kind", [kind for kind in KINDS if kind is not BadReply], ids=lambda kind: kind.__name__)
 def test_a_service_that_fails_its_get_fails_the_run_naming_the_kind(tmp_path: Path, sql: Path, kind: type[ServiceError]) -> None:
-    """An Unavailable GET is made again until no backoff fits its deadline, 5s: at once, on the fake's waits."""
+    """An Unavailable GET is made again three times at most: at once, on the fake's waits."""
     fake = venues()
     fake.fails("/venues/2026-11-05", kind)
     result = run(tmp_path, stamping(sql), traced()[0], venues=fake)
     assert (result.record.status, result.record.error) == ("failed", f"{kind.__name__}: venues answered {fakes.ANSWERS[kind]} to GET /venues/2026-11-05")
-    assert len(fake.waits.waited) == (8 if kind is Unavailable else 0)
+    assert len(fake.waits.waited) == (3 if kind is Unavailable else 0)  # an unavailable GET is made again three times at most
 
 
 def test_a_get_unavailable_once_is_made_again_and_the_run_goes_on(tmp_path: Path, sql: Path) -> None:

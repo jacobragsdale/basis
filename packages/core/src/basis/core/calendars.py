@@ -423,3 +423,23 @@ def _target2() -> Calendar:
 
 
 _CALENDARS: dict[str, Callable[[], Calendar]] = {"sifma-us": _sifma_us, "target2": _target2}
+
+
+NEARING = timedelta(days=180)
+"""How long before a calendar's last date `basis doctor` and `basis check` say it nears."""
+
+
+def nearing_end(today: date, *, within: timedelta = NEARING) -> list[str]:
+    """A note for each calendar whose last covered date is within `within` of `today`, or past: a job or a service on
+    it fails from the day after, until a release of basis covers the next year."""
+    notes: list[str] = []
+    for name in _CALENDARS:
+        found = calendar(name)
+        if found.last - today <= within:
+            days = (found.last - today).days
+            when = f"{days} days from today" if days >= 0 else f"{-days} days ago"
+            notes.append(
+                f"the calendar {name} covers business days to {found.last}, {when}: what resolves an interval or a business day on it fails from"
+                f" {found.last + DAY} until a release of basis covers {found.last.year + 1}, which `basis upgrade` takes"
+            )
+    return notes

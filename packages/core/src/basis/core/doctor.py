@@ -22,11 +22,12 @@ import sys
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from pydantic import ValidationError
 
-from basis.core import environments, hooks, lake, qa, settings
+from basis.core import calendars, environments, hooks, lake, qa, settings
 from basis.core.databases import Database, open_database
 from basis.core.errors import BasisError, ServiceError
 from basis.core.settings import MssqlSettings, OracleSettings, Settings
@@ -95,11 +96,13 @@ def doctor(  # noqa: PLR0913 -- what it checks and how it reaches the databases,
     env: str | None = None,
     databases: Callable[[Settings, str], Database] = open_database,
     lakes: Callable[[str, Settings], lake.Lake] = lake.lake,
+    today: date | None = None,
 ) -> int:
     """Check the desktop, and the repo at `repo` when doctor runs in one; `unread` says why a folder with a
     `pyproject.toml` is no basis repo basis can read. With `env`, also that environment's settings, each login of
     each database, opened by `databases`, each lake, opened by `lakes`, and its run store. 0 when nothing is wrong."""
     found = [Found(f"{desktop.system}, Python {platform.python_version()}"), _uv(desktop), _git(desktop), *_feed(repo, desktop)]
+    found += [Found(note, note=True) for note in calendars.nearing_end(today or datetime.now(UTC).date())]
     if unread is not None:
         found.append(Found("the repo", _split(unread)))
     if repo is not None:

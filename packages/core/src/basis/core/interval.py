@@ -122,7 +122,11 @@ class Relative:
             first = today.replace(day=1)
             return _days((first - _DAY).replace(day=1), first)
         start, _, end = self.text.partition("..")
-        return Interval(_end(start, today, calendar), _end(end, today, calendar))
+        first, last = _end(start, today, calendar), _end(end, today, calendar)
+        if first >= last:  # business days and calendar days mixed, which only the day can judge
+            msg = f"--interval {self.text} resolves to {_text(first)}..{_text(last)} on {today}, which does not start before it ends: give ends that do, as today-Nbd..today"
+            raise IntervalError(msg)
+        return Interval(first, last)
 
     @override
     def __str__(self) -> str:
@@ -148,7 +152,33 @@ def given(text: str) -> Interval | Relative:
             except ValueError as error:
                 msg = f"{found!r} is not a date, an instant with its offset, or today, today-Nd or today-Nbd ({error})"
                 raise ValueError(msg) from None
+        elif (relative := _RELATIVE_END.fullmatch(found)) is not None and relative["count"] is not None and int(relative["count"]) == 0:
+            msg = f"{found} is today: write today"
+            raise IntervalError(msg)
+    _refuse_backwards(start, end)
     return Relative(f"{start}..{end}")
+
+
+def _refuse_backwards(start: str, end: str) -> None:
+    """Refuse a relative interval that ends where it starts, or before, where the text alone says so: both ends in
+    calendar days, or both in business days, counted back from today."""
+    first, last = _RELATIVE_END.fullmatch(start), _RELATIVE_END.fullmatch(end)
+    if first is None or last is None:
+        return
+    units = {first["unit"] or "", last["unit"] or ""} - {""}
+    if len(units) > 1:
+        return  # business days against calendar days, which only the day can judge
+    back_start, back_end = int(first["count"] or 0), int(last["count"] or 0)
+    if back_start == back_end:
+        msg = (
+            f"{start}..{end} ends where it starts, so it holds no time: for today, give today"
+            if back_start == 0
+            else f"{start}..{end} ends where it starts, so it holds no time: give an earlier start"
+        )
+        raise IntervalError(msg)
+    if back_start < back_end:
+        msg = f"{start}..{end} ends before it starts: give the earlier end first, as {end}..{start}"
+        raise IntervalError(msg)
 
 
 def _end(text: str, today: date, calendar: Calendar) -> datetime:

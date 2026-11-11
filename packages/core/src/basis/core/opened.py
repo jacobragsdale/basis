@@ -47,6 +47,9 @@ RETRY_FIRST_S = 0.05
 """The wait before an `Unavailable` GET is made again the first time, which doubles each time after."""
 RETRY_MAX_S = 1.0
 """The longest wait between two attempts at an `Unavailable` GET, but for a longer `Retry-After`."""
+MAX_RESENDS = 3
+"""The most times an `Unavailable` GET is made again, however long its deadline: a service that is down stays down
+for longer than a few backoffs, and more attempts only add to its load."""
 _UNREACHABLE = (httpx2.NetworkError, httpx2.RemoteProtocolError, httpx2.ProxyError)
 """A transport's failures to reach the service: to connect, through the proxy too, or a connection reset or closed
 before the reply."""
@@ -213,8 +216,9 @@ class HttpClient:
 
 def _retry_in(method: HttpMethod, failure: ServiceError, response: httpx2.Response | None, *, resent: int, ends_at: float, waits: Waits) -> float | None:  # noqa: PLR0913 -- what the attempt was, and its clock
     """The seconds to wait before making the request again after `failure`, its `resent`-th resend: only for an
-    `Unavailable` GET, and only where the wait ends before the deadline, on `waits`' clock; otherwise None."""
-    if method != "GET" or not isinstance(failure, Unavailable):
+    `Unavailable` GET, `MAX_RESENDS` times at most, and only where the wait ends before the deadline, on `waits`'
+    clock; otherwise None."""
+    if method != "GET" or not isinstance(failure, Unavailable) or resent >= MAX_RESENDS:
         return None
     wait_s = min(RETRY_MAX_S, RETRY_FIRST_S * 2.0 ** min(resent, 32)) * waits.jitter()
     if response is not None and (after := _retry_after(response)) is not None:

@@ -89,3 +89,27 @@ def test_an_interval_whose_end_its_zone_shows_twice_is_refused_in_that_zone(text
 @pytest.mark.parametrize("text", ["2026-11-01T05:00Z..2026-11-01T07:00Z", "2026-11-01T04:00Z..2026-11-01T05:00Z", "2026-11-01T07:00Z..2026-11-01T08:00Z"])
 def test_an_interval_that_begins_or_ends_where_the_repeated_hour_does_binds_exactly(text: str) -> None:
     assert Interval.parse(text).in_zone(NEW_YORK).first_unsound() is None
+
+
+@pytest.mark.parametrize(
+    ("text", "says"),
+    [
+        ("today..today", "today..today ends where it starts, so it holds no time: for today, give today"),
+        ("today..today-7d", "today..today-7d ends before it starts: give the earlier end first, as today-7d..today"),
+        ("today-0bd..today", "today-0bd is today: write today"),
+        ("today-0d..today", "today-0d is today: write today"),
+        ("today-1d..today-3d", "today-1d..today-3d ends before it starts: give the earlier end first, as today-3d..today-1d"),
+    ],
+)
+def test_a_relative_interval_that_is_empty_or_backwards_is_refused_when_it_is_given(text: str, says: str) -> None:
+    with pytest.raises(IntervalError, match=f"^{re.escape(says)}$"):
+        given(text)
+
+
+def test_a_relative_interval_that_resolves_empty_is_one_line_with_the_fix() -> None:
+    """Business and calendar days mixed cannot be judged until the day: on a Monday, the Friday before is 3 days back."""
+    relative = given("today-3bd..today-5d")  # both the Wednesday before, from a Monday
+    assert isinstance(relative, Relative)
+    monday = datetime(2026, 11, 9, 15, tzinfo=UTC)
+    with pytest.raises(IntervalError, match=r"^--interval today-3bd\.\.today-5d resolves to 2026-11-04\.\.2026-11-04 on 2026-11-09, which does not start before it ends: give ends that do"):
+        relative.resolve(monday, calendar("sifma-us"), job="positions")

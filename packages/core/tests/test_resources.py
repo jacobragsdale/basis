@@ -4,7 +4,6 @@ values. test_http_contract.py checks the client makes the same of a fake service
 
 import asyncio
 import json
-import time
 from collections.abc import Awaitable, Callable, MutableMapping
 from datetime import UTC, datetime
 from http import HTTPStatus
@@ -20,7 +19,7 @@ from pydantic import BaseModel
 
 from basis.core import deadlines, errors, fakes, resources
 from basis.core.errors import KINDS, BadReply, Conflict, Denied, Failed, NotFound, Rejected, ServiceError, Timeout, Unavailable
-from basis.core.opened import SYSTEM_WAITS, HttpClient, NewIds, SystemClock, client
+from basis.core.opened import MAX_RESENDS, SYSTEM_WAITS, HttpClient, NewIds, SystemClock, client
 from basis.core.resources import ResourceError
 from basis.core.settings import HttpService
 
@@ -205,16 +204,22 @@ def test_an_unavailable_get_is_made_again_after_a_backoff_and_its_span_counts_th
     assert (len(seen), attributes["http.request.resend_count"], attributes["http.response.status_code"], [event.name for event in span.events]) == (1, 2, 200, ["basis.retry", "basis.retry"])
 
 
-def test_an_unavailable_get_is_made_again_until_no_backoff_fits_before_its_deadline() -> None:
-    """A fake's waits take no time, its clock moves by them alone, and each waits all of its backoff: 50ms, doubling to
-    1s, which 5s fits eight of, however long each attempt takes."""
+def test_an_unavailable_get_is_made_again_three_times_at_most_however_long_its_deadline() -> None:
+    """A fake's waits take no time, its clock moves by them alone, and each waits all of its backoff: 50ms, doubling,
+    three resends at most, where a deadline of minutes made a service that answers 503 a hundred and more requests."""
     seen: list[Message] = []
     fake = pricing(status=503, seen=seen)
-    started = time.monotonic()
     with pytest.raises(Unavailable, match="pricing answered 503 to GET /prices/S1"):
-        get(fake, spanned()[0], resource=resources.http("pricing", deadline_s=5))
-    assert (len(seen), fake.waits.waited) == (9, [0.05, 0.1, 0.2, 0.4, 0.8, 1, 1, 1])
-    assert time.monotonic() - started < 4.55  # the waits' own seconds, were any really waited
+        get(fake, spanned()[0], resource=resources.http("pricing", deadline_s=120))
+    assert (len(seen), fake.waits.waited) == (1 + MAX_RESENDS, [0.05, 0.1, 0.2])
+
+
+def test_an_unavailable_get_is_made_again_only_while_a_backoff_fits_before_its_deadline() -> None:
+    seen: list[Message] = []
+    fake = pricing(status=503, seen=seen)
+    with pytest.raises(Unavailable):
+        get(fake, spanned()[0], resource=resources.http("pricing", deadline_s=0.12))
+    assert fake.waits.waited == [0.05]  # 0.05 + 0.1 would end past 0.12s
 
 
 def test_the_systems_waits_jitter_each_backoff_between_half_and_all_of_it() -> None:

@@ -173,4 +173,4 @@ def test_a_server_nothing_listens_for_is_unavailable(service: Service) -> None:
 
     with pytest.raises(Unavailable, match=r"^pricing could not be reached for GET /prices/S1: ConnectError$") as raised:
         asyncio.run(main())
-    assert (raised.value.status, service.seen, waits.waited) == (None, [], [0.05, 0.1, 0.2, 0.4, 0.8, 1, 1, 1])  # each attempt refused, until no backoff fits 5s
+    assert (raised.value.status, service.seen, waits.waited) == (None, [], [0.05, 0.1, 0.2])  # each attempt refused, and made again three times at most

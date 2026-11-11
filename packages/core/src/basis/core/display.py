@@ -395,6 +395,8 @@ def text(value: object, display: Display | Mapping[str, object] | Format | None 
     match value:
         case None:
             shown = NULL_TEXT
+        case _ if type(value).__name__ == "NaTType":  # pandas' missing time, which is a datetime that holds no time
+            shown = NULL_TEXT
         case str():
             shown = value
         case bool():

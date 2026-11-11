@@ -2,6 +2,7 @@
 go only where the settings say, an OTLP export that fails nothing, and a run's one trace."""
 
 import threading
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -177,3 +178,12 @@ def _export_with(exporter: traces.Otlp) -> SpanExportResult:
     with provider.get_tracer("test").start_as_current_span("run"):
         pass
     return exporter.export(spans.get_finished_spans())
+
+
+def test_an_agent_that_is_not_running_costs_a_run_no_wait_at_its_exit() -> None:
+    """A refused connection is no Agent at the endpoint, which a wait does not bring up: an export fails at once, and
+    every later one of the process's, where waiting and posting again held a run's exit for seconds."""
+    exporter = traces.Otlp("http://127.0.0.1:9/v1/traces", 10)
+    started = time.monotonic()
+    assert [_export_with(exporter) for _ in range(5)] == [SpanExportResult.FAILURE] * 5
+    assert time.monotonic() - started < 1

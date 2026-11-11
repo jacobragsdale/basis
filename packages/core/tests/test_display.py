@@ -199,3 +199,9 @@ def test_the_kinds_and_currencies_are_the_contract_s() -> None:
     assert display.KINDS == ("number", "money", "pct", "bps", "price", "price32")
     assert (len(display.CURRENCIES), display.CURRENCIES["USD"], display.CURRENCIES["JPY"], display.CURRENCIES["BHD"], display.CURRENCIES["CLF"]) == (165, 2, 0, 3, 4)
     assert "XAU" not in display.CURRENCIES
+
+
+@pytest.mark.parametrize("kind", ["number", "money", "pct", "bps", "price", "price32"])
+def test_a_missing_value_reads_as_nothing_whatever_its_format(kind: str) -> None:
+    given: dict[str, object] = {"kind": kind} | ({"currency": "USD"} if kind == "money" else {})
+    assert display.text(pd.NaT, given) == display.text(None, given) == display.text(float("nan"), given)

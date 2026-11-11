@@ -14,9 +14,10 @@ import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
-from basis.core import gates, hooks, hygiene, sync
+from basis.core import calendars, gates, hooks, hygiene, sync
 from basis.core.errors import BasisError
 from basis.core.sync import AgentFiles, Problem
 from basis.core.verbs import Part, error_line, fail
@@ -57,6 +58,8 @@ def check(repo: Path, files: Sequence[AgentFiles], *, run: Runner, staged: bool 
     """Run every check on the repo at `repo`, whose parts' agent files are `files` and whose parts' own checks are
     `checks`, and with `staged` on the files staged for a commit; 0 when every one passes."""
     hooks.ensure(repo)
+    for note in calendars.nearing_end(datetime.now(UTC).date()):  # a note, which fails nothing: the date is the publisher's
+        sys.stdout.write(f"note: {note}\n")
     failures = sum(fail(*problem) for problem in hygiene.problems(repo)) if staged else 0
     found = sync.plan(repo, files)
     failures += sum(fail(*problem) for problem in found.problems())

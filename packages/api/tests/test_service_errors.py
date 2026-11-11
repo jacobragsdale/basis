@@ -195,14 +195,14 @@ def test_a_get_unavailable_once_is_made_again_and_the_route_answers() -> None:
     assert (response.status_code, response.json()) == (HTTPStatus.OK, {"security": SECURITY, "price": 99.50})
 
 
-def test_a_get_unavailable_every_time_is_made_again_as_often_as_its_deadline_allows() -> None:
-    """The fake service's client waits no time, and each wait is all of its backoff: 50ms, doubling to 1s, until the
-    next would not end within the call's 5s."""
+def test_a_get_unavailable_every_time_is_made_again_three_times_at_most() -> None:
+    """The fake service's client waits no time, and each wait is all of its backoff: 50ms, doubling, three resends at
+    most (`basis.core.opened.MAX_RESENDS`), within the call's 5s."""
     pricing = _pricing()
     pricing.fails(f"/prices/{SECURITY}", api.Unavailable)
     with _client(pricing=pricing) as client:
         response = client.get(f"/quotes/{SECURITY}")
-    assert (response.status_code, pricing.waits.waited) == (HTTPStatus.SERVICE_UNAVAILABLE, [0.05, 0.1, 0.2, 0.4, 0.8, 1, 1, 1])
+    assert (response.status_code, pricing.waits.waited) == (HTTPStatus.SERVICE_UNAVAILABLE, [0.05, 0.1, 0.2])
 
 
 def test_a_database_failure_once_fails_only_the_next_statement() -> None:
