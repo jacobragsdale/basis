@@ -84,6 +84,25 @@ def identity(value: object) -> object:
 
 def reads(warehouse: api.Reader) -> int:
     return 0
+
+
+class Unsolvable(Exception):
+    """An exception whose arguments are not its message, so pickle cannot make it again from what it holds."""
+
+    def __init__(self, price: float, settle: str) -> None:
+        super().__init__(f"no yield gives {price} at {settle}")
+
+
+class Unpriced(Exception):
+    """An exception pickle makes again as it was."""
+
+
+def refuse(price: float) -> int:
+    raise Unsolvable(price, "2026-11-06")
+
+
+def unpriced(price: float) -> int:
+    raise Unpriced(f"no price near {price}")
 '''
 
 
@@ -310,6 +329,69 @@ def test_a_compute_function_is_asked_for_by_the_types_its_aliases_name(workloads
         return {"amount": str(await run(1.0))}
 
     assert api.get("/double", doubled, deadline_s=1, response=dict[str, str], errors=[]).asks[0].given == scale
+
+
+def _failing(workloads: ModuleType) -> tuple[api.Service, list[api.ComputeFunction[..., object]]]:
+    """A service whose `/refuse` raises an exception that does not cross processes, and `/unpriced` one that does, each
+    declared a 422; and `/hold`, which spins until the test releases it."""
+    refuse, unpriced, hold = (_declared(workloads, name) for name in ("refuse", "unpriced", "hold"))
+    unsolvable = api.error(workloads.Unsolvable, status=HTTPStatus.UNPROCESSABLE_CONTENT, title="No yield gives the price")
+    priceless = api.error(workloads.Unpriced, status=HTTPStatus.UNPROCESSABLE_CONTENT, title="No price")
+
+    async def refused(price: float, run: Annotated[api.Compute[[float], int], api.given(refuse)]) -> dict[str, int]:
+        return {"never": await run(price)}
+
+    async def missing(price: float, run: Annotated[api.Compute[[float], int], api.given(unpriced)]) -> dict[str, int]:
+        return {"never": await run(price)}
+
+    async def held(started: str, release: str, run: Annotated[api.Compute[[str, str], int], api.given(hold)]) -> dict[str, int]:
+        return {"turns": await run(started, release)}
+
+    routes = [
+        api.get("/refuse", refused, deadline_s=10, response=dict[str, int], errors=[unsolvable]),
+        api.get("/unpriced", missing, deadline_s=10, response=dict[str, int], errors=[priceless]),
+        api.get("/hold", held, deadline_s=10, response=dict[str, int], errors=[]),
+    ]
+    return api.Service(name="failing", settings=api.Settings, routes=routes), [refuse, unpriced, hold]
+
+
+def test_an_exception_that_does_not_cross_processes_fails_its_call_alone(workloads: ModuleType, tmp_path: Path, logged: Callable[[], list[dict[str, object]]]) -> None:
+    """It is a defect, a 500 whose log says why, and the call the other process runs meanwhile still answers."""
+    started, release = tmp_path / "started", tmp_path / "release"
+    service, _ = _failing(workloads)
+    with TestClient(api.build(service, settings=api.Settings.given(compute={"workers": 2})).asgi) as client, ThreadPoolExecutor(1) as threads:
+        computing = threads.submit(client.get, "/hold", params={"started": str(started), "release": str(release)})
+        _until(started.exists)
+        refused = client.get("/refuse", params={"price": 101.5})
+        crossed = client.get("/unpriced", params={"price": 101.5})
+        release.write_text("go", encoding="utf-8")
+        held = computing.result(timeout=10)
+    assert (refused.status_code, crossed.status_code, crossed.json()["detail"], held.status_code) == (
+        HTTPStatus.INTERNAL_SERVER_ERROR, HTTPStatus.UNPROCESSABLE_CONTENT, "no price near 101.5", HTTPStatus.OK,
+    )  # fmt: skip
+    [failure] = [record for record in logged() if "traceback" in record]
+    assert "compute refuse raised Unsolvable, which pickle cannot make again in the app's process" in str(failure["error"])
+    assert "a process of the compute pool stopped, so the pool starts again" not in [record["message"] for record in logged()]
+
+
+def test_a_fake_answers_an_exception_as_the_pool_does(workloads: ModuleType) -> None:
+    service, declared = _failing(workloads)
+    with TestClient(api.build(service, settings=api.Settings.given(), fakes=dict.fromkeys(declared, fakes.Compute())).asgi) as client:
+        refused = client.get("/refuse", params={"price": 101.5})
+        crossed = client.get("/unpriced", params={"price": 101.5})
+    assert (refused.status_code, crossed.status_code) == (HTTPStatus.INTERNAL_SERVER_ERROR, HTTPStatus.UNPROCESSABLE_CONTENT)
+
+
+def test_calls_past_their_deadlines_never_starve_the_pool(workloads: ModuleType, tmp_path: Path, logged: Callable[[], list[dict[str, object]]]) -> None:
+    """A call that never ends holds the pool's one process past its deadline: the pool starts a new one for the next."""
+    started, release = tmp_path / "started", tmp_path / "release"
+    with TestClient(_pooled(workloads, deadline_s=1).asgi) as client:
+        stuck = client.get("/hold", params={"started": str(started), "release": str(release)})
+        then = [client.get("/pid").status_code for _ in range(3)]
+        ready = client.get("/health/ready").status_code
+        release.write_text("go", encoding="utf-8")
+    assert (stuck.status_code, then, ready) == (HTTPStatus.GATEWAY_TIMEOUT, [HTTPStatus.OK] * 3, HTTPStatus.OK)
+    assert "every process of the compute pool runs a call past its deadline, so the pool starts new ones and stops those" in [record["message"] for record in logged()]
 
 
 def test_a_process_that_dies_fails_its_call_and_the_next_call_starts_new_ones(workloads: ModuleType) -> None:
