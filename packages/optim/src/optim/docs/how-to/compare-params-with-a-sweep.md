@@ -73,7 +73,7 @@ The table has a row per params file and portfolio, with these columns:
 pipeline. Put the variants in a folder of their own, such as `models/income/params/sweep/`, then:
 
 ```sh
-uv run --env-file .env basis sweep RUN_ID models/income/params/sweep --out sweep.csv
+uv run --env-file .env basis sweep RUN_ID models/income/params/sweep --env dev --out sweep.csv
 ```
 
 `RUN_ID` is a run under `BASIS_SNAPSHOT_ROOT`, which `.env.example` sets to the repo's `snapshots/`, or the path of its

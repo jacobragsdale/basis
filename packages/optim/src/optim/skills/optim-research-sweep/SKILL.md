@@ -15,8 +15,8 @@ Follow `uv run basis docs optim/how-to/compare-params-with-a-sweep`. In short:
    A variant changes params alone, such as a limit or a term's weight; a new constraint or term is code (see
    `uv run basis docs optim/how-to/add-a-constraint`). Params are strict: a misspelled key fails the sweep before anything
    decides.
-4. Sweep from Python, `sweep(model, RUN, params=[...])`, or `uv run --env-file .env basis sweep RUN DIR --out
-   sweep.csv`. Each row is a variant and a portfolio: whether it was accepted, its objective, turnover, trades, cash,
-   solve time, the model's metrics and its reasons.
+4. Sweep from Python, `sweep(model, RUN, params=[...])`, or
+   `uv run --env-file .env basis sweep RUN DIR --env dev --out sweep.csv`. Each row is a variant and a portfolio:
+   whether it was accepted, its objective, turnover, trades, cash, solve time, the model's metrics and its reasons.
 
 A sweep reads only the snapshot and saves nothing. `uv run basis docs optim/reference` describes the sweep table.

@@ -80,13 +80,14 @@ environment's variables:
 basis run income --params models/income/params/default.json --as-of 2026-10-16 --publish
 ```
 
-`basis run` decides as a run from `main.py` does, through the same code, with these differences: it reads the process's
-environment, which `uv run --env-file .env basis run ...` sets on a machine; its paths are the working directory's; it
-saves its snapshot under `BASIS_SNAPSHOT_ROOT`, which it requires; with `--publish`, it writes the accepted portfolios'
-orders to the table `BASIS_OPTIM__ORDERS__DATABASE` and `BASIS_OPTIM__ORDERS__TABLE` configure, through that database's
-write login, with a row in its ledger; and it exits 0 only when every portfolio was accepted and the orders, if it
-published them, committed. `--portfolios P1 P2`, or `--portfolios @FILE` with one id per line, names the portfolios;
-without it, it decides every portfolio the model lists.
+`basis run` decides as a run from `main.py` does, through the same code, with these differences: it reads the settings
+of the environment it names, `--env prod` or the pod's `BASIS_ENV`: your own file for it where you have one, and else
+the process's environment, which `uv run --env-file .env basis run income --env dev ...` sets on a machine; its paths
+are the working directory's; it saves its snapshot under `BASIS_SNAPSHOT_ROOT`, which it requires; with `--publish`, it
+writes the accepted portfolios' orders to the table `BASIS_OPTIM__ORDERS__DATABASE` and `BASIS_OPTIM__ORDERS__TABLE`
+configure, through that database's write login, with a row in its ledger; and it exits 0 only when every portfolio was
+accepted and the orders, if it published them, committed. `--portfolios P1 P2`, or `--portfolios @FILE` with one id per
+line, names the portfolios; without it, it decides every portfolio the model lists.
 
 The ledger keeps a retried run from writing its orders twice: a run of the model for a date that another run published
 orders for stops before it loads, unless it is given `--again`, with `--portfolios` naming only portfolios that run

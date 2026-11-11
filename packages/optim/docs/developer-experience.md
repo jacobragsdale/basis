@@ -181,8 +181,8 @@ if __name__ == "__main__":
 
 ## Production
 
-`basis run MODEL --params FILE [--portfolios ...] [--as-of DATE] [--data DIR] [--publish]` reads the process's
-environment, saves the snapshot under `BASIS_SNAPSHOT_ROOT`, which it requires, and with `--publish` writes accepted
+`basis run MODEL --params FILE [--portfolios ...] [--as-of DATE] [--data DIR] [--publish] [--env ENV]` reads the
+settings of the environment it names, `--env` or `BASIS_ENV`, saves the snapshot under `BASIS_SNAPSHOT_ROOT`, which it requires, and with `--publish` writes accepted
 portfolios' orders to the table `BASIS_OPTIM__ORDERS__*` configures, with a ledger row; `basis resume MODEL RUN_ID`
 finishes a publish that failed. They are the only things that write orders. Its paths are the working directory's, as
 any command's are. It and `optim.run` share everything from loading to saving.

@@ -73,10 +73,10 @@ no solver returns `optim.Decision(buy={...}, sell={...})`.
 uv run python models/MODEL/main.py               # what pressing Run does: decide portfolios, print a row for each
 uv run basis check                               # lint, format, types, behaviour and contract tests, basis's files
 uv run basis describe MODEL                      # params schema, datasets and metrics, as JSON
-uv run --env-file .env basis run MODEL --params models/MODEL/params/default.json --data models/MODEL/tests/fixture
-uv run --env-file .env basis replay RUN_ID [--params FILE] [--portfolios ID ...]   # decide a saved run again
-uv run --env-file .env basis sweep RUN_ID DIR    # one table: a row per params file in DIR and portfolio
-uv run --env-file .env basis regress [MODEL]     # replay recent runs with this code; exit 1 if a trade changed
+uv run --env-file .env basis run MODEL --env dev --params models/MODEL/params/default.json --data models/MODEL/tests/fixture
+uv run --env-file .env basis replay RUN_ID --env dev [--params FILE] [--portfolios ID ...]   # decide a saved run again
+uv run --env-file .env basis sweep RUN_ID DIR --env dev   # one table: a row per params file in DIR and portfolio
+uv run --env-file .env basis regress [MODEL] --env dev    # replay recent runs with this code; exit 1 if a trade changed
 uv run basis new model NAME                      # add a model, and models/shared/ with the second
 uv run basis sync                                # rewrite this block, the optim-* skills and basis's files
 uv run basis docs [optim/PAGE]                   # optim's own docs: tutorial, how-to, reference, explanation

@@ -324,7 +324,11 @@ finds it. `workers` defaults to `BASIS_OPTIM__WORKERS`, or 1.
 A model repo's command is `basis`, and `uv run basis --help` lists every verb it has; `optim` is the same command, under
 its earlier name. `run`, `describe`, `resume`, `replay`, `regress` and `ddl` are verbs jobs have too: in a repo with
 both jobs and models, the model's name comes first, and `basis VERB NAME --help` gives the model's arguments. Every verb
-reads its settings from the process's environment, as `uv run --env-file .env basis ...` sets them, logs JSON lines on
+that reaches the firm's systems, `run`, `resume`, `replay`, `regress`, `ddl MODEL`, `sweep` of a run by its id and
+`warm`, names its environment, `--env dev`, `qa` or `prod`, or else `BASIS_ENV`, with no default, and reads that
+environment's settings (basis-core's `environments`): your own file for it, `~/.config/basis/ENV.env`
+(`%APPDATA%\basis\ENV.env` on Windows), alone, where there is one, and else the process's environment, as
+`uv run --env-file .env basis run income --env dev ...` sets it, or a pod's deployment does. Every verb logs JSON lines on
 stderr, ends its stderr with a log record, `finished VERB`, with its exit code and how long it took, and then prints
 each failure as one line, `ERROR: REASON: FIX`, the last. Paths are the working directory's. `--portfolios` takes ids,
 or `@FILE` with one per line.
@@ -332,7 +336,7 @@ or `@FILE` with one per line.
 ### `basis run`
 
 ```text
-basis run MODEL --params FILE [--as-of DATE] [--portfolios ID ...] [--data DIR] [--label KEY=VALUE] [--workers N] [--no-cache] [--publish [--again]]
+basis run MODEL --params FILE [--as-of DATE] [--portfolios ID ...] [--data DIR] [--label KEY=VALUE] [--workers N] [--no-cache] [--publish [--again]] [--env ENV]
 ```
 
 Validates the params, loads the model's data, decides each portfolio, and saves the snapshot under
@@ -378,7 +382,7 @@ that fails keeps the run, and `basis resume` writes its orders.
 ### `basis resume`
 
 ```text
-basis resume [MODEL] RUN_ID [--again]
+basis resume [MODEL] RUN_ID [--again] [--env ENV]
 ```
 
 Publishes the orders of a run of `basis run --publish` whose publish did not commit, from its snapshot: the same rows,
@@ -393,7 +397,7 @@ manifest, prints what it wrote or why it failed, and exits 0 when the publish co
 ### `basis ddl`
 
 ```text
-basis ddl MODEL --dialect mssql|oracle
+basis ddl MODEL --dialect mssql|oracle [--env ENV]
 basis ddl --ledger TABLE --dialect mssql|oracle
 ```
 
@@ -408,7 +412,7 @@ in optim is. A table a publish writes may differ, as long as its columns can hol
 ### `basis replay`
 
 ```text
-basis replay [MODEL] RUN [--params FILE] [--portfolios ID ...] [--label KEY=VALUE] [--workers N]
+basis replay [MODEL] RUN [--params FILE] [--portfolios ID ...] [--label KEY=VALUE] [--workers N] [--env ENV]
 ```
 
 Decides a saved run again with the code installed now, and other params if given, and saves it as a new run under
@@ -420,7 +424,7 @@ them in its order decide again too. A replay of a replay of a subset replays tha
 ### `basis sweep`
 
 ```text
-basis sweep RUN VARIANTS [--out FILE] [--workers N]
+basis sweep RUN VARIANTS [--out FILE] [--workers N] [--env ENV]
 ```
 
 Decides the run once per `*.json` params file in the directory `VARIANTS`, every file validated first, and writes one
@@ -431,7 +435,7 @@ defaults to 1. Columns: `variant` (the file's stem), `portfolio_id`, `accepted`,
 ### `basis regress`
 
 ```text
-basis regress [MODEL] [--snapshots ROOT] [--last N] [--label KEY=VALUE] [--out FILE] [--workers N]
+basis regress [MODEL] [--snapshots ROOT] [--last N] [--label KEY=VALUE] [--out FILE] [--workers N] [--env ENV]
 ```
 
 Replays the model's, or without `MODEL` every model's, `--last` (default 20) most recent runs under `--snapshots`
@@ -482,7 +486,7 @@ the pipeline stub and the hooks; basis's block of `AGENTS.md` and optim's, the c
 around them; `CLAUDE.md`; and the `optim-*` skills, in `.agents/skills/` and `.claude/skills/`, deleting copies of
 skills optim no longer ships. `basis check` fails when one of them differs. `basis docs` lists these docs, as
 `optim/PAGE`, and `basis docs optim/PAGE` prints one, such as `optim/how-to/add-a-dataset`. `basis warm MODEL ...
-[--as-of DATE]` reads every cached dataset the models read whole, the `portfolios` dataset included, live, and
+[--as-of DATE] [--env ENV]` reads every cached dataset the models read whole, the `portfolios` dataset included, live, and
 overwrites its cache entry; it needs `BASIS_OPTIM__CACHE_ROOT` and exits 1 if any load failed.
 
 ## Settings

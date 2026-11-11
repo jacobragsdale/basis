@@ -102,8 +102,8 @@ uv run basis check                  # the framework files, the hooks, the lockfi
 cp .env.example .env
 uv run python -c 'from optim import run; from models.ladder import model; run(model, data="tests/fixture")'
 uv run python models/ladder/main.py   # live data: stops, naming the settings to set
-uv run --env-file .env basis run ladder --params models/ladder/params/default.json --data models/ladder/tests/fixture
-uv run --env-file .env optim run ladder --params models/ladder/params/default.json --data models/ladder/tests/fixture
+uv run --env-file .env basis run ladder --env dev --params models/ladder/params/default.json --data models/ladder/tests/fixture
+uv run --env-file .env optim run ladder --env dev --params models/ladder/params/default.json --data models/ladder/tests/fixture
 git add --all && git commit -m "First commit"   # the commit hook fixes, formats and runs basis check
 ```
 

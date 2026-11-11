@@ -3,8 +3,9 @@ connection string. basis-core's settings name each database a dataset reads, as 
 and the snapshot root, `BASIS_SNAPSHOT_ROOT`; optim's own are its block, `BASIS_OPTIM__*`: the cache root, the worker
 processes, how many reads each database serves at once, the REST source and the orders table. Nested fields use a
 double underscore. A source that is not configured cannot be read, so a run that reads files needs no settings. A
-model's `main.py` names the file the settings come from, such as `.env.prod`; the command line reads the process's
-environment, as `uv run --env-file .env` sets it.
+model's `main.py` names the file the settings come from, such as `.env.prod`; the command line reads the environment
+`--env` or `BASIS_ENV` names, through basis-core's `environments`: the user's file for it, alone, or else the
+process's environment, as `uv run --env-file .env` sets it.
 
 optim 0.2.0 read `OPTIM_*` variables. Each of those is refused, naming the variable that replaced it, rather than
 ignored, so a settings file written for 0.2.0 cannot silently run with nothing configured."""

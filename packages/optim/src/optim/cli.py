@@ -3,16 +3,16 @@
 runs a model's `main.py` instead, which calls the same code (`optim.api`). Settings come from `BASIS_*` environment
 variables; choose the settings file explicitly:
 
-uv run --env-file .env basis run income --params models/income/params/default.json
-uv run --env-file .env basis run income --params models/income/params/default.json --portfolios P1 P2 --as-of 2026-10-16
-uv run --env-file .env basis run income --params models/income/params/default.json --data models/income/tests/fixture
-uv run --env-file .env.prod basis run income --params models/income/params/default.json --publish
-uv run --env-file .env.prod basis resume income RUN_ID
-uv run --env-file .env.prod basis ddl income --dialect mssql
-uv run --env-file .env basis replay RUN_ID --params models/income/params/wider.json --portfolios P1
-uv run --env-file .env basis sweep RUN_ID models/income/params/sweep --out sweep.csv
-uv run --env-file .env basis regress income --snapshots //share/optim/snapshots --label purpose=production
-uv run --env-file .env basis warm income
+uv run --env-file .env basis run income --env dev --params models/income/params/default.json
+uv run --env-file .env basis run income --env dev --params models/income/params/default.json --portfolios P1 P2 --as-of 2026-10-16
+uv run --env-file .env basis run income --env dev --params models/income/params/default.json --data models/income/tests/fixture
+uv run --env-file .env.prod basis run income --env prod --params models/income/params/default.json --publish
+uv run --env-file .env.prod basis resume income RUN_ID --env prod
+uv run --env-file .env.prod basis ddl income --env prod --dialect mssql
+uv run --env-file .env basis replay RUN_ID --env dev --params models/income/params/wider.json --portfolios P1
+uv run --env-file .env basis sweep RUN_ID models/income/params/sweep --env dev --out sweep.csv
+uv run --env-file .env basis regress income --env dev --snapshots //share/optim/snapshots --label purpose=production
+uv run --env-file .env basis warm income --env dev
 uv run basis describe income
 uvx --index INDEX_URL optim new repo sma-optimizer income --index INDEX_URL
 uv run basis new model ladder
