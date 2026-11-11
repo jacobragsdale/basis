@@ -7,14 +7,17 @@ the error it is given, which is no `OSError`, so no client takes it for a networ
 first, so it never warns that it was left open. A Unix socket is no network, and stays open to every test, as a
 process pool's fork server uses one; and so is the pair of sockets an event loop makes to wake itself, which on
 Windows is a connection to 127.0.0.1 (`socket.socketpair`): that pair is all FastAPI's `TestClient` needs, since it
-calls the app in the test's process. A test marked `integration`, which the default run leaves out, may open any
-socket. A driver that opens its sockets in C, as mssql-python's does, and a DNS lookup are out of the plugin's sight;
+calls the app in the test's process. Windows' default event loop, the proactor, connects and sends a datagram in C, through
+`_overlapped`, never through `socket.socket`'s methods, so the plugin guards its `IocpProactor`'s `connect` and
+`sendto` too: an `httpx.AsyncClient` that reaches QA fails on Windows as it does in WSL. A test marked `integration`,
+which the default run leaves out, may open any socket. A driver that opens its sockets in C, as mssql-python's does, and a DNS lookup are out of the plugin's sight;
 the settings a unit test builds with name no real database.
 
 With `--basis-gates FILE`, which `basis check` gives it, the plugin writes there, as JSON, each test that opened a
 socket with what it reached, and each test that failed, so that `basis check` prints one `ERROR` line for each test
 that opened one (`basis.core.gates`)."""
 
+import importlib
 import json
 import socket
 import threading
@@ -28,6 +31,10 @@ INTEGRATION = "integration"
 """The marker of a test that may reach a real database or service."""
 GUARDED = ("connect", "connect_ex", "bind", "sendto")
 """What a socket does that reaches, or opens itself to, the network."""
+PROACTOR = ("asyncio.windows_events", "IocpProactor")
+"""Windows' event loop's proactor, by module and class, whose `connect(conn, address)` and `sendto(conn, buf, flags,
+addr)` reach the network without `socket.socket`'s methods; the module imports on Windows alone."""
+PROACTOR_GUARDED = ("connect", "sendto")
 _NETWORK = frozenset({socket.AF_INET, socket.AF_INET6})
 FIX = "give it a fake of what it reaches, from basis's fakes or the repo's own, or, for a test that needs a real database or service, mark it @pytest.mark.integration"
 
@@ -58,6 +65,10 @@ class Gates:
         for name in GUARDED:
             self._replaced[name] = vars(socket.socket).get(name)
             setattr(socket.socket, name, self._guard(name, getattr(socket.socket, name)))
+        if (proactor := _proactor()) is not None:
+            for name in PROACTOR_GUARDED:
+                self._replaced[f"proactor.{name}"] = vars(proactor)[name]
+                setattr(proactor, name, self._proactor_guard(name, getattr(proactor, name)))
         self._replaced["socketpair"] = socket.socketpair
         socket.socketpair = self._socketpair(socket.socketpair)  # ty: ignore[invalid-assignment] -- the same function, which the wrapper calls with what it is given
         self._replaced["start"] = threading.Thread.start
@@ -69,6 +80,10 @@ class Gates:
                 delattr(socket.socket, name)
             else:
                 setattr(socket.socket, name, before)
+        if (proactor := _proactor()) is not None:
+            for name in PROACTOR_GUARDED:
+                if (before := self._replaced.get(f"proactor.{name}")) is not None:
+                    setattr(proactor, name, before)
         if (pair := self._replaced.get("socketpair")) is not None:
             socket.socketpair = pair  # ty: ignore[invalid-assignment] -- what it was before install
         if (start := self._replaced.get("start")) is not None:
@@ -77,19 +92,33 @@ class Gates:
 
     def _guard(self, name: str, original: Callable[..., object]) -> Callable[..., object]:
         def guarded(sock: socket.socket, *args: object) -> object:
-            if self.blocking and sock.family in _NETWORK and not getattr(self._pairing, "on", False):
-                reached = f"{name} {_address(args[-1] if name == 'sendto' else args[0])}"
-                owner = self._owners.get(threading.get_ident())
-                if owner is not None and owner != self.test:  # a thread an earlier test left running: that test's socket
-                    self.sockets.setdefault(owner, []).append(f"{reached}, on the thread {threading.current_thread().name} it left running")
-                else:
-                    self.pending.append(reached)
-                sock.close()  # which the caller may never do, as `socket.create_connection` closes one only on an OSError
-                msg = f"a unit test opened a socket, {reached}, and reaches nothing outside its process: {FIX}"
-                raise SocketBlockedError(msg)
+            self._refuse(name, sock, args[-1] if name == "sendto" else args[0])
             return original(sock, *args)
 
         return guarded
+
+    def _proactor_guard(self, name: str, original: Callable[..., object]) -> Callable[..., object]:
+        def guarded(proactor: object, conn: socket.socket, *args: object, **kwargs: object) -> object:
+            if name == "connect":
+                self._refuse(name, conn, args[0] if args else kwargs["address"])
+            elif (address := args[2] if len(args) > 2 else kwargs.get("addr")) is not None:  # noqa: PLR2004 -- sendto's buf, flags, addr
+                self._refuse(name, conn, address)
+            return original(proactor, conn, *args, **kwargs)
+
+        return guarded
+
+    def _refuse(self, name: str, sock: socket.socket, address: object) -> None:
+        """Raise `SocketBlockedError` when a unit test is running and `sock` reaches the network, closing it first."""
+        if self.blocking and sock.family in _NETWORK and not getattr(self._pairing, "on", False):
+            reached = f"{name} {_address(address)}"
+            owner = self._owners.get(threading.get_ident())
+            if owner is not None and owner != self.test:  # a thread an earlier test left running: that test's socket
+                self.sockets.setdefault(owner, []).append(f"{reached}, on the thread {threading.current_thread().name} it left running")
+            else:
+                self.pending.append(reached)
+            sock.close()  # which the caller may never do, as `socket.create_connection` closes one only on an OSError
+            msg = f"a unit test opened a socket, {reached}, and reaches nothing outside its process: {FIX}"
+            raise SocketBlockedError(msg)
 
     def _socketpair(self, original: Callable[..., tuple[socket.socket, socket.socket]]) -> Callable[..., tuple[socket.socket, socket.socket]]:
         def socketpair(*args: object, **kwargs: object) -> tuple[socket.socket, socket.socket]:
@@ -141,6 +170,16 @@ class Gates:
         if self.written is not None:
             found = {"exit_status": int(exitstatus), "failed": sorted(self.failed), "sockets": self.sockets}
             Path(self.written).write_text(json.dumps(found, indent=2), encoding="utf-8")
+
+
+def _proactor() -> object | None:
+    """Windows' `IocpProactor`, or None where its module does not import."""
+    module, name = PROACTOR
+    try:
+        found: object = getattr(importlib.import_module(module), name)
+    except ImportError:
+        return None
+    return found
 
 
 def _address(address: object) -> str:

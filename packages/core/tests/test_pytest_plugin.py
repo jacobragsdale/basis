@@ -122,3 +122,39 @@ def test_a_socket_a_thread_opens_after_its_test_ends_is_that_test_s_not_the_runn
     session.runpytest(f"--basis-gates={written}").assert_outcomes(passed=2)
     name = "test_a_socket_a_thread_opens_after_its_test_ends_is_that_test_s_not_the_running_one.py"
     assert json.loads(written.read_text(encoding="utf-8"))["sockets"] == {f"{name}::test_leaves_a_thread": ["connect 192.0.2.1:9, on the thread poller it left running"]}
+
+
+PROACTOR = "class IocpProactor:\n    def connect(self, conn, address):\n        return 'connected'\n\n    def sendto(self, conn, buf, flags=0, addr=None):\n        return 'sent'\n"
+"""A stand-in for Windows' `asyncio.windows_events.IocpProactor`, whose `connect` and `sendto` reach the network
+through `_overlapped`, in C, never through `socket.socket`'s methods."""
+
+
+def test_windows_event_loop_connects_and_sends_through_its_proactor_and_is_blocked(session: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows' default event loop, the proactor, connects with `ConnectEx` and sends a datagram with `WSASendTo`, so
+    an `httpx.AsyncClient` reaching QA would pass there and fail in WSL; the plugin guards the proactor too, here on a
+    stand-in of its class, which a Windows run checks on the real one below."""
+    windows_events = type(pytest)("asyncio.windows_events")
+    exec(PROACTOR, vars(windows_events))  # noqa: S102 -- the stand-in's own source, above
+    monkeypatch.setitem(__import__("sys").modules, "asyncio.windows_events", windows_events)
+    before = dict(vars(windows_events.IocpProactor))
+    session.makepyfile(
+        "import socket\n\nfrom asyncio.windows_events import IocpProactor\n\nDGRAM = (socket.AF_INET, socket.SOCK_DGRAM)\n\n\n"
+        f"def test_connects() -> None:\n    with socket.socket() as sock:\n        IocpProactor().connect(sock, {UNROUTABLE})\n\n\n"
+        f"def test_sends() -> None:\n    with socket.socket(*DGRAM) as sock:\n        IocpProactor().sendto(sock, b'x', addr={UNROUTABLE})\n\n\n"
+        "def test_sends_on_a_unix_socket() -> None:\n    with socket.socket(socket.AF_UNIX) as sock:\n        assert IocpProactor().sendto(sock, b'x', addr='there') == 'sent'\n\n\n"
+        "def test_sends_where_it_connected() -> None:\n    with socket.socket(*DGRAM) as sock:\n        assert IocpProactor().sendto(sock, b'x') == 'sent'\n"
+    )
+    result = session.runpytest()
+    result.assert_outcomes(failed=2, passed=2)
+    result.stdout.fnmatch_lines(["*SocketBlockedError: a unit test opened a socket, connect 192.0.2.1:9*", "*SocketBlockedError: a unit test opened a socket, sendto 192.0.2.1:9*"])
+    assert dict(vars(windows_events.IocpProactor)) == before  # put back as it was
+
+
+@pytest.mark.skipif(__import__("sys").platform != "win32", reason="Windows' default event loop, the proactor, is Windows' alone")
+def test_an_async_client_on_windows_default_event_loop_is_blocked(session: pytest.Pytester) -> None:
+    session.makepyfile(
+        f"import asyncio\n\n\nasync def reach() -> None:\n    await asyncio.wait_for(asyncio.open_connection(*{UNROUTABLE}), 5)\n\n\ndef test_reaches() -> None:\n    asyncio.run(reach())\n"
+    )
+    result = session.runpytest_subprocess()
+    result.assert_outcomes(failed=1)
+    result.stdout.fnmatch_lines(["*SocketBlockedError: a unit test opened a socket, connect 192.0.2.1:9*"])

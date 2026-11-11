@@ -648,7 +648,8 @@ it. From phase 5, that file is the user's `qa.env`, which every repo shares, and
   reason is refused.
 - **No network.** Unit tests cannot open sockets, so none can go flaky by reaching QA. basis-core's pytest plugin,
   which every repo's pytest loads, fails a test not marked `integration` that connects, binds or sends on an IPv4 or
-  IPv6 socket, from any thread, whatever the code does with the error. The socket pair an event loop makes to wake
+  IPv6 socket, from any thread, whatever the code does with the error, Windows' default event loop's included, which
+  connects through its proactor in C rather than the socket's methods. The socket pair an event loop makes to wake
   itself, which Windows makes over 127.0.0.1, and Unix sockets stay open, and FastAPI's `TestClient`, which calls the
   app in the process, needs nothing more. A driver that opens its sockets in C, as mssql-python's does, and a DNS
   lookup are out of its sight.
