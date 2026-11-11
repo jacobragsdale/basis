@@ -25,11 +25,13 @@ their lines alone; any other failure adds pytest's own line. What basis has the 
 its report and the plugin's file, goes to a temporary folder, removed after, so none of it lands in the repo."""
 
 import ast
+import io
 import json
 import math
 import os
 import re
 import tempfile
+import tokenize
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -103,6 +105,60 @@ def mocks(repo: Path) -> list[Problem]:
                 )
             )
     return found
+
+
+SUPPRESSION = re.compile(r"#\s*(?P<what>noqa\b(?::\s*[A-Z0-9]+(?:\s*,\s*[A-Z0-9]+)*)?|ty:\s*ignore(?:\[[^\]]*\])?|type:\s*ignore(?:\[[^\]]*\])?|pragma:\s*no\s+cover)(?P<rest>.*)$")
+"""A comment that suppresses a check of its line: ruff's, ty's, mypy's, or coverage's."""
+_SKIPS = frozenset({"skip", "skipif", "xfail"})
+"""The pytest marks that keep a test from passing or failing on its own, each of which needs its reason."""
+
+
+def suppressions(repo: Path) -> list[Problem]:
+    """Each suppression in the repo's Python that gives no reason, `# noqa`, `# ty: ignore`, `# pragma: no cover` and
+    `# type: ignore` with no ` -- WHY` after it, and each skip of a test without its reason, with the fix: what is
+    left to turn a check off once basis owns the tools' settings, which a reviewer reads the reason of."""
+    found: list[Problem] = []
+    for path in _python(repo):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError, UnicodeDecodeError:  # ruff says what is wrong with it
+            continue
+        name = path.relative_to(repo).as_posix()
+        found += [(f"{name}:{line} suppresses a check with `# {what}`, and gives no reason", f"say why after it, as `# {what} -- WHY`, or fix what it suppresses") for line, what in _bare(text)]
+        found += [(f"{name}:{line} skips a test with {what}, and gives no reason", f"say why, as {what.removesuffix('()')}(reason='WHY'), or fix the test") for line, what in _skips(text)]
+    return found
+
+
+def _bare(text: str) -> list[tuple[int, str]]:
+    """Each comment of `text` that suppresses a check with no reason, by its line, and what it says."""
+    try:
+        comments = [token for token in tokenize.generate_tokens(io.StringIO(text).readline) if token.type == tokenize.COMMENT]
+    except tokenize.TokenError, SyntaxError:  # ruff and ty say what is wrong with it
+        return []
+    return [(token.start[0], " ".join(match.group("what").split())) for token in comments if (match := SUPPRESSION.search(token.string)) is not None and not _REASON.match(match.group("rest"))]
+
+
+def _skips(text: str) -> list[tuple[int, str]]:
+    """Each skip of a test in `text` without its reason: a mark of `_SKIPS` with no `reason=`, or `pytest.skip()` with
+    no message."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError, ValueError:
+        return []
+    called = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}  # a mark called is judged by its call
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        match node:
+            case ast.Attribute(value=ast.Attribute(value=ast.Name(id="pytest"), attr="mark"), attr=str(mark)) if mark in _SKIPS and id(node) not in called:
+                found.append((node.lineno, f"@pytest.mark.{mark}"))
+            case ast.Call(func=ast.Attribute(value=ast.Attribute(value=ast.Name(id="pytest"), attr="mark"), attr=str(mark)), keywords=keywords) if mark in _SKIPS:
+                if not any(keyword.arg == "reason" for keyword in keywords):
+                    found.append((node.lineno, f"@pytest.mark.{mark}()"))
+            case ast.Call(func=ast.Attribute(value=ast.Name(id="pytest"), attr="skip"), args=[], keywords=[]):
+                found.append((node.lineno, "pytest.skip()"))
+            case _:
+                pass
+    return sorted(set(found))
 
 
 ROUNDERS = frozenset({"round", "around", "rint"})

@@ -77,6 +77,7 @@ def check(repo: Path, files: Sequence[AgentFiles], *, run: Runner, staged: bool 
             )
     failures += sum(_part_checks(repo, checks))
     failures += sum(fail(*problem) for problem in gates.mocks(repo))
+    failures += sum(fail(*problem) for problem in gates.suppressions(repo))
     failures += sum(fail(*problem) for problem in gates.rounding(repo))
     floor, missing = gates.floor(repo), gates.installed()
     if isinstance(floor, tuple):

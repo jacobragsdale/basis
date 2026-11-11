@@ -117,14 +117,14 @@ def test_the_example_passes_every_gate(repo: Path, monkeypatch: pytest.MonkeyPat
 
 
 def test_a_domain_module_that_imports_up_the_layers_fails(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    edit(repo, "domain.py", "from pydantic import AwareDatetime", "from accruals import handlers  # noqa: F401\nfrom pydantic import AwareDatetime")
+    edit(repo, "domain.py", "from pydantic import AwareDatetime", "from accruals import handlers  # noqa: F401 -- the import under test\nfrom pydantic import AwareDatetime")
     [line] = checked(repo, monkeypatch, capsys)
     assert line.startswith("ERROR: accruals/domain.py:11 imports accruals.handlers into accruals.domain: a domain module imports a handlers module, above it")
     assert line.endswith(": move what accruals.domain needs of accruals.handlers down into accruals.domain, or into a layer below it, or move the code that needs it up into a handlers module")
 
 
 def test_a_domain_module_that_reaches_io_fails(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    edit(repo, "domain.py", "from pydantic import AwareDatetime", "from basis import api  # noqa: F401\nfrom pydantic import AwareDatetime")
+    edit(repo, "domain.py", "from pydantic import AwareDatetime", "from basis import api  # noqa: F401 -- the import under test\nfrom pydantic import AwareDatetime")
     [line] = checked(repo, monkeypatch, capsys)
     assert line == (
         "ERROR: accruals/domain.py:11 imports basis into accruals.domain, and a domain module stays pure: no I/O, no web framework and nothing of basis:"

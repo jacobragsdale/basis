@@ -8,6 +8,7 @@ shares, at `basis/checks/PREFIX/COMMIT.json`, where PREFIX is the repo's folder 
 each pushed commit, in place or in a worktree of its own, so the record is there when the pull request is opened. A
 check of a folder with changes no commit holds is not recorded, since no commit is what was checked."""
 
+import re
 import sys
 from datetime import datetime
 from importlib.metadata import entry_points, version
@@ -150,6 +151,7 @@ def review(repo: Path, ref: str) -> int:
     record = Record.model_validate_json(kept.read_bytes())
     sys.stdout.write(markdown(record))
     sys.stdout.write(exceptions_markdown(found.root / "pyproject.toml"))
+    sys.stdout.write(added_markdown(found.root, commit))
     if not record.passed:
         return fail(f"commit {commit} failed basis check --full, as the summary says", "fix what it says, commit, and push again")
     return 0
@@ -172,6 +174,49 @@ def markdown(record: Record) -> str:
     lines += ["", "### Mutation testing", "", *_mutation(record.mutation)]
     lines += ["", "### Versions", "", *(f"- {name} {number}" for name, number in record.versions.items())]
     return "\n".join(lines) + "\n"
+
+
+_SKIPPING = re.compile(r"pytest\.(?:mark\.(?:skip|skipif|xfail)\b|skip\()")
+_TEST = re.compile(r"^\s*(?:async\s+)?def\s+test_\w*")
+_BASES = ("@{upstream}", "origin/HEAD", "origin/main", "main", "master")
+"""Where a change branched from, tried in turn: its branch's upstream, then the remote's and the clone's main branch."""
+
+
+def added_markdown(repo: Path, ref: str) -> str:
+    """What the change up to `ref` adds against where it branched, for a reviewer to weigh: each suppression of a check,
+    each skip of a test and each `monkeypatch.setattr` it adds, and each test it removes, with its line. A change on the branch it would branch
+    from is compared with the commit before."""
+    lines = ["", "### What the change adds to the checks' exceptions", ""]
+    found = clone.of(repo)
+    commit = found.commit(ref) if found is not None else None
+    if found is None or commit is None:
+        return "\n".join([*lines, "Unknown: the repo is in no git clone, or the commit is not there."]) + "\n"
+    base = next((merged for name in _BASES if (merged := clone.output(found.git, found.root, "merge-base", commit, name)) not in {None, "", commit}), None)
+    base = base or found.commit(f"{commit}^")
+    if base is None:
+        return "\n".join([*lines, "Nothing to compare with: this is the first commit."]) + "\n"
+    printed = clone.output(found.git, found.root, "diff", "--unified=0", "--no-color", "--no-renames", base, commit, "--", ".", raw=True) or ""
+    entries: list[tuple[str, str, str]] = []
+    path = ""
+    for line in printed.splitlines():
+        if line.startswith("+++ "):
+            path = line.removeprefix("+++ ").removeprefix("b/").removeprefix(found.prefix)
+        elif line.startswith("--- "):
+            path = path or line.removeprefix("--- ").removeprefix("a/").removeprefix(found.prefix)
+        elif line.startswith("+") and not line.startswith("+++"):
+            text = line[1:]
+            if gates.SUPPRESSION.search(text) or "# basis: allow-mocks" in text:
+                entries.append((path, "a suppression", text.strip()))
+            elif _SKIPPING.search(text):
+                entries.append((path, "a skip", text.strip()))
+            elif "monkeypatch.setattr(" in text:  # a test's stand-in for code, which the mock gate does not see: counted, never refused
+                entries.append((path, "a patch", text.strip()))
+        elif line.startswith("-") and not line.startswith("---") and _TEST.match(line[1:]):
+            entries.append((path, "a test removed", line[1:].strip()))
+    if not entries:
+        return "\n".join([*lines, f"None since {base[:12]}."]) + "\n"
+    rows = [f"| `{_cell(where)}` | {what} | `{_cell(text)}` |" for where, what, text in entries]
+    return "\n".join([*lines, f"Against {base[:12]}:", "", "| File | What | Line |", "|---|---|---|", *rows]) + "\n"
 
 
 def exceptions_markdown(pyproject: Path) -> str:

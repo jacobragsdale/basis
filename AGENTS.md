@@ -126,7 +126,9 @@ holds the interface, and its docstring is the reference.
   hook checks each pushed commit, in a temporary worktree inside the git folder when it is not a clean HEAD.
 - `basis check` (`basis.core.check`) holds every repo's tests to the gates (`basis.core.gates`): the coverage floor
   `[tool.basis] coverage` gives, which pytest-cov measures as basis configures it, repository modules left out; no
-  `unittest.mock` or pytest-mock but in a file with a line `# basis: allow-mocks -- WHY`; and no socket in a unit test,
+  `unittest.mock` or pytest-mock but in a file with a line `# basis: allow-mocks -- WHY`; no `# noqa`, `# ty: ignore`,
+  `# pragma: no cover` or skip of a test without its reason, as `# noqa: S307 -- WHY`, each of which `basis review`
+  lists where a change adds it, beside the tests it removes; and no socket in a unit test,
   which basis-core's pytest plugin (`basis.core.pytest_plugin`, `pytest11`'s `basis`) fails, and tells the check of.
   This workspace's own session leaves the plugin out (`-p no:basis`), since its tests serve and reach real servers.
 - `basis check --full` (`basis.core.full`), which the push hook and the pipeline run, adds `regress` from the process's
