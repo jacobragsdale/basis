@@ -164,7 +164,7 @@ def run_model(
     run_id = str(uuid.uuid7())
     logs.bind(run_id=run_id, model=model.name)
     log.info("starting run", extra={"optim_version": optim.__version__, "model_module": model.module, "params": str(params_file), "as_of_date": as_of_date})
-    if orders is not None and (refused := orders.refusals(model.module, as_of_date, again=again)):
+    if orders is not None and (refused := orders.refusals(model.module, as_of_date, again=again, portfolios=portfolio_ids)):
         msg = f"the run cannot publish its orders to {orders.table.table} in database {orders.table.database}, so it stops before it loads: {'; '.join(refused)}"
         raise OrdersRefusedError(msg)
     started_at = clock()

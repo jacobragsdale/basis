@@ -113,13 +113,37 @@ def test_a_second_run_of_a_model_for_a_date_is_refused_before_it_loads_unless_to
     orders = publishing_to(books)
     first = toy_run(tmp_path, orders, "P1")
 
-    with pytest.raises(OrdersRefusedError, match=rf"runs {first.run_id} of toys.basic already published orders for 2026-10-16: pass --again to publish this run's too"):
-        toy_run(tmp_path, orders, "P1")
-    again = toy_run(tmp_path, orders, "P1", again=True)
+    with pytest.raises(OrdersRefusedError, match=rf"runs {first.run_id} of toys.basic already published orders for 2026-10-16: pass --again, with --portfolios naming only the portfolios that"):
+        toy_run(tmp_path, orders, "P1", "P2")
+    with pytest.raises(OrdersRefusedError, match=rf"portfolios \['P1'\] already have orders for 2026-10-16 from runs {first.run_id} of toys.basic: leave them out of --portfolios"):
+        toy_run(tmp_path, orders, "P1", "P2", again=True)
+    again = toy_run(tmp_path, orders, "P2", again=True)
     next_day = toy_run(tmp_path, orders, "P1", as_of=datetime(2026, 10, 17, tzinfo=UTC))
 
-    assert [order[0] for order in written(books)] == [first.run_id, again.run_id, next_day.run_id]
-    assert len(list((tmp_path / "snapshots" / "runs" / "optim" / "toys.basic").iterdir())) == 3, "the refused run saved nothing"
+    assert [order[:2] for order in written(books)] == [(first.run_id, "P1"), (again.run_id, "P2"), (next_day.run_id, "P1")]
+    assert len(list((tmp_path / "snapshots" / "runs" / "optim" / "toys.basic").iterdir())) == 3, "the refused runs saved nothing"
+
+
+def test_again_needs_the_portfolios_it_publishes(tmp_path: Path) -> None:
+    """`--again` without `--portfolios` would publish every portfolio a second time."""
+    (tmp_path / "params.json").write_text("{}")
+    source = Rows({HOLDINGS: frame(HOLDINGS, {"portfolio_id": "P1"}), SECURITIES: MARKET})
+
+    with pytest.raises(OrdersRefusedError, match=r"--again publishes beside another run's orders, and the run names no portfolios"):
+        run_model(loader(source), Root.at(tmp_path / "snapshots"), TOY, tmp_path / "params.json", as_of_date=AS_OF, orders=publishing_to(trading()), again=True, clock=Clock())
+
+
+def test_a_resume_told_again_still_refuses_a_portfolio_another_run_ordered(tmp_path: Path) -> None:
+    """A run's publish fails; another run of the date then orders P1; resuming the first with --again, as the refusal
+    of its overlap says, would order P1 twice."""
+    books = trading(fails=True)
+    orders = publishing_to(books)
+    stopped = toy_run(tmp_path, orders, "P1")
+    other = toy_run(tmp_path, orders, "P1")
+
+    with pytest.raises(OrdersRefusedError, match=rf"portfolios \['P1'\] already have orders for 2026-10-16 from runs {other.run_id} of toys.basic"):
+        resume_run(saved(Root.at(tmp_path / "snapshots"), stopped.run_id), orders, again=True, clock=Clock())
+    assert [order[0] for order in written(books)] == [other.run_id]
 
 
 def test_a_run_with_no_orders_publishes_nothing_so_its_retry_is_not_refused(tmp_path: Path) -> None:
@@ -307,6 +331,17 @@ def test_again_without_publish_is_refused_before_anything_runs(basis: Basis, tmp
 
     assert basis("run", "toys.basic", "--params", str(tmp_path / "params.json"), "--portfolios", "P1", "--data", str(data), "--again") == 1
     assert error_line(capsys) == ("ERROR: --again publishes a run's orders even though another run published the date's, and the run was not given --publish: add --publish, or leave --again out")
+    assert not (tmp_path / "snapshots").exists()
+
+
+def test_again_without_portfolios_is_refused_before_anything_runs(basis: Basis, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", str(tmp_path / "snapshots"))
+    data = fixture_files(tmp_path)
+
+    assert basis("run", "toys.basic", "--params", str(tmp_path / "params.json"), "--data", str(data), "--publish", "--again") == 1
+    assert error_line(capsys) == (
+        "ERROR: --again publishes beside another run's orders for the date, and the run names no portfolios, so it would order every one again: name those that still need orders with --portfolios"
+    )
     assert not (tmp_path / "snapshots").exists()
 
 

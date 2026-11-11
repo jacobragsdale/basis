@@ -57,10 +57,11 @@ def trading(request: pytest.FixtureRequest) -> Iterator[Trading]:
     found.scratch.drop(found.orders, found.ledger)
 
 
-def toy_run(tmp_path: Path, orders: Orders, *, again: bool = False) -> Run:
+def toy_run(tmp_path: Path, orders: Orders, *portfolios: str, again: bool = False) -> Run:
     (tmp_path / "params.json").write_text("{}")
     source = Rows({HOLDINGS: HELD, SECURITIES: MARKET})
-    return run_model(loader(source), Root.at(tmp_path / "snapshots"), TOY, tmp_path / "params.json", as_of_date=AS_OF, portfolio_ids=list(PORTFOLIOS), orders=orders, again=again, clock=Clock())
+    chosen = list(portfolios or PORTFOLIOS)
+    return run_model(loader(source), Root.at(tmp_path / "snapshots"), TOY, tmp_path / "params.json", as_of_date=AS_OF, portfolio_ids=chosen, orders=orders, again=again, clock=Clock())
 
 
 def test_a_run_publishes_its_orders_with_a_ledger_row_and_a_second_publish_writes_nothing(trading: Trading, tmp_path: Path) -> None:
@@ -118,11 +119,13 @@ def test_a_publish_that_fails_partway_writes_nothing_and_resume_writes_each_orde
 
 def test_a_second_run_of_a_model_for_a_date_is_refused_unless_told_again(trading: Trading, tmp_path: Path) -> None:
     orders = trading.publishing()
-    first = toy_run(tmp_path, orders)
+    first = toy_run(tmp_path, orders, "P1", "P2")
 
     with pytest.raises(OrdersRefusedError, match=rf"runs {first.run_id} of toys.basic already published orders for 2026-10-16"):
-        toy_run(tmp_path, orders)
-    again = toy_run(tmp_path, orders, again=True)
+        toy_run(tmp_path, orders, "P3")
+    with pytest.raises(OrdersRefusedError, match=rf"portfolios \['P2'\] already have orders for 2026-10-16 from runs {first.run_id}"):
+        toy_run(tmp_path, orders, "P2", "P3", again=True)
+    again = toy_run(tmp_path, orders, "P3", again=True)
 
     assert again.committed
-    assert sorted(str(row[0]) for row in trading.written()) == sorted([first.run_id] * 3 + [again.run_id] * 3)
+    assert sorted((str(row[0]), str(row[1])) for row in trading.written()) == sorted([(first.run_id, "P1"), (first.run_id, "P2"), (again.run_id, "P3")])

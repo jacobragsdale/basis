@@ -242,7 +242,8 @@ see a run's orders twice, and a scheduler retries a task that failed, so the led
 a run's orders are written. A run the ledger holds is not written again, by a retry of its publish or by `basis resume`,
 which writes the same rows from the snapshot rather than deciding again. A retry that starts a new run would decide
 again and write a second set of orders for the same portfolios, so a run of a model for a date another run published is
-refused unless it is given `--again`, which a person passes on purpose, with the portfolios that still need orders.
+refused unless it is given `--again`, which a person passes on purpose, with the portfolios that still need orders:
+`--again` needs `--portfolios`, and refuses any of them that another run of the date ordered.
 
 ## Solving through optim.cvxpy
 

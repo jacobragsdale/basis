@@ -86,12 +86,14 @@ ORDERS_SPEC = TableSpec(
 
 
 LEDGER_QUERY = f"SELECT deleted, upserted, inserted_new, inserted, published_at FROM {LEDGER} WHERE run_id = %(run_id)s AND output = %(output)s"  # noqa: S608 -- the ledger's name, a constant
-"""The one statement optim runs itself: its ledger row, as the database stored it, with times naive UTC."""
+"""A statement optim runs itself: its ledger row, as the database stored it, with times naive UTC."""
+ORDERED_QUERY = f"SELECT DISTINCT portfolio_id FROM {ORDERS_TABLE} WHERE run_id = %(run_id)s"  # noqa: S608 -- the table's name, a constant
+"""The other: the portfolios a run ordered, which a run given --again must not order again."""
 
 
 def trading(*, spec: TableSpec | None = ORDERS_SPEC, fails: bool = False) -> fakes.Database:
     """The database `trading`, basis-core's fake, with the orders table as `spec` describes it, None where it does not
-    exist, and the answer to optim's ledger query. With `fails`, its first insert fails, as a constraint on the table
+    exist, and the answers to optim's own queries. With `fails`, its first insert fails, as a constraint on the table
     would refuse it, so the write commits nothing."""
     found = fakes.Database("trading")
     if spec is not None:
@@ -101,7 +103,12 @@ def trading(*, spec: TableSpec | None = ORDERS_SPEC, fails: bool = False) -> fak
         rows = [vars(entry.counts) | {"published_at": entry.published_at.replace(tzinfo=None)} for entry in found.entries if (entry.run_id, entry.output) == (binds["run_id"], binds["output"])]
         return pd.DataFrame(rows, columns=["deleted", "upserted", "inserted_new", "inserted", "published_at"])
 
+    def ordered(binds: Mapping[str, Bind]) -> pd.DataFrame:
+        held = found.rows(ORDERS_TABLE) if spec is not None else []
+        return pd.DataFrame({"portfolio_id": sorted({str(row["portfolio_id"]) for row in held if row["run_id"] == binds["run_id"]})}, dtype=object)
+
     found.answers[LEDGER_QUERY] = ledgered
+    found.answers[ORDERED_QUERY] = ordered
     if fails:
         found.fails(Rejected, on="apply", times=1)
     return found

@@ -202,7 +202,9 @@ def _run_arguments(parser: argparse.ArgumentParser) -> None:
     _deciding(parser)
     parser.add_argument("--no-cache", action="store_true", help="read every dataset live")
     parser.add_argument("--publish", action="store_true", help="write the accepted portfolios' orders to the orders table BASIS_OPTIM__ORDERS__* configures")
-    parser.add_argument("--again", action="store_true", help="with --publish: publish even though another run of the model published orders for the as-of date")
+    parser.add_argument(
+        "--again", action="store_true", help="with --publish and --portfolios: publish even though another run of the model published orders for the as-of date, for portfolios it did not order"
+    )
 
 
 def _deciding(parser: argparse.ArgumentParser) -> None:
@@ -221,6 +223,10 @@ def _run(args: RunArgs) -> int:
     out cannot go unnoticed."""
     if args.again and not args.publish:
         return fail("--again publishes a run's orders even though another run published the date's, and the run was not given --publish", "add --publish, or leave --again out")
+    if args.again and args.portfolios is None:
+        return fail(
+            "--again publishes beside another run's orders for the date, and the run names no portfolios, so it would order every one again", "name those that still need orders with --portfolios"
+        )
     environment = environments.load(args.env, Settings)
     if args.publish:
         environment.refuse_writes(f"basis run {args.model} --publish")

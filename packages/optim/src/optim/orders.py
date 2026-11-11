@@ -6,14 +6,16 @@ insert, in one transaction with the run's row in that database's ledger (`BASIS_
 The ledger is what makes a run's orders written once. A run the ledger holds is never written again, however often its
 publish is retried or resumed (`basis resume`). A run's interval in the ledger is its as-of date, so a second run of the
 same model for that date is refused, before it loads and again as it writes, unless it is given `--again`, as basis-job
-refuses a second append of an interval. A run with no orders publishes nothing, not even a ledger row, so a retry after
-every portfolio was rejected is not refused.
+refuses a second append of an interval. `--again` still guards each portfolio: a run given it must name its
+portfolios, and it is refused, before it loads and again before it writes, as is a resume told `--again`, while any
+portfolio it publishes has orders in the table from another run the ledger holds for the model and date. A run with
+no orders publishes nothing, not even a ledger row, so a retry after every portfolio was rejected is not refused.
 
 Orders are written after the snapshot is saved, so a failed write never loses the run, and `basis resume` writes the
 same rows from the snapshot. A replay never writes them, and optim never submits them: they are released elsewhere."""
 
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
@@ -144,18 +146,44 @@ class Orders:
     timeout_s: float
     """Each statement's deadline: the database's own `TIMEOUT_S`."""
 
-    def refusals(self, model: str, as_of_date: date, *, again: bool) -> list[str]:
+    def refusals(self, model: str, as_of_date: date, *, again: bool, portfolios: Sequence[str] | None = None) -> list[str]:
         """Why a run of `model` for `as_of_date` cannot publish here, found before it loads: the table is missing or
         cannot take the orders' columns, or another run of the model published orders for that date and the run is
-        not given `again`. Read through the write login, which sees the table as the publish will, and changes
-        nothing; the publish checks each again, in its own transaction."""
+        not given `again`; or, given `again`, it names no `portfolios`, or one of them has orders from such a run. Read
+        through the write login, which sees the table as the publish will, and changes nothing; the publish checks
+        each again."""
+        if again and portfolios is None:
+            return ["--again publishes beside another run's orders, and the run names no portfolios, so it would order every one again: name those that still need orders with --portfolios"]
         with self.databases(self.table.database).writing() as writer:
             if (spec := writer.describe(self.table.table)) is None:
                 return [f"{self.table.table} does not exist in database {self.table.database}: `basis ddl MODEL --dialect DIALECT` prints a CREATE TABLE for it"]
             reasons = check_table(self.table, spec)
-            if not again and (runs := writer.overlapping(model, OUTPUT, interval(as_of_date))):
-                reasons.append(f"runs {', '.join(runs)} of {model} already published orders for {as_of_date}: pass --again to publish this run's too")
+            runs = writer.overlapping(model, OUTPUT, interval(as_of_date))
+        if runs and not again:
+            reasons.append(
+                f"runs {', '.join(runs)} of {model} already published orders for {as_of_date}: pass --again, with --portfolios naming only the portfolios that still need orders,"
+                " to publish this run's too"
+            )
+        elif runs and not reasons and (clash := self.clashes(model, as_of_date, runs, portfolios or ())) is not None:
+            reasons.append(clash)
         return reasons
+
+    def clashes(self, model: str, as_of_date: date, runs: Sequence[str], portfolios: Iterable[str]) -> str | None:
+        """Why publishing orders for `portfolios` would order one twice: the portfolios that already have orders in the
+        table from `runs`, the model's other runs that the ledger holds for the date; None where none has. Read through
+        the write login."""
+        wanted, ordered = set(portfolios), set[str]()
+        sql = f"SELECT DISTINCT portfolio_id FROM {self.table.table} WHERE run_id = {_BIND[self.dialect].format('run_id')}"  # noqa: S608 -- the table is a name its setting's pattern allows; the run is bound
+        with self.databases(self.table.database).statements(writes=True) as statements:
+            for run in runs:
+                found = statements.query(sql, {"run_id": run}, timeout_s=self.timeout_s).column(0).to_pylist()
+                ordered |= wanted.intersection(str(portfolio) for portfolio in found)
+        if not ordered:
+            return None
+        return (
+            f"portfolios {sorted(ordered)[:20]} already have orders for {as_of_date} from runs {', '.join(runs)} of {model}:"
+            " leave them out of --portfolios, which --again needs to name only those that still need orders"
+        )
 
     def publish(self, run_id: str, model: str, as_of_date: date, orders: pd.DataFrame, *, again: bool, clock: Callable[[], datetime]) -> Published:
         """Write `orders`, a run's `OrderRow`s, each with the run's id, and the run's ledger row, in one transaction; a
@@ -164,6 +192,12 @@ class Orders:
         if orders.empty:
             log.info("no orders to publish", extra={"database": self.table.database})
             return Published({})
+        if again:
+            with self.databases(self.table.database).writing() as writer:
+                runs = [run for run in writer.overlapping(model, OUTPUT, interval(as_of_date)) if run != run_id]
+            if runs and (clash := self.clashes(model, as_of_date, runs, orders["portfolio_id"].unique())) is not None:
+                msg = f"run {run_id} cannot publish its orders to {self.table.table} in database {self.table.database}: {clash}"
+                raise OrdersRefusedError(msg)
         publication = publish.Publication(run_id, model, interval(as_of_date), optim.__version__, again, clock)
         records = publish.publish(publication, {OUTPUT: self.table}, {OUTPUT: Changes(insert=rows(run_id, orders))}, self.databases)
         found = records.get(self.table.database)

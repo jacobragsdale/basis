@@ -89,7 +89,8 @@ published them, committed. `--portfolios P1 P2`, or `--portfolios @FILE` with on
 without it, it decides every portfolio the model lists.
 
 The ledger keeps a retried run from writing its orders twice: a run of the model for a date that another run published
-orders for stops before it loads, unless it is given `--again`. If a run's publish fails, as when the database is down,
+orders for stops before it loads, unless it is given `--again`, with `--portfolios` naming only portfolios that run
+did not order. If a run's publish fails, as when the database is down,
 its snapshot is kept: fix the cause, then publish the same orders with `basis resume income RUN_ID`. The
 [reference](../reference.md#basis-run) says what each refuses.
 

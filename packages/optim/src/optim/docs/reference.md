@@ -349,6 +349,8 @@ none is. The ledger keeps a run's orders from being written twice:
   another run published orders for stops before it loads, and its publish is refused again as it writes, unless it is
   given `--again`. To publish the portfolios a published run rejected, decide those alone, with
   `--portfolios ... --again`.
+- `--again` still guards each portfolio: it needs `--portfolios`, and a run given it, or a resume told it, is refused
+  while any portfolio it publishes has orders in the table from another run of the model for the date.
 - A run with no orders, as when every portfolio was rejected, publishes nothing, not even a ledger row, so running it
   again for the same date is not refused.
 
@@ -369,7 +371,7 @@ that fails keeps the run, and `basis resume` writes its orders.
 | `--workers` | `BASIS_OPTIM__WORKERS`, or 1 | Worker processes. |
 | `--no-cache` | off | Reads every dataset live. |
 | `--publish` | off | Writes the accepted portfolios' orders to the orders table, through its database's write login. |
-| `--again` | off | With `--publish`: publishes even though another run of the model published orders for the as-of date. |
+| `--again` | off | With `--publish` and `--portfolios`: publishes even though another run of the model published orders for the as-of date, for portfolios that run did not order. |
 
 ### `basis resume`
 
@@ -382,7 +384,8 @@ to the same table, which the settings must still name. `RUN_ID` is found as `bas
 given, must be the run's. A run whose publish committed is left as it is, and so is one whose publish committed before
 its manifest recorded it, as when the process was stopped between the two: the ledger holds the run, and the resume
 saves and prints what its row says that earlier attempt wrote, and when. `--again` publishes even though another run of
-the model published orders for its as-of date; a run given `--again` resumes with it. Saves the outcome in the run's
+the model published orders for its as-of date, for portfolios that run did not order; a run given `--again` resumes
+with it. Saves the outcome in the run's
 manifest, prints what it wrote or why it failed, and exits 0 when the publish committed or the run had no orders.
 
 ### `basis ddl`
