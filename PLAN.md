@@ -22,7 +22,7 @@ step's own commit keeps it true.
 | 9.6 A lighter command | Done for `basis --version`; a verb in a repo still loads its declared parts, and `basis.job`'s package imports pandas, so `basis hook` in a job repo pays it: left for 11.4, the command's tables | `f8996bb` |
 | 10.1 The eval | In progress: [`evals/`](evals/README.md) holds twelve tasks, the runner and the graders, each task validated; the trials and the first report are next | the commit "Step 10.1, part 1" |
 | 10.2 `v0.1.0` | Released: the tag `v0.1.0` is on `acd92ef`, since CI failed on the bump commit `b9d8c4f` over a stale test that `acd92ef` fixed | `acd92ef` |
-| 10.3 The pilot | To do; **(work)** | |
+| 10.3 The pilot | Handed over: [docs/pilot.md](docs/pilot.md) is the commands to run at the firm and what to send back, one section per item below; the answers are the maintainer's, **(work)** | the commit "Step 10.3" |
 | 11.1 One interface for a job's outputs | Done: `basis.job.effects` (a `Kind` per output that is not a table, and the one loop `run` and `resume` share), `basis.job.replays`; a resume now stops at the first kind that fails, as a run does | the commit "Step 11.1" |
 | 11.2 One descriptor per kind of resource | Done: `basis.core.kinds` (each kind but a database: its settings, its fake, doctor's check, the QA tier's refusal), `basis.core.ledgered` (the one ledgered effect, which sending and the lake share), `opened.transport_failure`; `basis doctor --env` now checks HTTP services, Slack, email relays and Mongo | the commit "Step 11.2" |
 | 11.3 to 11.7 | To do | |
@@ -530,7 +530,7 @@ passing the checks in `AGENTS.md` before it lands.
 2. **10.2 `v0.1.0`.** The roadmap's 1.8, after phases 6 to 9 and lane B of 7, so the first contract basis-ui pins
    is the true one.
 3. **10.3 The pilot (work).** The roadmap's 2.8, with this review's list of what only the firm's environment can
-   answer:
+   answer, which [docs/pilot.md](docs/pilot.md) hands over as commands to run and what to send back:
    - `basis upgrade` while `basis.exe` runs; a workbook open in Excel during the rename
      (`core/folders.py:112-119`), a UNC share, a clone under a non-ASCII user folder;
    - an Azure Pipelines checkout's depth and tags; the lake's rename on the firm's account; Kerberos; Datadog;
