@@ -72,3 +72,16 @@ def test_a_clock_or_ids_is_named_as_a_resource_is_and_declared_once() -> None:
         class Twice(etl.Inputs):
             first = shared
             second = shared
+
+
+class _Sheet(etl.Inputs):
+    prices = etl.Excel(Price, folder="pm", path="in/prices.xlsx", sheet="Prices", empty="fail")
+
+
+def test_a_fixture_holds_a_file_for_each_sheet_rather_than_reading_its_folder(tmp_path: Path) -> None:
+    """A unit test reaches no shared folder, so the fixture gives the sheet's rows, as it gives a query's."""
+    job = make_job(write=etl.Append())
+    sheeted = Job(job.name, job.module, job.params, _Sheet, job.outputs, job.transform, None, job.directory)
+    (tmp_path / "fixture.json").write_text('{"interval": null}', encoding="utf-8")
+    with pytest.raises(ContractError, match=r"has no file for \['prices'\]: add NAME\.csv or NAME\.parquet for each"):
+        check_fixture(sheeted, tmp_path, params_file(tmp_path), tmp_path / "snapshots")

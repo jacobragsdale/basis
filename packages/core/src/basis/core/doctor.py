@@ -33,7 +33,7 @@ from basis.core.errors import BasisError, ServiceError
 from basis.core.settings import MssqlSettings, OracleSettings, Settings
 from basis.core.storage import Root
 from basis.core.sync import Problem
-from basis.core.verbs import Part
+from basis.core.verbs import Part, fail
 
 UV = (0, 13, 6)
 """The oldest uv basis works with: the version of the build backend, uv_build, that its repos build with."""
@@ -115,8 +115,7 @@ def doctor(  # noqa: PLR0913 -- what it checks and how it reaches the databases,
             sys.stdout.write(f"{'note' if entry.note else 'ok'}: {entry.what}\n")
             sys.stdout.flush()  # so the lines keep their order, on stdout and stderr
         else:
-            sys.stderr.write(f"ERROR: {entry.problem[0]}: {entry.problem[1]}\n")
-            problems += 1
+            problems += fail(*entry.problem)  # held, as every command's ERROR lines are, until its finished record
     return 1 if problems else 0
 
 

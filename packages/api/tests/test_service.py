@@ -6,7 +6,7 @@ from types import FunctionType
 from typing import Annotated
 
 import pytest
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from basis import api
@@ -159,3 +159,45 @@ def test_given_settings_ignore_the_environment(monkeypatch: pytest.MonkeyPatch) 
 def test_an_app_is_built_with_its_services_settings() -> None:
     with pytest.raises(api.DeclarationError, match="build it with those, not a Other"):
         api.build(_service()(), settings=Other.given())
+
+
+class _Opaque:
+    """A class of the service's own that is no pydantic model, which no JSON reads or writes."""
+
+
+def _takes_opaque(given: _Opaque) -> dict[str, int]:
+    del given
+    return {}
+
+
+def _answers_opaque() -> _Opaque:
+    return _Opaque()
+
+
+@pytest.mark.parametrize(
+    ("declare", "message"),
+    [
+        (
+            lambda: api.get("/x", _takes_opaque, deadline_s=1, response=dict[str, int], errors=[]),
+            r"_takes_opaque's parameter given is _Opaque, which pydantic cannot read: declare it a pydantic model, or a type of a path or query parameter, as str or int",
+        ),
+        (
+            lambda: api.get("/x", _answers_opaque, deadline_s=1, response=_Opaque, errors=[]),
+            r"_answers_opaque's response is _Opaque, which pydantic cannot write as JSON: declare a pydantic model of what it answers",
+        ),
+    ],
+    ids=["a-parameter", "a-response"],
+)
+def test_a_type_pydantic_cannot_read_or_write_is_refused_when_the_route_is_declared_with_basiss_fix(declare: Callable[[], object], message: str) -> None:
+    """Not FastAPI's error when the app is built, whose fix is response_model=None, which a route never takes."""
+    with pytest.raises(api.DeclarationError, match=f"^{message}$"):
+        declare()
+
+
+def test_a_parameter_basis_cannot_read_from_text_is_told_the_types_basis_takes() -> None:
+    def listed(tags: Annotated[list[dict[str, str]], Query()]) -> dict[str, int]:
+        del tags
+        return {}
+
+    with pytest.raises(api.DeclarationError, match=r"give it str, int, float, bool, date, AwareDatetime, UUID, a Literal or an Enum, or a list or tuple of one$"):
+        api.get("/x", listed, deadline_s=1, response=dict[str, int], errors=[])

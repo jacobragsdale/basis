@@ -91,6 +91,9 @@ def test_a_workbook_that_cannot_be_written_leaves_the_run_partial_and_its_resume
     blocked.mkdir(parents=True)  # a folder where the workbook goes, so its rename into place fails
     result = run(tmp_path, shared, publish=True)
     assert (result.record.status, result.record.written["holdings"].status) == ("partial", "failed")
+    reason, fix = runs.failure_of(result.record, publish=True) or ("", "")
+    assert reason.startswith(f"run {result.record.run_id} of {result.record.job} published, and could not write the workbook holdings: ")
+    assert fix == f"fix it, then `{runs.resume_command(result.record)}`, which writes what it has not"
     blocked.rmdir()
     assert result.snapshot is not None
     settings = GivenSettings.model_validate({"folders": {"pm": {"path": str(shared.root)}}})

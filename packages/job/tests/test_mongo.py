@@ -105,6 +105,9 @@ def test_an_upsert_that_fails_leaves_the_run_partial_and_its_resume_makes_it(tmp
     reference.fails(Unavailable, times=1, on="upsert")
     result = run(tmp_path, reference)
     assert (result.record.status, result.record.upserted["summaries"].status) == ("partial", "failed")
+    reason, fix = runs.failure_of(result.record, publish=True) or ("", "")
+    assert reason.startswith(f"run {result.record.run_id} of {result.record.job} published, and could not upsert summaries: ")
+    assert fix == f"fix it, then `{runs.resume_command(result.record)}`, which upserts what it has not"
     assert result.snapshot is not None
     resumed = runs.resume(JOB, result.snapshot, GivenSettings(), clock=clock, faked={"reference": reference})
     assert (resumed.status, resumed.upserted["summaries"].status, len(reference.collections["summaries"])) == ("published", "upserted", 2)

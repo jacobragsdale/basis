@@ -69,7 +69,7 @@ from types import FunctionType
 from typing import Annotated, Literal, Protocol, TypeAliasType, assert_never, get_args, get_origin
 
 from fastapi import params
-from pydantic import JsonValue, ValidationError
+from pydantic import JsonValue, PydanticSchemaGenerationError, TypeAdapter, ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.routing import Route as StarletteRoute
@@ -296,6 +296,12 @@ def _check_response(route: Route) -> None:
     if returns != declared and not (tables.row_of(declared) is not None and tables.is_frame_or_table(returns)):
         msg = f"{route.name} returns {strict.named(returns)}, and its route declares response={strict.named(declared)}: declare the one it returns"
         raise DeclarationError(msg)
+    if declared is not None and tables.row_of(declared) is None:
+        try:
+            TypeAdapter(declared)
+        except PydanticSchemaGenerationError:
+            msg = f"{route.name}'s response is {strict.named(declared)}, which pydantic cannot write as JSON: declare a pydantic model of what it answers"
+            raise DeclarationError(msg) from None
     strict.aware(route.name, "response", declared)
     if (declared is None) != (route.status == HTTPStatus.NO_CONTENT):
         fix = "give it status=HTTPStatus.NO_CONTENT" if declared is None else "declare the response it has, or response=None with no content"

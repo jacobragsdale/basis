@@ -66,7 +66,8 @@ from uuid import UUID
 from fastapi import params
 from fastapi.dependencies.models import Dependant
 from fastapi.dependencies.utils import get_dependant
-from pydantic import AwareDatetime, BaseModel, FutureDatetime, NaiveDatetime, PastDatetime, TypeAdapter, ValidationError
+from fastapi.exceptions import FastAPIError
+from pydantic import AwareDatetime, BaseModel, FutureDatetime, NaiveDatetime, PastDatetime, PydanticSchemaGenerationError, TypeAdapter, ValidationError
 from pydantic.fields import FieldInfo
 
 from basis.api.errors import DeclarationError
@@ -142,11 +143,15 @@ class Shape:
 
 def shape(path: str, handler: Callable[..., object], name: str) -> Shape:
     """What the route `name` reads, after checking that basis can read each of its parameters strictly."""
-    found = list(_flat(get_dependant(path=path, call=handler)))
+    try:
+        dependant = get_dependant(path=path, call=handler)
+    except (FastAPIError, AssertionError) as error:  # FastAPI's own refusals of a parameter, whose fixes are FastAPI's
+        raise DeclarationError(_unreadable(name, handler, error)) from None
+    found = list(_flat(dependant))
     if any(dependant.background_tasks_param_name is not None for dependant in found):
         msg = (
             f"{name} takes BackgroundTasks, whose work runs after the response, outside the route's deadline and transaction, where a failure reaches nobody:"
-            " do the work in the handler; a call to another service that changes its state waits for the outbox basis is to have"
+            " do the work in the handler, and make a call to another service that changes its state with Client.send, which the outbox makes once the request commits"
         )
         raise DeclarationError(msg)
     readable_path = tuple(_parameter(name, "path", field.alias, field.field_info) for dependant in found for field in dependant.path_params)
@@ -227,6 +232,26 @@ def _flat(dependant: Dependant) -> Iterator[Dependant]:
         yield from _flat(sub)
 
 
+LISTING = "str, int, float, bool, date, AwareDatetime, UUID, a Literal or an Enum"
+"""The types a path or query parameter may be, which basis reads strictly from text."""
+
+
+def _unreadable(name: str, handler: Callable[..., object], error: Exception) -> str:
+    """Why FastAPI refused a parameter of `handler`'s, with basis's fix, which names the parameter."""
+    hints = typing.get_type_hints(handler, include_extras=True)
+    if (query := re.search(r"Query parameter '([^']+)'", str(error))) is not None:
+        given = named(bare(hints.get(query[1], object)))
+        return f"{name}'s query parameter {query[1]} is {given}, which basis cannot read strictly from text: give it {LISTING}, or a list or tuple of one"
+    for parameter, hint in hints.items():
+        if parameter == "return":
+            continue
+        try:
+            TypeAdapter(hint)
+        except PydanticSchemaGenerationError:
+            return f"{name}'s parameter {parameter} is {named(bare(hint))}, which pydantic cannot read: declare it a pydantic model, or a type of a path or query parameter, as str or int"
+    return f"{name}'s parameters are refused by FastAPI ({' '.join(str(error).split())}): give each a pydantic model, or a type of a path or query parameter, as str or int"
+
+
 def _parameter(route: str, where: Literal["path", "query"], key: str, info: FieldInfo) -> Parameter:
     """`key`'s parameter: one of its type's values, or, in a query, a list or a tuple of them."""
     annotation = info.annotation
@@ -238,7 +263,7 @@ def _parameter(route: str, where: Literal["path", "query"], key: str, info: Fiel
         kind = _given(arguments[0]) if len(set(arguments)) == 1 else None
     found = text(kind) if kind is not None else None
     if found is None:
-        listing = "str, int, Decimal, float, bool, date, AwareDatetime, UUID, a Literal or an Enum" + (", or a list or tuple of one" if where == "query" else "")
+        listing = LISTING + (", or a list or tuple of one" if where == "query" else "")
         msg = f"{route}'s {where} parameter {key} is {named(bare(annotation))}, which basis cannot read strictly from text: give it {listing}"
         raise DeclarationError(msg)
     return Parameter(key, found, is_many, info)

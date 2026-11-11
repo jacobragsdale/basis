@@ -23,9 +23,11 @@ import io
 import json
 import logging
 import os
+import signal
 import sys
+import threading
 import time
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Generator, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property, partial
 from importlib.metadata import EntryPoint, entry_points
@@ -162,16 +164,47 @@ def standalone(prog: str, description: str, verbs: Sequence[Verb], argv: Sequenc
     return _finishing(prog, given, execute)
 
 
+class _TerminatedError(BaseException):
+    """SIGTERM, as a harness's timeout sends it, raised where the command is, so it finishes as Ctrl+C does."""
+
+
+STOPPED: dict[type[BaseException], tuple[int, str]] = {KeyboardInterrupt: (130, "interrupted"), _TerminatedError: (143, "stopped by a signal")}
+"""How a command stopped before it finished exits, by what stopped it, as a shell gives a process a signal ended."""
+
+
 def _finishing(prog: str, argv: Sequence[str], execute: Callable[[], int]) -> int:
     """`execute`'s exit code, `prog ARGV`'s, after the record that says it finished, with its verb, its exit code and
-    how long it took, and then the ERROR lines it printed, so that they are last."""
+    how long it took, and then the ERROR lines it printed, so that they are last: when Ctrl+C or SIGTERM stops it
+    first too, with one line more that says so."""
     start = time.perf_counter()
-    with holding() as held:
-        code = execute()
     verb = next((argument for argument in argv if not argument.startswith("-")), None)
+    with holding() as held, _terminable():
+        try:
+            code = execute()
+        except (KeyboardInterrupt, _TerminatedError) as error:
+            code, how = STOPPED[type(error)]
+            fail(f"{prog}{f' {verb}' if verb is not None else ''} was {how} before it finished", "run it again, and let it finish")
     log.info("finished %s", verb or prog, extra={"verb": verb, "exit_code": code, "ms": logs.ms_since(start)})
     sys.stderr.write("".join(held))
     return code
+
+
+@contextlib.contextmanager
+def _terminable() -> Generator[None]:
+    """SIGTERM raises `_TerminatedError` while the command runs, in the main thread, where Python delivers a signal;
+    the handler before is put back after. A server that drains on SIGTERM, as `basis serve`'s does, sets its own."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def terminated(_signal: int, _frame: object) -> None:
+        raise _TerminatedError
+
+    before = signal.signal(signal.SIGTERM, terminated)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, before)
 
 
 def versions() -> str:
@@ -239,7 +272,15 @@ def declared(pyproject: Path) -> list[str]:
 
 
 def _load(entry: EntryPoint) -> Part:
-    part: object = entry.load()()  # the entry point names a callable that takes nothing and returns the part
+    try:
+        made = entry.load()
+    except ImportError as error:  # the part's package installed, and something it imports not: a half-finished sync
+        msg = (
+            f"the {entry.name} part's package is installed, and its entry point {entry.value} does not import ({type(error).__name__}: {' '.join(str(error).split())}):"
+            " run `uv sync --all-packages`, which installs what it needs"
+        )
+        raise CommandError(msg) from error
+    part: object = made()  # the entry point names a callable that takes nothing and returns the part
     if not isinstance(part, Part):
         msg = f"{entry.value}, the {entry.name} part's entry point in {GROUP}, gives a {type(part).__name__} rather than a Part: reinstall the part's package with `uv sync --reinstall`"
         raise CommandError(msg)

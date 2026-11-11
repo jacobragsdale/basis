@@ -329,6 +329,21 @@ def test_review_of_a_commit_no_check_recorded_says_how_to_record_one(repo: Path,
     assert line.endswith("has no `basis check --full` recorded in this clone: push it, which runs the check, or run `uv run basis check --full` with every change committed\n")
 
 
+def test_review_of_a_record_another_version_of_basis_wrote_names_it_and_says_to_check_again(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    found = clone.of(repo)
+    assert found is not None
+    head = found.head()
+    assert head is not None
+    kept = review.path(found, head)
+    kept.parent.mkdir(parents=True, exist_ok=True)
+    kept.write_text('{"commit": "%s", "checked": "yes", "recorded_by": "basis 0.0.1"}' % head, encoding="utf-8")  # noqa: UP031 -- JSON's braces
+    assert review.review(repo, "HEAD") == 1
+    assert capsys.readouterr().err == (
+        f"ERROR: {kept} records commit {head}'s basis check --full in a form this version of basis does not read, as another version wrote it:"
+        " run `uv run basis check --full` again, with every change committed, which records it anew\n"
+    )
+
+
 def test_review_of_a_commit_that_failed_prints_its_summary_and_fails(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     checked(repo, Part(), run=failing)
     capsys.readouterr()

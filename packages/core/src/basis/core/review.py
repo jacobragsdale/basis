@@ -14,7 +14,7 @@ from datetime import datetime
 from importlib.metadata import entry_points, version
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from basis.core import clone, gates, tools
 from basis.core.model import Model
@@ -148,7 +148,11 @@ def review(repo: Path, ref: str) -> int:
     kept = path(found, commit)
     if not kept.is_file():
         return fail(f"commit {commit} has no `basis check --full` recorded in this clone", "push it, which runs the check, or run `uv run basis check --full` with every change committed")
-    record = Record.model_validate_json(kept.read_bytes())
+    try:
+        record = Record.model_validate_json(kept.read_bytes())
+    except ValidationError:
+        reason = f"{kept} records commit {commit}'s basis check --full in a form this version of basis does not read, as another version wrote it"
+        return fail(reason, "run `uv run basis check --full` again, with every change committed, which records it anew")
     sys.stdout.write(markdown(record))
     sys.stdout.write(exceptions_markdown(found.root / "pyproject.toml"))
     sys.stdout.write(added_markdown(found.root, commit))

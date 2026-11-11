@@ -287,18 +287,29 @@ _held: ContextVar[list[str] | None] = ContextVar("basis.core.verbs.held", defaul
 
 def fail(reason: str, fix: str) -> int:
     """Print a failure as `basis` prints every one, `ERROR: REASON: FIX` on one line of stderr, and return 1."""
-    error_line(f"{reason}: {fix}")
+    error_line(f"{one_line(reason)}: {one_line(fix)}")
     return 1
 
 
 def error_line(message: str) -> None:
     """Print `ERROR: MESSAGE` on one line of stderr: held back, while a verb runs, until `basis` has logged that it
-    finished, so that the ERROR lines come last."""
-    line = f"ERROR: {message}\n"
+    finished, so that the ERROR lines come last. A message that spans lines, as a list of problems does, is folded
+    onto the one (`one_line`)."""
+    line = f"ERROR: {one_line(message)}\n"
     if (held := _held.get()) is not None:
         held.append(line)
     else:
         sys.stderr.write(line)
+
+
+def one_line(message: str) -> str:
+    """`message` on one line: each of its lines stripped, a list item's mark dropped, after a line that ends with a
+    colon with a space, and after any other with `; `."""
+    pieces = [line.strip().removeprefix("- ").strip() for line in message.splitlines()]
+    folded = ""
+    for piece in (piece for piece in pieces if piece):
+        folded += piece if not folded else (f" {piece}" if folded.endswith(":") else f"; {piece}")
+    return folded
 
 
 @contextmanager

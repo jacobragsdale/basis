@@ -32,7 +32,7 @@ from basis.core.storage import Root
 from basis.core.testing import ContractError
 from basis.job import api, handles, runs
 from basis.job import job as jobs
-from basis.job.inputs import Fetch, Inputs, Query
+from basis.job.inputs import Excel, Fetch, Inputs, Mongo, Query
 from basis.job.rows import Row, conform
 
 FORBIDDEN = (
@@ -79,7 +79,7 @@ def check_fixture(job: jobs.Job, fixture: Path, params: Path, snapshot_root: Pat
     """Run the job on its fixture, which must hold a file for every dataset, and require every check to pass."""
     __tracebackhide__ = True
     datasets = job.inputs.declared()
-    sourced = (Query, Fetch)
+    sourced = (Query, Fetch, Excel, Mongo)  # what a run reads outside the repo, from a database, a service, a shared folder or Mongo
     if missing := sorted(name for name, dataset in datasets.items() if isinstance(dataset, sourced) and not any((fixture / f"{name}{suffix}").exists() for suffix in (".csv", ".parquet"))):
         msg = f"{job.name}'s fixture {fixture} has no file for {missing}: add NAME.csv or NAME.parquet for each"
         raise ContractError(msg)

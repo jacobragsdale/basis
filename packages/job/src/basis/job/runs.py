@@ -366,6 +366,10 @@ def _partial(run: str, record: RunRecord) -> tuple[str, str]:
         return f"{run} began to publish and stopped before it recorded what it published", f"`{resume_command(record)}`, which asks each ledger what it holds and publishes the rest"
     if unsent := [f"{name}: {entry.error}" for name, entry in record.sent.items() if entry.status == "failed"]:
         return f"{run} published, and could not send {'; '.join(unsent)}", f"fix it, then `{resume_command(record)}`, which sends what it has not"
+    if unwritten := [f"{name}: {entry.error}" for name, entry in record.written.items() if entry.status == "failed"]:
+        return f"{run} published, and could not write the workbook {'; '.join(unwritten)}", f"fix it, then `{resume_command(record)}`, which writes what it has not"
+    if unupserted := [f"{name}: {entry.error}" for name, entry in record.upserted.items() if entry.status == "failed"]:
+        return f"{run} published, and could not upsert {'; '.join(unupserted)}", f"fix it, then `{resume_command(record)}`, which upserts what it has not"
     if unarchived := [f"{name}: {entry.error}" for name, entry in record.archived.items() if entry.status == "failed"]:
         return f"{run} published, and could not archive {'; '.join(unarchived)}", f"fix it, then `{resume_command(record)}`, which archives what it has not"
     return f"{run} published to some of its databases and failed on another", f"fix what its publishes record, then `{resume_command(record)}`"

@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import signal
 import sys
 from collections.abc import Callable, Mapping
 from functools import partial
@@ -639,3 +640,34 @@ def test_smoke_needs_an_environment_and_a_part_that_smokes(tmp_path: Path, capsy
     assert basis(folder, "smoke", installed=installed) == 2  # --env is required, as argparse says
     capsys.readouterr()
     assert basis(folder, "smoke", "--env", "qa", installed={"alpha": lambda: Part(verbs=(verb("serve"),))}) == 2  # no part smokes, so basis offers no smoke
+
+
+def _stopped(by: Callable[[], None]) -> Callable[[argparse.Namespace], int]:
+    def handle(_: argparse.Namespace) -> int:
+        fail("the port is taken", "give another")
+        by()
+        return 0
+
+    return handle
+
+
+def _interrupt() -> None:
+    raise KeyboardInterrupt
+
+
+@pytest.mark.parametrize(("stop", "code", "how"), [(_interrupt, 130, "interrupted"), (lambda: os.kill(os.getpid(), signal.SIGTERM), 143, "stopped by a signal")], ids=["ctrl-c", "sigterm"])
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows delivers no SIGTERM to a process, and ends it at once")
+def test_a_command_stopped_before_it_finishes_still_prints_its_error_lines_last(tmp_path: Path, capsys: pytest.CaptureFixture[str], stop: Callable[[], None], code: int, how: str) -> None:
+    """As a harness's timeout stops one, with SIGTERM, or a developer with Ctrl+C: what it held is not lost."""
+    before = signal.getsignal(signal.SIGTERM)
+    assert basis(repo(tmp_path), "stops", installed={"alpha": lambda: Part(verbs=(verb("stops", _stopped(stop)),))}) == code
+    lines = capsys.readouterr().err.splitlines()
+    finished = next(index for index, line in enumerate(lines) if '"finished stops"' in line)
+    assert lines[finished + 1 :] == ["ERROR: the port is taken: give another", f"ERROR: basis stops was {how} before it finished: run it again, and let it finish"]
+    assert signal.getsignal(signal.SIGTERM) == before
+
+
+def test_a_failure_whose_message_spans_lines_is_one_error_line(capsys: pytest.CaptureFixture[str]) -> None:
+    """As a row mismatch's is, which lists each problem on a line of its own for pytest."""
+    fail("prices's output does not match its row:\n  - price: 3 nulls\n  - when: no time zone\n", "fix the transform, and run the job again")
+    assert capsys.readouterr().err == "ERROR: prices's output does not match its row: price: 3 nulls; when: no time zone: fix the transform, and run the job again\n"

@@ -2,6 +2,8 @@ import os
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import timedelta
+from functools import partial
+from importlib.metadata import EntryPoint
 from pathlib import Path
 from typing import cast
 
@@ -312,3 +314,27 @@ def test_doctor_notes_a_calendar_nearing_its_last_date(tmp_path: Path, capsys: p
     last = calendar("sifma-us").last
     doctor.doctor(None, {}, desktop(tmp_path), describe=str, today=last - timedelta(days=30))
     assert f"note: the calendar sifma-us covers business days to {last}, 30 days from today" in capsys.readouterr().out
+
+
+def test_doctors_error_lines_come_after_its_finished_record(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """As every command's do, so a failure's line is the last line."""
+    (tmp_path / "pyproject.toml").write_text('[tool.basis]\nparts = "alpha"\n', encoding="utf-8")
+    assert command.run(["doctor"], cwd=tmp_path, installed={}) == 1
+    lines = capsys.readouterr().err.splitlines()
+    finished = next(index for index, line in enumerate(lines) if '"finished doctor"' in line)
+    assert lines[finished + 1 :] == [line for line in lines if line.startswith("ERROR")]
+    assert lines[-1].startswith("ERROR: ")
+
+
+def test_a_declared_part_that_does_not_import_is_one_line_doctor_names(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """A part's package installed with something it imports missing, as a half-finished `uv sync` leaves one."""
+    (tmp_path / "pyproject.toml").write_text('[tool.basis]\nparts = ["alpha"]\n', encoding="utf-8")
+    broken = EntryPoint(name="alpha", value="basis_alpha_nowhere.cli:part", group=command.GROUP)
+    for argv in (["doctor"], ["sync"]):
+        assert command.run(argv, cwd=tmp_path, installed={"alpha": partial(command._load, broken)}) == 1  # noqa: SLF001 -- the loader `installed` gives each entry point
+        err = capsys.readouterr().err
+        assert "Traceback" not in err
+        assert err.splitlines()[-1] == (
+            "ERROR: the alpha part's package is installed, and its entry point basis_alpha_nowhere.cli:part does not import"
+            " (ModuleNotFoundError: No module named 'basis_alpha_nowhere'): run `uv sync --all-packages`, which installs what it needs"
+        )
