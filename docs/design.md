@@ -185,9 +185,10 @@ of the `openapi.json` that this repo's example API produces. [The contract page]
 - **The OpenAPI document.** Each API commits its `openapi.json`, which `basis sync` writes from its service and `basis
   check` fails on when it is out of date. Each operation's id is its handler's name, so a generated client's functions
   read `getPositions` rather than FastAPI's default `read_positions_positions_get`, and every model is strict. The API's
-  breaking-change check compares the document with the one at its last release tag, which the repo declares as a glob of
-  its release tags, and fails when a field is removed, renamed or changes type; with no earlier release, it passes and
-  says so, and in a clone that may lack its releases, a shallow one or one that fetches no tags, it fails with the fix. Adding a response field is never breaking, because basis-ui's
+  breaking-change check compares the document with `openapi.released.json`, the copy its last release committed beside
+  it, which `basis release-document VERSION` writes at a release (decided on 2026-11-09, step 7.12), so it reads no
+  tag and no history, and fails when a field is removed, renamed or changes type, or an error's type answers another
+  status; with no released copy committed yet, it passes and says so. Adding a response field is never breaking, because basis-ui's
   schemas drop fields they do not know. Requests are the other way round: an API refuses unknown request fields, so an
   API that accepts a new one deploys before the UI that sends it, and it takes a time only with its offset, as it sends
   one: a route whose request or response may hold a time without its offset is refused when it is declared.

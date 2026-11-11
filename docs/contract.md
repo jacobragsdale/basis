@@ -24,6 +24,7 @@ document at `/openapi.json`.
 | A time | `{"type": "string", "format": "date-time"}`, which RFC 3339 gives an offset, and every time has one |
 | A date | `{"type": "string", "format": "date"}` |
 | Each error | Its status, under `application/problem+json`: a 422 as `ValidationProblem`, any other as `Problem` |
+| An operation's errors | `x-basis-errors`: each error it may answer, as `{"status": 404, "type": "unknown-bond", "title": "No bond has that ISIN"}`, by status and type |
 | A dataset route | Its success lists `application/vnd.apache.arrow.stream` as `{"type": "string", "format": "binary"}` beside its JSON |
 
 What a success answers is what the app sends: each float is `{"type": ["number", "null"]}`, since NaN and ±inf
@@ -236,19 +237,13 @@ among them, is `no-cache`, with an `ETag` and a `Last-Modified`, so a reload of 
 
 ## Compatibility
 
-`basis check --full`, which the push hook runs, compares the repo's `openapi.json` with the one at its last release, and
-fails on a change that breaks a UI built against that release. The repo declares its release tags, as a glob:
-
-```toml
-[tool.basis.api]
-releases = "v*"
-```
-
-The last release is the nearest tag that matches the glob among the checked commit's ancestors, the commit itself
-included, as `git describe --tags --abbrev=0 --match GLOB HEAD` finds it. With no such tag, or none whose commit has an
-`openapi.json`, there is no earlier release, and the check passes, saying so. A clone that may lack the release fails
-instead, with the fix: a shallow one, as a CI checkout is by default, or one whose remote's `tagOpt` is `--no-tags`, as
-`git clone --no-tags` leaves it. `basis review` prints what the check found.
+`basis check --full`, which the push hook runs, compares the repo's `openapi.json` with `openapi.released.json`, the
+document UIs built against its last release rely on, committed beside it, and fails on a change that breaks such a UI.
+`basis release-document VERSION` writes the released document from `openapi.json`, in the commit a release tags; its
+first key is `"x-basis-release": VERSION`, and it is the repo's own file, which `basis sync` leaves alone. The check
+reads the file as the commit holds it, so it needs no tag or history: a shallow clone, or one that fetches no tags,
+checks the same as any other. With no released document committed yet, there is no earlier release, and the check
+passes, saying so. `basis review` prints what the check found, with each keyword of a schema it does not compare.
 
 | Change | Breaks a UI |
 |---|---|
@@ -269,9 +264,14 @@ instead, with the fix: a shallow one, as a CI checkout is by default, or one who
 | A body the route no longer takes, or now requires | Yes |
 | A dataset route that no longer answers Arrow | Yes |
 | A path parameter renamed | No, since a path's parameters are compared by their place in it |
+| A model added to a response's union, or a field of one of its models retyped | Yes |
+| A field required in one model of a request's union | Yes |
+| A string that becomes a choice of values, in a request | Yes |
+| An error's type, in `x-basis-errors`, that answers another status | Yes |
+| An error's type added, removed or titled anew, or a field's display format changed | No, and listed |
 
-Errors' problems are basis's, the same in every API, and are not compared; nor are constraints, such as a pattern or a
-bound.
+Each model of a union is compared by itself, by its component's name, as `body<Swap>.rate`, and each item of a tuple by
+its place. Constraints, such as a pattern or a bound, are not compared.
 
 ## The sample
 
@@ -279,8 +279,10 @@ The example API's document is
 [`packages/api/src/basis/api/example/openapi.json`](../packages/api/src/basis/api/example/openapi.json), the sample
 basis-ui generates its client from and tests against, pinned to a commit of this repo. It holds every part of the
 contract: query and path parameters, a JSON body with numbers and dates, a time with its offset, a dataset route,
-`coupons`, with its Arrow, a 422 a handler names its fields in, a route that writes and books its write with another
+`coupons`, with its Arrow, whose columns declare each of the six display formats, a 422 a handler names its fields in, a route that writes and books its write with another
 service through its database's outbox, `record_settlement`, and the errors basis adds, that route's 502 among them. `uv run python -m
 basis.api.example` writes it, and the example's tests fail when it differs from the example's service, or when it
-breaks its contract with this repo's last `v*` release. Step 2.11 changes it: the example's decimals become floats,
+breaks its contract with basis's last release, whose copy of it, `openapi.released.json` beside it, `scripts/release.py version` writes. Beside it, `coupons.arrows` is a sample of that route's Arrow stream, the fake warehouse's US912810TM64 as the
+example's app answers it, each column's display format in its field's metadata, which basis-ui pins with the document
+and the example's tests check is current. Step 2.11 changes it: the example's decimals become floats,
 which the document gives as JSON numbers, and `x-basis-decimal` goes, so basis-ui's pinned copy changes with it.

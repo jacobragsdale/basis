@@ -40,7 +40,9 @@ To cut a release:
    uv run scripts/release.py version minor
    ```
 
-   It prints `basis 0.1.0: every member, each basis-core pin and uv.lock; commit them`. For another bump, pass
+   It prints `basis 0.1.0: every member, each basis-core pin and uv.lock; commit them`. It also writes the example
+   API's `openapi.released.json`, the sample's copy as this release gives it, which the example's contract test
+   compares each later sample with, and which the release workflow's `check --tag` checks names the tag. For another bump, pass
    `patch`, or a version such as `0.1.0`. Generated repos cap basis below the next 0.x minor version, so the script
    refuses a 1.x version, and changes nothing, until those templates change. It works out every file's new text
    before it writes any, and puts every file back, `uv.lock` among them, when `uv lock` fails, so the workspace is

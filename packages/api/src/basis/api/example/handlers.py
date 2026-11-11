@@ -107,8 +107,9 @@ async def bond_yield(  # noqa: PLR0913, PLR0917 -- what the route reads and reac
 
 
 class CouponRow(BaseModel):
-    """A row of a bond's coupons as a UI's grid shows them: the domain's `Coupon`, with each number's display format,
-    which is how the API presents it, not a rule of the domain's."""
+    """A row of a bond's coupons as a UI's grid shows them: the domain's `Coupon`, and what it comes to, with each
+    number's display format, which is how the API presents it, not a rule of the domain's. Between them the columns
+    show every kind of display format, so the sample basis-ui pins holds each."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -117,12 +118,26 @@ class CouponRow(BaseModel):
     pays: date
     interest: Annotated[float, api.format.price(4)]
     """Per 100 of face, as the bond's convention accrues it over the period."""
+    interest_32nds: Annotated[float, api.format.price32()]
+    """The same, as a Treasury desk reads a price, in 32nds."""
+    rate: Annotated[float, api.format.pct(3)]
+    """The bond's annual coupon rate, as a fraction: 0.045 is 4.5%."""
+    period_rate: Annotated[float, api.format.bps(1)]
+    """The period's interest as a fraction of face: 0.0225 is 225 bp."""
+    per_million: Annotated[float, api.format.money("USD")]
+    """The period's interest on 1,000,000 of face, in dollars."""
+    year_fraction: Annotated[float, api.format.number(6)]
+    """The share of a year the period accrues over, at the coupon rate; null for a bond that pays none."""
 
 
 async def coupons(security: Security, warehouse: Annotated[api.Reader, api.given(WAREHOUSE)]) -> api.Table[CouponRow]:
     """The bond's coupons, from its first to its last, which is paid at maturity, as a table: a frame of them."""
-    schedule = domain.schedule(await repository.bond(warehouse, security))
-    return pd.DataFrame([coupon.model_dump() for coupon in schedule], columns=list(CouponRow.model_fields))
+    found = await repository.bond(warehouse, security)
+    frame = pd.DataFrame([coupon.model_dump() for coupon in domain.schedule(found)], columns=["starts", "pays", "interest"])
+    per_100 = frame["interest"]
+    accrues = per_100 / (100 * found.coupon_rate) if found.coupon_rate > 0 else per_100 * float("nan")
+    frame = frame.assign(interest_32nds=per_100, rate=found.coupon_rate, period_rate=per_100 / 100, per_million=per_100 * 10_000, year_fraction=accrues)
+    return frame[list(CouponRow.model_fields)]
 
 
 async def record_settlement(  # noqa: PLR0913 -- the request, and each thing the route reaches, as api.given gives it

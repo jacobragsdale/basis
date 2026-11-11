@@ -1,6 +1,7 @@
 """The breaking-change check: an API's `openapi.json` against its last release's, found by the tags its repo declares,
 which fails on a change that breaks a UI built against that release."""
 
+import json
 import re
 from collections.abc import Callable, Sequence
 from datetime import date
@@ -13,6 +14,8 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 
 from basis import api
 from basis.api import cli, contract, openapi
+from basis.core import command
+from basis.core.sync import MARKER
 
 type Git = Callable[..., str]
 """conftest's `git` fixture."""
@@ -179,7 +182,7 @@ BEFORE = (get_bond(), post_order(), get_rows(dataset=True))
         ((BEFORE[0], post_order(OrderNeedingNote), BEFORE[2]), ["POST /orders (place) no longer takes body.note as null", "POST /orders (place) requires body.note"], []),
         ((BEFORE[0], post_order(OrderBuyingOnly), BEFORE[2]), ['POST /orders (place) no longer takes body.side as "sell"'], []),
         ((BEFORE[0], post_order(OrderOfAnySide), BEFORE[2]), [], ['POST /orders (place) takes body.side as "short" too']),
-        ((BEFORE[0], post_order(None, name="place"), BEFORE[2]), ["POST /orders (place) takes no body"], []),
+        ((BEFORE[0], post_order(None, name="place"), BEFORE[2]), ["POST /orders (place) takes no body"], ["POST /orders (place) no longer answers body-too-large"]),
         ((BEFORE[0], post_order(name="submit"), BEFORE[2]), ["POST /orders (submit) has the operation id submit, renaming its client's function"], []),
         ((BEFORE[0], post_order(status=HTTPStatus.CREATED), BEFORE[2]), ["POST /orders (place) succeeds with 201, not 200"], []),
         ((*BEFORE[:2], get_rows(dataset=False)), ["GET /rows/{security} (rows) no longer answers Arrow"], []),
@@ -218,18 +221,13 @@ def test_a_query_parameter_renamed_or_required_breaks_a_ui() -> None:
 
 
 @pytest.fixture
-def released(tmp_path: Path, git: Git) -> Path:
-    """A clone whose API was released as v0.1.0, with its document at the repo's root, in a folder of the clone."""
-    repo = tmp_path / "clone" / "api"
-    repo.mkdir(parents=True)
-    git(tmp_path / "clone", "init", "--quiet", "--initial-branch=main")
-    git(tmp_path / "clone", "config", "user.email", "ci@example.com")
-    git(tmp_path / "clone", "config", "user.name", "ci")
-    (repo / "pyproject.toml").write_text('[tool.basis]\nparts = ["api"]\n\n[tool.basis.api]\nreleases = "v*"\n', encoding="utf-8")
+def released(tmp_path: Path) -> Path:
+    """An API repo released as v0.1.0: its document, and the released one committed beside it."""
+    repo = tmp_path / "api"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text('[tool.basis]\nparts = ["api"]\n', encoding="utf-8")
     write(repo, *BEFORE)
-    git(repo, "add", "--all")
-    git(repo, "commit", "--quiet", "--message", "The first release")
-    git(repo, "tag", "v0.1.0")
+    contract.release(repo, "v0.1.0")
     return repo
 
 
@@ -237,17 +235,12 @@ def write(repo: Path, *routes: api.Route) -> None:
     (repo / "openapi.json").write_text(openapi.text(api.Service(name="bonds", settings=api.Settings, routes=routes)), encoding="utf-8")
 
 
-def commit(repo: Path, git: Git, message: str) -> None:
-    git(repo, "commit", "--quiet", "--all", "--message", message)
-
-
 def test_an_unchanged_document_is_none(released: Path) -> None:
     assert contract.contract(released) is None
 
 
-def test_a_change_no_ui_relies_on_is_summed_up_and_listed(released: Path, git: Git) -> None:
+def test_a_change_no_ui_relies_on_is_summed_up_and_listed(released: Path) -> None:
     write(released, get_bond(BondWithIssuer), *BEFORE[1:])
-    commit(released, git, "An issuer")
     assert contract.contract(released) == ("Changed since release `v0.1.0`, with nothing a UI built against it relies on broken.\n\n- GET /bonds/{security} (bond): the response.issuer is added")
 
 
@@ -262,66 +255,40 @@ def test_a_change_that_breaks_a_ui_fails_and_names_each_break(released: Path) ->
     )
 
 
-def test_the_baseline_is_the_nearest_release_among_the_commits_ancestors(released: Path, git: Git) -> None:
+def test_the_released_document_is_the_repos_own_which_sync_leaves_alone(released: Path) -> None:
+    text = (released / "openapi.released.json").read_text(encoding="utf-8")
+    assert text.splitlines()[:2] == ["{", '  "x-basis-release": "v0.1.0",']
+    assert MARKER not in text
+    assert json.loads(text) == {"x-basis-release": "v0.1.0", **openapi.document(api.Service(name="bonds", settings=api.Settings, routes=BEFORE))}
+
+
+def test_the_check_needs_no_history_and_no_tags(released: Path, git: Git, tmp_path: Path) -> None:
+    """A shallow clone that fetched no tags, as a pipeline's default checkout may be, checks as any other."""
+    git(released, "init", "--quiet", "--initial-branch=main")
+    git(released, "config", "user.email", "ci@example.com")
+    git(released, "config", "user.name", "ci")
+    git(released, "add", "--all")
+    git(released, "commit", "--quiet", "--message", "The first release")
     write(released, get_bond(BondWithoutCoupon), *BEFORE[1:])
-    commit(released, git, "No coupon")
-    git(released, "tag", "v0.2.0")
-    git(released, "tag", "release-candidate")  # matches no glob the repo declares
-    assert contract.contract(released) is None
-    git(released, "checkout", "--quiet", "v0.1.0")
-    assert contract.contract(released) is None
+    git(released, "commit", "--quiet", "--all", "--message", "No coupon")
+    git(tmp_path, "clone", "--quiet", "--depth", "1", "--no-tags", released.as_uri(), "partial")
+    with pytest.raises(contract.ContractError, match=re.escape("openapi.json breaks its contract with release v0.1.0's: GET /bonds/{security} (bond): the response.coupon is removed")):
+        contract.contract(tmp_path / "partial")
 
 
-def test_a_clone_of_the_repo_with_its_tags_finds_its_release(released: Path, git: Git, tmp_path: Path) -> None:
-    git(tmp_path, "clone", "--quiet", str(released.parent), "whole")
-    write(tmp_path / "whole" / "api", get_bond(BondWithoutCoupon), *BEFORE[1:])
-    with pytest.raises(contract.ContractError, match=re.escape("breaks its contract with release v0.1.0's")):
-        contract.contract(tmp_path / "whole" / "api")
+def test_with_no_released_document_there_is_nothing_to_break(released: Path) -> None:
+    (released / "openapi.released.json").unlink()
+    assert contract.contract(released) == "No earlier release to compare with: no openapi.released.json is committed, which `basis release-document VERSION` writes at a release."
 
 
-@pytest.mark.parametrize(
-    ("argv", "message"),
-    [
-        (("--depth", "1"), "is shallow, so the release it descends from may be missing from it, and its contract cannot be checked: fetch its whole history and its tags"),
-        (("--no-tags",), "fetches no tags from origin, so the release it descends from may be missing from it, and its contract cannot be checked:"),
-    ],
-    ids=["shallow", "no-tags"],
-)
-def test_a_clone_that_may_lack_its_release_fails_rather_than_finding_none(released: Path, git: Git, tmp_path: Path, argv: tuple[str, ...], message: str) -> None:
-    write(released, get_bond(BondWithIssuer), *BEFORE[1:])
-    commit(released, git, "An issuer, after the release")  # so that one commit deep is short of it
-    git(tmp_path, "clone", "--quiet", *argv, released.parent.as_uri(), "partial")
-    with pytest.raises(contract.ContractError, match=re.escape(message)):
-        contract.contract(tmp_path / "partial" / "api")
-
-
-def test_with_no_earlier_release_there_is_nothing_to_break(tmp_path: Path, git: Git) -> None:
-    git(tmp_path, "init", "--quiet")
-    git(tmp_path, "config", "user.email", "ci@example.com")
-    git(tmp_path, "config", "user.name", "ci")
-    (tmp_path / "pyproject.toml").write_text('[tool.basis.api]\nreleases = "api-v*"\n', encoding="utf-8")
-    write(tmp_path, *BEFORE)
-    git(tmp_path, "add", "--all")
-    git(tmp_path, "commit", "--quiet", "--message", "First")
-    git(tmp_path, "tag", "v0.1.0")
-    assert contract.contract(tmp_path) == "No earlier release to compare with: no tag matches `api-v*` among this commit's ancestors."
-
-
-def test_a_release_before_the_document_has_none_to_break(tmp_path: Path, git: Git) -> None:
-    git(tmp_path, "init", "--quiet")
-    git(tmp_path, "config", "user.email", "ci@example.com")
-    git(tmp_path, "config", "user.name", "ci")
-    (tmp_path / "pyproject.toml").write_text('[tool.basis.api]\nreleases = "v*"\n', encoding="utf-8")
-    git(tmp_path, "add", "--all")
-    git(tmp_path, "commit", "--quiet", "--message", "Before the API")
-    git(tmp_path, "tag", "v0.1.0")
-    write(tmp_path, *BEFORE)
-    assert contract.contract(tmp_path) == "No earlier document to compare with: release `v0.1.0` has no `openapi.json`."
-
-
-def test_the_api_part_gives_basis_its_contract(released: Path) -> None:
+def test_the_api_part_gives_basis_its_contract_and_the_verb_that_records_a_release(released: Path, capsys: pytest.CaptureFixture[str], logging_restored: None) -> None:
+    del logging_restored
     given = cli.part().contract
     assert given is not None
+    assert given(released) is None
+    write(released, get_bond(BondWithIssuer), *BEFORE[1:])
+    assert command.run(["release-document", "v0.2.0"], cwd=released, installed=command.installed()) == 0
+    assert capsys.readouterr().out == "openapi.released.json: release v0.2.0's document; commit it with the release\n"
     assert given(released) is None
 
 
@@ -334,13 +301,12 @@ def test_a_missing_document_says_to_sync(released: Path) -> None:
 @pytest.mark.parametrize(
     ("table", "message"),
     [
-        ("", 'declares no releases: add releases = "v*", the glob of the tags that mark its releases'),
-        ('[tool.basis.api]\nreleases = "v*"\nrelases = "v*"\n', "has relases, which basis-api does not read: remove it"),
-        ("[tool.basis.api]\nreleases = 1\n", "releases is not a glob: give one string"),
+        ('[tool.basis.api]\nreleases = "v*"\n', "declares releases, the glob of release tags basis-api reads no longer: remove it"),
+        ("[tool.basis.api]\nrelases = 1\n", "has relases, which basis-api does not read: remove it"),
     ],
-    ids=["none", "a-misspelled-key", "not-a-glob"],
+    ids=["the-old-glob", "a-misspelled-key"],
 )
-def test_the_baseline_is_declared_never_guessed(tmp_path: Path, table: str, message: str) -> None:
+def test_the_api_table_holds_only_what_basis_api_reads(tmp_path: Path, table: str, message: str) -> None:
     (tmp_path / "pyproject.toml").write_text(f'[tool.basis]\nparts = ["api"]\n\n{table}', encoding="utf-8")
     with pytest.raises(contract.ContractError, match=re.escape(message)):
         contract.declared(tmp_path)
@@ -419,14 +385,87 @@ def test_a_request_breaks_a_ui_only_where_it_refuses_what_it_took_and_a_response
     assert (found.breaking, found.compatible) == (breaking, compatible)
 
 
-def test_no_earlier_release_is_known_whatever_language_git_speaks(tmp_path: Path, git: Git, monkeypatch: pytest.MonkeyPatch) -> None:
-    git(tmp_path, "init", "--quiet")
-    git(tmp_path, "config", "user.email", "ci@example.com")
-    git(tmp_path, "config", "user.name", "ci")
-    (tmp_path / "pyproject.toml").write_text('[tool.basis.api]\nreleases = "v*"\n', encoding="utf-8")
-    write(tmp_path, *BEFORE)
-    git(tmp_path, "add", "--all")
-    git(tmp_path, "commit", "--quiet", "--message", "First")
-    monkeypatch.setenv("LANGUAGE", "de")  # a git with its translations then says "Keine Namen gefunden"
-    monkeypatch.setenv("LC_ALL", "de_DE.UTF-8")
-    assert contract.contract(tmp_path) == "No earlier release to compare with: no tag matches `v*` among this commit's ancestors."
+def _raw(body: JsonValue = None, answer: JsonValue = None, **schemas: JsonValue) -> dict[str, JsonValue]:
+    """A document of one operation, POST /take, that takes `body` and answers `answer`, with `schemas` as its
+    components."""
+    operation: dict[str, JsonValue] = {"operationId": "take", "responses": {"200": {"content": {"application/json": {"schema": answer or {"type": "string"}}}}}}
+    if body is not None:
+        operation["requestBody"] = {"required": True, "content": {"application/json": {"schema": body}}}
+    return {"openapi": "3.1.0", "paths": {"/take": {"post": operation}}, "components": {"schemas": dict(schemas)}}
+
+
+def _object(**properties: JsonValue) -> dict[str, JsonValue]:
+    return {"type": "object", "properties": dict(properties), "required": list(properties), "additionalProperties": False}
+
+
+UNION: JsonValue = {"anyOf": [{"$ref": "#/components/schemas/Swap"}, {"$ref": "#/components/schemas/Bond"}]}
+TEXT: JsonValue = {"type": "string"}
+NUMBER: JsonValue = {"type": "number"}
+INTEGER: JsonValue = {"type": "integer"}
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "breaking"),
+    [
+        (
+            _raw(UNION, Swap=_object(rate=NUMBER), Bond=_object(coupon=NUMBER)),
+            _raw(UNION, Swap=_object(rate=NUMBER, notional=NUMBER), Bond=_object(coupon=NUMBER)),
+            ["POST /take (take) requires body<Swap>.notional, which it did not take"],
+        ),
+        (
+            _raw(answer=UNION, Swap=_object(size=INTEGER), Bond=_object(size=TEXT)),
+            _raw(answer=UNION, Swap=_object(size=TEXT), Bond=_object(size=TEXT)),
+            ["POST /take (take): the response<Swap>.size may be string"],
+        ),
+        (
+            _raw(answer={"$ref": "#/components/schemas/Swap"}, Swap=_object(rate=NUMBER)),
+            _raw(answer=UNION, Swap=_object(rate=NUMBER), Bond=_object(coupon=NUMBER)),
+            ["POST /take (take): the response may be Bond"],
+        ),
+        (_raw(_object(side=TEXT)), _raw(_object(side={"type": "string", "enum": ["buy", "sell"]})), ['POST /take (take) no longer takes body.side as any value but "buy" or "sell"']),
+        (
+            _raw(_object(pair={"type": "array", "prefixItems": [INTEGER, TEXT], "minItems": 2, "maxItems": 2})),
+            _raw(_object(pair={"type": "array", "prefixItems": [INTEGER, INTEGER], "minItems": 2, "maxItems": 2})),
+            ["POST /take (take) no longer takes body.pair[1] as string"],
+        ),
+    ],
+    ids=["a-required-field-added-to-one-arm-of-a-request", "a-field-retyped-in-one-arm-of-a-response", "an-arm-added-to-a-response", "text-narrowed-to-a-literal", "a-tuples-item-retyped"],
+)
+def test_each_arm_of_a_union_and_each_item_of_a_tuple_is_compared_by_itself(before: dict[str, JsonValue], after: dict[str, JsonValue], breaking: list[str]) -> None:
+    assert contract.compare(before, after).breaking == breaking
+
+
+def test_a_keyword_the_check_does_not_compare_is_said() -> None:
+    found = contract.compare(_raw(_object(note={"allOf": [TEXT]})), _raw(_object(note={"allOf": [TEXT], "not": {"const": ""}})))
+    assert found.skipped == ["POST /take (take): body.note's allOf", "POST /take (take): body.note's not"]
+
+
+def _erring(*errors: JsonValue) -> dict[str, JsonValue]:
+    document = _raw(_object(side=TEXT))
+    operation = openapi.mapping(openapi.mapping(openapi.mapping(document["paths"])["/take"])["post"])
+    operation["x-basis-errors"] = list(errors)
+    return document
+
+
+GONE: dict[str, JsonValue] = {"status": 410, "type": "gone", "title": "The order is gone"}
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "breaking", "compatible"),
+    [
+        (_erring(GONE), _erring(GONE | {"status": 404}), ["POST /take (take) answers gone with 404, not 410"], []),
+        (_erring(), _erring(GONE), [], ["POST /take (take) may answer gone, 410"]),
+        (_erring(GONE), _erring(), [], ["POST /take (take) no longer answers gone"]),
+        (_erring(GONE), _erring(GONE | {"title": "The order has gone"}), [], ["POST /take (take) titles gone 'The order has gone', not 'The order is gone'"]),
+    ],
+    ids=["a-type-that-answers-another-status", "a-type-added", "a-type-removed", "a-title-changed"],
+)
+def test_an_operations_errors_are_compared_by_type(before: dict[str, JsonValue], after: dict[str, JsonValue], breaking: list[str], compatible: list[str]) -> None:
+    found = contract.compare(before, after)
+    assert (found.breaking, found.compatible) == (breaking, compatible)
+
+
+def test_a_display_format_that_changes_is_listed() -> None:
+    money: dict[str, JsonValue] = {"type": "number", "x-basis-format": {"kind": "money", "currency": "USD"}}
+    found = contract.compare(_raw(answer=_object(notional=money)), _raw(answer=_object(notional=money | {"x-basis-format": {"kind": "pct", "decimals": 2}})))
+    assert (found.breaking, found.compatible) == ([], ['POST /take (take): the response.notional is shown as {"decimals":2,"kind":"pct"}, not {"currency":"USD","kind":"money"}'])

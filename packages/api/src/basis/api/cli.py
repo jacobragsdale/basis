@@ -8,6 +8,8 @@
   `--real` in the environment `--env` names;
 - `basis relay [SERVICE] --env ENV` makes again the calls the service's outboxes still hold, and fails when one has
   aged out (`relay.py`), which the repo's scheduler runs on a schedule;
+- `basis release-document VERSION` writes `openapi.released.json` from `openapi.json`, in the commit a release tags,
+  which `basis check --full` compares each later document with (`contract.py`);
 
 The verbs that reach the firm's systems, `serve`, `call --real` and `relay`, act in the environment `--env` or
 `BASIS_ENV` names, with its settings (`basis.core.environments`), and in prod refuse to start where the settings give a
@@ -17,7 +19,7 @@ settings in code, and never need one.
 - `basis ddl [SERVICE] --dialect DIALECT`, basis-core's verb, prints the CREATE TABLE of each outbox the service's
   databases declare (`outboxes.py`).
 - `basis sync` writes, and `basis check` checks, the repo's `openapi.json` with the API's other files (`sync.py`), and
-  `basis check --full` compares it with the last release's (`contract.py`);
+  `basis check --full` compares it with the released one committed beside it (`contract.py`);
 - `basis check` holds the repo's code to its layers (`layers.py`), and builds the app on its fakes, which Schemathesis
   then sends the requests it makes from its document (`fuzz.py`).
 
@@ -94,6 +96,7 @@ def part() -> Part:
             Verb("dev", "serve the API on its declared fakes, on this machine alone, until Ctrl+C", _service_argument, lambda n: _dev(DevArgs(n.service, Path(n.repo_root)))),
             Verb("call", "run one route in this process, on the API's fakes or its real resources, and print its response as JSON", _call_arguments, lambda n: _call(_call_args(n))),
             Verb("relay", RELAY, _reaching(_service_argument), lambda n: _relay(ServeArgs(n.service, n.env))),
+            Verb("release-document", RELEASE_DOCUMENT, _version_argument, lambda n: _release_document(Path(n.repo_root), str(n.version))),
         ),
         files=sync.agent_files,
         runs=Runs(
@@ -117,6 +120,21 @@ def _smoke(repo: Path, env: str, commit: str | None) -> list[Problem]:
     from basis.api import smoke  # noqa: PLC0415 -- the client loads when the verb runs
 
     return smoke.smoke(repo, env, commit=commit)
+
+
+RELEASE_DOCUMENT = "record openapi.json as what this release's UIs rely on, openapi.released.json, which the breaking-change check compares with: run it in the commit a release tags"
+
+
+def _version_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("version", help="the release, as its tag names it, such as v0.2.0")
+
+
+def _release_document(repo: Path, version: str) -> int:
+    from basis.api import contract  # noqa: PLC0415 -- the check's module loads when the verb runs
+
+    written = contract.release(repo, version)
+    sys.stdout.write(f"{written.name}: release {version}'s document; commit it with the release\n")
+    return 0
 
 
 def _contract(repo: Path) -> str | None:

@@ -82,7 +82,24 @@
               }
             }
           }
-        }
+        },
+        "x-basis-errors": [
+          {
+            "status": 422,
+            "type": "invalid-request",
+            "title": "The request is not valid"
+          },
+          {
+            "status": 422,
+            "type": "period-reversed",
+            "title": "The period ends before it starts"
+          },
+          {
+            "status": 422,
+            "type": "period-too-long",
+            "title": "The period is longer than this service accrues over"
+          }
+        ]
       }
     },
     "/conventions": {
@@ -114,7 +131,14 @@
               }
             }
           }
-        }
+        },
+        "x-basis-errors": [
+          {
+            "status": 422,
+            "type": "invalid-request",
+            "title": "The request is not valid"
+          }
+        ]
       }
     },
     "/bonds/{security}": {
@@ -196,7 +220,49 @@
               }
             }
           }
-        }
+        },
+        "x-basis-errors": [
+          {
+            "status": 404,
+            "type": "unknown-bond",
+            "title": "No bond has that ISIN"
+          },
+          {
+            "status": 422,
+            "type": "invalid-request",
+            "title": "The request is not valid"
+          },
+          {
+            "status": 502,
+            "type": "service-conflict",
+            "title": "A service or database the request called refused it as a conflict"
+          },
+          {
+            "status": 502,
+            "type": "service-denied",
+            "title": "A service or database the request called denied it"
+          },
+          {
+            "status": 502,
+            "type": "service-failed",
+            "title": "A call the request made failed"
+          },
+          {
+            "status": 502,
+            "type": "service-rejected",
+            "title": "A service or database the request called refused it as invalid"
+          },
+          {
+            "status": 503,
+            "type": "service-unavailable",
+            "title": "A service or database the request calls is unavailable"
+          },
+          {
+            "status": 504,
+            "type": "service-timeout",
+            "title": "A call took longer than its deadline"
+          }
+        ]
       }
     },
     "/bonds/{security}/dirty-price": {
@@ -298,7 +364,74 @@
               }
             }
           }
-        }
+        },
+        "x-basis-errors": [
+          {
+            "status": 404,
+            "type": "unknown-bond",
+            "title": "No bond has that ISIN"
+          },
+          {
+            "status": 404,
+            "type": "unpriced",
+            "title": "The pricing service has no price for the bond"
+          },
+          {
+            "status": 422,
+            "type": "invalid-request",
+            "title": "The request is not valid"
+          },
+          {
+            "status": 422,
+            "type": "matured",
+            "title": "The bond matures on or before the settlement date"
+          },
+          {
+            "status": 422,
+            "type": "not-issued",
+            "title": "The bond is issued after the settlement date"
+          },
+          {
+            "status": 502,
+            "type": "service-bad-reply",
+            "title": "A service the request called answered with a reply that is not the one it declares"
+          },
+          {
+            "status": 502,
+            "type": "service-conflict",
+            "title": "A service or database the request called refused it as a conflict"
+          },
+          {
+            "status": 502,
+            "type": "service-denied",
+            "title": "A service or database the request called denied it"
+          },
+          {
+            "status": 502,
+            "type": "service-failed",
+            "title": "A call the request made failed"
+          },
+          {
+            "status": 502,
+            "type": "service-not-found",
+            "title": "A service the request called has no such thing"
+          },
+          {
+            "status": 502,
+            "type": "service-rejected",
+            "title": "A service or database the request called refused it as invalid"
+          },
+          {
+            "status": 503,
+            "type": "service-unavailable",
+            "title": "A service or database the request calls is unavailable"
+          },
+          {
+            "status": 504,
+            "type": "service-timeout",
+            "title": "A call took longer than its deadline"
+          }
+        ]
       }
     },
     "/bonds/{security}/yield": {
@@ -391,7 +524,79 @@
               }
             }
           }
-        }
+        },
+        "x-basis-errors": [
+          {
+            "status": 404,
+            "type": "unknown-bond",
+            "title": "No bond has that ISIN"
+          },
+          {
+            "status": 404,
+            "type": "unpriced",
+            "title": "The pricing service has no price for the bond"
+          },
+          {
+            "status": 422,
+            "type": "invalid-request",
+            "title": "The request is not valid"
+          },
+          {
+            "status": 422,
+            "type": "matured",
+            "title": "The bond matures on or before the settlement date"
+          },
+          {
+            "status": 422,
+            "type": "no-yield",
+            "title": "No yield gives the bond's price"
+          },
+          {
+            "status": 422,
+            "type": "not-issued",
+            "title": "The bond is issued after the settlement date"
+          },
+          {
+            "status": 502,
+            "type": "service-bad-reply",
+            "title": "A service the request called answered with a reply that is not the one it declares"
+          },
+          {
+            "status": 502,
+            "type": "service-conflict",
+            "title": "A service or database the request called refused it as a conflict"
+          },
+          {
+            "status": 502,
+            "type": "service-denied",
+            "title": "A service or database the request called denied it"
+          },
+          {
+            "status": 502,
+            "type": "service-failed",
+            "title": "A call the request made failed"
+          },
+          {
+            "status": 502,
+            "type": "service-not-found",
+            "title": "A service the request called has no such thing"
+          },
+          {
+            "status": 502,
+            "type": "service-rejected",
+            "title": "A service or database the request called refused it as invalid"
+          },
+          {
+            "status": 503,
+            "type": "service-unavailable",
+            "title": "A service or database the request calls is unavailable"
+          },
+          {
+            "status": 504,
+            "type": "service-timeout",
+            "title": "A call took longer than its deadline"
+          }
+        ]
       }
     },
     "/bonds/{security}/coupons": {
@@ -484,7 +689,49 @@
               }
             }
           }
-        }
+        },
+        "x-basis-errors": [
+          {
+            "status": 404,
+            "type": "unknown-bond",
+            "title": "No bond has that ISIN"
+          },
+          {
+            "status": 422,
+            "type": "invalid-request",
+            "title": "The request is not valid"
+          },
+          {
+            "status": 502,
+            "type": "service-conflict",
+            "title": "A service or database the request called refused it as a conflict"
+          },
+          {
+            "status": 502,
+            "type": "service-denied",
+            "title": "A service or database the request called denied it"
+          },
+          {
+            "status": 502,
+            "type": "service-failed",
+            "title": "A call the request made failed"
+          },
+          {
+            "status": 502,
+            "type": "service-rejected",
+            "title": "A service or database the request called refused it as invalid"
+          },
+          {
+            "status": 503,
+            "type": "service-unavailable",
+            "title": "A service or database the request calls is unavailable"
+          },
+          {
+            "status": 504,
+            "type": "service-timeout",
+            "title": "A call took longer than its deadline"
+          }
+        ]
       }
     },
     "/settlements": {
@@ -593,7 +840,84 @@
               }
             }
           }
-        }
+        },
+        "x-basis-errors": [
+          {
+            "status": 401,
+            "type": "sign-in-required",
+            "title": "Sign-in is required"
+          },
+          {
+            "status": 404,
+            "type": "unknown-bond",
+            "title": "No bond has that ISIN"
+          },
+          {
+            "status": 413,
+            "type": "body-too-large",
+            "title": "The request body is too large"
+          },
+          {
+            "status": 422,
+            "type": "invalid-request",
+            "title": "The request is not valid"
+          },
+          {
+            "status": 422,
+            "type": "matured",
+            "title": "The bond matures on or before the settlement date"
+          },
+          {
+            "status": 422,
+            "type": "not-issued",
+            "title": "The bond is issued after the settlement date"
+          },
+          {
+            "status": 500,
+            "type": "outcome-unknown",
+            "title": "Whether the request's writes committed is not known"
+          },
+          {
+            "status": 502,
+            "type": "service-bad-reply",
+            "title": "A service the request called answered with a reply that is not the one it declares"
+          },
+          {
+            "status": 502,
+            "type": "service-conflict",
+            "title": "A service or database the request called refused it as a conflict"
+          },
+          {
+            "status": 502,
+            "type": "service-denied",
+            "title": "A service or database the request called denied it"
+          },
+          {
+            "status": 502,
+            "type": "service-failed",
+            "title": "A call the request made failed"
+          },
+          {
+            "status": 502,
+            "type": "service-not-found",
+            "title": "A service the request called has no such thing"
+          },
+          {
+            "status": 502,
+            "type": "service-rejected",
+            "title": "A service or database the request called refused it as invalid"
+          },
+          {
+            "status": 503,
+            "type": "service-unavailable",
+            "title": "A service or database the request calls is unavailable"
+          },
+          {
+            "status": 504,
+            "type": "service-timeout",
+            "title": "A call took longer than its deadline"
+          }
+        ]
       }
     }
   },
@@ -722,6 +1046,60 @@
               "decimals": 4,
               "kind": "price"
             }
+          },
+          "interest_32nds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Interest 32Nds",
+            "x-basis-format": {
+              "kind": "price32"
+            }
+          },
+          "rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Rate",
+            "x-basis-format": {
+              "decimals": 3,
+              "kind": "pct"
+            }
+          },
+          "period_rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Period Rate",
+            "x-basis-format": {
+              "decimals": 1,
+              "kind": "bps"
+            }
+          },
+          "per_million": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Per Million",
+            "x-basis-format": {
+              "currency": "USD",
+              "kind": "money"
+            }
+          },
+          "year_fraction": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Year Fraction",
+            "x-basis-format": {
+              "decimals": 6,
+              "kind": "number"
+            }
           }
         },
         "additionalProperties": false,
@@ -729,10 +1107,15 @@
         "required": [
           "starts",
           "pays",
-          "interest"
+          "interest",
+          "interest_32nds",
+          "rate",
+          "period_rate",
+          "per_million",
+          "year_fraction"
         ],
         "title": "CouponRow",
-        "description": "A row of a bond's coupons as a UI's grid shows them: the domain's `Coupon`, with each number's display format,\nwhich is how the API presents it, not a rule of the domain's."
+        "description": "A row of a bond's coupons as a UI's grid shows them: the domain's `Coupon`, and what it comes to, with each\nnumber's display format, which is how the API presents it, not a rule of the domain's. Between them the columns\nshow every kind of display format, so the sample basis-ui pins holds each."
       },
       "DayCount": {
         "properties": {

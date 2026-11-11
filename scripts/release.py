@@ -10,7 +10,7 @@ version. docs/releasing.md says how a release goes, and .github/workflows/releas
 
     uv run scripts/release.py check                   # refuse a member, a pin or the lock at another version
     uv run scripts/release.py check --tag v0.1.0      # and a tag that names another version, or none
-    uv run scripts/release.py version 0.1.0           # set the version everywhere, and relock; or `patch`, `minor`
+    uv run scripts/release.py version 0.1.0           # set the version everywhere, relock, and write the sample's release
     uv run scripts/release.py packages                # the members a release publishes, a name per line
     uv run scripts/release.py gate COMMIT --repository OWNER/REPO   # refuse a commit off main, or one CI did not pass
     uv run scripts/release.py feed dist --port 8761   # dist/ as an index that proxies PyPI, as the firm's feed does
@@ -47,6 +47,12 @@ UNRELEASED = "0.0.0"
 CI = "ci.yml"
 """The workflow whose run on a commit must pass before a tag of it releases."""
 PYPI = "https://pypi.org/simple"
+SAMPLE = Path("packages/api/src/basis/api/example/openapi.json")
+"""The example API's document, which basis-ui pins; `version` writes the release's copy of it beside it, which the
+example's contract test compares the sample with (basis.api.contract)."""
+RELEASED = SAMPLE.with_name("openapi.released.json")
+RELEASE_KEY = "x-basis-release"
+"""The released document's first key, in place of basis's marker, as basis-api's `basis release-document` writes it."""
 _VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 _NAME = re.compile(r"^\s*([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)")
 """A PEP 508 requirement's name, at its start."""
@@ -298,6 +304,11 @@ def set_version(root: Path, asked: str, *, lock: Callable[[Path], int]) -> list[
     lockfile = root / "uv.lock"
     before = {path: path.read_bytes() for path in [*(path for path, _ in edits), lockfile] if path.exists()}
     after = {path: with_version(before[path].decode("utf-8"), version, pin=pin, where=path.relative_to(root).as_posix()).encode("utf-8") for path, pin in edits}
+    if (root / SAMPLE).is_file():
+        released = root / RELEASED
+        if released.exists():
+            before[released] = released.read_bytes()
+        after[released] = released_text((root / SAMPLE).read_text(encoding="utf-8"), f"v{version}").encode("utf-8")
     try:
         for path, text in after.items():
             path.write_bytes(text)
@@ -307,9 +318,36 @@ def set_version(root: Path, asked: str, *, lock: Callable[[Path], int]) -> list[
         raise
     if not relocked:
         _restore(before, lockfile)
+        for path in set(after) - set(before):
+            path.unlink(missing_ok=True)
         fix = f"fix what it says, and set the version again, as `uv run scripts/release.py version {asked}` does"
         return [Problem("uv could not relock the workspace, as it says above, so every file is as it was", fix)]
     return problems(read(root))
+
+
+def released_text(sample: str, tag: str) -> str:
+    """The sample document `sample` as the release `tag` gives it, as basis-api's `contract.released_text` writes one."""
+    try:
+        document = json.loads(sample)
+    except json.JSONDecodeError as error:
+        msg = f"{SAMPLE} is not JSON ({error}): write it again, as `uv run python -m basis.api.example` does"
+        raise ReleaseError(msg) from None
+    given = {key: value for key, value in document.items() if key != "x-basis"}
+    return json.dumps({RELEASE_KEY: tag, **given}, indent=2, ensure_ascii=False) + "\n"
+
+
+def released_problems(root: Path, tag: str) -> list[Problem]:
+    """That the sample's released document, where the workspace has the sample, is the release `tag`'s."""
+    if not (root / SAMPLE).is_file():
+        return []
+    fix = f"set the version with `uv run scripts/release.py version {tag.removeprefix('v')}`, which writes it, in the release's commit"
+    try:
+        named = json.loads((root / RELEASED).read_text(encoding="utf-8")).get(RELEASE_KEY)
+    except OSError, json.JSONDecodeError, AttributeError:
+        named = None
+    if named != tag:
+        return [Problem(f"{RELEASED.as_posix()} is release {named}'s, not {tag}'s" if named is not None else f"{RELEASED.as_posix()} names no release", fix)]
+    return []
 
 
 def _restore(before: Mapping[Path, bytes], lockfile: Path) -> None:
@@ -513,7 +551,7 @@ def main(argv: Sequence[str], *, root: Path = ROOT, lock: Callable[[Path], int] 
         match command:
             case Check(tag):
                 workspace = read(root)
-                found = problems(workspace, tag=tag)
+                found = problems(workspace, tag=tag) + (released_problems(root, tag) if tag is not None else [])
                 if not found:
                     published = ", ".join(member.name for member in workspace.published())
                     sys.stdout.write(f"basis {workspace.version}: {len(workspace.members)} members at one version; a release publishes {published}\n")

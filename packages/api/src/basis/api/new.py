@@ -1,7 +1,7 @@
 """`basis-api new app NAME`: an API repo, from basis's shared templates, this package's own and its example service,
 in its layers, with a job beside it, so a new repo matches the basis-api version that made it. Its package is the
 app's name with each hyphen an underscore; its `pyproject.toml` declares both parts, `[tool.basis] parts = ["api",
-"job"]`, the coverage floor and the release tags its contract is checked against. The first job comes from basis-job's
+"job"]`, and the coverage floor. The first job comes from basis-job's
 own generator, through `basis new job`, since basis-api imports nothing of basis-job's."""
 
 import re
@@ -21,7 +21,7 @@ EXAMPLE_FILES = (
     "tests/__init__.py", "tests/test_compute.py", "tests/test_domain.py", "tests/test_handlers.py", "tests/test_repository.py",
 )  # fmt: skip
 """What a new app copies of the example, by name, so a cache or a stray file in a checkout's example is never copied.
-Left out: its `ruff.toml`, and what writes and tests the example's own sample (`__main__.py`, `openapi.json`,
+Left out: its `ruff.toml`, and what writes and tests the example's own samples (`__main__.py`, `openapi.json`, `coupons.arrows`,
 `tests/test_openapi.py`), which a repo's `basis sync` writes at its root instead."""
 EXAMPLE_NAME = re.compile(r'name="accruals"')
 

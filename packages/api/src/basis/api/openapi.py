@@ -6,7 +6,8 @@ FastAPI makes the document from the routes, and basis finishes it, so that it sa
 - each operation's id is its handler's name, so a generated client reads `getPositions`, not
   `read_positions_positions_get`;
 - every error is `application/problem+json`, the media type the app answers errors with: a 422 a `ValidationProblem`,
-  whose `errors` name the fields at fault, and any other a `Problem`;
+  whose `errors` name the fields at fault, and any other a `Problem`; and each operation lists the errors it may
+  answer as `x-basis-errors`, each by its status, its type and its title;
 - every model is strict, `additionalProperties: false`: a request's unknown key is refused, and a response holds
   only the fields its model declares;
 - every number is a JSON number, a float or an int, never a string (design.md, "Numbers"), as pydantic gives one, and
@@ -34,7 +35,7 @@ from fastapi import FastAPI
 from pydantic import JsonValue, TypeAdapter
 
 from basis.api import routes, sync
-from basis.api.errors import MEDIA_TYPE
+from basis.api.errors import MEDIA_TYPE, described
 from basis.api.service import Route, Service
 from basis.core.sync import MARKER
 
@@ -72,9 +73,12 @@ def text(service: Service) -> str:
     return json.dumps({"x-basis": MARKER, **document(service)}, indent=2, ensure_ascii=False) + "\n"
 
 
-def finish(found: dict[str, JsonValue], declared: Sequence[Route] = ()) -> dict[str, JsonValue]:  # noqa: ARG001 -- the routes, which a later rule may read
+def finish(found: dict[str, JsonValue], declared: Sequence[Route] = ()) -> dict[str, JsonValue]:
     """FastAPI's document `found`, of the routes `declared`, as basis gives it: in place, and returned."""
+    by_name = {route.name: route for route in declared}
     for _, _, operation in operations(found):
+        if (route := by_name.get(str(operation.get("operationId")))) is not None:
+            operation["x-basis-errors"] = errors(route)
         for status, response in mapping(operation.get("responses")).items():
             content = mapping(mapping(response).get("content"))
             if (status == "default" or (status.isdigit() and int(status) >= HTTPStatus.BAD_REQUEST)) and "application/json" in content:
@@ -167,6 +171,14 @@ def _target(reference: str, names: dict[str, str]) -> str:
 
 _LITERAL = frozenset({"default", "example", "examples", "const", "enum", "x-basis-format"})
 """The keys whose values are values, never schemas."""
+
+
+def errors(route: Route) -> list[JsonValue]:
+    """Each error `route` may answer, by its status, its type and its title, as `x-basis-errors` lists them, the 422
+    of a request basis does not read among them: what a UI tells its errors apart by, and the breaking-change check
+    compares."""
+    listed = [(int(HTTPStatus.UNPROCESSABLE_CONTENT), "invalid-request", "The request is not valid"), *(described(error) for error in route.answers)]
+    return [{"status": status, "type": kind, "title": title} for status, kind, title in sorted(set(listed))]
 
 
 def _strict(schema: JsonValue) -> None:

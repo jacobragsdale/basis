@@ -2,6 +2,7 @@
 and each error a route declares, its own and the kinds of service error basis adds for what it reaches, answers its
 problem. A resource's failure is made with its fake's `fails`, as a real one would fail."""
 
+import json
 from collections.abc import Iterator, Mapping
 from datetime import UTC, date, datetime, timedelta
 from http import HTTPStatus
@@ -266,20 +267,21 @@ def test_an_unknown_bond_has_no_price_and_no_yield(client: TestClient) -> None:
 def test_a_bonds_coupons_are_its_schedule(client: TestClient) -> None:
     coupons = client.get(f"/bonds/{ISIN}/coupons").json()
     # semiannual from its issue to its maturity, each 30/360 period at 4.5% on 100: 2.25
-    assert (len(coupons), coupons[0], coupons[-1]) == (
-        20,
-        pytest.approx({"starts": "2024-11-15", "pays": "2025-05-15", "interest": 2.25}),
-        pytest.approx({"starts": "2034-05-15", "pays": "2034-11-15", "interest": 2.25}),
-    )
+    row = {"interest": 2.25, "interest_32nds": 2.25, "rate": 0.045, "period_rate": 0.0225, "per_million": 22500.0, "year_fraction": 0.5}
+    assert (len(coupons), coupons[0], coupons[-1]) == (20, pytest.approx({"starts": "2024-11-15", "pays": "2025-05-15", **row}), pytest.approx({"starts": "2034-05-15", "pays": "2034-11-15", **row}))
 
 
 def test_a_ui_takes_the_coupons_as_arrow(client: TestClient) -> None:
     response = client.get(f"/bonds/{ISIN}/coupons", headers={"accept": ARROW})
-    assert (response.headers["content-type"], response.headers["vary"]) == (ARROW, "Accept")
+    assert (response.headers["content-type"], "Accept" in response.headers["vary"].split(", ")) == (ARROW, True)
     table = pa.ipc.open_stream(response.content).read_all()
-    assert table.schema == pa.schema([pa.field("starts", pa.date32(), nullable=False), pa.field("pays", pa.date32(), nullable=False), pa.field("interest", pa.float64(), nullable=True)])
+    numbers = ["interest", "interest_32nds", "rate", "period_rate", "per_million", "year_fraction"]
+    assert table.schema.names == ["starts", "pays", *numbers]
+    assert [(field.type, field.nullable) for field in table.schema] == [(pa.date32(), False)] * 2 + [(pa.float64(), True)] * 6
+    shown = {field.name: json.loads(field.metadata[b"basis.format"])["kind"] for field in table.schema if field.metadata}
+    assert shown == {"interest": "price", "interest_32nds": "price32", "rate": "pct", "period_rate": "bps", "per_million": "money", "year_fraction": "number"}
     as_json = client.get(f"/bonds/{ISIN}/coupons").json()
-    assert table.to_pylist() == [{"starts": date.fromisoformat(row["starts"]), "pays": date.fromisoformat(row["pays"]), "interest": float(row["interest"])} for row in as_json]
+    assert table.to_pylist() == [{**row, "starts": date.fromisoformat(row["starts"]), "pays": date.fromisoformat(row["pays"])} for row in as_json]
 
 
 def test_a_bond_it_has_no_coupons_for_is_a_problem_whatever_was_asked_for(client: TestClient) -> None:

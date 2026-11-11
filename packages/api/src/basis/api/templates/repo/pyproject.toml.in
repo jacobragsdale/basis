@@ -13,9 +13,6 @@ dependencies = ["basis-api>={version},<{upper}", "basis-job>={version},<{upper}"
 parts = ["api", "job"]  # the parts this repo has, whose verbs `basis` offers; basis never infers one from a folder
 coverage = 90  # the percentage of the code's lines and branches the unit tests must cover, which `basis check` holds them to
 
-[tool.basis.api]
-releases = "v*"  # the repo's release tags, whose openapi.json `basis check --full` checks the API's contract against
-
 # The QA tier, which the push hook's `basis check --full` runs on a desktop with the user's own qa.env: each job,
 # published to QA. It refuses to run unless every database in qa.env, and its store, has a name that contains the
 # marker, and writes only the tables listed, ledgers included. `basis docs job/reference` says more.

@@ -78,11 +78,12 @@ Rules to keep:
   writes it from the service, and `basis check`, which the commit hook runs, fails until it matches, so run
   `uv run basis sync` after changing a route or a model, and commit what it writes. Each operation's id is its
   handler's name, so renaming a handler renames the function a UI calls.
-- `[tool.basis.api] releases` in `pyproject.toml` is the glob of the repo's release tags, as `"v*"`. `basis check
-  --full`, which the push hook runs, fails on a change to `openapi.json` that breaks a UI built against the last
-  release: a field a response gives removed, renamed or retyped, a field a request takes removed or newly required,
-  or an operation removed or renamed. Add beside what a UI relies on; never change it in place. The check reads the
-  repo's release tags, so a CI checkout of the repo fetches its whole history and its tags.
+- `openapi.released.json` is what UIs built against the last release rely on, which
+  `uv run basis release-document VERSION` writes from `openapi.json` in the commit a release tags. `basis check
+  --full`, which the push hook runs, fails on a change to `openapi.json` that breaks a UI built against it: a field a
+  response gives removed, renamed or retyped, a field a request takes removed or newly required, an error's type that
+  answers another status, or an operation removed or renamed. Add beside what a UI relies on; never change it in
+  place, and never edit `openapi.released.json` by hand.
 - Every time a request or a response holds is pydantic's `AwareDatetime` (`from pydantic import AwareDatetime`), never
   a plain `datetime` or a `time` of day, which a route is refused for when it is declared: the clock's times have
   their offsets.

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 import shared
-from release import CORE, FeedServer, Member, ReleaseError, Run, Workspace, gate, main, next_version, problems, read, with_version
+from release import CORE, SAMPLE, FeedServer, Member, ReleaseError, Run, Workspace, gate, main, next_version, problems, read, with_version
 
 VERSION = "0.4.0"
 BASE = Member(CORE, "packages/core", VERSION, ("pydantic>=2.14.3",), publish=True)
@@ -206,6 +206,25 @@ def test_version_sets_every_member_and_pin_from_the_root_and_relocks(tmp_path: P
     job: object = tomllib.loads((root / "packages/job/pyproject.toml").read_text(encoding="utf-8"))["project"]
     assert job == {"name": "basis-job", "version": "0.4.0", "dependencies": ["basis-core==0.4.0"]}
     assert main(["check", "--tag", "v0.4.0"], root=root) == 0
+
+
+def test_version_writes_the_samples_released_document_and_a_tag_checks_it(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """basis-ui pins the sample, and basis-api's contract test compares it with what the release gave."""
+    root = repo(tmp_path)
+    sample = root / SAMPLE
+    sample.parent.mkdir(parents=True)
+    sample.write_text('{\n  "x-basis": "managed by basis",\n  "openapi": "3.1.0",\n  "paths": {}\n}\n', encoding="utf-8")
+    assert main(["version", "minor"], root=root, lock=relock) == 0
+    released = (root / SAMPLE).with_name("openapi.released.json")
+    assert released.read_text(encoding="utf-8") == '{\n  "x-basis-release": "v0.4.0",\n  "openapi": "3.1.0",\n  "paths": {}\n}\n'
+    assert main(["check", "--tag", "v0.4.0"], root=root) == 0
+    released.write_text(released.read_text(encoding="utf-8").replace("v0.4.0", "v0.3.0"), encoding="utf-8")
+    capsys.readouterr()
+    assert main(["check", "--tag", "v0.4.0"], root=root) == 1
+    assert capsys.readouterr().err == (
+        "ERROR: packages/api/src/basis/api/example/openapi.released.json is release v0.3.0's, not v0.4.0's:"
+        " set the version with `uv run scripts/release.py version 0.4.0`, which writes it, in the release's commit\n"
+    )
 
 
 def test_a_version_past_0x_is_refused_before_any_file_changes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

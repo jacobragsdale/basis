@@ -119,6 +119,16 @@ def test_every_error_is_problem_details_and_a_422_names_its_fields() -> None:
     assert at("components", "schemas", "ParameterError", "required") == ["detail", "parameter"]
 
 
+def test_each_operation_lists_the_errors_it_answers_by_type() -> None:
+    assert at("paths", "/orders", "post", "x-basis-errors") == [
+        {"status": 410, "type": "gone", "title": "The order is gone"},
+        {"status": 413, "type": "body-too-large", "title": "The request body is too large"},
+        {"status": 422, "type": "invalid-request", "title": "The request is not valid"},
+        {"status": 422, "type": "rejected", "title": "The order is rejected"},
+    ]
+    assert at("paths", "/window", "get", "x-basis-errors") == [{"status": 422, "type": "invalid-request", "title": "The request is not valid"}]
+
+
 def test_every_model_is_strict_and_a_mapping_keeps_its_values() -> None:
     models = {name: schema for name, schema in schemas().items() if isinstance(schema, dict) and "properties" in schema}
     assert {name for name, schema in models.items() if schema.get("additionalProperties") is not False} == set()
