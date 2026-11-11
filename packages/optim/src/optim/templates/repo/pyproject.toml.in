@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Portfolio models that run on optim"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = ["optim>={version},<0.{next_minor}"]  # 0.x: a minor release may break the contract, so a repo takes patches alone
+dependencies = ["optim>={version},<{upper}"]  # before 1.0 a minor release may break the contract, so a repo takes patches alone; from 1.0, what keeps its major
 
 # Each model by name: its folder's model.py, which `basis run NAME` and a replay find it by.
 [project.entry-points."optim.models"]

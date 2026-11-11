@@ -2,7 +2,7 @@
 package's own and its example, so a new repo matches the basis-job version that made it. A repo's package is `jobs`,
 each job a folder in it, and its `pyproject.toml` declares the part, as `[tool.basis] parts = ["job"]`."""
 
-import shutil
+import keyword
 from pathlib import Path
 
 from basis.core import new as core_new
@@ -12,10 +12,17 @@ from basis.job.job import GROUP
 from basis.job.version import VERSION
 
 _PACKAGE = Path(__file__).parent
-_EXAMPLE = _PACKAGE / "example"
+EXAMPLE = _PACKAGE / "example"
 _TEMPLATES = _PACKAGE / "templates" / "repo"
 _FOLDER = "packages/job"
 """basis-job's folder in a checkout of basis."""
+EXAMPLE_FILES = (
+    "__init__.py", "README.md", "job.py", "main.py", "params/default.json", "rows.py", "sql/accounts.sql", "sql/trades.sql",
+    "tests/__init__.py", "tests/fixture/accounts.csv", "tests/fixture/fixture.json", "tests/fixture/trades.csv",
+    "tests/test_check.py", "tests/test_contract.py", "tests/test_transform.py",
+)  # fmt: skip
+"""What a new job copies of the example, by name, so a cache or a stray file in a checkout's example is never copied;
+its `ruff.toml` alone is left out, since a repo's own settings sort its imports."""
 
 
 def repo(path: Path, job_name: str, *, index: str | None, framework_path: Path | None, install: bool = True) -> Path:
@@ -24,13 +31,13 @@ def repo(path: Path, job_name: str, *, index: str | None, framework_path: Path |
     installed editable, or, with neither, from basis's GitHub repository at this version's tag, which needs a release
     (see `basis.core.new.sources`). `install=False` leaves out `git init` and `uv sync`."""
     _check_job_name(job_name)
-    _, minor, *_ = VERSION.split(".")
-    values = {"repo": path.name, "job": job_name, "version": VERSION, "next_minor": str(int(minor) + 1)}
-    core_new.repo(path, templates=_TEMPLATES, values=values, distributions={"basis-job": _FOLDER}, version=VERSION, index=index, checkout=framework_path)
-    (path / "jobs").mkdir()
-    (path / "jobs" / "__init__.py").write_text("", encoding="utf-8")
-    _copy_example(path / "jobs" / job_name, job_name)
-    sync.write(path)
+    values = {"repo": path.name, "job": job_name, "version": VERSION}
+    with core_new.building(path) as folder:
+        core_new.repo(folder, templates=_TEMPLATES, values=values, distributions={"basis-job": _FOLDER}, version=VERSION, index=index, checkout=framework_path)
+        (folder / "jobs").mkdir()
+        (folder / "jobs" / "__init__.py").write_text("", encoding="utf-8")
+        _copy_example(folder / "jobs" / job_name, job_name)
+        sync.write(folder)
     if install:
         core_new.install(path)
     return path
@@ -63,10 +70,15 @@ def _check_job_name(name: str) -> None:
     if not IDENTIFIER.match(name) or name.startswith("_"):
         msg = f"{name!r} is no job's name: give one of lower-case letters, digits and underscores, starting with a letter"
         raise core_new.NewError(msg)
+    if keyword.iskeyword(name):
+        msg = f"{name!r} is a Python keyword, which no import of the job's module can name: give another name"
+        raise core_new.NewError(msg)
 
 
 def _copy_example(target: Path, name: str) -> None:
-    shutil.copytree(_EXAMPLE, target, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "ruff.toml"))
-    for path in target.rglob("*"):
-        if path.suffix in {".py", ".md"}:
-            path.write_text(path.read_text(encoding="utf-8").replace("basis.job.example", f"jobs.{name}"), encoding="utf-8")
+    for relative in EXAMPLE_FILES:
+        text = (EXAMPLE / relative).read_text(encoding="utf-8")
+        if relative.endswith((".py", ".md")):
+            text = text.replace("basis.job.example", f"jobs.{name}")
+        (target / relative).parent.mkdir(parents=True, exist_ok=True)
+        (target / relative).write_text(text, encoding="utf-8")

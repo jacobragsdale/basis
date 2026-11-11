@@ -2,14 +2,20 @@
 basis packages come from, so a new repo matches the basis version that made it. The part adds its own files after."""
 
 import json
+import keyword
 import re
+import shutil
 import subprocess
+import sys
+import tempfile
 import tomllib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
 from importlib.metadata import PackageNotFoundError, distribution
+from importlib.util import find_spec
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -27,6 +33,8 @@ TEMPLATES = Path(__file__).parent / "templates" / "repo"
 """The files every part's repo holds."""
 _DOTTED = {"gitignore", "dockerignore", "env.example", "python-version"}
 _REPO = re.compile(r"^[a-z0-9][a-z0-9._-]{0,99}$")
+OWN_NAMES = frozenset({"basis", "jobs", "models", "optim", "tests", "snapshots"})
+"""Names a repo's own top-level package may not take: basis's namespace and the folders basis puts in every repo."""
 _COMMIT = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
 """A git commit's full id: SHA-1, or SHA-256 in a repository that uses it."""
 
@@ -107,22 +115,62 @@ def commit_of(direct_url: str, name: str) -> Commit | None:
     return Commit(url, commit, revision)
 
 
-def repo(  # noqa: PLR0913 -- the part says what it adds and where its packages come from, by keyword
-    path: Path, *, templates: Path, values: Mapping[str, str], distributions: Mapping[str, str], version: str, index: str | None, checkout: Path | None
-) -> None:
-    """A new folder at `path`, holding the shared templates and the part's `templates`, each with `{NAME}` replaced by
-    `values[NAME]` and `{source}` by where the repo's basis packages come from (see `sources`): with neither an index
-    nor a checkout, the tag or the commit the part's package was installed from, if it came from git."""
+@contextmanager
+def building(path: Path) -> Generator[Path]:
+    """The folder to make a new repo at `path` in: a hidden one beside it, renamed to `path` once the block returns,
+    and removed if it raises, so a repo that cannot be made leaves nothing behind for the retry to find. Installing it
+    comes after, in place, since a virtual environment does not move."""
     if path.exists():
         msg = f"{path} already exists: give a new folder"
         raise NewError(msg)
     if not _REPO.match(path.name):
         msg = f"{path.name!r} is no repo's name: give one of lower-case letters, digits, '.', '_' and '-'"
         raise NewError(msg)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    folder = Path(tempfile.mkdtemp(prefix=f".{path.name}.", dir=path.parent))
+    try:
+        yield folder
+    except BaseException:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    folder.rename(path)
+
+
+def repo(  # noqa: PLR0913 -- the part says what it adds and where its packages come from, by keyword
+    folder: Path, *, templates: Path, values: Mapping[str, str], distributions: Mapping[str, str], version: str, index: str | None, checkout: Path | None
+) -> None:
+    """The shared templates and the part's `templates` in `folder`, which `building` gives, each with `{NAME}`
+    replaced by `values[NAME]`, `{upper}` by the first version the repo does not take (`upper_bound`), and `{source}`
+    by where the repo's basis packages come from (see `sources`): with neither an index nor a checkout, the tag or the
+    commit the part's package was installed from, if it came from git."""
     source = sources(distributions, version=version, index=index, checkout=checkout, installed=partial(installed_from, next(iter(distributions))))
-    path.mkdir(parents=True)
-    for folder in (TEMPLATES, templates):
-        write_templates(path, folder, {**values, "source": source})
+    for templated in (TEMPLATES, templates):
+        write_templates(folder, templated, {**values, "upper": upper_bound(version), "source": source})
+
+
+def upper_bound(version: str) -> str:
+    """The first version a repo made at `version` does not take: the next minor before 1.0, where a minor may break the
+    contract, and the next major from 1.0, so the repo takes the fixes and features that keep it."""
+    major, minor, *_ = (int(part) for part in [*re.findall(r"\d+", version)[:2], "0"])
+    return f"0.{minor + 1}" if major == 0 else str(major + 1)
+
+
+def check_package(name: str, what: str) -> None:
+    """Refuse `name` for a repo's own top-level package, named for its `what`, before anything is written: a Python
+    keyword, which cannot be imported; a standard library module's name, or one this environment already imports,
+    which it would shadow; or one of basis's own (`OWN_NAMES`)."""
+    if keyword.iskeyword(name):
+        reason = "is a Python keyword, which no import can name"
+    elif name in sys.stdlib_module_names:
+        reason = "is a standard library module's name, which the package would shadow"
+    elif name in OWN_NAMES:
+        reason = "is one of basis's own names in a repo"
+    elif find_spec(name) is not None:
+        reason = "is the name of a package the repo's environment already holds, which the package would shadow"
+    else:
+        return
+    msg = f"{what} {name!r} {reason}: give another name"
+    raise NewError(msg)
 
 
 def sources(distributions: Mapping[str, str], *, version: str, index: str | None, checkout: Path | None, installed: Callable[[], Commit | Installed]) -> str:

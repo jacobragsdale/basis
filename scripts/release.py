@@ -163,7 +163,7 @@ def _publishing_problems(workspace: Workspace) -> list[Problem]:
 def _past_zero(version: str) -> Problem | None:
     if version.startswith("0."):
         return None
-    fix = "keep 0.x, or change the generators' templates in the same commit, since a generated repo takes basis as `>=0.MINOR,<0.NEXT`"
+    fix = "keep 0.x until one does; the generators' templates already take `<MAJOR+1` from 1.0 (basis.core.new.upper_bound)"
     return Problem(f"the version is {version}, and basis stays at 0.x until a real repo runs it in production", fix)
 
 

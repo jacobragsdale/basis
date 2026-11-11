@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from basis.core.new import GIT, UNRELEASED, Commit, Installed, NewError, NoReleaseError, NotInstalledError, check_tags, commit_of, installed_from, repo, sources
+from basis.core.new import GIT, UNRELEASED, Commit, Installed, NewError, NoReleaseError, NotInstalledError, building, check_package, check_tags, commit_of, installed_from, sources, upper_bound
 
 PART = {"basis-job": "packages/job"}
 CHECKOUT = Path(__file__).parents[3]
@@ -166,6 +166,61 @@ def test_a_folder_that_is_not_a_checkout_of_basis_is_refused(tmp_path: Path) -> 
 
 @pytest.mark.parametrize("name", ["Pricing", "pricing etl", "pricing!", "-pricing"])
 def test_a_folder_that_is_no_repos_name_is_refused_before_anything_is_made(tmp_path: Path, name: str) -> None:
-    with pytest.raises(NewError, match=re.escape(f"{name!r} is no repo's name")):
-        repo(tmp_path / name, templates=tmp_path, values={}, distributions=PART, version=UNRELEASED, index=None, checkout=CHECKOUT)
+    with pytest.raises(NewError, match=re.escape(f"{name!r} is no repo's name")), building(tmp_path / name):
+        pytest.fail("the block ran")
     assert list(tmp_path.iterdir()) == []
+
+
+def test_a_repo_is_made_in_a_hidden_folder_beside_it_and_renamed_once_made(tmp_path: Path) -> None:
+    with building(tmp_path / "pricing") as folder:
+        assert (folder.parent, folder.name.startswith(".pricing.")) == (tmp_path, True)
+        (folder / "pyproject.toml").write_text("", encoding="utf-8")
+    assert [path.name for path in tmp_path.iterdir()] == ["pricing"]
+    assert (tmp_path / "pricing" / "pyproject.toml").is_file()
+
+
+def test_a_repo_that_fails_to_be_made_leaves_nothing_behind_so_the_retry_is_not_told_it_exists(tmp_path: Path) -> None:
+    def half_made() -> None:
+        with building(tmp_path / "pricing") as folder:
+            (folder / "pyproject.toml").write_text("", encoding="utf-8")
+            msg = "half made"
+            raise NewError(msg)
+
+    with pytest.raises(NewError, match="half made"):
+        half_made()
+    assert list(tmp_path.iterdir()) == []
+    with building(tmp_path / "pricing"):
+        pass
+    assert (tmp_path / "pricing").is_dir()
+
+
+def test_a_folder_that_exists_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(NewError, match="already exists: give a new folder"), building(tmp_path):
+        pytest.fail("the block ran")
+
+
+@pytest.mark.parametrize(("version", "upper"), [("0.0.0", "0.1"), ("0.7.2", "0.8"), ("0.3.0rc1", "0.4"), ("1.0.0", "2"), ("2.4.1", "3")])
+def test_a_repo_takes_the_versions_that_keep_its_contract(version: str, upper: str) -> None:
+    assert upper_bound(version) == upper
+
+
+@pytest.mark.parametrize(
+    ("name", "reason"),
+    [
+        ("yield", "is a Python keyword"),
+        ("class", "is a Python keyword"),
+        ("signal", "is a standard library module's name"),
+        ("calendar", "is a standard library module's name"),
+        ("jobs", "is one of basis's own names"),
+        ("tests", "is one of basis's own names"),
+        ("basis", "is one of basis's own names"),
+        ("pydantic", "is the name of a package the repo's environment already holds"),
+    ],
+)
+def test_a_package_name_that_cannot_be_imported_or_would_shadow_another_is_refused(name: str, reason: str) -> None:
+    with pytest.raises(NewError, match=re.escape(f"the app's package {name!r} {reason}") + ".*: give another name$"):
+        check_package(name, "the app's package")
+
+
+def test_a_package_name_of_its_own_passes() -> None:
+    check_package("ledger_app", "the app's package")

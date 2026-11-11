@@ -2,7 +2,7 @@
 name = "{repo}"
 version = "0.1.0"
 requires-python = ">=3.14"
-dependencies = ["basis-api>={version},<0.{next_minor}", "basis-job>={version},<0.{next_minor}", "pandas>=3.1.1"]  # an API, and the jobs beside it, which build frames with pandas
+dependencies = ["basis-api>={version},<{upper}", "basis-job>={version},<{upper}", "pandas>=3.1.1"]  # an API, and the jobs beside it, which build frames with pandas
 
 [project.entry-points."basis.apis"]
 {app} = "{package}.service:service"

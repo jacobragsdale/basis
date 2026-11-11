@@ -5,7 +5,6 @@ app's name with each hyphen an underscore; its `pyproject.toml` declares both pa
 own generator, through `basis new job`, since basis-api imports nothing of basis-job's."""
 
 import re
-import shutil
 from pathlib import Path
 
 from basis.api.service import NAME
@@ -13,14 +12,18 @@ from basis.api.version import VERSION
 from basis.core import new as core_new
 
 _PACKAGE = Path(__file__).parent
-_EXAMPLE = _PACKAGE / "example"
+EXAMPLE = _PACKAGE / "example"
 _TEMPLATES = _PACKAGE / "templates" / "repo"
 _FOLDERS = {"basis-api": "packages/api", "basis-job": "packages/job"}
 """Each package's folder in a checkout of basis."""
-_LEFT_OUT = ("__pycache__", "*.pyc", "ruff.toml", "__main__.py", "openapi.json", "test_openapi.py")
-"""What a new app does not copy of the example: what writes and tests the example's own sample, which a repo's
-`basis sync` writes at its root instead."""
-_EXAMPLE_NAME = re.compile(r'name="accruals"')
+EXAMPLE_FILES = (
+    "__init__.py", "compute.py", "dev.py", "domain.py", "errors.py", "handlers.py", "repository.py", "resources.py", "service.py",
+    "tests/__init__.py", "tests/test_compute.py", "tests/test_domain.py", "tests/test_handlers.py", "tests/test_repository.py",
+)  # fmt: skip
+"""What a new app copies of the example, by name, so a cache or a stray file in a checkout's example is never copied.
+Left out: its `ruff.toml`, and what writes and tests the example's own sample (`__main__.py`, `openapi.json`,
+`tests/test_openapi.py`), which a repo's `basis sync` writes at its root instead."""
+EXAMPLE_NAME = re.compile(r'name="accruals"')
 
 
 def app(path: Path, name: str, job: str | None, *, index: str | None, framework_path: Path | None, install: bool = True) -> Path:  # noqa: PLR0913 -- where, what, and where its packages come from, by keyword
@@ -33,12 +36,13 @@ def app(path: Path, name: str, job: str | None, *, index: str | None, framework_
         msg = f"{name!r} is no app's name: give one of lower-case letters, digits and hyphens, starting with a letter"
         raise core_new.NewError(msg)
     package = name.replace("-", "_")
-    _, minor, *_ = VERSION.split(".")
-    values = {"repo": path.name, "app": name, "package": package, "job": job or "JOB", "version": VERSION, "next_minor": str(int(minor) + 1)}
-    core_new.repo(path, templates=_TEMPLATES, values=values, distributions=_FOLDERS, version=VERSION, index=index, checkout=framework_path)
-    _copy_example(path / package, package, name)
-    (path / "jobs").mkdir()
-    (path / "jobs" / "__init__.py").write_text("", encoding="utf-8")
+    core_new.check_package(package, "the app's package")
+    values = {"repo": path.name, "app": name, "package": package, "job": job or "JOB", "version": VERSION}
+    with core_new.building(path) as folder:
+        core_new.repo(folder, templates=_TEMPLATES, values=values, distributions=_FOLDERS, version=VERSION, index=index, checkout=framework_path)
+        _copy_example(folder / package, package, name)
+        (folder / "jobs").mkdir()
+        (folder / "jobs" / "__init__.py").write_text("", encoding="utf-8")
     if install:
         core_new.install(path)
         if job is not None:
@@ -48,8 +52,7 @@ def app(path: Path, name: str, job: str | None, *, index: str | None, framework_
 
 
 def _copy_example(target: Path, package: str, name: str) -> None:
-    shutil.copytree(_EXAMPLE, target, ignore=shutil.ignore_patterns(*_LEFT_OUT))
-    for path in target.rglob("*"):
-        if path.suffix in {".py", ".md"}:
-            text = path.read_text(encoding="utf-8").replace("basis.api.example", package)
-            path.write_text(_EXAMPLE_NAME.sub(f'name="{name}"', text), encoding="utf-8")
+    for relative in EXAMPLE_FILES:
+        text = EXAMPLE_NAME.sub(f'name="{name}"', (EXAMPLE / relative).read_text(encoding="utf-8").replace("basis.api.example", package))
+        (target / relative).parent.mkdir(parents=True, exist_ok=True)
+        (target / relative).write_text(text, encoding="utf-8")

@@ -10,8 +10,6 @@ import re
 import tomllib
 from pathlib import Path
 
-from packaging.version import Version
-
 import optim
 from basis.core import new as core_new
 from basis.core.new import NewError
@@ -33,11 +31,12 @@ def repo(path: Path, model: str, *, index: str | None, framework_path: Path | No
     was installed from, or else basis's GitHub repository at this version's tag, which needs a release.
     `install=False` leaves out `git init` and `uv sync`."""
     module = _identifier(model)
-    values = {"repo": path.name, "model": model, "module": module, "version": optim.__version__, "next_minor": str(Version(optim.__version__).minor + 1)}
-    core_new.repo(path, templates=TEMPLATES / "repo", values=values, distributions={"optim": FOLDER}, version=optim.__version__, index=index, checkout=framework_path)
-    _write(path / "models" / "__init__.py", "")
-    _copy_model(path, model)
-    sync.write(path)
+    values = {"repo": path.name, "model": model, "module": module, "version": optim.__version__}
+    with core_new.building(path) as folder:
+        core_new.repo(folder, templates=TEMPLATES / "repo", values=values, distributions={"optim": FOLDER}, version=optim.__version__, index=index, checkout=framework_path)
+        _write(folder / "models" / "__init__.py", "")
+        _copy_model(folder, model)
+        sync.write(folder)
     if install:
         core_new.install(path)
     return path

@@ -1,3 +1,5 @@
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -5,6 +7,7 @@ import pytest
 from basis.core.new import UNRELEASED, NoReleaseError
 from basis.job import new, sync
 
+GIT = shutil.which("git") or "git"
 CHECKOUT = Path(__file__).parents[3]
 """The checkout of basis these tests run in, which holds packages/core and packages/job."""
 
@@ -74,3 +77,27 @@ def test_without_a_release_a_repo_needs_a_checkout_or_an_index(tmp_path: Path, m
 def test_a_job_name_is_an_identifier(tmp_path: Path, name: str) -> None:
     with pytest.raises(ValueError, match="is no job's name: give one of lower-case letters"):
         new.repo(tmp_path / "pricing-etl", name, index=None, framework_path=None, install=False)
+
+
+@pytest.mark.parametrize("name", ["class", "yield"])
+def test_a_job_name_that_is_a_keyword_is_refused(tmp_path: Path, name: str) -> None:
+    with pytest.raises(ValueError, match="is a Python keyword, which no import of the job's module can name"):
+        new.repo(tmp_path / "pricing-etl", name, index=None, framework_path=None, install=False)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_job_copies_the_files_it_names_and_no_cache_or_stray_file_of_the_example(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    example = tmp_path / "example"
+    shutil.copytree(new.EXAMPLE, example)
+    (example / ".ruff_cache").mkdir(exist_ok=True)  # as a checkout's example holds once ruff has run in it
+    (example / ".ruff_cache" / "CACHEDIR.TAG").write_text("", encoding="utf-8")
+    (example / "notes.txt").write_text("a stray file\n", encoding="utf-8")
+    monkeypatch.setattr(new, "EXAMPLE", example)
+    repo = new.repo(tmp_path / "pricing-etl", "prices", index=None, framework_path=CHECKOUT, install=False)
+    job = repo / "jobs" / "prices"
+    assert sorted(path.relative_to(job).as_posix() for path in job.rglob("*") if path.is_file()) == sorted(new.EXAMPLE_FILES)
+
+
+def test_the_files_a_job_copies_are_every_file_of_the_example_but_its_ruff_settings() -> None:
+    tracked = subprocess.run([GIT, "ls-files"], cwd=new.EXAMPLE, capture_output=True, text=True, check=True).stdout.split()
+    assert sorted(tracked) == sorted([*new.EXAMPLE_FILES, "ruff.toml"])
