@@ -265,15 +265,13 @@ Lane B. Needs step 1.3. Steps 2.3 and 2.4 run at once, and so do 2.5 and 2.9.
     - a dataset's float column is always nullable, in the Arrow schema and in the document;
     - NaN and ±inf are null on the wire, in JSON and Arrow alike;
     - the example service's numbers become floats, which changes the sample `openapi.json` basis-ui pins;
-    - `basis check`'s rounding gate, which refuses `round()`, `.round()`, `numpy.round`, `numpy.around`, `numpy.rint`
-      and the `decimal` module in user code, saying to leave rounding to the UI. How a business-rounding function is
-      marked is still open, pending the maintainer;
     - a test that, in a repo whose `pyproject.toml` has no `[tool.basis]` table, `basis` refuses every verb that reads
       or writes the repo's files, and allows `--version`, `doctor` and `docs`.
 
     No release exists yet, so the breaking-change check passes, as having no earlier release, and the first release
     (1.8) waits for this step. Needs 5.0b and 2.6. Done when the example's `openapi.json` shows numbers as numbers,
-    basis-ui is told, and the rounding gate refuses a `round()` with its fix.
+    and basis-ui is told. (It added a gate that refused rounding in user code, which step 8.7 removed: it refused
+    rounding a time, had no exemption, and missed rounding done by hand.)
 12. **2.12 Arrow-table datasets.** A dataset route may return a pandas frame or an Arrow table, declared as
     `response=api.Table[Row]`, as [the design](design.md#apis-basisapi) has it: checked once against the row model's
     names, types, nulls and time zones, never row by row, with a mismatch a 500 defect whose request's writes roll

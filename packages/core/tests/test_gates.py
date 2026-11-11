@@ -167,34 +167,6 @@ def test_a_failure_beside_a_socket_still_needs_pytests_line() -> None:
         assert not measured.found(1).explained
 
 
-@pytest.mark.parametrize(
-    ("code", "what"),
-    [
-        ("x = round(2.675, 2)\n", "round()"),
-        ("def f(frame):\n    return frame['a'].round(2)\n", ".round()"),
-        ("import numpy as np\n\ny = np.around([1.5])\n", ".around()"),
-        ("import numpy\n\ny = numpy.rint(1.5)\n", ".rint()"),
-        ("from decimal import Decimal\n", "the decimal module"),
-        ("import decimal\n", "the decimal module"),
-    ],
-    ids=["round", "a-frames-round", "numpy-around", "numpy-rint", "from-decimal", "import-decimal"],
-)
-def test_code_that_rounds_is_refused_with_the_fix(tmp_path: Path, code: str, what: str) -> None:
-    (tmp_path / "rates").mkdir()
-    (tmp_path / "rates" / "domain.py").write_text(code, encoding="utf-8")
-    [(reason, fix)] = gates.rounding(tmp_path)
-    assert reason.startswith("rates/domain.py:")
-    assert reason.endswith(f"rounds with {what}, and Python never rounds a number")
-    assert fix == "leave rounding to the UI, which rounds once as it shows the number, and give it the number whole"
-
-
-def test_tests_may_round_and_code_that_does_not_round_passes(tmp_path: Path) -> None:
-    (tmp_path / "tests").mkdir()
-    (tmp_path / "tests" / "test_rates.py").write_text("assert round(2.5) == 2\n", encoding="utf-8")
-    (tmp_path / "rates.py").write_text("def rate(a: float, b: float) -> float:\n    return a / b\n", encoding="utf-8")
-    assert gates.rounding(tmp_path) == []
-
-
 def test_a_module_no_test_imports_counts_against_the_floor_whatever_package_it_is_in(tmp_path: Path) -> None:
     """`src/app` has no `__init__.py`, a namespace package, whose untested module coverage leaves out unless told
     otherwise; a job's `main.py`, which runs it and which no test imports, is no code to cover."""

@@ -515,10 +515,10 @@ implements. This replaces the rules that kept integers and decimals exact, in fr
   take `float` for every number, and refuse `int` and `Decimal` fields, with the fix; an enum or `Literal` in one is
   text, and one of integers is refused, with the fix to use a `str` enum or a `Literal` of strings. Outside datasets,
   route models refuse `Decimal`, and `int` stays allowed, as a JSON number.
-- **Rounding.** Python never rounds numbers. A `basis check` gate refuses `round()`, `.round()`, `numpy.round`,
-  `numpy.around`, `numpy.rint` and the `decimal` module in user code, with a message that says to leave rounding to the
-  UI. Business rounding, such as lot and tick sizes, stays in named, tested functions. How such a function is marked is
-  still open, pending the maintainer.
+- **Rounding.** No gate refuses rounding. The UI rounds a number once, as it shows it, so a service gives numbers
+  whole; business rounding, such as lot and tick sizes, stays in named, tested functions. A gate on `round()` refused
+  `frame["traded_at"].dt.round("1min")`, had no exemption, and let `math.floor(x * 100 + 0.5) / 100` through, so it
+  went (step 8.7).
 
 ## ctzd, a consumer
 
