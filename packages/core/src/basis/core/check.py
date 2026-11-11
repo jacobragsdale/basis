@@ -9,6 +9,7 @@ path basis writes, is one line, and every other file is still compared. Each too
 step that fails ends with one `ERROR` line that says how to fix it."""
 
 import logging
+import os
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -109,11 +110,17 @@ def _part_checks(repo: Path, checks: Checks) -> list[int]:
     return failed
 
 
+COVERAGE_VARIABLES = ("COVERAGE_FILE", "COVERAGE_RCFILE", "COVERAGE_PROCESS_START", "COVERAGE_CORE")
+"""coverage.py's variables, which outrank the settings basis measures a repo's coverage by (`gates.measured`): a
+command basis runs never sees the caller's, so a `basis check` run under coverage writes nothing into its data."""
+
+
 def run_command(argv: Sequence[str], folder: Path) -> int:
     sys.stdout.flush()  # so what basis printed comes before what the command prints
     sys.stderr.flush()
+    environment = {name: value for name, value in os.environ.items() if name not in COVERAGE_VARIABLES}
     try:
-        return subprocess.run(argv, cwd=folder, check=False).returncode
+        return subprocess.run(argv, cwd=folder, check=False, env=environment).returncode
     except FileNotFoundError as error:
         msg = f"{argv[0]} is not on the PATH, and basis check runs every tool through it: install it, as https://docs.astral.sh/uv/ says"
         raise BasisError(msg) from error

@@ -70,7 +70,6 @@ def test_without_basis_fuzz_the_app_is_only_built_on_its_fakes(monkeypatch: pyte
     assert fuzz.check(api.Service(name="halving", settings=api.Settings, routes=routes)) == []
 
 
-@pytest.mark.heavy
 @pytest.mark.usefixtures("fuzzing")
 def test_an_app_that_answers_as_its_document_says_passes() -> None:
     routes = [api.get("/halves", halves, deadline_s=1, response=Halves, errors=[NoHalves]), api.get("/today", today, deadline_s=1, response=dict[str, date], errors=[])]
@@ -78,7 +77,6 @@ def test_an_app_that_answers_as_its_document_says_passes() -> None:
     assert fuzz.check(service) == []
 
 
-@pytest.mark.heavy
 @pytest.mark.usefixtures("fuzzing")
 def test_a_route_that_answers_500_is_found_with_the_request_that_shows_it() -> None:
     service = api.Service(name="halving", settings=api.Settings, routes=[api.get("/divides", divides, deadline_s=1, response=Halves, errors=[])])
@@ -101,7 +99,6 @@ def test_settings_basis_cannot_build_from_their_defaults_are_named() -> None:
     assert fix == "basis check builds the app from its settings' defaults alone, and divisor has none: give each a default in the service's Settings"
 
 
-@pytest.mark.heavy
 @pytest.mark.usefixtures("fuzzing")
 def test_a_service_whose_callers_sign_in_is_built_on_the_development_key_and_called_anonymously() -> None:
     def mine(user: Annotated[api.User | None, api.given(api.User)]) -> dict[str, str]:
@@ -114,7 +111,6 @@ def test_a_service_whose_callers_sign_in_is_built_on_the_development_key_and_cal
     assert fuzz.check(service) == []
 
 
-@pytest.mark.heavy
 @pytest.mark.usefixtures("fuzzing")
 def test_without_schemathesis_the_repo_is_told_to_install_it(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "schemathesis", None)
@@ -163,7 +159,6 @@ def test_the_repos_own_code_is_checked_not_an_installed_copy_of_it(monkeypatch: 
     assert "shadowed" not in sys.modules
 
 
-@pytest.mark.heavy
 @pytest.mark.usefixtures("fuzzing")
 def test_the_example_answers_every_request_as_its_document_says(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(services, "entry_points", lambda **_: [EntryPoint(name="accruals", value="basis.api.example.service:service", group=services.GROUP)])
@@ -182,7 +177,6 @@ def test_an_app_whose_fakes_raise_is_one_line(monkeypatch: pytest.MonkeyPatch) -
     ]
 
 
-@pytest.mark.heavy
 @pytest.mark.usefixtures("fuzzing")
 def test_hypothesis_keeps_nothing_in_the_repo(monkeypatch: pytest.MonkeyPatch) -> None:
     homes: list[str | Path | None] = []

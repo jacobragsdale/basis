@@ -60,7 +60,8 @@ class Steps:
             return 0
         arguments = list(argv[argv.index("pytest") + 1 :])
         if self.real:
-            environment = {**os.environ, "PYTHONPATH": str(folder), "PYTHONDONTWRITEBYTECODE": "1"}
+            kept = {name: value for name, value in os.environ.items() if name not in check.COVERAGE_VARIABLES}  # as check.run_command keeps them
+            environment = {**kept, "PYTHONPATH": str(folder), "PYTHONDONTWRITEBYTECODE": "1"}
             return subprocess.run([sys.executable, "-m", "pytest", *arguments], cwd=folder, env=environment, check=False).returncode
         for argument in arguments:
             if argument.startswith("--cov-report=json:"):
@@ -206,7 +207,6 @@ def test_an_app_that_does_not_build_on_its_fakes_fails(repo: Path, monkeypatch: 
     ]
 
 
-@pytest.mark.heavy
 def test_a_route_that_answers_500_fails_with_the_request_that_shows_it(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv(fuzz.FUZZ, "1")
     edit(repo, "handlers.py", "    return domain.conventions()", "    return [domain.conventions()[3]]  # there are three")

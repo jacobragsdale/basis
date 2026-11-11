@@ -3,36 +3,50 @@ name: ci
 on:
   push:
     branches: [main]
-    paths-ignore: ["docs/**", "**/*.md"]
+    paths: ["**", "!docs/**", "!*.md", "!packages/*/AGENTS.md"]  # Markdown basis writes, ships or checks byte for byte (skills, agent blocks, packaged docs) is code here
   pull_request:
-    paths-ignore: ["docs/**", "**/*.md"]
+    paths: ["**", "!docs/**", "!*.md", "!packages/*/AGENTS.md"]  # Markdown basis writes, ships or checks byte for byte (skills, agent blocks, packaged docs) is code here
+
+concurrency:  # a newer push to a pull request's branch cancels the run it replaces; main's runs each finish
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   checks:
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
           fetch-depth: 0  # every commit and tag, so the example's openapi.json is checked against basis's last release
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
         with:
           version: "0.13.7"
       - run: uv sync --locked --all-packages
       - run: uv run pre-commit run --all-files
-      - run: uv run pytest
+      - run: uv run pytest -n auto --cov --cov-report= --cov-fail-under=0  # the floor is held on this run and the integration tier's together, in coverage
+        env:
+          COVERAGE_FILE: ${{ github.workspace }}/.coverage.unit  # absolute, since tests change the folder they run in
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: coverage-unit
+          path: .coverage.unit
+          include-hidden-files: true
 
   without-optim:
     # scripts/without_optim.py: nothing outside packages/optim may need it, and its docstring says how this checks.
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
         with:
           version: "0.13.7"
       - run: uv run scripts/without_optim.py
 
   job-integration:
     # Every member's integration tier, against SQL Server and Oracle.
+    timeout-minutes: 40
     runs-on: ubuntu-latest
     services:
       mssql:
@@ -56,8 +70,8 @@ jobs:
       BASIS_TEST_ORACLE_USER: etl
       BASIS_TEST_ORACLE_PASSWORD: etltest
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
         with:
           version: "0.13.7"
       - run: uv sync --locked --all-packages
@@ -77,13 +91,39 @@ jobs:
           cursor.execute("IF DB_ID('etltest') IS NULL CREATE DATABASE etltest")
           cursor.execute("ALTER DATABASE etltest SET ALLOW_SNAPSHOT_ISOLATION ON")
           PY
-      - run: uv run pytest -m integration
+      - run: uv run pytest -m integration --cov --cov-report= --cov-fail-under=0  # where mssql.py and oracle.py run
+        env:
+          COVERAGE_FILE: ${{ github.workspace }}/.coverage.integration
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: coverage-integration
+          path: .coverage.integration
+          include-hidden-files: true
 
-  job-generated-repo:
+  coverage:
+    # basis's own branch coverage, the unit and integration tiers' together, held to [tool.coverage.report] fail_under.
+    needs: [checks, job-integration]
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
+        with:
+          version: "0.13.7"
+      - run: uv sync --locked --all-packages
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+      - run: uv run coverage combine .coverage.unit .coverage.integration
+      - run: uv run coverage report --skip-covered | tee -a "$GITHUB_STEP_SUMMARY"
+
+  job-generated-repo:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
         with:
           version: "0.13.7"
       - run: uv sync --locked
@@ -134,6 +174,7 @@ jobs:
   job-gates:
     # The desktop gates in a generated repo: its push hook runs regress against a local run store, and the QA tier
     # against a SQL Server standing in for QA, and basis review prints both.
+    timeout-minutes: 40
     runs-on: ubuntu-latest
     services:
       mssql:
@@ -145,8 +186,8 @@ jobs:
     env:
       QA: Server=127.0.0.1,1433;Database=pricing_qa;UID=sa;PWD=Etl-test-1234;Encrypt=yes;TrustServerCertificate=yes
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
         with:
           version: "0.13.7"
       - run: uv sync --locked
@@ -240,6 +281,7 @@ jobs:
   job-image:
     # The repo a developer makes with uvx, from this commit on GitHub: its checks, its image, and its example job
     # published from the image to SQL Server.
+    timeout-minutes: 40
     runs-on: ubuntu-latest
     services:
       mssql:
@@ -252,7 +294,7 @@ jobs:
       COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
       SERVER: Server=127.0.0.1,1433;UID=sa;PWD=Etl-test-1234;Encrypt=yes;TrustServerCertificate=yes
     steps:
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
         with:
           version: "0.13.7"
       - name: Make a job repo with uvx from this commit, and commit it through its hooks

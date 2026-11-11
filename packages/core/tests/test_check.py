@@ -1,11 +1,12 @@
 import json
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 import pytest
 
 from basis.core import gates, hooks, sync
-from basis.core.check import Runner, check
+from basis.core.check import Runner, check, run_command
 from basis.core.errors import BasisError
 from basis.core.sync import AgentFiles, stamped
 
@@ -250,3 +251,14 @@ def test_each_parts_checks_are_lines_of_their_own_and_a_defect_in_one_leaves_the
         "ERROR: the beta part's checks could not run, RuntimeError: no graph: a defect; the log record above holds its traceback",
         "ERROR: api/service.py does not load: fix it",
     ]
+
+
+def test_a_command_basis_runs_never_sees_the_callers_coverage_variables(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]) -> None:
+    """coverage.py's variables outrank the settings basis measures by, so `basis check` run under coverage wrote its
+    repo's data into the caller's file."""
+    monkeypatch.setenv("COVERAGE_FILE", str(tmp_path / ".coverage.caller"))
+    monkeypatch.setenv("COVERAGE_PROCESS_START", str(tmp_path / ".coveragerc"))
+    monkeypatch.setenv("BASIS_KEPT", "yes")
+    shown = "import os; print(sorted(name for name in os.environ if name.startswith(('COVERAGE_', 'BASIS_KEPT'))))"
+    assert run_command([sys.executable, "-c", shown], tmp_path) == 0
+    assert capfd.readouterr().out == "['BASIS_KEPT']\n"

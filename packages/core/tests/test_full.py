@@ -338,7 +338,6 @@ CLAMPED = "from rates import domain\n\n\ndef test_clamp() -> None:\n    assert d
 PYTEST = '\n[tool.pytest.ini_options]\naddopts = "-ra --import-mode=importlib -p no:randomly"\ntestpaths = ["rates"]\n'
 
 
-@pytest.mark.heavy
 @pytest.mark.skipif(sys.platform != "linux", reason="mutmut runs in WSL or on Linux only")
 def test_review_lists_a_mutant_of_a_domain_function_the_change_touches_that_survived(repo: Path, git: Git, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     """The change's mutants survive or die by the repo's own unit tests, which mutmut runs; a survivor fails nothing."""

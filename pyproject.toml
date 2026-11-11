@@ -31,6 +31,7 @@ dev = [
     "pytest>=9.2.0",
     "pytest-cov>=7.1.0",
     "pytest-randomly>=5.0.0",
+    "pytest-xdist>=3.8.0",  # CI runs the unit tests with `-n auto`
     "ruff==0.17.4",
     "schemathesis>=4.33.1",  # the requests basis-api's checks send an API on its fakes: basis.api.fuzz
     "ty==0.0.99",
@@ -116,7 +117,7 @@ error-on-warning = true
 # another's tests; pytester's own sessions still load it. So does basis-core's, `basis`, which keeps a repo's unit tests
 # off sockets: this workspace's own tests serve and reach real servers on sockets, by design, and the example's run
 # under it as a repo's do, in the tests of basis-api's checks.
-addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration and not heavy' --ignore-glob=packages/*/src/*/templates -p pytester -p no:optim -p no:basis"
+addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration' --ignore-glob=packages/*/src/*/templates -p pytester -p no:optim -p no:basis"
 testpaths = ["packages/*/tests", "packages/*/src/*/example", "packages/*/src/basis/*/example", "scripts/tests"]  # every member's tests, its example's, and the release script's
 pythonpath = ["packages/job/tests", "packages/optim/tests", "scripts"]  # each member's shared test modules, such as basis-job's `builders`, and scripts/release.py; a missing path adds nothing
 xfail_strict = true  # An xfail that starts passing is a failure, not a silent pass.
@@ -127,19 +128,19 @@ filterwarnings = [
 ]
 markers = [
     "integration: needs a real SQL Server or Oracle (see packages/job/tests/integration/README.md); excluded from the default run",
-    "heavy: runs Schemathesis or mutmut, which stay out of routine runs while the MVP takes shape (`-m heavy` runs them); excluded from the default run",
 ]
 
 [tool.coverage.run]
 branch = true  # Statement coverage hides the untaken half of every condition.
 source = ["packages/core/src/basis", "packages/job/src/basis", "packages/api/src/basis", "packages/optim/src/optim"]  # each package's code, not its tests
-omit = ["**/templates/**"]  # a generated repo's files, which run in that repo; coverage's `*` stops at a `/`
+omit = ["**/templates/**", "*/example/tests/*"]  # a generated repo's files, which run in that repo, and the example's tests, which are not code under test; coverage's `*` stops at a `/`
+relative_files = true  # so CI can combine the unit and integration jobs' data, each measured in its own checkout
 
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
 exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "@overload"]
-# Deliberately no fail_under: coverage is a diagnostic here, not a CI gate.
+fail_under = 85  # basis's own floor, which CI holds on the unit and integration runs together; generated repos are held to 90
 
 # The import contracts of basis-core, basis-job and basis-api. A member with contracts of its own keeps them in its
 # pyproject.toml, which the commit hook gives `lint-imports --config`, so these hold without it.
