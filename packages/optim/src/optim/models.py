@@ -6,6 +6,7 @@ import importlib
 import tomllib
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from functools import cache
 from importlib.metadata import entry_points
 from pathlib import Path
 from types import ModuleType
@@ -37,15 +38,48 @@ class LoadedModel:
     check: Callable[..., Iterable[str]] | None
     metrics: type[Metrics] | None
 
+    @property
+    def repo(self) -> str | None:
+        """The project that holds the model, by its name: the distribution that lists it, or the `[project]` of the
+        nearest `pyproject.toml` at or above its folder; None where neither is found."""
+        return repo_of(self.module, self.directory)
+
+    @property
+    def identity(self) -> str:
+        """The model as no other repo's is, whatever it names its models: `REPO.NAME`, its repo and the name the
+        environment lists it by, or its module path where it lists none. The ledger knows its runs by it, and the run
+        store keeps them in a folder of that name, so two repos' models named `income` share neither."""
+        key = name_of_path(self.module)
+        return f"{repo}.{key}" if (repo := self.repo) is not None else key
+
 
 def installed() -> dict[str, str]:
     """Every model the environment lists, by name: its module path."""
     return {point.name: point.value for point in entry_points(group=GROUP)}
 
 
+def name_of_path(module: str) -> str:
+    """The name the environment lists the model at `module` by, or else the module path."""
+    return next((name for name, path in installed().items() if path == module), module)
+
+
+@cache
+def repo_of(module: str, directory: Path) -> str | None:
+    """The project that holds a model: the distribution that lists `module`, or the `[project]` name of the nearest
+    `pyproject.toml` at or above `directory`."""
+    for point in entry_points(group=GROUP):
+        if point.value == module and point.dist is not None:
+            return point.dist.name
+    for folder in (directory, *directory.parents):
+        if (file := folder / "pyproject.toml").is_file():
+            name = tomllib.loads(file.read_text(encoding="utf-8")).get("project", {}).get("name")
+            return name if isinstance(name, str) else None
+    return None
+
+
 def name_of(module: ModuleType) -> str:
     """The name the environment lists a model's module by, or else its module path."""
-    return next((name for name, path in installed().items() if path == module.__name__), module.__name__)
+    return name_of_path(module.__name__)
 
 
 def listed(repo: Path) -> dict[str, str]:

@@ -68,7 +68,7 @@ the rest from their sources, which suits a what-if on one dataset.
 - A dataset with a cache age is read from the cache where `BASIS_OPTIM__CACHE_ROOT` is set and the entry is fresh;
   `cache=False` reads every dataset live.
 
-To confirm it read live data, open the run's manifest, `snapshots/runs/optim/MODEL/RUN_ID.json`: `reads` records where
+To confirm it read live data, open the run's manifest, `snapshots/runs/optim/REPO.MODEL/RUN_ID.json`: `reads` records where
 each dataset came from, such as `"source": "mssql"` and `"read": "live"`, and `portfolios` the portfolios it decided.
 
 ## Run it in production

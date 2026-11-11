@@ -91,7 +91,7 @@ decisions.
 To confirm it worked, run the model on its fixture: add `data="tests/fixture"` to the `run(...)` call in `main.py` and
 press Run. The second portfolio in the order buys only what the first left: with 60,000 of a bond on offer, a first
 portfolio that buys 55,000 leaves the next 5,000. The run's manifest, the repo's
-`snapshots/runs/optim/MODEL/RUN_ID.json`, records the order under `order`.
+`snapshots/runs/optim/REPO.MODEL/RUN_ID.json`, records the order under `order`.
 
 Replaying one portfolio of such a run decides the portfolios before it again, so it sees the supply it saw. In
 `main.py`, call this instead of `run`:

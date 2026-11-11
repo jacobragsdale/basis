@@ -125,7 +125,7 @@ def test_the_smoke_case_runs_replays_and_compares_a_models_trades(tmp_path: Path
     ran = qa.smoke("toys.basic", params, ["P1", "P2"], "--data", str(data), "--as-of", "2026-10-16")
 
     assert ran.exit_code == 0
-    assert len(Root.at(root / "runs" / "optim" / "toys.basic").children()) == 2  # the run and its replay
+    assert len(Root.at(root / "runs" / "optim" / "optim.toys.basic").children()) == 2  # the run and its replay
 
 
 def test_qa_picks_the_first_portfolios_a_model_lists() -> None:

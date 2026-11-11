@@ -1,6 +1,6 @@
 """A snapshot of every run: what it was asked, the datasets it loaded and every decision, so any decision can be
 explained and replayed. Runs are kept in basis-core's run store (`basis.core.storage.Store`), under the package
-`optim`: each run a manifest, `runs/optim/MODEL/RUN_ID.json`, that holds its record (`RunInfo`) and names each dataset
+`optim`: each run a manifest, `runs/optim/REPO.MODEL/RUN_ID.json`, that holds its record (`RunInfo`) and names each dataset
 it saved by the hash of its object, `objects/HASH.parquet`, which the store holds once however many runs save it:
 
     inputs/NAME       each dataset exactly as loaded
@@ -75,6 +75,20 @@ class ModelInfo(Model):
     name: str
     """As the run named it: an entry point's name, or a module path."""
     module: str
+    identity: str | None = None
+    """The model as no other repo's is, `REPO.NAME` (`optim.models.LoadedModel.identity`): the run's folder in the
+    store and its name in the ledger. None in a run saved before it was recorded, which is in its name's folder and
+    known to the ledger by its module."""
+
+    @property
+    def folder(self) -> str:
+        """The folder of the store that holds the run's manifest."""
+        return self.identity or self.name
+
+    @property
+    def ledgered(self) -> str:
+        """The name the ledger knows the run's orders by."""
+        return self.identity or self.module
 
 
 class ParamsFile(Model):
@@ -281,7 +295,7 @@ def save(root: Root, info: RunInfo, inputs: Mapping[str, pd.DataFrame], outcomes
     """Save a new run in the store at `root`: each dataset the store does not hold yet, then its manifest. `inputs` are
     the datasets the run loaded, by name, and `orders` its outcomes' orders, as `optim.orders.orders_of` builds them."""
     store = Store(root)
-    path = store.manifest(PACKAGE, info.model.name, info.run_id)
+    path = store.manifest(PACKAGE, info.model.folder, info.run_id)
     if path.exists():
         msg = f"run {info.run_id} is in the store already, at {path.location}: a new run takes a new id"
         raise FileExistsError(msg)
@@ -300,10 +314,10 @@ def _table(frame: pd.DataFrame) -> pa.Table:
 
 
 def read(path: Root) -> Saved:
-    """The run whose manifest is at `path`, `ROOT/runs/optim/MODEL/RUN_ID.json`, in the store at `ROOT`."""
+    """The run whose manifest is at `path`, `ROOT/runs/optim/REPO.MODEL/RUN_ID.json`, in the store at `ROOT`."""
     package = path.parent.parent
     if not path.name.endswith(".json") or package.name != PACKAGE or package.parent.name != "runs":
-        msg = f"{path.location} is not a run of optim's: give a run's id, or the path of its manifest, ROOT/runs/{PACKAGE}/MODEL/RUN_ID.json"
+        msg = f"{path.location} is not a run of optim's: give a run's id, or the path of its manifest, ROOT/runs/{PACKAGE}/REPO.MODEL/RUN_ID.json"
         raise LookupError(msg)
     try:
         manifest = Manifest.model_validate_json(path.read_bytes())

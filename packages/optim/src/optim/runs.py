@@ -164,7 +164,7 @@ def run_model(
     run_id = str(uuid.uuid7())
     logs.bind(run_id=run_id, model=model.name)
     log.info("starting run", extra={"optim_version": optim.__version__, "model_module": model.module, "params": str(params_file), "as_of_date": as_of_date})
-    if orders is not None and (refused := orders.refusals(model.module, as_of_date, again=again, portfolios=portfolio_ids)):
+    if orders is not None and (refused := orders.refusals(model.identity, as_of_date, again=again, portfolios=portfolio_ids)):
         msg = f"the run cannot publish its orders to {orders.table.table} in database {orders.table.database}, so it stops before it loads: {'; '.join(refused)}"
         raise OrdersRefusedError(msg)
     started_at = clock()
@@ -177,7 +177,7 @@ def run_model(
     info = RunInfo(
         run_id=run_id,
         optim_version=optim.__version__,
-        model=ModelInfo(name=model.name, module=model.module),
+        model=ModelInfo(name=model.name, module=model.module, identity=model.identity),
         as_of_date=as_of_date,
         portfolios=portfolio_ids,
         params=params.model_dump(mode="json"),
@@ -197,7 +197,7 @@ def run_model(
     saved = save(snapshot_root, info, frames, decided.outcomes, to_publish)
     if orders is None:
         return Run(run_id, decided.outcomes)
-    outcome = orders.publish(run_id, model.module, as_of_date, to_publish, again=again, clock=clock)
+    outcome = orders.publish(run_id, model.identity, as_of_date, to_publish, again=again, clock=clock)
     saved.save_publishes(outcome.records)
     return Run(run_id, decided.outcomes, outcome.records)
 
@@ -222,7 +222,7 @@ def resume_run(saved: Saved, orders: Orders, *, again: bool = False, clock: Call
             " resume it with the settings it ran with"
         )
         raise BasisError(msg)
-    outcome = orders.publish(info.run_id, info.model.module, info.as_of_date, saved.orders(), again=publishing.again or again, clock=clock)
+    outcome = orders.publish(info.run_id, info.model.ledgered, info.as_of_date, saved.orders(), again=publishing.again or again, clock=clock)
     saved.save_publishes(outcome.records)
     return outcome
 
@@ -290,7 +290,7 @@ def replay_run(
     info = RunInfo(
         run_id=run_id,
         optim_version=optim.__version__,
-        model=ModelInfo(name=model.name, module=model.module),
+        model=ModelInfo(name=model.name, module=model.module, identity=model.identity),
         as_of_date=saved.info.as_of_date,
         portfolios=saved.info.portfolios,
         params=params.model_dump(mode="json"),

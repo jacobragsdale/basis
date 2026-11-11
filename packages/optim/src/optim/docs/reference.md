@@ -522,8 +522,8 @@ hidden name renamed into place, so a reader never sees half a run.
 
 ```text
 ROOT/
-  runs/optim/MODEL/RUN_ID.json   each run's manifest, under the model's name as the run gave it
-  objects/HASH.parquet           each dataset, once
+  runs/optim/REPO.MODEL/RUN_ID.json   each run's manifest, under its repo's name and the model's
+  objects/HASH.parquet                each dataset, once
 ```
 
 A manifest's `datasets` names its objects:

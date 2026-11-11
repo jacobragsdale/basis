@@ -80,7 +80,7 @@ def test_a_run_publishes_its_orders_with_a_ledger_row_and_a_second_publish_write
     }
     assert saved(Root.at(tmp_path / "snapshots"), ran.run_id).info.publishes == resumed.records
     assert trading.written() == [(ran.run_id, portfolio, "A", "buy", 1000.0) for portfolio in PORTFOLIOS]
-    assert [(*row[:5], bool(row[5])) for row in trading.ledgered()] == [(ran.run_id, "toys.basic", "orders", trading.orders, 3, False)]
+    assert [(*row[:5], bool(row[5])) for row in trading.ledgered()] == [(ran.run_id, "optim.toys.basic", "orders", trading.orders, 3, False)]
 
 
 def test_a_publish_that_fails_partway_writes_nothing_and_resume_writes_each_order_once(
@@ -101,7 +101,7 @@ def test_a_publish_that_fails_partway_writes_nothing_and_resume_writes_each_orde
     run = ["run", "toys.basic", "--params", str(tmp_path / "params.json"), "--portfolios", *PORTFOLIOS, "--data", str(data), "--as-of", AS_OF.isoformat(), "--publish", "--again"]
 
     assert basis(*run) == 1
-    [manifest] = (tmp_path / "snapshots" / "runs" / "optim" / "toys.basic").iterdir()
+    [manifest] = (tmp_path / "snapshots" / "runs" / "optim" / "optim.toys.basic").iterdir()
     run_id = manifest.stem
     assert capsys.readouterr().err.splitlines()[-1] == (
         f"ERROR: run {run_id} saved its orders and did not publish them: fix what the orders line above says, then `basis resume toys.basic {run_id} --again`"
@@ -121,7 +121,7 @@ def test_a_second_run_of_a_model_for_a_date_is_refused_unless_told_again(trading
     orders = trading.publishing()
     first = toy_run(tmp_path, orders, "P1", "P2")
 
-    with pytest.raises(OrdersRefusedError, match=rf"runs {first.run_id} of toys.basic already published orders for 2026-10-16"):
+    with pytest.raises(OrdersRefusedError, match=rf"runs {first.run_id} of optim.toys.basic already published orders for 2026-10-16"):
         toy_run(tmp_path, orders, "P3")
     with pytest.raises(OrdersRefusedError, match=rf"portfolios \['P2'\] already have orders for 2026-10-16 from runs {first.run_id}"):
         toy_run(tmp_path, orders, "P2", "P3", again=True)

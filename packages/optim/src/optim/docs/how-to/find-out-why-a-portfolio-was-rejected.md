@@ -79,7 +79,7 @@ To find out why a portfolio was rejected:
    ```
 
 5. Tell the data from the model. `open_snapshot(...).data` holds every dataset as the run loaded it, such as
-   `.holdings` and `.controls`, and the run's manifest, `snapshots/runs/optim/MODEL/RUN_ID.json`, the params it decided
+   `.holdings` and `.controls`, and the run's manifest, `snapshots/runs/optim/REPO.MODEL/RUN_ID.json`, the params it decided
    with and, under `datasets`, the Parquet file in `snapshots/objects/` that holds each dataset, such as
    `inputs/holdings`. Compare the portfolio's rows with what the model assumed.
 6. Try a fix. Replay with other params, `params="params/wider.json"`, or with a change to the model's code, and run the

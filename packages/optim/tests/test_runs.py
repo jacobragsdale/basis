@@ -152,7 +152,7 @@ def test_the_command_exits_zero_only_when_every_portfolio_is_accepted(tmp_path: 
     line = capsys.readouterr().err.splitlines()[-1]
     fix = r"fix what each says; `basis replay toys\.basic \1` decides them again on what the run read"
     assert re.fullmatch(rf"ERROR: run (\S+) rejected 1 of its 2 portfolios, for the reasons above: {fix}", line), line
-    [first, _] = sorted(path.stem for path in (tmp_path / "snapshots" / "runs" / "optim" / "toys.basic").iterdir())
+    [first, _] = sorted(path.stem for path in (tmp_path / "snapshots" / "runs" / "optim" / "optim.toys.basic").iterdir())
     assert basis("replay", first) == 0
     assert saved(Root.at(tmp_path / "snapshots"), first).results()["decisions"]["portfolio_id"].tolist() == ["P1", "P2"]
 

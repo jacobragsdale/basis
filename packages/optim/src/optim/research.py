@@ -79,9 +79,9 @@ def regress(model: LoadedModel, snapshots: Root | str | Path, *, last: int = 20,
 
 
 def _recent(model: LoadedModel, snapshots: Root, *, last: int, labels: dict[str, str]) -> list[Saved]:
-    """The model's runs, replays aside, newest first, under its name or its module path, whichever the run gave."""
+    """The model's runs, replays aside, newest first, in its own folder of the store (`LoadedModel.identity`)."""
     found = []
-    for saved in runs_of(snapshots, [model.name, model.module]):
+    for saved in runs_of(snapshots, [model.identity]):
         if len(found) == last:
             break
         if saved.info.replay is None and labels.items() <= saved.info.labels.items():

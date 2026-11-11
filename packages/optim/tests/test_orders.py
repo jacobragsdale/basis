@@ -4,6 +4,7 @@ fails writes nothing and `resume` finishes it; neither a resume nor a retry writ
 run of a model for a date is refused unless it is given `--again`."""
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -49,7 +50,7 @@ def test_a_run_publishes_its_accepted_portfolios_orders_with_a_ledger_row(tmp_pa
     assert written(books) == [(ran.run_id, "P1", "A", "buy", 1000.0)]  # P2 was rejected
     [entry] = books.entries
     assert (entry.run_id, entry.job, entry.output, entry.table, entry.interval, entry.rerun_safe, entry.counts.inserted) == (
-        ran.run_id, "toys.basic", "orders", "trading.orders", Interval(datetime(2026, 10, 16, tzinfo=UTC), datetime(2026, 10, 17, tzinfo=UTC)), False, 1,
+        ran.run_id, "optim.toys.basic", "orders", "trading.orders", Interval(datetime(2026, 10, 16, tzinfo=UTC), datetime(2026, 10, 17, tzinfo=UTC)), False, 1,
     )  # fmt: skip
     info = saved(Root.at(tmp_path / "snapshots"), ran.run_id).info
     assert info.publishing is not None
@@ -113,15 +114,34 @@ def test_a_second_run_of_a_model_for_a_date_is_refused_before_it_loads_unless_to
     orders = publishing_to(books)
     first = toy_run(tmp_path, orders, "P1")
 
-    with pytest.raises(OrdersRefusedError, match=rf"runs {first.run_id} of toys.basic already published orders for 2026-10-16: pass --again, with --portfolios naming only the portfolios that"):
+    with pytest.raises(OrdersRefusedError, match=rf"runs {first.run_id} of optim.toys.basic already published orders for 2026-10-16: pass --again, with --portfolios naming only the portfolios that"):
         toy_run(tmp_path, orders, "P1", "P2")
-    with pytest.raises(OrdersRefusedError, match=rf"portfolios \['P1'\] already have orders for 2026-10-16 from runs {first.run_id} of toys.basic: leave them out of --portfolios"):
+    with pytest.raises(OrdersRefusedError, match=rf"portfolios \['P1'\] already have orders for 2026-10-16 from runs {first.run_id} of optim.toys.basic: leave them out of --portfolios"):
         toy_run(tmp_path, orders, "P1", "P2", again=True)
     again = toy_run(tmp_path, orders, "P2", again=True)
     next_day = toy_run(tmp_path, orders, "P1", as_of=datetime(2026, 10, 17, tzinfo=UTC))
 
     assert [order[:2] for order in written(books)] == [(first.run_id, "P1"), (again.run_id, "P2"), (next_day.run_id, "P1")]
-    assert len(list((tmp_path / "snapshots" / "runs" / "optim" / "toys.basic").iterdir())) == 3, "the refused runs saved nothing"
+    assert len(list((tmp_path / "snapshots" / "runs" / "optim" / "optim.toys.basic").iterdir())) == 3, "the refused runs saved nothing"
+
+
+def test_two_repos_models_of_one_name_share_neither_a_ledger_identity_nor_a_store_folder(tmp_path: Path) -> None:
+    """The repos alpha and beta each have a model at the same module path, as two repos' `models.income.model` are: a
+    run of beta's for a date alpha's published is not refused, and each keeps its runs in its own folder."""
+    (tmp_path / "params.json").write_text("{}")
+    source = Rows({HOLDINGS: frame(HOLDINGS, {"portfolio_id": "P1"}), SECURITIES: MARKET})
+    books, store = trading(), Root.at(tmp_path / "snapshots")
+    twins = []
+    for repo in ("alpha", "beta"):
+        (tmp_path / repo).mkdir()
+        (tmp_path / repo / "pyproject.toml").write_text(f'[project]\nname = "{repo}"\n')
+        twins.append(replace(TOY, directory=tmp_path / repo / "models" / "income"))
+
+    runs = [run_model(loader(source), store, twin, tmp_path / "params.json", as_of_date=AS_OF, portfolio_ids=["P1"], orders=publishing_to(books), clock=Clock()) for twin in twins]
+
+    assert [run.committed for run in runs] == [True, True]
+    assert sorted(path.name for path in (tmp_path / "snapshots" / "runs" / "optim").iterdir()) == ["alpha.toys.basic", "beta.toys.basic"]
+    assert [entry.job for entry in books.entries] == ["alpha.toys.basic", "beta.toys.basic"]
 
 
 def test_again_needs_the_portfolios_it_publishes(tmp_path: Path) -> None:
@@ -141,7 +161,7 @@ def test_a_resume_told_again_still_refuses_a_portfolio_another_run_ordered(tmp_p
     stopped = toy_run(tmp_path, orders, "P1")
     other = toy_run(tmp_path, orders, "P1")
 
-    with pytest.raises(OrdersRefusedError, match=rf"portfolios \['P1'\] already have orders for 2026-10-16 from runs {other.run_id} of toys.basic"):
+    with pytest.raises(OrdersRefusedError, match=rf"portfolios \['P1'\] already have orders for 2026-10-16 from runs {other.run_id} of optim.toys.basic"):
         resume_run(saved(Root.at(tmp_path / "snapshots"), stopped.run_id), orders, again=True, clock=Clock())
     assert [order[0] for order in written(books)] == [other.run_id]
 
