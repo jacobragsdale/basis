@@ -144,14 +144,19 @@ class Regression[D]:
 
 
 def regress[D](  # noqa: PLR0913 -- the part says what it is and how it replays, by keyword
-    root: Root, name: str, *, package: str, last: int, labels: Mapping[str, str], replay: Callable[[Snapshot], tuple[RunRecord, list[D]]]
+    root: Root, name: str, *, package: str, last: int, labels: Mapping[str, str], replay: Callable[[Snapshot], tuple[RunRecord, list[D]]], statuses: Collection[str] = ("published",)
 ) -> list[Regression[D]]:
-    """Replay the last `last` published runs of `package`'s `name` whose labels include `labels`, with `replay`, the
-    part's own, and how each one's outputs differ. Writes nothing, and reads manifests only until it has `last`."""
+    """Replay the last `last` runs of `package`'s `name` whose status is one of `statuses`, published by default, and
+    whose labels include `labels`, with `replay`, the part's own, and how each one's outputs differ; a replay is never
+    one of them. Writes nothing, and reads manifests only until it has `last`."""
     if last < 1:
         msg = f"regress replays the last N published runs, and N must be at least 1, not {last}"
         raise ValueError(msg)
-    published = (snapshot for snapshot in snapshots.runs_of(root, name, package=package) if (record := snapshot.record()).status == "published" and labels.items() <= record.labels.items())
+    published = (
+        snapshot
+        for snapshot in snapshots.runs_of(root, name, package=package)
+        if (record := snapshot.record()).status in statuses and record.replay_of is None and labels.items() <= record.labels.items()
+    )
     chosen = list(itertools.islice(published, last))
     start = time.perf_counter()
     found: list[Regression[D]] = []

@@ -7,8 +7,8 @@ another service's client, the clock, ids, each call's deadline and span, tracing
 raises are basis-core's, which jobs share (`basis.core.resources`, `opened`, `fakes`, `deadlines`, `traces` and
 `errors`), and this package builds on them.
 [The design](../../docs/design.md#apis-basisapi) holds the decisions, and [the roadmap](../../docs/roadmap.md#phase-2-apis)
-the steps still to come: `basis-api new app` (2.7) and `basis smoke` (2.10). What a UI can rely on, field by field,
-is [the contract page](../../docs/contract.md).
+and [the plan](../../PLAN.md) the steps. What a UI can rely on, field by field, is
+[the contract page](../../docs/contract.md).
 
 ## Where things are
 

@@ -23,7 +23,7 @@ modules to the same rule with an import contract. `main.py` is outside it, since
 
 ETL jobs write every shape of table: appends by date, appends with no date, upserts, full refreshes, history tables,
 tables in two databases at once. A framework that picked a default for any of these would be right for most jobs and
-quietly wrong for the rest. So every output names its write mode, every `Decimal` its precision, every `datetime` the
+quietly wrong for the rest. So every output names its write mode, every `datetime` the
 zone its naive values are in, and every input what an empty result means. A declaration is a few more characters than a
 default, and it is the one place a reader learns how a table is written.
 
@@ -63,14 +63,16 @@ output take turns, and neither deletes or inserts beside the other.
 
 ## Exact values
 
-Data that moves between systems has to arrive as it left. Frames are pandas, and every column is backed by Arrow, of
-the type its row declares: integers with nulls stay integers, decimals keep their precision and scale, and datetimes
-carry their zone, where numpy's types would make a nullable integer a float and a decimal an untyped object. The data
-arrives as Arrow, from the drivers and Parquet, and leaves as Arrow, so a frame shares its buffers both ways. A row's
+Data that moves between systems has to arrive as it left. Every number is a float64, from the database to the
+browser, since one primitive type then runs the whole way and the browser's Number is one too: the UI rounds once, as
+it shows a number. An identifier is text, so no id is ever a number that rounds. In a frame a number is numpy's
+float64, NaN where missing, and every other column is backed by Arrow, of the type its row declares, so strings,
+dates and datetimes, which carry their zone, never become untyped objects. The data arrives as Arrow, from the drivers
+and Parquet, and leaves as Arrow. A row's
 types are checked at every boundary, in both directions, and a conversion is allowed only where nothing is lost:
 Arrow's safe casts refuse a rounded or truncated value, and the framework checks the rest itself, such as a time of
-day that a cast to a date would drop. Floats never become decimals implicitly; the transform rounds, as the data
-needs. The destination is checked too, against what the database says the table is: a string longer than its column,
+day that a cast to a date would drop. A whole number a float cannot hold exactly, beyond 2^53, fails the
+read, with the fix to select it as text. The destination is checked too, against what the database says the table is: a string longer than its column,
 a time finer than `DATE` or `DATETIME2(3)` keeps, a float a `REAL` would round, an identifier's text an integer column
 would store as other text, such as `'00123'`, or an empty string, which Oracle stores as NULL, stops the run before the
 database would change it or fail halfway.

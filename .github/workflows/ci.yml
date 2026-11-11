@@ -179,6 +179,14 @@ jobs:
           uv run basis new job rates
           uv run basis --help
           uv run basis check
+      - name: Run a job on its fixture as AGENTS.md gives it, with no environment, then replay and regress it
+        working-directory: ${{ runner.temp }}/pricing-etl
+        run: |
+          test -z "${BASIS_ENV:-}"
+          run=$(uv run basis run rates --params jobs/rates/params/default.json --data jobs/rates/tests/fixture | python3 -c 'import json, sys; r = json.load(sys.stdin); assert r["status"] == "checked", r; print(r["run_id"])')
+          uv run basis replay rates "$run" --rows 5 | python3 -c 'import json, sys; assert json.load(sys.stdin)["replay_of"] == sys.argv[1]' "$run"
+          uv run basis regress rates | python3 -c 'import json, sys; assert [entry["run_id"] for entry in json.load(sys.stdin)] == [sys.argv[1]]' "$run"
+          uv run basis runs rates | python3 -c 'import json, sys; assert sys.argv[1] in [entry["replay_of"] for entry in json.load(sys.stdin)]' "$run"
       - name: Commit through its hooks, which fix and format the staged files, and refuse a lint error
         working-directory: ${{ runner.temp }}/pricing-etl
         run: |

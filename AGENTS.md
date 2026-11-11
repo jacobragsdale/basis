@@ -4,8 +4,8 @@ This repo is basis (a placeholder name): the Python packages that give a firm's 
 optimizers one shape. UIs live in its TypeScript sibling, [basis-ui](https://github.com/jacobragsdale/basis-ui), and
 meet basis at the contract in [docs/design.md](docs/design.md#what-a-ui-can-rely-on). [docs/design.md](docs/design.md)
 holds the decisions and their reasons, and [docs/roadmap.md](docs/roadmap.md) the phases, their steps, and the lanes
-that run at the same time. Code arrives in the roadmap's phase 1, when etl-framework moves in; until then the repo is
-its docs.
+that run at the same time, and [PLAN.md](PLAN.md) the review after the MVP and its phases 6 to 12. The code is in
+`packages/`: basis-core, basis-job, basis-api, and optim, whose design is provisional.
 
 ## Working here
 
@@ -77,8 +77,8 @@ holds the interface, and its docstring is the reference.
   points at a callable returning its `Part`: its own `verbs`, each a `Verb` with a name, a one-line help, a function
   that adds its arguments to an argparse parser, and a handler that returns the exit code; and the fields core's verbs
   use, `files` (`sync`, `check`; read only when used), `docs` (`docs`), `new` (`new KIND NAME`), `runs` (`run`,
-  `describe`, `resume`, `replay`, `regress` and `ddl`, which every part that runs things by name has, and
-  `regressions`, for `check --full`), `qa` (the QA tier), `contract` (`check --full` and `review`, such as basis-api's breaking-change check of
+  `describe`, `resume`, `replay`, `regress`, `runs` and `ddl`, which every part that runs things by name has, and
+  `regressions`, for `check --full`), `qa` (the QA tier), `smoke` (`smoke --env ENV`: the part's checks of a deployed environment), `contract` (`check --full` and `review`, such as basis-api's breaking-change check of
   `openapi.json`), `checks` (`check`: the part's own checks of the repo's code, each problem one `ERROR` line, such as
   basis-api's layers and its app on its fakes), `full_checks` (`check --full`: those too slow for every commit, such as
   basis-api's Schemathesis requests), and `renamed`, which refuses the
@@ -125,7 +125,7 @@ holds the interface, and its docstring is the reference.
   (`basis.core.hooks.ensure`); the verbs a container runs, such as `run`, leave git alone. `basis check` fails, with
   the fix, when the clone runs other hooks or is no clone. The hooks are POSIX sh, which Git for Windows runs too. The
   commit hook ends with `basis check --staged`, whose checks of the staged files are `basis.core.hygiene`'s; the push
-  hook checks each pushed commit, in a temporary worktree inside the git folder when it is not a clean HEAD.
+  hook checks each pushed commit, in a temporary worktree beside the clone when it is not a clean HEAD.
 - `basis check` (`basis.core.check`) holds every repo's tests to the gates (`basis.core.gates`): the coverage floor
   `[tool.basis] coverage` gives, which pytest-cov measures as basis configures it, repository modules left out; no
   `unittest.mock` or pytest-mock but in a file with a line `# basis: allow-mocks -- WHY`; no `# noqa`, `# ty: ignore`,

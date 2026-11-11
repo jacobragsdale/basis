@@ -16,7 +16,10 @@ from basis.job.outputs import Target
 def test_keyed_rows_are_matched_by_key_and_changes_counted_by_column() -> None:
     before = prices({"security_id": "S1"}, {"security_id": "S2"})
     after = prices({"security_id": "S1", "price": 101.0}, {"security_id": "S3"})
-    assert diff_frames("prices", "insert", before, after, ("day", "security_id")) == OperationDiff("prices", "insert", added=1, removed=1, changed=1, columns={"price": 1})
+    assert diff_frames("prices", "insert", before, after, ("day", "security_id")) == OperationDiff(
+        "prices", "insert", added=1, removed=1, changed=1, columns={"price": 1},
+        rows=[{"key": {"day": "2026-11-05", "security_id": "S1"}, "changes": {"price": {"before": 100.0, "after": 101.0}}}],
+    )  # fmt: skip
 
 
 def test_rows_without_a_key_compare_as_a_multiset() -> None:
@@ -27,7 +30,13 @@ def test_rows_without_a_key_compare_as_a_multiset() -> None:
 def test_two_nulls_are_equal_and_a_null_against_a_value_is_a_change() -> None:
     before = prices({"security_id": "S1"}, {"security_id": "S2"}, {"security_id": "S3", "note": "x"})
     after = prices({"security_id": "S1"}, {"security_id": "S2", "note": "y"}, {"security_id": "S3"})
-    assert diff_frames("prices", "upsert", before, after, ("day", "security_id")) == OperationDiff("prices", "upsert", added=0, removed=0, changed=2, columns={"note": 2})
+    assert diff_frames("prices", "upsert", before, after, ("day", "security_id")) == OperationDiff(
+        "prices", "upsert", added=0, removed=0, changed=2, columns={"note": 2},
+        rows=[
+            {"key": {"day": "2026-11-05", "security_id": "S2"}, "changes": {"note": {"before": None, "after": "y"}}},
+            {"key": {"day": "2026-11-05", "security_id": "S3"}, "changes": {"note": {"before": "x", "after": None}}},
+        ],
+    )  # fmt: skip
     assert diff_frames("prices", "insert", before, after, None) == OperationDiff("prices", "insert", added=2, removed=2, changed=0)
     assert diff_frames("prices", "insert", after.iloc[::-1], after, None).same
 
@@ -40,6 +49,7 @@ def test_a_column_added_removed_or_retyped_between_runs_is_a_change_of_its_own_a
     assert keyed == OperationDiff(
         "prices", "upsert", added=0, removed=0, changed=1, columns={"booked_at": 1},
         schema={"note": "removed", "price": "retyped from float64 to string", "extra": "added"},
+        rows=[{"key": {"day": "2026-11-05", "security_id": "S2"}, "changes": {"booked_at": {"before": None, "after": "2026-11-05T14:30:00+00:00"}}}],
     )  # fmt: skip
     assert not keyed.same
     assert difference(keyed).summary == "upsert: 1 changed (booked_at 1); note removed, price retyped from float64 to string, extra added"

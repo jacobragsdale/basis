@@ -133,6 +133,7 @@ def test_a_repo_with_jobs_and_models_runs_each_by_its_name(jobs_and_models: Path
     model = ["run", "income", "--params", str(EXAMPLE / "params" / "default.json"), "--data", str(EXAMPLE / "tests" / "fixture"), "--portfolios", "P1"]
 
     assert basis_in(jobs_and_models, *job) == 0
+    assert json.loads(capsys.readouterr().out)["job"] == "positions"
     assert basis_in(jobs_and_models, *model) == 0
     assert capsys.readouterr().out.splitlines()[0].startswith("run ")
     assert basis_in(jobs_and_models, "describe") == 0

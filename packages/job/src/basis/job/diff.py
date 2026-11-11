@@ -27,6 +27,9 @@ class OperationDiff:
     """Changed rows, by the column that changed."""
     schema: dict[str, str] = field(default_factory=dict)
     """Each column the two runs' frames do not hold alike, and how: `added`, `removed`, or `retyped from A to B`."""
+    rows: list[dict[str, object]] = field(default_factory=list)
+    """The first `SAMPLE` changed rows, matched by key: each row's `key`, by column, and `changes`, each column that
+    changed with its value `before` and `after`, as JSON holds them; `basis replay --rows N` prints the first N."""
 
     @property
     def same(self) -> bool:
@@ -75,11 +78,40 @@ def diff_frames(output: str, operation: str, before: pd.DataFrame | None, after:
     both = merged[side == "both"]
     differs = {name: ~_same(both[name], both[f"{name}{_AFTER}"]) for name in values}
     columns = {name: int(changed.sum()) for name, changed in differs.items()}
-    changed = int(pd.concat(differs.values(), axis=1).any(axis=1).sum()) if differs else 0
+    any_changed = pd.concat(differs.values(), axis=1).any(axis=1) if differs else pd.Series(False, index=both.index)  # noqa: FBT003 -- a series of False, not a flag
     return OperationDiff(
-        output, operation, added=int((side == "right_only").sum()), removed=int((side == "left_only").sum()), changed=changed,
-        columns={name: count for name, count in columns.items() if count}, schema=schema,
+        output, operation, added=int((side == "right_only").sum()), removed=int((side == "left_only").sum()), changed=int(any_changed.sum()),
+        columns={name: count for name, count in columns.items() if count}, schema=schema, rows=_sample(both[any_changed], on, differs),
     )  # fmt: skip
+
+
+SAMPLE = 20
+"""How many changed rows a difference keeps, for `basis replay --rows N`."""
+
+
+def _sample(changed: pd.DataFrame, key: list[str], differs: dict[str, pd.Series]) -> list[dict[str, object]]:
+    """The first `SAMPLE` of `changed`, rows matched by `key` that differ, each its key and its changed columns' values
+    before and after."""
+    head = changed.head(SAMPLE)
+    flags = pd.DataFrame(differs, index=head.index)
+    found: list[dict[str, object]] = []
+    for (_, row), (_, flag) in zip(head.iterrows(), flags.iterrows(), strict=True):
+        changes = {name: {"before": _json(row[name]), "after": _json(row[f"{name}{_AFTER}"])} for name in differs if bool(flag[name])}
+        found.append({"key": {name: _json(row[name]) for name in key}, "changes": changes})
+    return found
+
+
+def _json(value: object) -> object:
+    """A frame's value as JSON holds it: a null as None, a float, text or a boolean as itself, and the rest, a date or
+    a time, as its ISO text."""
+    if value is None or value is pd.NA or value is pd.NaT or (isinstance(value, float) and np.isnan(value)):
+        return None
+    if isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, np.generic):
+        return value.item()
+    isoformat = getattr(value, "isoformat", None)
+    return isoformat() if callable(isoformat) else str(value)
 
 
 _SIDE = "#side"  # never a row's column, whose name is lower-case letters, digits and underscores

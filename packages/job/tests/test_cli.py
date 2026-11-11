@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from datetime import UTC, datetime
 from importlib.metadata import entry_points, version
 from pathlib import Path
@@ -81,10 +82,36 @@ def test_a_run_that_cannot_publish_exits_nonzero_with_the_reason_and_the_fix(rep
     assert line.endswith("fix it, and run the job again")
 
 
-def test_a_run_that_names_no_environment_is_refused_with_the_fix(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_run_that_reads_a_source_and_names_no_environment_is_refused_with_the_fix(repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("BASIS_ENV")
-    assert basis(repo, *RUN) == 1
+    partly = tmp_path / "partly"
+    partly.mkdir()
+    for path in (EXAMPLE / "tests/fixture").iterdir():
+        if path.name != "trades.csv":  # so the run reads trades from its database
+            shutil.copy(path, partly / path.name)
+    assert basis(repo, *RUN[:-4], "--data", str(partly)) == 1
     assert error_line(capsys).endswith("names no environment, which basis never assumes: give --env dev|qa|prod, or set BASIS_ENV")
+
+
+def test_a_run_on_files_alone_needs_no_environment_and_runs_as_main_py_does(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fixture's interval and time, and the repo's own snapshots/, with the run's summary on stdout (steps 9.2, 9.3)."""
+    monkeypatch.delenv("BASIS_ENV")
+    assert basis(repo, *RUN[:-2]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert (printed["status"], printed["interval"], printed["job"]) == ("checked", "2026-11-05..2026-11-06", "basis.job.example.job")
+    assert printed["outputs"]
+    assert printed["reasons"] == []
+    assert len(list((repo / "snapshots").rglob(f"{printed['run_id']}.json"))) == 1
+
+
+def test_a_run_on_files_replays_and_regresses_from_the_repos_own_store_with_no_environment(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BASIS_ENV")
+    assert basis(repo, *RUN[:-2]) == 0
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+    assert basis(repo, "replay", "basis.job.example.job", run_id) == 0
+    assert (json.loads(capsys.readouterr().out)["replay_of"], len(list((repo / "snapshots").rglob("*.json")))) == (run_id, 2)
+    assert basis(repo, "regress", "basis.job.example.job") == 0
+    assert [entry["run_id"] for entry in json.loads(capsys.readouterr().out)] == [run_id]  # the run, and not its replay
 
 
 def test_a_run_reads_the_user_s_file_for_the_environment_it_names(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -380,3 +407,40 @@ def test_a_runs_stderr_holds_none_of_the_secrets_its_settings_hold(repo: Path, t
     assert err.splitlines()[-1].startswith("ERROR: ")
     for secret in ("Pa55", "tail-of-it", "pa55word", "proxypa55"):
         assert secret not in err, secret
+
+
+def test_a_replay_with_rows_lists_each_changed_row_by_key_before_and_after(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id = ran(repo, capsys)
+    today = job.transform
+
+    def doubled(inputs: job.Inputs, params: job.Params) -> job.Outputs:
+        outputs = today(inputs, params)
+        return job.Outputs(positions=outputs.positions.assign(gross_notional=outputs.positions["gross_notional"] * 2), activity=outputs.activity)
+
+    monkeypatch.setattr(job, "transform", doubled)
+    assert basis(repo, "replay", "basis.job.example.job", run_id, "--rows", "1") == 0
+    (positions,) = [entry for entry in json.loads(capsys.readouterr().out)["differences"] if entry["output"] == "positions"]
+    assert positions["changed"] > 1
+    (row,) = positions["rows"]
+    assert set(row["key"]) == {"trade_date", "account_id", "security_id"}
+    assert set(row["changes"]) == {"gross_notional"}
+    assert row["changes"]["gross_notional"]["after"] == 2 * row["changes"]["gross_notional"]["before"]
+    assert basis(repo, "replay", "basis.job.example.job", run_id) == 0
+    assert all("rows" not in entry for entry in json.loads(capsys.readouterr().out)["differences"])
+
+
+def test_a_replay_asked_for_more_rows_than_it_keeps_is_refused(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    run_id = ran(repo, capsys)
+    assert basis(repo, "replay", run_id, "--rows", "21") == 2
+    assert "a replay keeps 20 changed rows of each table, so give --rows 20 or fewer, not 21" in only_error(capsys.readouterr().err)
+
+
+def test_runs_lists_the_stores_recent_runs_newest_first_with_their_trace(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    first, second = ran(repo, capsys), ran(repo, capsys)
+    assert basis(repo, "runs", "basis.job.example.job") == 0
+    listed = json.loads(capsys.readouterr().out)
+    assert [entry["run_id"] for entry in listed] == [second, first]
+    assert {(entry["status"], entry["interval"], entry["error"], entry["reasons"]) for entry in listed} == {("checked", "2026-11-05..2026-11-06", None, 0)}
+    assert all(len(entry["trace_id"]) == 32 for entry in listed)
+    assert basis(repo, "runs", "basis.job.example.job", "--last", "1") == 0
+    assert [entry["run_id"] for entry in json.loads(capsys.readouterr().out)] == [second]

@@ -8,7 +8,8 @@ description: Make a new ETL job in a basis-job repo, from its tables to its firs
 1. Run `uv run basis new job NAME`. It copies the example into `jobs/NAME/` and lists it in `pyproject.toml`.
 2. Read `uv run basis docs job/reference` once: it is the contract.
 3. In `jobs/NAME/rows.py`, declare one row per table the job reads or writes. Ask for the real column types: every
-   `Decimal` needs its precision and scale, every `datetime` its zone, every nullable column `| None`.
+   number is a `float`, every identifier a `str` the query selects as text, every `datetime` needs its zone, every
+   nullable column `| None`.
 4. In `jobs/NAME/job.py`: a `Query` per input from a database, with its SQL in `sql/`, or a `Fetch` per input from
    another service, each binding only the interval; a `Clock` or `Ids` where the transform needs the time or new ids,
    never `datetime.now()` or `uuid`; a `Table` per

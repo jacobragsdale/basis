@@ -272,6 +272,11 @@ _TEXT = "string[pyarrow]"
 """Text, before `conform` types it: pandas' Arrow-backed strings, whose null is pandas' NA."""
 
 
+def unfiled(datasets: Mapping[str, Dataset], data: Path) -> list[str]:
+    """The datasets that have no file in `data`, so that a run on it reads them from their sources."""
+    return [name for name in datasets if _data_file(data, name) is None]
+
+
 def _data_file(data: Path, name: str) -> Path | None:
     found = [path for path in (data / f"{name}.csv", data / f"{name}.parquet") if path.exists()]
     if len(found) > 1:

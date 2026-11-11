@@ -75,6 +75,7 @@ SHARED = {
     "resume": Spec("the {noun} whose run it is; without it, the run is found by its id", run_id=True, env=True),
     "replay": Spec("the {noun} whose run it is; without it, the run is found by its id", run_id=True, env=True),
     "regress": Spec("the {noun} whose runs to replay; without it, every one", alone="each", env=True),
+    "runs": Spec("the {noun} whose runs to list; without it, every one", alone="each", env=True),
     "ddl": Spec("the {noun} whose tables to print{path}", alone="ledger"),
 }
 """The verbs of the parts that run things by name, such as jobs, which are core's, in the order `basis --help` lists
@@ -365,7 +366,7 @@ def _gives(part: Part) -> set[str]:
 
 def _sides(runs: Runs) -> dict[str, Shared]:
     """The part's side of each verb in `SHARED` it has, by the verb's name."""
-    sides = {"run": runs.run, "describe": runs.describe, "resume": runs.resume, "replay": runs.replay, "regress": runs.regress, "ddl": runs.ddl}
+    sides = {"run": runs.run, "describe": runs.describe, "resume": runs.resume, "replay": runs.replay, "regress": runs.regress, "runs": runs.runs, "ddl": runs.ddl}
     return {name: side for name, side in sides.items() if side is not None}
 
 
@@ -415,6 +416,8 @@ class _Dispatched(Verb):
     `_execute` hands it the arguments after the verb."""
 
     dispatch: Callable[[Sequence[str]], int]
+    parsers: Callable[[], list[argparse.ArgumentParser]]
+    """Each part's parser of the verb's arguments, for `unparsed`."""
 
 
 def _shared(repo: Repo) -> list[Verb]:
@@ -424,7 +427,7 @@ def _shared(repo: Repo) -> list[Verb]:
         sides = {part: (runs, side) for part, runs in _running(repo).items() if (side := _sides(runs).get(name)) is not None}
         if sides:
             sharing = _Sharing(name, spec, sides, repo.root)
-            found.append(_Dispatched(name, sharing.help(), _no_arguments, partial(_dispatched, sharing.dispatch), sharing.dispatch))
+            found.append(_Dispatched(name, sharing.help(), _no_arguments, partial(_dispatched, sharing.dispatch), sharing.dispatch, sharing.parsers))
     return found
 
 
@@ -490,6 +493,10 @@ class _Sharing:
                 where = "before the run's id" if self.spec.run_id else "first"
                 msg = f"more than one part of this repo has `basis {self.verb}` ({', '.join(self.sides)}): give the {self._nouns("'s")} name {where}"
                 raise CommandError(msg)
+
+    def parsers(self) -> list[argparse.ArgumentParser]:
+        """Each part's parser of the verb's arguments."""
+        return [self._parser(part) for part in self.sides]
 
     def _parser(self, part: str) -> argparse.ArgumentParser:
         """`part`'s parser for the verb: core's NAME and RUN_ID, and the part's own arguments."""
@@ -587,6 +594,41 @@ class _Sharing:
     def _nouns(self, suffix: str = "") -> str:
         """What the parts run, such as `job`, joined by `or`, each with `suffix`."""
         return " or ".join(f"{runs.noun}{suffix}" for runs, _ in self.sides.values())
+
+
+def unparsed(argv: Sequence[str], repo: Repo, *, whole: bool) -> str | None:
+    """Why `basis ARGV`, as a doc, a skill or an agent block gives it, is not a command of `repo`: a verb the repo's
+    parts do not give, an option its verb does not take, or, when `whole`, a command line its parser refuses; or None.
+    Nothing runs: this is what each part's tests hold its packaged words to (`basis.core.documented`)."""
+    if argv[:1] and argv[0] in {"-h", "--help", "--version"}:
+        return None
+    verbs = {verb.name: verb for _, group in _groups(repo) for verb in group}
+    if not argv or (verb := verbs.get(argv[0])) is None:
+        return f"basis has no verb {argv[0] if argv else ''!r} in a repo whose parts are {', '.join(repo.parts) or 'none'}"
+    parsers = verb.parsers() if isinstance(verb, _Dispatched) else [_own_parser(verb, repo.root)]
+    known = {option for parser in parsers for option in parser._option_string_actions}  # noqa: SLF001 -- argparse names no public list of a parser's options
+    if unknown := [word.partition("=")[0] for word in argv[1:] if word.startswith("--") and word.partition("=")[0] not in known]:
+        return f"basis {argv[0]} takes no option {unknown[0]}"
+    refusals = [refused for parser in parsers if (refused := _refusal(parser, argv[1:]))] if whole else []
+    return refusals[0] if len(refusals) == len(parsers) and refusals else None
+
+
+def _refusal(parser: argparse.ArgumentParser, argv: Sequence[str]) -> str:
+    """Why `parser` refuses `argv`, or nothing where it takes it."""
+    try:
+        parser.parse_args(argv)
+    except CommandError as error:
+        return str(error)
+    except SystemExit:  # --help
+        return ""
+    return ""
+
+
+def _own_parser(verb: Verb, root: Path) -> argparse.ArgumentParser:
+    parser = _Parser(prog=f"basis {verb.name}", description=verb.help)
+    parser.set_defaults(repo_root=root)
+    verb.arguments(parser)
+    return parser
 
 
 def _print(value: object) -> int:

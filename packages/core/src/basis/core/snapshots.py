@@ -189,6 +189,8 @@ class RunRecord(Model):
     data: str | None = None
     """The folder a run on files read its inputs from."""
     replay_of: str | None = None
+    trace_id: str | None = None
+    """The run's trace, as Datadog shows it, where the run had one: what ties its manifest to its spans and logs."""
     again: bool = False
     """Whether the run was told to publish a plain insert for an interval the ledger has already, as its resume is."""
     publish: bool | None = None

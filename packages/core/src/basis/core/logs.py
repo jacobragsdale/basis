@@ -118,6 +118,11 @@ def trace_fields(context: SpanContext) -> dict[str, str]:
     return {"trace_id": trace.format_trace_id(context.trace_id), "span_id": trace.format_span_id(context.span_id)}
 
 
+def trace_id() -> str | None:
+    """The current trace's id, as `trace_fields` gives it, or None outside every trace."""
+    return _current().get("trace_id")
+
+
 def _current() -> dict[str, str]:
     """The current span's `trace_fields`, or none outside every trace."""
     context = trace.get_current_span().get_span_context()

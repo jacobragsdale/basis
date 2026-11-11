@@ -21,7 +21,7 @@ that one of them gives something to do:
 | `sync` | always | writes basis's own files and what every part's `files` give, and removes what basis wrote that none of them gives now |
 | `docs [PAGE]` | `docs` | lists every part's pages as `PART/PAGE`, or prints one |
 | `new KIND NAME` | `new` | calls `new[KIND](repo, NAME)` |
-| `run`, `describe`, `resume`, `replay`, `regress`, `ddl` | that field of `runs` | parses NAME, and RUN_ID for `resume` and `replay`; NAME's part's `Shared` adds and reads the rest |
+| `run`, `describe`, `resume`, `replay`, `regress`, `runs`, `ddl` | that field of `runs` | parses NAME, and RUN_ID for `resume` and `replay`; NAME's part's `Shared` adds and reads the rest |
 | `check --full` | always | `check`, then each part's `runs.regressions` where the run store is reachable, its `qa` where the repo declares a QA tier and this machine has its settings, and mutants |
 | `review` | always | prints what `check --full` found for a commit, with each part's `contract` diff and the mutants that survived |
 | `doctor`, `upgrade` | always | check the desktop's setup; relock basis, `sync` and `check --full` |
@@ -176,6 +176,9 @@ class Runs:
     """`basis replay [NAME] RUN_ID`, which reruns a saved run with today's code."""
     regress: Shared | None = None
     """`basis regress [NAME]`, which replays recent published runs and lists what changed."""
+    runs: Shared | None = None
+    """`basis runs [NAME]`, which lists the store's recent runs, newest first, as JSON: the first question of every
+    production issue."""
     ddl: Shared | None = None
     """`basis ddl [NAME]`, which prints the CREATE TABLE statements for NAME's tables, or without NAME, the ledger's."""
     regressions: Callable[[Regress], Regressions] | None = None

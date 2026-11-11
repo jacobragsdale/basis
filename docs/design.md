@@ -73,6 +73,7 @@ same verbs (`check`, `dev`, `test`, `sync`, `doctor`, `docs`) through Vite+'s ow
 | `basis dev`, `basis serve`, `basis call ROUTE` | Run the API on fakes; run the API; run one route in-process and print its response | An API |
 | `basis records export` | Write chosen recorded requests and responses as JSON, for a UI's fixture mode | An API |
 | `basis run NAME`, `basis resume RUN`, `basis describe NAME` | Run a job, and with `--publish` write its outputs; finish a publish that failed partway; print its params, inputs and outputs | Jobs, and models (provisional) |
+| `basis runs [NAME]` | List the run store's recent runs, newest first, with each one's status, interval, error and trace id | Jobs |
 | `basis ddl NAME` | Print a job's `CREATE TABLE` statements | Jobs, and models (provisional) |
 | `basis sweep RUN DIR` | Decide a model's saved run once per params file | Models (provisional) |
 

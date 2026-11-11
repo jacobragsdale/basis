@@ -6,6 +6,7 @@ JSON lines on stderr, with every failure's one `ERROR` line after them; results 
 and `regress`, are JSON on stdout."""
 
 import argparse
+import itertools
 import json
 import logging
 import os
@@ -20,15 +21,15 @@ from basis.core import command, environments, interval, logs, snapshots
 from basis.core.destination import Dialect
 from basis.core.errors import BasisError, deliberate
 from basis.core.interval import Interval, Relative
-from basis.core.settings import Settings
+from basis.core.settings import GivenSettings, Settings
 from basis.core.snapshots import Snapshot
 from basis.core.storage import Root
 from basis.core.sync import Problem
 from basis.core.tables import Column
 from basis.core.verbs import Difference, Part, Regress, Regressed, Regressions, Runs, Shared, Verb, fail
-from basis.job import ddl, docs, new, qa, runs, sync
+from basis.job import api, ddl, docs, loader, new, qa, runs, sync
 from basis.job import job as jobs
-from basis.job.diff import OperationDiff
+from basis.job.diff import SAMPLE, OperationDiff
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +49,8 @@ class RunArgs:
     again: bool
     env: str | None = None
     """The environment `--env` names, or None for `BASIS_ENV`'s."""
+    repo_root: Path = Path()
+    """The repo's folder, whose `snapshots/` a run on files alone saves to."""
 
 
 @dataclass(frozen=True)
@@ -58,6 +61,8 @@ class ReplayArgs:
     env: str | None = None
     repo_root: Path = Path()
     """The repo's folder, whose `snapshots/` the replay is saved in."""
+    rows: int = 0
+    """How many changed rows of each table's difference to print, as `--rows N` gives."""
 
 
 @dataclass(frozen=True)
@@ -77,6 +82,9 @@ class RegressArgs:
     snapshots: str | None
     """The run store to read, or None for the one the environment's settings name."""
     env: str | None = None
+    local: Path | None = None
+    """The repo's folder, whose `snapshots/` regress reads, its runs on files among them, where neither `--snapshots`
+    nor an environment says which store to read."""
 
 
 @dataclass(frozen=True)
@@ -116,9 +124,12 @@ def part() -> Part:
             describe=Shared("print a job's params, inputs and outputs as JSON, or every job's name", lambda n: _describe(DescribeArgs(n.name))),
             resume=Shared("finish publishing a run that failed partway, from its snapshot", lambda n: _resume(ResumeArgs(n.name, n.run_id, n.again, n.env)), _resume_arguments),
             replay=Shared(
-                "rerun a saved run's transform with today's code, and print how its outputs differ", lambda n: _replay(ReplayArgs(n.name, n.run_id, n.params, n.env, n.repo_root)), _replay_arguments
+                "rerun a saved run's transform with today's code, and print how its outputs differ",
+                lambda n: _replay(ReplayArgs(n.name, n.run_id, n.params, n.env, n.repo_root, n.rows)),
+                _replay_arguments,
             ),
             regress=Shared("replay recent published runs with today's code, and list what changed", _regress_from, _regress_arguments),
+            runs=Shared("list the store's recent runs, newest first: status, interval, error and trace id", _runs_from, _runs_arguments),
             ddl=Shared("print CREATE TABLE statements for a job's tables, or for the ledger", lambda n: _ddl(DdlArgs(n.name, n.ledger, n.dialect)), _ddl_arguments),
             regressions=_regress_jobs,
         ),
@@ -139,7 +150,7 @@ def scaffold(argv: Sequence[str] | None = None) -> int:
 
 
 def _run_from(n: argparse.Namespace) -> int:
-    return _run(RunArgs(n.name, n.params, n.interval, n.data, dict(n.label), publish=n.publish, again=n.again, env=n.env))
+    return _run(RunArgs(n.name, n.params, n.interval, n.data, dict(n.label), publish=n.publish, again=n.again, env=n.env, repo_root=n.repo_root))
 
 
 def _run_arguments(parser: argparse.ArgumentParser) -> None:
@@ -166,12 +177,47 @@ def _resume_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _replay_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--params", type=command.existing_file, help="other params to replay with, instead of the run's own")
+    parser.add_argument("--rows", type=_rows, default=0, metavar="N", help=f"list up to N changed rows of each table, by key, with each changed column before and after (at most {SAMPLE})")
+
+
+def _rows(text: str) -> int:
+    count = command.positive(text)
+    if count > SAMPLE:
+        msg = f"a replay keeps {SAMPLE} changed rows of each table, so give --rows {SAMPLE} or fewer, not {count}"
+        raise argparse.ArgumentTypeError(msg)
+    return count
 
 
 def _regress_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--last", type=command.positive, default=10, help="how many published runs of each, newest first")
     parser.add_argument("--label", type=command.label, action="append", default=[], help="KEY=VALUE a run's labels must include; repeatable")
     parser.add_argument("--snapshots", help="the snapshot root to read, instead of the environment's BASIS_SNAPSHOT_ROOT")
+
+
+def _runs_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--last", type=command.positive, default=10, help="how many runs of each, newest first")
+
+
+def _runs_from(n: argparse.Namespace) -> int:
+    """`basis runs [JOB]`: the last runs of JOB, or of every job the repo lists, in the environment's store, or with no
+    environment the repo's own `snapshots/`, as JSON."""
+    names = (n.name,) if n.name is not None else tuple(sorted(jobs.listed()))
+    root = Root.at(n.repo_root / "snapshots") if offline(n.env) else environments.load(n.env, Settings).settings.snapshots()
+    _print([listed(record) for name in names for record in recent(root, jobs.load(name).name, n.last)])
+    return 0
+
+
+def recent(root: Root, job: str, last: int) -> list[snapshots.RunRecord]:
+    """The last `last` runs of `job` in the store at `root`, newest first, replays among them."""
+    return [snapshot.record() for snapshot in itertools.islice(snapshots.runs_of(root, job, package=runs.PACKAGE), last)]
+
+
+def listed(record: snapshots.RunRecord) -> dict[str, object]:
+    """A run as `basis runs` lists it: what the first look at a production issue asks."""
+    return {
+        "run_id": record.run_id, "job": record.job, "status": record.status, "interval": record.interval, "started_at": record.started_at.isoformat(),
+        "error": record.error, "reasons": len(record.reasons), "labels": record.labels, "publish": record.publish, "replay_of": record.replay_of, "trace_id": record.trace_id,
+    }  # fmt: skip
 
 
 def _ddl_arguments(parser: argparse.ArgumentParser) -> None:
@@ -197,9 +243,16 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def offline(env: str | None) -> bool:
+    """Whether a verb is given no environment, by `--env` or `BASIS_ENV`, so reaches nothing of the firm's."""
+    return env is None and os.environ.get(environments.VARIABLE, "") == ""
+
+
 def _run(args: RunArgs) -> int:
     job = jobs.load(args.job)
     logs.include(job.module.partition(".")[0])
+    if args.data is not None and offline(args.env) and not args.publish and not loader.unfiled(job.inputs.declared(), args.data):
+        return _run_on_files(job, args, args.data)
     environment = environments.load(args.env, Settings)
     if args.publish:
         environment.refuse_writes(f"basis run {job.name} --publish")
@@ -207,7 +260,28 @@ def _run(args: RunArgs) -> int:
     given = args.interval.resolve(_now(), job.calendar, job=job.name) if isinstance(args.interval, Relative) else args.interval
     request = runs.Request(args.params, given, args.data, args.labels, publish=args.publish, again=args.again, git_sha=os.environ.get("BASIS_GIT_SHA"))
     result = runs.run(job, settings, request, snapshot_root=settings.snapshots(), environment=environment.name)
+    _print(runs.summary(result.record))
     return fail(*found) if (found := runs.failure_of(result.record, publish=args.publish)) is not None else 0
+
+
+def _run_on_files(job: jobs.Job, args: RunArgs, data: Path) -> int:
+    """`basis run` where every dataset has a file in `--data`, as a fixture's do, given no environment: a run that
+    reaches nothing of the firm's, so needs none, and runs as `etl.run` and `main.py` do: with the interval and the
+    time `fixture.json` gives where `--interval` does not, its ids counting up from 1, and its snapshot in the repo's
+    `snapshots/`."""
+    with deliberate(FileNotFoundError):  # a folder with no fixture.json, whose message says what to write
+        fixture = api.read_fixture(data) if args.interval is None or (data / api.FIXTURE).exists() else None
+    now = fixture.now if fixture is not None and fixture.now is not None else _now()
+    if isinstance(args.interval, Relative):
+        given: Interval | None = args.interval.resolve(now, job.calendar, job=job.name)
+    elif args.interval is not None:
+        given = args.interval
+    else:
+        given = Interval.parse(fixture.interval) if fixture is not None and fixture.interval is not None else None
+    request = runs.Request(args.params, given, data, args.labels, git_sha=os.environ.get("BASIS_GIT_SHA"))
+    result = runs.run(job, GivenSettings(), request, snapshot_root=Root.at(args.repo_root / "snapshots"), faked=api.fixture_fakes(job, fixture, data))
+    _print(runs.summary(result.record))
+    return fail(*found) if (found := runs.failure_of(result.record, publish=False)) is not None else 0
 
 
 def _saved(root: Root, run_id: str, name: str | None) -> tuple[Snapshot, jobs.Job]:
@@ -225,14 +299,17 @@ def _saved(root: Root, run_id: str, name: str | None) -> tuple[Snapshot, jobs.Jo
 
 
 def _replay(args: ReplayArgs) -> int:
-    environment = environments.load(args.env, Settings)
-    settings = environment.settings
-    root = settings.snapshots()
-    source, job = _saved(root, args.run_id, args.job)
     local = Root.at(args.repo_root / "snapshots")  # the repo's own store, as etl.replay saves to: never the environment's, which may be prod's
+    if offline(args.env):  # a run on files, saved in the repo's own store, which needs no environment to replay
+        settings, name, root = GivenSettings(), None, local
+    else:
+        environment = environments.load(args.env, Settings)
+        settings, name, root = environment.settings, environment.name, environment.settings.snapshots()
+    source, job = _saved(root, args.run_id, args.job)
     with deliberate(ValueError):  # a run of another job, or one that did not save what the job reads now
-        result, diffs = runs.replay(job, source, params=args.params, snapshot_root=local, tracing=settings.traces, environment=environment.name)
-    _print({"run_id": result.record.run_id, "replay_of": args.run_id, "status": result.record.status, "reasons": result.record.reasons, "differences": [vars(entry) for entry in diffs]})
+        result, diffs = runs.replay(job, source, params=args.params, snapshot_root=local, tracing=settings.traces, environment=name)
+    differences = [{**vars(entry), "rows": entry.rows[: args.rows]} if args.rows else {key: value for key, value in vars(entry).items() if key != "rows"} for entry in diffs]
+    _print({"run_id": result.record.run_id, "replay_of": args.run_id, "status": result.record.status, "reasons": result.record.reasons, "differences": differences})
     if result.ok:
         return 0
     why = "; ".join(result.record.reasons) or result.record.error or result.record.status
@@ -254,9 +331,12 @@ def _resume(args: ResumeArgs) -> int:
 def _regress_from(n: argparse.Namespace) -> int:
     """`basis regress`: each run replayed, as JSON on stdout, and a line for each failure to replay a job; 1 when one
     failed, or when a run differs or would not write."""
-    found = regress_jobs(RegressArgs((n.name,) if n.name is not None else tuple(sorted(jobs.listed())), n.last, dict(n.label), n.snapshots, n.env))
+    found = regress_jobs(RegressArgs((n.name,) if n.name is not None else tuple(sorted(jobs.listed())), n.last, dict(n.label), n.snapshots, n.env, local=n.repo_root))
     failed = sum(command.report(error) for error in found.failures)
-    _print([{"job": entry.name, "run_id": entry.run_id, "reasons": list(entry.reasons), "differences": [dict(diff.detail) for diff in entry.differences]} for entry in found.replayed])
+    _print([
+        {"job": entry.name, "run_id": entry.run_id, "reasons": list(entry.reasons), "differences": [{key: value for key, value in diff.detail.items() if key != "rows"} for diff in entry.differences]}
+        for entry in found.replayed
+    ])  # fmt: skip
     labels = dict(n.label)
     if labels and found.unreplayed and not found.replayed:
         given = ", ".join(f"{key}={value}" for key, value in sorted(labels.items()))
@@ -278,14 +358,20 @@ def _regress_jobs(args: Regress) -> Regressions:
 def regress_jobs(args: RegressArgs) -> Regressions:
     """`basis regress` for the jobs `args` names, which `basis` prints. Each job replays on its own: one that fails to
     load or to replay is a failure of its own, and the rest still replay."""
-    root = Root.at(args.snapshots) if args.snapshots is not None else environments.load(args.env, Settings).settings.snapshots()
+    statuses: tuple[str, ...] = ("published",)
+    if args.snapshots is not None:
+        root = Root.at(args.snapshots)
+    elif args.local is not None and offline(args.env):  # the repo's own store, whose runs on files are checked, never published
+        root, statuses = Root.at(args.local / "snapshots"), ("published", "checked")
+    else:
+        root = environments.load(args.env, Settings).settings.snapshots()
     replayed: list[Regressed] = []
     failures: list[Exception] = []
     unreplayed: list[str] = []
     for name in args.jobs:
         try:
             job = jobs.load(name)
-            entries = runs.regress(job, root, last=args.last, labels=args.labels)
+            entries = runs.regress(job, root, last=args.last, labels=args.labels, statuses=statuses)
         except Exception as error:  # noqa: BLE001 -- each job's failure is its own line, and the other jobs still replay
             error.add_note(f"while regressing {name}")
             failures.append(error)

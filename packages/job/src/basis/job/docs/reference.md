@@ -30,19 +30,18 @@ A row is a subclass of `etl.Row` with one annotated attribute per column, in col
 
 | Annotation | Frame dtype | Requires |
 |---|---|---|
-| `int` | `pd.ArrowDtype(pa.int64())` | |
-| `float` | `pd.ArrowDtype(pa.float64())` | |
-| `Annotated[Decimal, etl.Precision(P, S)]` | `pd.ArrowDtype(pa.decimal128(P, S))` | `1 <= P <= 38`, `0 <= S <= P` |
-| `str`, or `Annotated[str, etl.MaxLength(N)]` | `pd.ArrowDtype(pa.string())` | `N >= 1` |
-| `bool` | `pd.ArrowDtype(pa.bool_())` | |
-| `date` | `pd.ArrowDtype(pa.date32())` | |
-| `Annotated[datetime, etl.Zone(NAME)]` | `pd.ArrowDtype(pa.timestamp("us", "UTC"))` | an IANA zone name |
-| `Annotated[str, etl.Json()]` | `String` | each value JSON text, an object or an array, as SQL Server's `json` type holds it; never a key or a `ReplaceWhere(matching=...)` column |
+| `float` | numpy's `float64` | |
+| `str`, or `Annotated[str, etl.MaxLength(N)]` | Arrow's `string` | `N >= 1` |
+| `bool` | Arrow's `bool` | |
+| `date` | Arrow's `date32[day]` | |
+| `Annotated[datetime, etl.Zone(NAME)]` | Arrow's `timestamp[us, tz=UTC]` | an IANA zone name |
+| `Annotated[str, etl.Json()]` | Arrow's `string` | each value JSON text, an object or an array, as SQL Server's `json` type holds it; never a key or a `ReplaceWhere(matching=...)` column |
 
-Every column is backed by Arrow, so a null is `pd.NA` in every type, an `int` with nulls stays an integer, a
-`Decimal` stays exact through arithmetic and sums, and no column is `object`. Job code, which may not import pyarrow,
-names a dtype through its row: `Row.dtypes()` gives each column's by name, for `frame.astype(Row.dtypes())`, and
-`Row.empty()` a frame with no rows. `T | None`, or
+Every number is a `float`, an amount or a count alike, numpy's float64 in a frame, with NaN where it is missing; an
+`int` or a `Decimal` column is refused, with the fix. An identifier, such as an id or an account number, is a `str`,
+which a query selects as text. Every other column is backed by Arrow, so its null is `pd.NA`, and no column is
+`object`. Job code, which may not import pyarrow, names a dtype through its row: `Row.dtypes()` gives each column's
+by name, for `frame.astype(Row.dtypes())`, and `Row.empty()` a frame with no rows. `T | None`, or
 `Annotated[T, ...] | None`, makes a column nullable. A column name is lower-case letters, digits and underscores, never a word its database reserves (basis quotes no name, so `key`, `order` or Oracle's `date` are refused before a publish),
 starting with a letter or an underscore. `Zone` names the zone a datetime's naive values are in, in sources and
 destinations; in a frame, every datetime is UTC.
@@ -65,11 +64,10 @@ Every frame that enters or leaves a job is conformed to its row:
 - Its columns must be exactly the row's, matched without regard to case; a column left in the frame's index, as a
   `groupby` without `as_index=False` leaves its keys, is named as such. Its index is never data: a conformed frame's
   only counts its rows.
-- A column of any dtype converts, Arrow's, numpy's, a category or `object`'s Python values, but only without loss: an
-  integer type to `int`, a decimal or integer to a `Decimal` that keeps every digit, a datetime at midnight to `date`,
-  `0` and `1` to `bool`, text to any type. A float never converts to an `int` or a `Decimal`, and numpy's `NaN` is a
-  null. Since numpy's integers have no null, pandas makes `[1, None]` floats: give such a column its dtype, as
-  `pd.array(values, dtype=Row.dtypes()["count"])`.
+- A column of any dtype converts, Arrow's, numpy's, a category or `object`'s Python values, but only without loss but
+  a number's rounding to the nearest double: any number to a `float`, but a whole number beyond 2^53, which a float
+  cannot hold exactly; a datetime at midnight to `date`; `0` and `1` to `bool`; text to any type, an empty field
+  null unless the column is a `str`. numpy's `NaN` is a null, and a float that is infinite is refused.
 - A naive datetime from a source is read in its column's zone. A naive datetime in a transform's output is refused.
 - Non-null columns have no nulls, floats are finite, and strings are at most their `MaxLength`.
 
@@ -359,10 +357,11 @@ basis's.
 | `basis review [--commit REF]` | Prints, as Markdown for a pull request's description, what the latest `basis check --full` of `REF` (default `HEAD`) found: the outputs `regress` saw change, the QA tier's runs, the mutants that survived, the basis versions, and the commit. Exits 1 when no check of the commit is recorded in this clone, or when it failed. |
 | `basis doctor [--env ENV]` | Checks this desktop, on Windows and in WSL, in a repo or outside one: uv and its version, git, that the clone runs the repo's hooks, the feed (the default index of the user's `uv.toml`, which must be the repo's index where `pyproject.toml` names one), and the settings: the process's, and the user's `qa.env` where the repo declares a QA tier. With `--env`, also where that environment's settings come from, whether each database's read login, and its write login where it has one, answers a query that reads no table, whether its run store is reachable, and, in prod, whether this machine may write. Prints `ok:` for each check passed and one `ERROR` line, ending with its fix, for each problem. |
 | `basis upgrade` | With nothing uncommitted, relocks basis's packages within what `pyproject.toml` allows, runs `basis sync` and `basis check --full --no-qa` with the newly locked version, and prints each package's version before and after and each file it changed. The QA tier runs when the upgrade is committed and pushed, so QA publishes it once, with a record for `basis review`. |
-| `basis run JOB --env ENV --params FILE [--interval INTERVAL] [--data DIR] [--label KEY=VALUE]... [--publish] [--again]` | Runs a job in an environment (see [Environments](#environments)), saves its snapshot, and with `--publish` writes its changes, which prod refuses unless the deployment allows it. `--again` publishes an `Append()` table for an interval the ledger already has. |
-| `basis replay [JOB] RUN_ID --env ENV [--params FILE]` | Runs a saved run's transform again on its inputs, read from the environment's run store, and saves the replay in the repo's own `snapshots/`, never the environment's; prints the replay's status, reasons and differences as JSON: each table's, each workbook's, upsert's and archive's rows, and each message's text. Without `JOB`, the run is found by its id alone. |
+| `basis run JOB --env ENV --params FILE [--interval INTERVAL] [--data DIR] [--label KEY=VALUE]... [--publish] [--again]` | Runs a job in an environment (see [Environments](#environments)), saves its snapshot, and with `--publish` writes its changes, which prod refuses unless the deployment allows it. `--again` publishes an `Append()` table for an interval the ledger already has. A run whose every dataset is a file in `--data`, given no `--env`, no `BASIS_ENV` and no `--publish`, reaches nothing of the firm's, so needs no environment: it runs as `etl.run` does, with `fixture.json`'s interval and `now` unless `--interval` is given, and saves to the repo's `snapshots/`. Prints the run's summary as JSON: its `run_id`, `status`, `interval`, each input's and output's rows, its `reasons`, `error` and each publish's status. |
+| `basis replay [JOB] RUN_ID [--env ENV] [--params FILE] [--rows N]` | Runs a saved run's transform again on its inputs, read from the environment's run store, or with no environment from the repo's own `snapshots/`, and saves the replay in the repo's own `snapshots/`, never the environment's; prints the replay's status, reasons and differences as JSON: each table's, each workbook's, upsert's and archive's rows, and each message's text. Without `JOB`, the run is found by its id alone. With `--rows N`, each table's difference lists up to `N` changed rows: the row's key, and each column that changed, before and after. |
+| `basis runs [JOB] [--env ENV] [--last N]` | Lists the last `N` (default 10) runs of `JOB`, or of every job, in the environment's run store, or with no environment the repo's own `snapshots/`, newest first, as JSON: each run's id, job, status, interval, start, error, labels, whether it was asked to publish, what it replays, and its trace id, which the first question about a production issue asks for. |
 | `basis resume [JOB] RUN_ID --env ENV [--again]` | Writes a partly published run's changes, or a run's that stopped while it published, to each database whose ledger lacks the run, told `--again` if the run was, or if given now; a run not asked to publish, and a replay, are refused. Without `JOB`, the run is found by its id alone. |
-| `basis regress [JOB] (--env ENV \| --snapshots ROOT) [--last N] [--label KEY=VALUE]...` | Replays the last `N` (default 10) published runs of `JOB`, or of every job the repo lists, whose labels include every `--label`, from the environment's run store or `ROOT`; prints each run's job, reasons and differences as JSON: rows added, removed and changed, by column, and each column added, removed or retyped, the rows comparing by the columns both runs hold alike, and two floats within a relative 1e-12 being the same. A `--label` no published run has fails, naming the labels; a job with no published run prints a `SKIPPED:` line. |
+| `basis regress [JOB] [--env ENV \| --snapshots ROOT] [--last N] [--label KEY=VALUE]...` | Replays the last `N` (default 10) published runs of `JOB`, or of every job the repo lists, whose labels include every `--label`, from the environment's run store or `ROOT`, or with neither, from the repo's own `snapshots/`, its runs on files among them; a replay is never replayed; prints each run's job, reasons and differences as JSON: rows added, removed and changed, by column, and each column added, removed or retyped, the rows comparing by the columns both runs hold alike, and two floats within a relative 1e-12 being the same. A `--label` no published run has fails, naming the labels; a job with no published run prints a `SKIPPED:` line. |
 | `basis describe [JOB]` | Prints the job's params schema, inputs and outputs as JSON; without `JOB`, every job the repo lists, with its module. |
 | `basis ddl JOB --dialect mssql\|oracle` | Prints `CREATE TABLE` for each of the job's tables. |
 | `basis ddl --ledger TABLE --dialect mssql\|oracle` | Prints `CREATE TABLE` and `CREATE INDEX` for the ledger, and on Oracle the table of its publishes' locks, `TABLE_locks`, beside it. |
@@ -549,7 +548,7 @@ NVARCHAR(MAX) NULL` on SQL Server, or `ADD (detail CLOB)` on Oracle.
   the job runs on `tests/fixture` with every check passing, and that `job.py` cannot reach I/O through its imports.
   Set `params` or `fixture` on the subclass for other paths, relative to the job's folder.
 - `frame(row, *rows)`: a frame of `row` from partial rows of Python values, conformed as a load conforms it; a column a
-  row leaves out is null, and a `Decimal` column's `int` or `str` is exact.
+  row leaves out is null, and a `float` column takes an `int` too.
 - `inputs(Inputs, *, interval=None, now=None, **frames)`: an `Inputs` instance; a dataset not given has no rows. Each
   clock reads `now`, which an `Inputs` with a clock needs, and each ids counts up from
   `00000000-0000-7000-8000-000000000001`.

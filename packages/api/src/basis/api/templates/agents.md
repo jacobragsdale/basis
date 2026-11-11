@@ -26,8 +26,10 @@ Rules to keep:
   `api.Error` its handler raises and each meaning `errors.py` gives a domain exception it may meet, or `[]`. An error
   it does not declare, or an `HTTPException`, answers 500.
 - A route reads its request strictly: a key it does not declare is refused, a JSON body's values have their own JSON
-  types, a decimal is a string (`"0.045"`, never `0.045`), a time has its offset, and query and path text reads by its
-  type's grammar (`10`, `0.045`, `true`, `2026-11-06`). Declare query parameters one by one, or as one model with
+  types, a number is a JSON number (`0.045`, never `"0.045"`), and `NaN`, `Infinity` or a number beyond a float's
+  range is refused, as a repeated key is; a time has its offset; and query and path text reads by its type's grammar
+  (`10`, `0.045`, `true`, `2026-11-06`). Every number a model holds is a `float`, or an `int` where it counts; a
+  `Decimal` is refused. Declare query parameters one by one, or as one model with
   `Query()`. A request model reads each field by one key, a plain `alias` or its name, and a body holds tuples or lists
   of models, never sets of them. A route takes no `BackgroundTasks`: its work ends with its response.
 - A handler takes the service's settings as `Annotated[Settings, api.given(Settings)]`, never from the environment.
@@ -89,9 +91,18 @@ Rules to keep:
 - Every time a request or a response holds is pydantic's `AwareDatetime` (`from pydantic import AwareDatetime`), never
   a plain `datetime` or a `time` of day, which a route is refused for when it is declared: the clock's times have
   their offsets.
-- A route that answers rows, as a grid shows them, declares `dataset=True` and answers `list[Row]`, each field of `Row`
-  a scalar, a decimal with its `Field(max_digits=..., decimal_places=...)`; it answers Arrow to a request that asks for
-  `application/vnd.apache.arrow.stream`, and JSON otherwise.
+- A route that answers rows, as a grid shows them, answers Arrow to a request that asks for
+  `application/vnd.apache.arrow.stream`, and JSON otherwise. Each field of its `Row` is a scalar, every number a
+  `float` (an `int` or `Decimal` is refused), and a number names how a UI shows it, as
+  `Annotated[float, api.format.pct(3)]`: `api.format.number`, `money`, `pct`, `bps`, `price` or `price32`, which
+  the document carries as `x-basis-format`. Declare such a row model beside the handler that answers it, in
+  `handlers.py`, since a display format is how the API presents a number, not a rule of the domain, and a domain
+  module imports nothing of basis. A route of many rows declares `response=api.Table[Row]`, and its handler returns
+  the frame or Arrow table of `await reader.fetch_table(Row, SQL)` (or a frame it builds), which basis checks once,
+  never row by row; one of few declares `dataset=True` and answers `list[Row]`.
+- A GET that reads nothing a deployment lacks gives `smoke=`, a read-only example of its request as `basis call`
+  takes one, `{"path": {...}, "query": {...}}`, which `basis smoke --env ENV` sends the deployed API after a release,
+  validating its answer.
 - A UI calls the API from its own host, under `/api`, which the ingress removes, so no route's path starts with it.
   Where a UI's pages are on another origin, the settings name it, as `BASIS_ALLOWED_ORIGINS='["https://ui.example"]'`;
   without it, no other origin's page may call the API.

@@ -5,6 +5,27 @@ MVP, done on 2026-11-09 against commit `95e6794`, and the work that follows from
 still holds the decisions and [the roadmap](docs/roadmap.md) phases 0 to 5; this page adds phases 6 to 12, whose step
 ids continue the roadmap's, so a branch is named as `AGENTS.md` says, such as `7.1-publish-state`.
 
+## Status
+
+As of 2026-11-11. Each step lands on `main` as one commit or more; this table names each step's commits, and a
+step's own commit keeps it true.
+
+| Step | State | Commit |
+|---|---|---|
+| 6.1 to 6.5 | Done | `7dc8a53`, `be769a8`, `29ce806`, `cb64183`, `778cb73` |
+| 7.1 to 7.13 | Done | `5c3c2e2`, `0da9fef`, `7792046`, `affbe96`, `d09e284`, `6e59dff`, `6fd6830`, `704f5ec`, `1b74ab1`, `49fb3eb`, `3fa732e`, `7bb60a3`/`29a9f2b`/`dc6ce0d`, `89cd05d` |
+| 7.14 | Done, in nine commits | `3594ded` to `700bd7e` |
+| 8.1 to 8.10 | Done | `b67e7bc`, `c4dbc9e`, `4937c8e`, `18e55d0`, `626087a`, `d4adf0a`, `1de8200`, `4d28bd4`, `e832eb5` (8.9), `9086a5b` (8.10) |
+| 9.1, 9.2, 9.3 | Done, in one commit, "Steps 9.1, 9.2 and 9.3" | that commit |
+| 9.4 Skills and docs for APIs | To do | |
+| 9.5 SQL is opened before the environment | To do | |
+| 9.6 A lighter command | To do | |
+| 10.1 to 10.3 | To do; 10.3 is **(work)** | |
+| 11.1 to 11.7 | To do | |
+| 12.1 to 12.9 | To do | |
+
+Phases 6 to 8 first reached GitHub's CI on 2026-11-11; what it found is fixed in commits of their own, named "CI: ...".
+
 The review read the source of all four packages (about 29,000 lines) and a sample of their tests, ran the unit tests
 and coverage, drove the `basis` command in generated job and API repos as an agent would, and probed the pure parts
 (calendars, number formatting, intervals, the OpenAPI diff) with edge cases. It did not run anything on Windows,

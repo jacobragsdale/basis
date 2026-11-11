@@ -22,7 +22,7 @@ a span under, exported where the settings say, and every record it logs carries 
 
 import logging
 import traceback
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Callable, Collection, Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -216,7 +216,7 @@ def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
         run_id=run_id, job=job.name, module=job.module, version=VERSION, git_sha=request.git_sha, started_at=started,
         interval=str(request.interval) if request.interval is not None else None, params_path=str(request.params),
         params_sha256=snapshots.params_digest(params_text), labels=dict(request.labels), data=str(request.data) if request.data is not None else None,
-        again=request.again, publish=request.publish,
+        again=request.again, publish=request.publish, trace_id=logs.trace_id(),
     )  # fmt: skip
     targets = targets_of(job)
     try:
@@ -688,6 +688,7 @@ class _Record:
     replay_of: str | None = None
     again: bool = False
     publish: bool = False
+    trace_id: str | None = None
     inputs: dict[str, InputRecord] = field(default_factory=dict)
     outputs: dict[str, snapshots.OutputRecord] = field(default_factory=dict)
     clocks: dict[str, list[datetime]] = field(default_factory=dict)
@@ -733,7 +734,8 @@ class _Record:
         return RunRecord(
             run_id=self.run_id, job=self.job, module=self.module, version=self.version, git_sha=self.git_sha, started_at=self.started_at,
             finished_at=finished_at, interval=self.interval, params_path=self.params_path, params_sha256=self.params_sha256, labels=self.labels,
-            data=self.data, replay_of=self.replay_of, again=self.again, publish=self.publish, status=status, inputs=self.inputs, outputs=self.outputs, reasons=reasons or [], error=error,
+            data=self.data, replay_of=self.replay_of, again=self.again, publish=self.publish, trace_id=self.trace_id, status=status, inputs=self.inputs, outputs=self.outputs,
+            reasons=reasons or [], error=error,
             publishes=publishes or {}, messages=self.messages, sent=sent or {}, reports=self.reports, written=written or {},
             documents=self.documents, upserted=upserted or {}, archives=self.archives, archived=archived or {}, clocks=self.clocks, ids=self.ids,
         )  # fmt: skip
@@ -757,21 +759,27 @@ def _summarized(result: Result) -> Result:
 
 def _summary(record: RunRecord) -> None:
     """The run's one summary record: what a dashboard or a monitor reads."""
+    said = {key: value for key, value in summary(record).items() if key not in {"run_id", "job"}}  # which every record of the run carries already
+    log.info("run summary", extra={**said, "reasons": len(record.reasons)})
+
+
+def summary(record: RunRecord) -> dict[str, object]:
+    """What a run did, as `basis run` prints it on stdout and its summary record logs it: its id, which `replay` and
+    `resume` take, its status, the rows each input and output held, why it wrote nothing, and each publish's status."""
     duration = (record.finished_at - record.started_at).total_seconds() * 1000 if record.finished_at is not None else None
-    log.info(
-        "run summary",
-        extra={
-            "status": record.status,
-            "interval": record.interval,
-            "labels": record.labels,
-            "inputs": {name: entry.rows for name, entry in record.inputs.items()},
-            "outputs": {name: entry.rows for name, entry in record.outputs.items()},
-            "reasons": len(record.reasons),
-            "error": record.error,
-            "publishes": {name: entry.status for name, entry in record.publishes.items()},
-            "run_ms": round(duration, 1) if duration is not None else None,
-        },
-    )
+    return {
+        "run_id": record.run_id,
+        "job": record.job,
+        "status": record.status,
+        "interval": record.interval,
+        "labels": record.labels,
+        "inputs": {name: entry.rows for name, entry in record.inputs.items()},
+        "outputs": {name: entry.rows for name, entry in record.outputs.items()},
+        "reasons": list(record.reasons),
+        "error": record.error,
+        "publishes": {name: entry.status for name, entry in record.publishes.items()},
+        "run_ms": round(duration, 1) if duration is not None else None,
+    }
 
 
 def replay(  # noqa: PLR0913 -- what it replays, and where it saves and traces, by keyword
@@ -806,7 +814,7 @@ def _replayed(job: Job, source: Snapshot, opened: core_runs.Replay[Params], *, s
     record = _Record(
         run_id=opened.run_id, job=job.name, module=job.module, version=VERSION, git_sha=None, started_at=clock(), interval=original.interval,
         params_path=opened.params_path, params_sha256=snapshots.params_digest(opened.params_text),
-        labels={"replay_of": original.run_id}, data=None, replay_of=original.run_id,
+        labels={"replay_of": original.run_id}, data=None, replay_of=original.run_id, trace_id=logs.trace_id(),
         inputs={name: InputRecord(source=f"snapshot: {original.run_id}", rows=table.num_rows, read_ms=0.0) for name, table in opened.saved.items()},
     )  # fmt: skip
     tables = {name: opened.saved[name] for name in job.inputs.declared()}
@@ -969,12 +977,12 @@ def _check_messages(job: Job, settings: Settings, faked: Mapping[str, fakes.Fake
     return reasons
 
 
-def regress(job: Job, root: Root, *, last: int, labels: Mapping[str, str]) -> list[Regression[OperationDiff]]:
-    """Replay a job's last `last` published runs whose labels include `labels`, with the code of the day, and how each
-    one's changes differ. Writes nothing."""
+def regress(job: Job, root: Root, *, last: int, labels: Mapping[str, str], statuses: Collection[str] = ("published",)) -> list[Regression[OperationDiff]]:
+    """Replay a job's last `last` runs of `statuses`, published by default, whose labels include `labels`, with the
+    code of the day, and how each one's changes differ. Writes nothing."""
 
     def replayed(snapshot: Snapshot) -> tuple[RunRecord, list[OperationDiff]]:
         result, diffs = replay(job, snapshot)
         return result.record, diffs
 
-    return core_runs.regress(root, job.name, package=PACKAGE, last=last, labels=labels, replay=replayed)
+    return core_runs.regress(root, job.name, package=PACKAGE, last=last, labels=labels, replay=replayed, statuses=statuses)

@@ -21,7 +21,7 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
 | core `settings.py` | `BASIS_*` variables: the snapshot root, each named database, with an optional `WRITE` block, each other service a fetch names (`http`), where spans go (`traces`), and the image's commit (`git_sha`). |
 | `job.py` | Finding a job by entry point or module path, and reading its contract. |
 | `rows.py` | `Row`, its column types and annotations, and `conform`, the boundary every frame passes through. |
-| core `frames.py` | The one table of each kind of column's type in a pandas frame, every one Arrow-backed (`pd.ArrowDtype`); `convert`, a column's values to it without loss, which `conform` uses; and a frame to Arrow and back, as the databases and the run store take it. The one module of basis's pure code that imports pyarrow, which the import check discounts (core `testing.TYPES`). |
+| core `frames.py` | The one table of each kind of column's type in a pandas frame: numpy's float64 for a number, and Arrow's (`pd.ArrowDtype`) for the rest; `convert`, a column's values to it without loss, which `conform` uses; and a frame to Arrow and back, as the databases and the run store take it. The one module of basis's pure code that imports pyarrow, which the import check discounts (core `testing.TYPES`). |
 | core `tables.py` | What a run writes, in the terms every part shares: `Column`, `IDENTIFIER`, `Changes`, `Delete`, `Range`, and the `Target` protocol that `outputs.Target` meets. |
 | `params.py`, core `model.py` | `Params` (strict), and the lax base model for records. |
 | `inputs.py`, `outputs.py` | `Query`, `Fetch`, `File`, `Excel`, `Mongo`, `Clock`, `Ids` and `Inputs`, with the `Handles` a run gives a transform; `Table`, the write modes, `Target`, the workbook `ExcelReport`, `MongoUpsert`, the lake archive `Lake`, the messages `Slack` and `Email`, and `Outputs`. |
@@ -73,7 +73,7 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
   `OTEL_RESOURCE_ATTRIBUTES` give one (`basis.core.telemetry`).
 - basis-core imports nothing from basis-job; `lint-imports` enforces it. What core needs of a job's declarations, it
   takes through `basis.core.tables`.
-- Nothing about a table is assumed: a write mode, a `Precision`, a `Zone` and an input's `empty` are always declared.
+- Nothing about a table is assumed: a write mode, a `Zone` and an input's `empty` are always declared.
   A new option gets no default that depends on how jobs usually look.
 - A query binds only the interval, as `interval_start` and `interval_end` (Oracle reserves `START`), and a fetch's
   path only the interval's ends, as `{start}` and `{end}`. Params never change what is read.
@@ -81,8 +81,8 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
   `basis resume`. Each database's tables and ledger rows commit in one transaction.
 - Identifiers in SQL are a row's column names and a table's name, restricted by `basis.core.tables.IDENTIFIER` and
   `outputs.TABLE_NAME`; every value is bound.
-- Every frame a job gets or returns is pandas, each column Arrow-backed, of the type `basis.core.frames` gives its
-  row's kind, so no column is `object`. A frame becomes Arrow through `frames.to_arrow` alone: the columns' own types,
+- Every frame a job gets or returns is pandas, each column of the type `basis.core.frames` gives its row's kind: a
+  number numpy's float64, and every other column Arrow-backed, so no column is `object`. A frame becomes Arrow through `frames.to_arrow` alone: the columns' own types,
   no index and no pandas metadata, so the same rows are always the same object in the run store.
 - A conversion at a boundary loses nothing: `frames.convert` casts with pyarrow's safe casts, which refuse a value
   that would round or truncate, and checks what they allow, a time of day dropped from a date and an integer other
