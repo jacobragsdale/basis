@@ -5,7 +5,11 @@ log record whose fields JSON cannot hold, as a missing time or bytes, is still o
 import asyncio
 import json
 import logging
+import os
+import subprocess
+import sys
 from collections.abc import Awaitable, Callable, MutableMapping
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -82,3 +86,14 @@ def test_a_record_whose_fields_json_cannot_hold_is_still_one_line_of_json(value:
     line = JsonFormatter().format(record)
     assert "\n" not in line
     assert json.loads(line)["message"] == "a value"
+
+
+def test_gits_output_is_read_as_utf_8_whatever_the_locale(tmp_path: Path) -> None:
+    """A clone under a user folder such as `C:\\Users\\Ánna`, whose name the C locale cannot decode."""
+    folder = tmp_path / "Ánna"
+    folder.mkdir()
+    subprocess.run(["git", "init", "--quiet"], cwd=folder, check=True)  # noqa: S607 -- the git on the PATH
+    script = "import sys; from pathlib import Path; from basis.core import clone; found = clone.of(Path(sys.argv[1])); sys.stdout.buffer.write(str(found.top if found else None).encode())"
+    ran = subprocess.run([sys.executable, "-c", script, str(folder)], capture_output=True, env=os.environ | {"LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0"}, check=False)
+    assert ran.returncode == 0, ran.stderr
+    assert ran.stdout.decode("utf-8").strip() == str(folder)

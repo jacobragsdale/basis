@@ -47,6 +47,20 @@ def problem(root: Path) -> tuple[str, str] | None:
     return None
 
 
+def unexecutable(root: Path) -> list[tuple[str, str]]:
+    """Each hook the clone's index holds without its executable bit, as Git for Windows commits one, whose file system
+    keeps none, and which git in WSL or on Linux then skips, with the fix."""
+    if (git := shutil.which("git")) is None:
+        return []
+    listed = _git(git, root, "ls-files", "--stage", "--", *(f"{FOLDER}/{hook}" for hook in HOOKS)) or ""
+    modes = {line.split("\t", 1)[1]: line.split(" ", 1)[0] for line in listed.splitlines() if "\t" in line}
+    return [
+        (f"{name} is committed without its executable bit, so git in WSL or on Linux skips it", f"run `git update-index --chmod=+x -- {name}`, and commit, as the commit hook now does")
+        for name, mode in sorted(modes.items())
+        if mode != "100755"
+    ]
+
+
 def _setting(root: Path, top: str) -> str:
     """`core.hooksPath` for the repo at `root`, in the clone whose top is `top`: relative to the top, where git runs
     hooks from, so the setting holds wherever the clone is."""

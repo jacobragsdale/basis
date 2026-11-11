@@ -17,7 +17,6 @@ staged() {
 }
 
 command -v uv >/dev/null 2>&1 || fail "uv is not on the PATH git runs hooks with, and the hooks run every check through it: install uv, as https://docs.astral.sh/uv/ says, or put its folder on the PATH"
-git diff --cached --check >&2 || fail "the staged changes add the whitespace errors or conflict markers listed above: remove each, stage the files again, and commit"
 
 if [ -n "$(staged)" ]; then
     partly=$(staged -z | xargs -0 git diff --name-only --relative --)
@@ -27,4 +26,11 @@ if [ -n "$(staged)" ]; then
     staged -z | xargs -0 uv run --frozen --quiet ruff format --force-exclude --silent -- || :
     staged -z | xargs -0 git add --
 fi
+# After ruff's fixes, so whitespace the formatter removed is no error of the commit's.
+git diff --cached --check >&2 || fail "the staged changes add the whitespace errors or conflict markers listed above: remove each, stage the files again, and commit"
+# A hook staged without its executable bit, as Git for Windows stages one, whose file system keeps none, is recorded
+# with it: git in WSL or on Linux skips a hook without it.
+git diff --cached --name-only --relative --diff-filter=AM -- .githooks | while read -r hook; do
+    [ "$(git ls-files --stage -- "$hook" | cut -c1-6)" = 100755 ] || git update-index --chmod=+x -- "$hook"
+done
 exec uv run --frozen --quiet basis check --staged

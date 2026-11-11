@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from basis.core import hygiene
 from basis.core.hygiene import LIMIT_KB, problems
 
 type Git = Callable[..., str]
@@ -92,3 +93,21 @@ def test_without_git_it_says_to_install_it(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setenv("PATH", str(tmp_path / "no-tools"))
     assert problems(tmp_path) == [("git is not on the PATH, so the staged files cannot be read", "install git, and put it on the PATH")]
     assert os.environ["PATH"].endswith("no-tools")
+
+
+def test_a_private_key_committed_past_the_commit_hook_is_found_in_what_the_push_would_send(tmp_path: Path, git: Git) -> None:
+    """`git commit --no-verify` skips the commit hook's staged checks; the push hook's check reads the files every commit
+    no remote holds adds or changes."""
+    git(tmp_path, "init", "--quiet", "--initial-branch=main")
+    git(tmp_path, "config", "user.email", "t@example.com")
+    git(tmp_path, "config", "user.name", "t")
+    (tmp_path / "notes.md").write_text("# Notes\n", encoding="utf-8")
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "--quiet", "--no-verify", "-m", "first")
+    (tmp_path / "deploy_key").write_bytes(b"-----" + hygiene.PRIVATE_KEYS[3] + b"-----\nb3BlbnNzaC1rZXk=\n")
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "--quiet", "--no-verify", "-m", "a key")
+    (tmp_path / "deploy_key").unlink()
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "--quiet", "--no-verify", "-m", "the key gone, but not from history")
+    assert [reason for reason, _ in hygiene.pushing(tmp_path, "HEAD")] == ["deploy_key holds a private key"]

@@ -16,7 +16,7 @@ _LOCATION = frozenset({"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_
 def output(git: str, root: Path, *argv: str, raw: bool = False) -> str | None:
     """What `git ARGV` prints, run in `root` with the git at `git`, stripped unless `raw`, or None when it fails."""
     environment = {name: value for name, value in os.environ.items() if name not in _LOCATION}
-    found = subprocess.run([git, *argv], cwd=root, env=environment, capture_output=True, text=True, check=False)
+    found = subprocess.run([git, *argv], cwd=root, env=environment, capture_output=True, encoding="utf-8", errors="surrogateescape", check=False)  # git's, whatever the locale's
     if found.returncode != 0:
         return None
     return found.stdout if raw else found.stdout.strip()

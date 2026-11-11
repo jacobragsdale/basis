@@ -23,7 +23,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from basis.core import check, clone, mutation, qa, review
+from basis.core import check, clone, hygiene, mutation, qa, review
 from basis.core.check import Runner
 from basis.core.errors import BasisError
 from basis.core.settings import Settings, locate
@@ -54,6 +54,8 @@ def full(  # noqa: PLR0913 -- the repo, its parts, and how the check reaches the
     commit = found.head() if found is not None else None
     clean = found is not None and found.clean()  # before the check, which may write what git does not ignore
     checked = check.check(repo, files, run=run, checks=check.checks_of(parts)) == 0
+    if commit is not None:  # what the commit hook checks of a staged file, of each file a commit made with --no-verify adds
+        checked = not sum(fail(*problem) for problem in hygiene.pushing(repo, commit)) and checked
     if checked:
         regressed = _regress(parts, folder, report)
         tier = _qa(repo, parts, commit=commit, folder=folder, report=report) if with_qa else _skip_qa(QA_LATER)

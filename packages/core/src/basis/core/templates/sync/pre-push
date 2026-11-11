@@ -34,12 +34,23 @@ prefix=$(git rev-parse --show-prefix) # the repo's folder in its clone, empty at
 refs=$(cat) # each line: LOCAL_REF LOCAL_COMMIT REMOTE_REF REMOTE_COMMIT
 checked=" "
 failed=0
-while read -r _ commit _ _; do
+records="$(git rev-parse --path-format=absolute --git-common-dir)/basis/checks/$prefix"
+while read -r ref commit _ _; do
     case "$commit" in
         *[!0]*) ;;
         *) continue ;; # a deletion, which pushes no commit
     esac
+    commit=$(git rev-parse --verify --quiet "$commit^{commit}" </dev/null || printf '%s' "$commit") # a tag's commit
     case "$checked" in *" $commit "*) continue ;; esac
+    case "$ref" in
+        refs/tags/*)
+            if grep -q '"passed": true' "$records$commit.json" 2>/dev/null; then
+                printf 'basis: %s names commit %s, which basis check --full passed already\n' "${ref#refs/tags/}" "$commit" >&2
+                checked="$checked$commit "
+                continue
+            fi
+            ;;
+    esac
     checked="$checked$commit "
     if [ "$commit" = "$head" ] && [ -z "$(git status --porcelain </dev/null)" ]; then
         uv run --frozen --quiet basis check --full </dev/null || failed=1

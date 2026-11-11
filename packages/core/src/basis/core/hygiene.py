@@ -42,7 +42,47 @@ def problems(root: Path) -> list[Problem]:
     git = shutil.which("git")
     if git is None:
         return [("git is not on the PATH, so the staged files cannot be read", "install git, and put it on the PATH")]
-    files = _staged(git, root)
+    return _checked(git, root, _staged(git, root))
+
+
+def pushing(root: Path, commit: str) -> list[Problem]:
+    """Each problem of each file that the commits up to `commit` no remote holds yet add or change, as the push hook's
+    `basis check --full` reads them: what a commit made with `git commit --no-verify` skipped, a key since deleted
+    among it, since the history holds it."""
+    git = shutil.which("git")
+    if git is None:
+        return [("git is not on the PATH, so the commits being pushed cannot be read", "install git, and put it on the PATH")]
+    argv = [git, "log", "--raw", "-z", "--no-renames", "--no-abbrev", "--relative", "--format=", "--diff-filter=AM", commit, "--not", "--remotes"]
+    out = subprocess.run(argv, cwd=root, capture_output=True, check=True).stdout
+    files: dict[str, Staged] = {}
+    fields = out.split(b"\0")
+    index = 0
+    while index < len(fields) - 1:
+        header = fields[index].strip(b"\n")
+        if not header.startswith(b":"):
+            index += 1
+            continue
+        _, mode, _, blob, _ = header.decode().split(" ")
+        name = fields[index + 1].decode()
+        if mode != _SUBMODULE:
+            files.setdefault(blob, Staged(name, blob))
+        index += 2
+    found = _checked(git, root, list(files.values()))
+    pushed = [(reason, _pushed_fix(fix)) for reason, fix in found]
+    return list(dict.fromkeys(pushed))
+
+
+def _pushed_fix(fix: str) -> str:
+    """A staged file's fix, as it reads for a file in a commit being pushed, which unstaging no longer takes out."""
+    found = re.match(r"unstage it with `git rm --cached (?P<name>[^`]+)`(?P<rest>.*)$", fix)
+    if found is None:
+        return fix
+    name = found["name"]
+    return f"take it out of every commit being pushed, as `git reset --soft @{{upstream}}`, `git rm --cached {name}` and committing again do{found['rest']}"
+
+
+def _checked(git: str, root: Path, files: list[Staged]) -> list[Problem]:
+    """Each problem of each of `files`, by its object in git."""
     sizes = _sizes(git, root, [file.blob for file in files])
     found: list[Problem] = []
     for file in files:

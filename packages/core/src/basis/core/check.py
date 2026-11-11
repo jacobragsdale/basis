@@ -68,6 +68,7 @@ def check(repo: Path, files: Sequence[AgentFiles], *, run: Runner, staged: bool 
         failures += fail(f"{names} {'does' if len(stale) == 1 else 'do'} not match what the installed basis writes", "run `uv run basis sync`, which rewrites or removes each")
     if (found := hooks.problem(repo)) is not None:
         failures += fail(*found)
+    failures += sum(fail(*problem) for problem in hooks.unexecutable(repo))
     if tools.owned([part.tools for part in files]) and (pyproject := repo / "pyproject.toml").is_file():
         for name in tools.tables(pyproject):
             file = tools.FILES[tools.OWNED.index(name)]

@@ -18,7 +18,7 @@ UV = """#!/bin/sh
 # CHECK fails it, recording the folder and the commit it checked.
 printf '%s\\n' "$*" >> "$UV_LOG"
 case "$*" in
-    *"ruff format"*) for file in "$@"; do case "$file" in *.py) printf '# formatted\\n' >> "$file" ;; esac; done ;;
+    *"ruff format"*) for file in "$@"; do case "$file" in *.py) sed -i 's/[[:space:]]*$//' "$file"; printf '# formatted\\n' >> "$file" ;; esac; done ;;
     *"basis check"*) printf '%s %s\\n' "$PWD" "$(git rev-parse --verify --quiet HEAD || echo none)" >> "$UV_LOG.checks"; exit "${CHECK:-0}" ;;
 esac
 """
@@ -259,3 +259,42 @@ def test_the_push_hook_of_a_repo_in_a_folder_of_its_clone_checks_that_folder_of_
     assert folder.relative_to(folder.parents[1]) == Path("services/prices")
     assert folder.parents[1].name.startswith(".clone.push.")
     assert worktrees(top, git) == [f"worktree {top}"]
+
+
+def test_whitespace_in_a_python_file_the_formatter_fixes_does_not_stop_the_commit(hooked: Path, git: Git) -> None:
+    (hooked / "jobs").mkdir()
+    (hooked / "jobs/prices.py").write_text("x = 1   \n", encoding="utf-8")
+    git(hooked, "add", "--all")
+    assert committed(hooked).returncode == 0
+    assert git(hooked, "show", "HEAD:jobs/prices.py") == "x = 1\n# formatted\n"
+
+
+def test_a_hook_staged_without_its_executable_bit_is_committed_with_it(hooked: Path, git: Git) -> None:
+    """As Git for Windows stages a hook, whose file system keeps no executable bit: git in WSL then skips it."""
+    git(hooked, "add", "--all")
+    git(hooked, "update-index", "--chmod=-x", "--", ".githooks/pre-commit")
+    assert committed(hooked).returncode == 0
+    assert git(hooked, "ls-files", "-s", "--", ".githooks/pre-commit").split(" ")[0] == "100755"
+
+
+def test_a_tag_of_a_commit_already_checked_is_not_checked_again(pushing: Path, tmp_path: Path, git: Git) -> None:
+    head = git(pushing, "rev-parse", "HEAD").strip()
+    record = Path(git(pushing, "rev-parse", "--git-common-dir").strip())
+    record = (pushing / record if not record.is_absolute() else record) / "basis" / "checks" / f"{head}.json"
+    record.parent.mkdir(parents=True)
+    record.write_text('{\n  "passed": true\n}', encoding="utf-8")  # as basis check --full records a pass
+    git(pushing, "tag", "--annotate", "--message", "a release", "v1.0.0")
+    assert pushed(pushing, "v1.0.0").returncode == 0
+    assert checks(tmp_path) == []
+
+
+def test_a_hook_the_index_holds_without_its_executable_bit_is_named_with_the_fix(hooked: Path, git: Git) -> None:
+    git(hooked, "add", "--all")
+    assert hooks.unexecutable(hooked) == []
+    git(hooked, "update-index", "--chmod=-x", "--", ".githooks/pre-push")
+    assert hooks.unexecutable(hooked) == [
+        (
+            ".githooks/pre-push is committed without its executable bit, so git in WSL or on Linux skips it",
+            "run `git update-index --chmod=+x -- .githooks/pre-push`, and commit, as the commit hook now does",
+        )
+    ]
