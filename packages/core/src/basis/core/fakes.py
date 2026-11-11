@@ -30,6 +30,7 @@ from basis.core.databases.base import LEDGER_COLUMNS, Bind, Counts, LedgerEntry,
 from basis.core.databases.failures import failure
 from basis.core.ddl import ORACLE_VARCHAR_LIMIT
 from basis.core.destination import DestColumn, Dialect, TableSpec, Unit
+from basis.core.dialects import of
 from basis.core.errors import DATABASE_KINDS, KINDS, BadReply, Conflict, Denied, Failed, NotFound, Rejected, ServiceError, Timeout, Unavailable
 from basis.core.interval import Interval
 from basis.core.mongo import Upserted
@@ -621,7 +622,7 @@ class _DatabaseWriter(_DatabaseReader):
         table = for_writing(target, frame)
         names = [str(name) for name in table.column_names]
         rows = [dict(zip(names, values, strict=True)) for values in rows_of(table)]
-        if self.database.dialect == "oracle":
+        if of(self.database.dialect).empty_is_null:
             return [{name: None if value == "" else value for name, value in row.items()} for row in rows]
         return rows
 

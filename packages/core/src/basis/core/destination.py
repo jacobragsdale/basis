@@ -16,10 +16,10 @@ import numpy as np
 import pandas as pd
 
 from basis.core import frames
+from basis.core.dialects import Dialect, of
 from basis.core.frames import WHOLE
-from basis.core.tables import Changes, Column, Kind, Target
+from basis.core.tables import Changes, Column, Target
 
-type Dialect = Literal["mssql", "oracle"]
 type Unit = Literal["characters", "UTF-16 units", "bytes"]
 UNICODE = frozenset({"utf-8", "utf-16-le", "utf-16-be"})
 """The encodings that store any text."""
@@ -66,26 +66,6 @@ _WHOLE = frozenset({"TINYINT", "SMALLINT", "INT", "BIGINT"})
 """SQL Server's integer types, which a float binds into as an integer's text, and an identifier's text too."""
 _DECIMAL = frozenset({"DECIMAL", "NUMERIC", "NUMBER"})
 """The decimal types, which a float binds into as its shortest decimal text, for the column's scale to round."""
-_TYPES: dict[Dialect, dict[Kind, frozenset[str]]] = {
-    "mssql": {
-        "float": frozenset({"FLOAT", "REAL", "DECIMAL", "NUMERIC"}) | _WHOLE,
-        "str": frozenset({"CHAR", "VARCHAR", "NCHAR", "NVARCHAR", "TEXT", "NTEXT"}) | _WHOLE,
-        "bool": frozenset({"BIT"}),
-        "date": frozenset({"DATE", "DATETIME2", "DATETIME", "SMALLDATETIME"}),
-        "datetime": frozenset({"DATETIME2", "DATETIME", "SMALLDATETIME"}),
-    },
-    "oracle": {
-        "float": frozenset({"BINARY_DOUBLE", "BINARY_FLOAT", "FLOAT", "NUMBER"}),
-        "str": frozenset({"CHAR", "NCHAR", "VARCHAR2", "NVARCHAR2", "CLOB", "NCLOB", "NUMBER"}),
-        "bool": frozenset({"BOOLEAN", "NUMBER"}),
-        "date": frozenset({"DATE", "TIMESTAMP"}),
-        "datetime": frozenset({"TIMESTAMP", "DATE"}),
-    },
-}
-"""The types that take each kind of column's values, given the checks below: a float into a float's type, a decimal's,
-which its scale rounds it to, or an integer's, where it is whole; text into a text type, or, where it is an
-identifier's whole number, an integer's, which the server converts it to."""
-
 type Binding = Literal["float", "decimal", "whole"]
 """How a float binds into a column: as a float, as its shortest decimal text, or as a whole number's text."""
 
@@ -105,46 +85,14 @@ _SECONDS_ONLY = frozenset({"DATETIME", "SMALLDATETIME", "DATE"})
 minute, and Oracle's `DATE` to the second."""
 
 
-RESERVED: dict[Dialect, frozenset[str]] = {
-    "mssql": frozenset(
-        """ADD ALL ALTER AND ANY AS ASC AUTHORIZATION BACKUP BEGIN BETWEEN BREAK BROWSE BULK BY CASCADE CASE CHECK
-        CHECKPOINT CLOSE CLUSTERED COALESCE COLLATE COLUMN COMMIT COMPUTE CONSTRAINT CONTAINS CONTAINSTABLE CONTINUE
-        CONVERT CREATE CROSS CURRENT CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER CURSOR DATABASE DBCC
-        DEALLOCATE DECLARE DEFAULT DELETE DENY DESC DISK DISTINCT DISTRIBUTED DOUBLE DROP DUMP ELSE END ERRLVL ESCAPE
-        EXCEPT EXEC EXECUTE EXISTS EXIT EXTERNAL FETCH FILE FILLFACTOR FOR FOREIGN FREETEXT FREETEXTTABLE FROM FULL
-        FUNCTION GOTO GRANT GROUP HAVING HOLDLOCK IDENTITY IDENTITY_INSERT IDENTITYCOL IF IN INDEX INNER INSERT
-        INTERSECT INTO IS JOIN KEY KILL LEFT LIKE LINENO LOAD MERGE NATIONAL NOCHECK NONCLUSTERED NOT NULL NULLIF OF
-        OFF OFFSETS ON OPEN OPENDATASOURCE OPENQUERY OPENROWSET OPENXML OPTION OR ORDER OUTER OVER PERCENT PIVOT PLAN
-        PRECISION PRIMARY PRINT PROC PROCEDURE PUBLIC RAISERROR READ READTEXT RECONFIGURE REFERENCES REPLICATION
-        RESTORE RESTRICT RETURN REVERT REVOKE RIGHT ROLLBACK ROWCOUNT ROWGUIDCOL RULE SAVE SCHEMA SECURITYAUDIT SELECT
-        SEMANTICKEYPHRASETABLE SEMANTICSIMILARITYDETAILSTABLE SEMANTICSIMILARITYTABLE SESSION_USER SET SETUSER
-        SHUTDOWN SOME STATISTICS SYSTEM_USER TABLE TABLESAMPLE TEXTSIZE THEN TO TOP TRAN TRANSACTION TRIGGER TRUNCATE
-        TRY_CONVERT TSEQUAL UNION UNIQUE UNPIVOT UPDATE UPDATETEXT USE USER VALUES VARYING VIEW WAITFOR WHEN WHERE
-        WHILE WITH WITHIN WRITETEXT""".split()  # noqa: SIM905 -- a list of words, which a string holds legibly
-    ),
-    "oracle": frozenset(
-        """ACCESS ADD ALL ALTER AND ANY AS ASC AUDIT BETWEEN BY CHAR CHECK CLUSTER COLUMN COMMENT COMPRESS CONNECT CREATE
-        CURRENT DATE DECIMAL DEFAULT DELETE DESC DISTINCT DROP ELSE EXCEPT EXCLUSIVE EXISTS FILE FLOAT FOR FROM GRANT
-        GROUP HAVING IDENTIFIED IMMEDIATE IN INCREMENT INDEX INITIAL INSERT INTEGER INTERSECT INTO IS LEVEL LIKE LOCK
-        LONG MAXEXTENTS MINUS MLSLABEL MODE MODIFY NOAUDIT NOCOMPRESS NOT NOWAIT NULL NUMBER OF OFFLINE ON ONLINE
-        OPTION OR ORDER PCTFREE PRIOR PUBLIC RAW RENAME RESOURCE REVOKE ROW ROWID ROWNUM ROWS SELECT SESSION SET SHARE
-        SIZE SMALLINT START SUCCESSFUL SYNONYM SYSDATE TABLE THEN TO TRIGGER UID UNION UNIQUE UPDATE USER VALIDATE
-        VALUES VARCHAR VARCHAR2 VIEW WHENEVER WHERE WITH""".split()  # noqa: SIM905 -- as above
-    ),
-}
-"""The words each dialect reserves, which an unquoted column may not be named: SQL Server's reserved keywords, and
-Oracle's reserved words, 23ai's `V$RESERVED_WORDS` with those 19c reserves too."""
-_DIALECT_NAMES: dict[Dialect, str] = {"mssql": "SQL Server", "oracle": "Oracle"}
-
-
 def check_table(target: Target, spec: TableSpec) -> list[str]:
     """Why the table cannot take the row's columns, whatever their values."""
     reasons: list[str] = []
     names = {column.name for column in target.columns}
     for column in target.columns:
         found = spec.columns.get(column.name)
-        if column.name.upper() in RESERVED[spec.dialect]:
-            reasons.append(f"{column.name}: {_DIALECT_NAMES[spec.dialect]} reserves the word {column.name.upper()}, and basis never quotes a column's name: rename the row's column, and the table's")
+        if column.name.upper() in of(spec.dialect).reserved:
+            reasons.append(f"{column.name}: {of(spec.dialect).title} reserves the word {column.name.upper()}, and basis never quotes a column's name: rename the row's column, and the table's")
         elif found is None:
             reasons.append(f"{column.name}: {spec.table} has no such column")
         elif found.generated:
@@ -162,7 +110,7 @@ def check_table(target: Target, spec: TableSpec) -> list[str]:
 def _type_problem(dialect: Dialect, column: Column, found: DestColumn) -> str | None:
     if found.type == "JSON":
         return None if column.json else "a JSON column holds JSON text, objects and arrays: declare the row's column Annotated[str, etl.Json()]"
-    if found.type not in _TYPES[dialect][column.kind]:
+    if found.type not in of(dialect).types[column.kind]:
         return f"a {found.type} column cannot hold a row's {column.kind} values exactly"
     match column.kind, found.type:
         case "str", "NUMBER" if found.scale != 0:
@@ -198,7 +146,7 @@ def _value_problems(column: Column, found: DestColumn, series: pd.Series, dialec
         case "str" if found.type in _WHOLE or found.type == "NUMBER":
             problems.extend(_identifier_problems(found, values))
         case "str":
-            if dialect == "oracle" and (empty := int((values == "").sum())):
+            if of(dialect).empty_is_null and (empty := int((values == "").sum())):
                 problems.append(
                     f"{empty} empty strings, which Oracle stores as NULL, so a key or a match on them never finds the row:"
                     f" give the row None for them, as frame.replace({{{column.name!r}: {{'': None}}}})"
@@ -290,27 +238,20 @@ def _text_problems(found: DestColumn, values: pd.Series, dialect: Dialect) -> li
     if encoded is not None and encoded.lost:
         problems.append(
             f"{int(values.isin(encoded.lost).sum())} values hold characters {found.charset or found.encoding} cannot store, such as"
-            f" {encoded.first!r}, which the database would replace without an error: {_UNICODE_COLUMN[dialect]}"
+            f" {encoded.first!r}, which the database would replace without an error: {of(dialect).unicode_column}"
         )
     if found.encoding is None and found.charset is not None and len(beyond := values[~_ascii(values)]):
         first = next(character for character in str(beyond.iloc[0]) if not character.isascii())
         problems.append(
             f"{len(beyond)} values hold characters beyond ASCII, such as {first!r}, and basis does not know which of them {found.charset}"
-            f" stores, which the database would replace without an error: {_UNICODE_COLUMN[dialect]}, or add {found.charset} to"
-            f" {_CHARSETS_AT[dialect]}"
+            f" stores, which the database would replace without an error: {of(dialect).unicode_column}, or add {found.charset} to"
+            f" {of(dialect).charsets_at}"
         )
     for limit, unit in ((found.length, found.unit), (found.max_bytes, "bytes")):
         if limit is not None and (longest := _longest(distinct, unit, found.encoding, encoded)) > limit:
             measure = f"bytes in {found.charset or found.encoding}" if unit == "bytes" else unit
             problems.append(f"values up to {longest} {measure}, and the column holds {limit}")
     return problems
-
-
-_UNICODE_COLUMN: dict[Dialect, str] = {
-    "mssql": "store them in a Unicode column, NVARCHAR or a VARCHAR with a UTF-8 collation",
-    "oracle": "store them in an NVARCHAR2 or NCLOB column, whose national character set is Unicode",
-}
-_CHARSETS_AT: dict[Dialect, str] = {"mssql": "Python's codecs", "oracle": "basis.core.databases.oracle.CHARSETS"}
 
 
 def _ascii(values: pd.Series) -> pd.Series:

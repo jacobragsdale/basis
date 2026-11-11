@@ -51,7 +51,7 @@ from pydantic import AfterValidator
 from basis.api.resources import Outbox, SendMethod, checked_path
 from basis.core import ddl as core_ddl
 from basis.core.databases.base import Bind, Statements, naive_in_zone
-from basis.core.destination import Dialect
+from basis.core.dialects import Dialect, of
 from basis.core.errors import ServiceError
 from basis.core.model import Model
 from basis.core.tables import Column
@@ -228,7 +228,7 @@ class Sql:
     dialect: Dialect
 
     def _bind(self, name: str) -> str:
-        return f"%({name})s" if self.dialect == "mssql" else f":{name}"
+        return of(self.dialect).bind(name)
 
     def probe(self, *, timeout_s: float) -> None:
         self.statements.query(f"SELECT id FROM {self.table} WHERE 1 = 0", {}, timeout_s=timeout_s)
@@ -240,10 +240,7 @@ class Sql:
 
     def due(self, now: datetime, limit: int, *, timeout_s: float) -> list[Row]:
         columns, where = ", ".join(COLUMNS), f"WHERE next_at <= {self._bind('now')} AND status IN ('pending', 'refused') ORDER BY next_at, id"
-        if self.dialect == "mssql":
-            sql = f"SELECT TOP ({self._bind('limit')}) {columns} FROM {self.table} {where}"
-        else:
-            sql = f"SELECT {columns} FROM {self.table} {where} FETCH FIRST {self._bind('limit')} ROWS ONLY"
+        sql = of(self.dialect).first(columns, self.table, where, self._bind("limit"))
         found = self.statements.query(sql, {"now": _stored(now), "limit": limit}, timeout_s=timeout_s)
         return [Row.model_validate(values) for values in found.to_pylist()]
 
@@ -312,4 +309,4 @@ def index(table: str, dialect: Dialect) -> str:
     if len(name) > NAME_LENGTH:
         digest = hashlib.sha256(table.lower().encode()).hexdigest()[:8]
         name = f"ix_{bare[: NAME_LENGTH - len('ix___due') - len(digest)]}_{digest}_due"
-    return f"{schema}.{name}" if schema and dialect == "oracle" else name
+    return f"{schema}.{name}" if schema and of(dialect).schema_indexes else name

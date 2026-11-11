@@ -257,6 +257,9 @@ class _Failing:
     def fetchone(self) -> tuple[int]:
         return (0,)
 
+    def fetchall(self) -> list[tuple[int]]:
+        return [(0,)]
+
     def close(self) -> None:
         pass
 
@@ -354,6 +357,9 @@ class _Cursor:
 
     def fetchone(self) -> tuple[int]:
         return (0,)
+
+    def fetchall(self) -> list[tuple[int]]:
+        return [(0,)]
 
     def unconstrained_numbers(self, sql: str, binds: object) -> list[str]:
         del sql, binds

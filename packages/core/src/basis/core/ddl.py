@@ -3,11 +3,10 @@ that publishes writes beside them. A run never creates or alters a table: these 
 to run them, by `basis ddl`: a part's tables, such as a job's, and the ledger. A string column without a
 maximum length is unbounded, and says so in a comment beside it. Pure: these only build text."""
 
-from basis.core.destination import Dialect
-from basis.core.tables import Column, Kind, Target
+from basis.core.dialects import ORACLE_VARCHAR_LIMIT, Dialect, of
+from basis.core.tables import Column, Target
 
-ORACLE_VARCHAR_LIMIT = 4000
-"""The most characters an Oracle VARCHAR2 holds without extended data types."""
+__all__ = ["ORACLE_VARCHAR_LIMIT", "create_table", "ledger", "ledger_tables", "locks"]
 
 
 def create_table(target: Target, dialect: Dialect) -> str:
@@ -19,32 +18,15 @@ def create_table(target: Target, dialect: Dialect) -> str:
     return f"CREATE TABLE {target.table} (\n" + "\n".join(lines) + "\n);\n"
 
 
-_LEDGER: dict[Dialect, list[str]] = {
-    "mssql": [
-        "run_id CHAR(36) NOT NULL", "job NVARCHAR(200) NOT NULL", "output NVARCHAR(128) NOT NULL", "table_name NVARCHAR(261) NOT NULL",
-        "interval_start DATETIME2 NULL", "interval_end DATETIME2 NULL", "rerun_safe BIT NOT NULL", "deleted BIGINT NOT NULL",
-        "upserted BIGINT NOT NULL", "inserted_new BIGINT NOT NULL", "inserted BIGINT NOT NULL", "published_at DATETIME2 NOT NULL",
-        "etl_version NVARCHAR(50) NOT NULL", "detail NVARCHAR(MAX) NULL",
-    ],
-    "oracle": [
-        "run_id CHAR(36) NOT NULL", "job VARCHAR2(200 CHAR) NOT NULL", "output VARCHAR2(128 CHAR) NOT NULL", "table_name VARCHAR2(261 CHAR) NOT NULL",
-        "interval_start TIMESTAMP NULL", "interval_end TIMESTAMP NULL", "rerun_safe NUMBER(1) NOT NULL", "deleted NUMBER(19) NOT NULL",
-        "upserted NUMBER(19) NOT NULL", "inserted_new NUMBER(19) NOT NULL", "inserted NUMBER(19) NOT NULL", "published_at TIMESTAMP NOT NULL",
-        "etl_version VARCHAR2(50 CHAR) NOT NULL", "detail CLOB NULL",
-    ],
-}  # fmt: skip
-"""The ledger's columns, in the order `basis.core.databases.base.LEDGER_COLUMNS` writes them."""
-
-
 def ledger(table: str, dialect: Dialect) -> str:
     """The ledger, one table per database a part publishes to: a row per table each run published, in the transaction
     that wrote it, keyed by run and output, and indexed for the rerun guard's lookup by job, output and interval. On
     Oracle, beside it, a row per output for the publish's lock (`locks`): SQL Server takes an application lock, which
     needs no table, and Oracle's own, `DBMS_LOCK`, needs a grant a login seldom has."""
     bare = table.rsplit(".", 1)[-1].lower()
-    columns = ",\n".join(f"    {column}" for column in _LEDGER[dialect])
+    columns = ",\n".join(f"    {column}" for column in of(dialect).ledger_columns)
     text = f"CREATE TABLE {table} (\n{columns},\n    CONSTRAINT pk_{bare} PRIMARY KEY (run_id, output)\n);\nCREATE INDEX ix_{bare}_interval ON {table} (job, output, interval_start, interval_end);\n"
-    if dialect == "oracle":
+    if of(dialect).lock_table:
         text += f"CREATE TABLE {locks(table)} (\n    job VARCHAR2(200 CHAR) NOT NULL,\n    output VARCHAR2(128 CHAR) NOT NULL,\n    CONSTRAINT pk_{bare}_locks PRIMARY KEY (job, output)\n);\n"
     return text
 
@@ -56,29 +38,15 @@ def locks(ledger: str) -> str:
 
 def ledger_tables(ledger: str, dialect: Dialect) -> tuple[str, ...]:
     """The tables `ledger` prints for the ledger `ledger`, which a publish needs."""
-    return (ledger, locks(ledger)) if dialect == "oracle" else (ledger,)
-
-
-_FIXED: dict[tuple[Kind, Dialect], str] = {
-    ("float", "mssql"): "FLOAT",
-    ("float", "oracle"): "BINARY_DOUBLE",
-    ("bool", "mssql"): "BIT",
-    ("bool", "oracle"): "NUMBER(1)",
-    ("date", "mssql"): "DATE",
-    ("date", "oracle"): "DATE",
-    ("datetime", "mssql"): "DATETIME2(6)",
-    ("datetime", "oracle"): "TIMESTAMP(6)",
-}
+    return (ledger, locks(ledger)) if of(dialect).lock_table else (ledger,)
 
 
 def _type(column: Column, dialect: Dialect) -> str:
     if column.json:
-        return "JSON" if dialect == "mssql" else "CLOB"
-    if column.kind == "str" and dialect == "mssql":
-        return f"NVARCHAR({column.max_length if column.max_length is not None else 'MAX'})"
+        return of(dialect).json_type
     if column.kind == "str":
-        return f"VARCHAR2({column.max_length} CHAR)" if column.max_length is not None and column.max_length <= ORACLE_VARCHAR_LIMIT else "CLOB"
-    return _FIXED[column.kind, dialect]
+        return of(dialect).text_type(column.max_length)
+    return of(dialect).fixed[column.kind]
 
 
 def _note(column: Column) -> str:

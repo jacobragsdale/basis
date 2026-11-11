@@ -25,7 +25,8 @@ step's own commit keeps it true.
 | 10.3 The pilot | Handed over: [docs/pilot.md](docs/pilot.md) is the commands to run at the firm and what to send back, one section per item below; the answers are the maintainer's, **(work)** | the commit "Step 10.3" |
 | 11.1 One interface for a job's outputs | Done: `basis.job.effects` (a `Kind` per output that is not a table, and the one loop `run` and `resume` share), `basis.job.replays`; a resume now stops at the first kind that fails, as a run does | the commit "Step 11.1" |
 | 11.2 One descriptor per kind of resource | Done: `basis.core.kinds` (each kind but a database: its settings, its fake, doctor's check, the QA tier's refusal), `basis.core.ledgered` (the one ledgered effect, which sending and the lake share), `opened.transport_failure`; `basis doctor --env` now checks HTTP services, Slack, email relays and Mongo | the commit "Step 11.2" |
-| 11.3 to 11.7 | To do | |
+| 11.3 One object per database dialect | Done: `basis.core.dialects` (`SqlDialect`: types, reserved words, DDL, ledger columns, binds, ping, a first-rows query), which `destination`, `ddl`, `doctor`, `fakes` and basis-api's outbox read; the ledger's queries that both writers duplicated are `databases.base.published`, `recorded` and `overlapping` | the commit "Step 11.3" |
+| 11.4 to 11.7 | To do | |
 | 12.1 to 12.9 | To do | |
 
 Phases 6 to 8 first reached GitHub's CI on 2026-11-11; what it found is fixed in commits of their own, named

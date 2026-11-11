@@ -10,7 +10,6 @@ runs it (`basis.core.traces.tracer`). A caller that writes its own SQL, such as 
 of its own, and which the caller gives a span of its own, with its deadline."""
 
 import logging
-import re
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -27,6 +26,7 @@ from opentelemetry.trace import Span, SpanKind
 
 from basis.core import frames, traces
 from basis.core.destination import Binding, TableSpec
+from basis.core.dialects import SqlDialect
 from basis.core.interval import Interval
 from basis.core.tables import Changes, Target
 
@@ -174,9 +174,9 @@ def ledger_values(entry: LedgerEntry) -> tuple[object, ...]:
     )  # fmt: skip
 
 
-def binds_named(sql: str, pattern: str, interval: Interval | None, *, what: str) -> dict[str, datetime]:
-    """The interval's binds that a query names, by `pattern`, a regular expression with a `{name}` field."""
-    names = [name for name in ("interval_start", "interval_end") if re.search(pattern.format(name=name), sql)]
+def binds_named(sql: str, dialect: SqlDialect, interval: Interval | None, *, what: str) -> dict[str, datetime]:
+    """The interval's binds that a query names, in `dialect`'s binds."""
+    names = [name for name in ("interval_start", "interval_end") if dialect.binds(sql, name)]
     if names and interval is None:
         msg = f"{what} binds the interval ({', '.join(names)}), and this run has none: give it one"
         raise ValueError(msg)
@@ -184,6 +184,32 @@ def binds_named(sql: str, pattern: str, interval: Interval | None, *, what: str)
         return {}
     binds = interval.binds()
     return {name: binds[name] for name in names}
+
+
+type Rows = Callable[[str, Mapping[str, object]], list[tuple[object, ...]]]
+"""A writer's query of its transaction: the rows a statement returns, each statement a span."""
+
+
+def published(rows: Rows, dialect: SqlDialect, ledger: str, run_id: str) -> bool:
+    """Whether `ledger` holds a row of the run `run_id`: `Writer.published`, in either dialect."""
+    found = rows(f"SELECT COUNT(*) FROM {ledger} WHERE run_id = {dialect.bind('run_id')}", {"run_id": run_id})
+    return bool(found) and int(str(found[0][0])) > 0
+
+
+def recorded(rows: Rows, dialect: SqlDialect, ledger: str, run_id: str) -> dict[str, Counts]:
+    """What `ledger` counted of each output the run `run_id` published: `Writer.recorded`."""
+    found = rows(f"SELECT output, deleted, upserted, inserted_new, inserted FROM {ledger} WHERE run_id = {dialect.bind('run_id')}", {"run_id": run_id})
+    return {str(row[0]): Counts(*(int(str(value)) for value in row[1:])) for row in found}
+
+
+def overlapping(rows: Rows, dialect: SqlDialect, ledger: str, *, job: str, output: str, interval: Interval | None) -> list[str]:  # noqa: PLR0913 -- the ledger, and what it is asked of
+    """The runs `ledger` has of the job's output for an interval overlapping `interval`, or at all: `Writer.overlapping`."""
+    binds: dict[str, object] = {"job": job, "output": output}
+    sql = f"SELECT DISTINCT run_id FROM {ledger} WHERE job = {dialect.bind('job')} AND output = {dialect.bind('output')}"
+    if interval is not None:
+        binds |= interval.binds()
+        sql += f" AND interval_start < {dialect.bind('interval_end')} AND interval_end > {dialect.bind('interval_start')}"
+    return sorted({str(row[0]).strip() for row in rows(sql, binds)})
 
 
 def for_writing(target: Target, frame: pd.DataFrame) -> pa.Table:

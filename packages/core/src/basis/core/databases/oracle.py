@@ -48,12 +48,16 @@ from basis.core.databases.base import (
     lower_cased,
     naive_in_zone,
     number_text,
+    overlapping,
+    published,
+    recorded,
     slices,
     span,
     statement,
 )
 from basis.core.databases.failures import Boundary, ending, failures, quietly
 from basis.core.destination import DestColumn, TableSpec, binding
+from basis.core.dialects import ORACLE
 from basis.core.errors import Conflict, Denied, Failed, Rejected, ServiceError, Timeout, Unavailable
 from basis.core.interval import Interval
 from basis.core.logs import ms_since
@@ -63,7 +67,6 @@ from basis.core.tables import Changes, Delete, Target
 log = logging.getLogger(__name__)
 CONNECT_TIMEOUT_S = 30
 """The longest a login waits, however long its round trips may take."""
-_BIND = r"(?<![:\w]):{name}\b"
 _NO_SCALE = -127
 """The scale the driver describes a `NUMBER` with no precision by."""
 
@@ -281,7 +284,7 @@ class OracleReader:
     max_rows: int
 
     def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pd.DataFrame:
-        binds = binds_named(sql, _BIND, interval, what=what)
+        binds = binds_named(sql, ORACLE, interval, what=what)
         tables: list[pa.Table] = []
         rows = 0
         try:
@@ -379,18 +382,15 @@ class OracleWriter(OracleReader):
     committed: bool = False
 
     def published(self, run_id: str) -> bool:
-        sql = f"SELECT COUNT(*) FROM {self.ledger} WHERE run_id = :run_id"
-        with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql):
-            cursor.execute(sql, {"run_id": run_id})
-            row = cursor.fetchone()
-        return row is not None and int(str(row[0])) > 0
+        return published(self._rows, ORACLE, self.ledger, run_id)
 
     def recorded(self, run_id: str) -> dict[str, Counts]:
-        sql = f"SELECT output, deleted, upserted, inserted_new, inserted FROM {self.ledger} WHERE run_id = :run_id"
+        return recorded(self._rows, ORACLE, self.ledger, run_id)
+
+    def _rows(self, sql: str, binds: Mapping[str, object]) -> list[tuple[object, ...]]:
         with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql):
-            cursor.execute(sql, {"run_id": run_id})
-            rows = cursor.fetchall()
-        return {str(row[0]): Counts(*(int(str(value)) for value in row[1:])) for row in rows}
+            cursor.execute(sql, dict(binds))
+            return [tuple(row) for row in cursor.fetchall()]
 
     def lock(self, job: str, output: str) -> None:
         """The output's row of the lock table beside the ledger (`basis.core.ddl.locks`), inserted the first time and
@@ -411,14 +411,7 @@ class OracleWriter(OracleReader):
                 cursor.fetchall()
 
     def overlapping(self, job: str, output: str, interval: Interval | None) -> list[str]:
-        binds: dict[str, object] = {"job": job, "output": output}
-        sql = f"SELECT run_id FROM {self.ledger} WHERE job = :job AND output = :output"
-        if interval is not None:
-            binds |= interval.binds()
-            sql += " AND interval_start < :interval_end AND interval_end > :interval_start"
-        with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql):
-            cursor.execute(sql, binds)
-            return sorted({str(row[0]).strip() for row in cursor.fetchall()})
+        return overlapping(self._rows, ORACLE, self.ledger, job=job, output=output, interval=interval)
 
     def apply(self, target: Target, changes: Changes, spec: TableSpec) -> Counts:
         deleted = upserted = inserted_new = inserted = 0

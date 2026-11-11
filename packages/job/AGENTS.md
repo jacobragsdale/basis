@@ -37,6 +37,7 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
 | `loader.py` | Loading a job's inputs, each database in one read-only transaction, each fetch's GET, or from a folder of files, each thread in a copy of the run's context, so its spans are the run's; `json_rows`, the one place a fetch's rows become a frame, whose refusal of a reply is a `BadReply`. |
 | core `opened.py`, `fakes.py`, `deadlines.py` | basis-core's resources as a run opens them: another service's client from the settings alone, with each call's span and deadline, the system's clock and new ids; their fakes, and a database's, `fakes.Database`, which core's `tests/test_database_contract.py` holds to SQL Server's and Oracle's writers and every publishing test uses; and each call's deadline. |
 | `changes.py` | From outputs to conformed `Changes` per table, and the core's checks on them. |
+| core `dialects.py` | Each SQL dialect as one object: its types, the words it reserves, the DDL basis prints, its ledger's columns, its binds and the query that checks a login. |
 | core `destination.py` | `TableSpec`, a destination as its database describes it, and the checks that a row and its values fit it. |
 | core `databases/` | `base.py`, the reader and writer protocols and what the dialects share, a statement's span among it; `mssql.py` and `oracle.py`, each dialect's reads, table descriptions, writes and ledger, each statement a span. |
 | core `publish.py` | Writing each database in one transaction, in name order, with the rerun guard and ledger rows. |
@@ -98,10 +99,10 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
 
 ## Changing the framework
 
-- A database dialect is a module in core's `databases/` with a reader, a writer, its settings in core's
-  `settings.py`, its types in core's `destination._TYPES` and `ddl._FIXED`, and its ledger columns in core's
-  `ddl._LEDGER`; add its driver to the import contract and to core's `testing.FORBIDDEN`, and its container to the
-  integration tier and CI.
+- A database dialect is a `SqlDialect` in core's `dialects.py` (its types, reserved words, DDL, ledger columns, binds
+  and ping), a module in core's `databases/` with a reader and a writer, which take the ledger's queries from
+  `databases/base.py`, and its settings in core's `settings.py`; add its driver to the import contract and to core's
+  `testing.FORBIDDEN`, and its container to the integration tier and CI.
 - A write mode is a frozen dataclass in `outputs.py`, a case in `changes.build`, and a row in the reference's table.
 - An output that is not a table is a declaration in `outputs.py` that subclasses `Effect` (or `FrameEffect`, for one
   written from a frame), a `Kind` in `effects.py` added to `KINDS` where it goes in the order, its plan's and its

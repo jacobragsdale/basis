@@ -29,10 +29,10 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from basis.core import calendars, environments, hooks, kinds, lake, qa, settings
+from basis.core import calendars, dialects, environments, hooks, kinds, lake, qa, settings
 from basis.core.databases import Database, open_database
 from basis.core.errors import BasisError, ServiceError
-from basis.core.settings import MssqlSettings, OracleSettings, Settings
+from basis.core.settings import Settings
 from basis.core.storage import Root
 from basis.core.sync import Problem
 from basis.core.verbs import Part, fail
@@ -272,10 +272,6 @@ def _environment(repo: Path, desktop: Desktop, describe: Describe) -> list[Found
     return found
 
 
-PING: dict[type[MssqlSettings | OracleSettings], str] = {MssqlSettings: "SELECT 1 AS answered", OracleSettings: "SELECT 1 AS answered FROM DUAL"}
-"""The query each dialect's logins are checked with, which reads no table."""
-
-
 def _environment_of(  # noqa: PLR0913 -- the environment, and how doctor reaches what it configures
     given: str, repo: Path | None, desktop: Desktop, describe: Describe, *, databases: Callable[[Settings, str], Database], lakes: Callable[[str, Settings], lake.Lake]
 ) -> list[Found]:
@@ -324,7 +320,7 @@ def _logins(env: str, name: str, configured: Settings, where: str, databases: Ca
         what = f"{env}'s database {name}: its {login} login"
         try:
             with database.statements(writes=writes) as statements:
-                statements.query(PING[type(found)], {}, timeout_s=found.timeout_s)
+                statements.query(dialects.of(found.kind).ping, {}, timeout_s=found.timeout_s)
         except (ServiceError, BasisError) as error:
             reason = f"{what} does not answer ({type(error).__name__}: {' '.join(str(error).split())})"
             checked.append(Found(what, (reason, f"check BASIS_DATABASES__{name.upper()}__* in {where}, and that this machine may reach the database")))

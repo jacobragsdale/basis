@@ -64,6 +64,9 @@ from basis.core.databases.base import (
     lower_cased,
     naive_in_zone,
     number_text,
+    overlapping,
+    published,
+    recorded,
     rows_of,
     slices,
     span,
@@ -71,6 +74,7 @@ from basis.core.databases.base import (
 )
 from basis.core.databases.failures import Boundary, ending, quietly
 from basis.core.destination import DestColumn, TableSpec, Unit, binding
+from basis.core.dialects import MSSQL
 from basis.core.errors import Conflict, Denied, Failed, Rejected, ServiceError, Timeout, Unavailable
 from basis.core.interval import Interval
 from basis.core.logs import ms_since
@@ -80,7 +84,6 @@ from basis.core.tables import Changes, Delete, Kind, Target
 log = logging.getLogger(__name__)
 LOGIN_TIMEOUT_S = 30
 """The longest a login waits, however long its statements may take."""
-_BIND = r"%\({name}\)s"
 _STAGE = "#etl_stage"
 _MATCH = "#etl_match"
 
@@ -345,7 +348,7 @@ class MssqlReader:
     max_rows: int
 
     def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pd.DataFrame:
-        binds = binds_named(sql, _BIND, interval, what=what)
+        binds = binds_named(sql, MSSQL, interval, what=what)
         with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql) as traced:
             if binds:
                 cursor.execute(sql, binds)
@@ -511,18 +514,15 @@ class MssqlWriter(MssqlReader):
     committed: bool = False
 
     def published(self, run_id: str) -> bool:
-        sql = f"SELECT COUNT(*) FROM {self.ledger} WHERE run_id = %(run_id)s"
-        with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql):
-            cursor.execute(sql, {"run_id": run_id})
-            row = cursor.fetchone()
-        return row is not None and int(str(row[0])) > 0
+        return published(self._rows, MSSQL, self.ledger, run_id)
 
     def recorded(self, run_id: str) -> dict[str, Counts]:
-        sql = f"SELECT output, deleted, upserted, inserted_new, inserted FROM {self.ledger} WHERE run_id = %(run_id)s"
+        return recorded(self._rows, MSSQL, self.ledger, run_id)
+
+    def _rows(self, sql: str, binds: Mapping[str, object]) -> list[tuple[object, ...]]:
         with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql):
-            cursor.execute(sql, {"run_id": run_id})
-            rows = cursor.fetchall()
-        return {str(row[0]): Counts(*(int(str(value)) for value in row[1:])) for row in rows}
+            cursor.execute(sql, dict(binds))
+            return [tuple(row) for row in cursor.fetchall()]
 
     def lock(self, job: str, output: str) -> None:
         """An application lock, `sp_getapplock`, owned by the transaction, which any login may take; it waits as long
@@ -536,14 +536,7 @@ class MssqlWriter(MssqlReader):
             raise Conflict(detail, resource=self.database)
 
     def overlapping(self, job: str, output: str, interval: Interval | None) -> list[str]:
-        binds: dict[str, object] = {"job": job, "output": output}
-        sql = f"SELECT DISTINCT run_id FROM {self.ledger} WHERE job = %(job)s AND output = %(output)s"
-        if interval is not None:
-            binds |= interval.binds()
-            sql += " AND interval_start < %(interval_end)s AND interval_end > %(interval_start)s"
-        with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql):
-            cursor.execute(sql, binds)
-            return sorted(str(row[0]).strip() for row in cursor.fetchall())
+        return overlapping(self._rows, MSSQL, self.ledger, job=job, output=output, interval=interval)
 
     def apply(self, target: Target, changes: Changes, spec: TableSpec) -> Counts:
         deleted = upserted = inserted_new = inserted = 0
