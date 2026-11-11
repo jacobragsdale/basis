@@ -50,9 +50,9 @@ from basis.core.settings import LEDGER, MssqlSettings, OracleSettings, Settings,
 from basis.core.storage import Root
 from basis.core.sync import Problem
 from basis.core.tables import IDENTIFIER, Changes, Target
-from basis.core.verbs import Part, Qa, QaPlan, QaRun
+from basis.core.verbs import QA_KEY, Part, Qa, QaPlan, QaRun
 
-KEY = "qa"
+KEY = QA_KEY
 """The `[tool.basis]` table that declares the tier."""
 _SECTION = f"[tool.basis.{KEY}]"
 _EXAMPLE = f'{_SECTION} marker = "qa", stores = ["//files/runs-qa/NAME"], writes = {{ warehouse = ["TABLE", "etl.publishes"] }}'

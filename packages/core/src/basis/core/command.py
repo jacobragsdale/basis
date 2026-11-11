@@ -32,15 +32,17 @@ from dataclasses import dataclass
 from functools import cached_property, partial
 from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
-from typing import Literal, NoReturn, override
+from typing import TYPE_CHECKING, Literal, NoReturn, override
 
 from pydantic import ValidationError
 
-from basis.core import check, ddl, doctor, environments, full, gates, guard, hooks, invalid, logs, qa, review, settings, sync, upgrade
-from basis.core.destination import Dialect
+from basis.core import check, environments, gates, guard, hooks, invalid, logs, review, settings, sync, upgrade
 from basis.core.errors import BasisError
 from basis.core.logs import utc_now
-from basis.core.verbs import GROUP, Part, ProjectError, Runs, Shared, Verb, basis_table, error_line, fail, holding, not_a_table
+from basis.core.verbs import GROUP, QA_KEY, Part, ProjectError, Runs, Shared, Verb, basis_table, error_line, fail, holding, not_a_table
+
+if TYPE_CHECKING:  # numpy loads with the destinations, when a verb writes DDL, never for `basis --version`
+    from basis.core.destination import Dialect
 
 CORE = ("check", "review", "new", "sync", "upgrade", "doctor", "hook", "docs", "smoke")
 """Core's verbs, which no part may add: in the order `basis --help` lists them. `check`, `review`, `sync`, `upgrade`,
@@ -250,9 +252,9 @@ def declared(pyproject: Path) -> list[str]:
         raise CommandError(msg)
     names = table.get("parts")
     listed = {str(name) for name in names} if isinstance(names, list) else set[str]()
-    unknown = sorted(set(table) - {"parts", sync.APT, gates.KEY, qa.KEY} - listed)
+    unknown = sorted(set(table) - {"parts", sync.APT, gates.KEY, QA_KEY} - listed)
     if unread := [key for key in unknown if not isinstance(table[key], dict)]:
-        reads = f"parts, as {example}, {sync.APT}, {gates.KEY}, {qa.KEY}, and a table of each declared part's own, as [tool.basis.job]"
+        reads = f"parts, as {example}, {sync.APT}, {gates.KEY}, {QA_KEY}, and a table of each declared part's own, as [tool.basis.job]"
         msg = f"{pyproject}'s [tool.basis] has {', '.join(unread)}, which basis does not read: remove it; basis reads {reads}"
         raise CommandError(msg)
     if not isinstance(names, list) or not names or not all(isinstance(name, str) for name in names):
@@ -337,6 +339,8 @@ def _core(repo: Repo) -> list[Verb]:
         if args.staged:
             return fail("--staged checks a commit's staged files, and --full a commit being pushed", "give one of them")
         folder = args.settings_from.resolve() if args.settings_from is not None else repo.root
+        from basis.core import full  # noqa: PLC0415 -- the full check's tiers load pandas and the drivers when it runs
+
         return full.full(repo.root, agent_files(), repo.parts, run=check.run_command, report=reported, folder=folder, clock=utc_now, with_qa=args.with_qa)
 
     def run_sync(n: argparse.Namespace) -> int:
@@ -677,6 +681,8 @@ def _doctor_arguments(parser: argparse.ArgumentParser) -> None:
 def _diagnose(repo: Repo | None, unread: str | None, env: str | None = None) -> int:
     """`basis doctor`: the desktop, and the repo when it runs in one; `unread` says why the folder's `pyproject.toml`
     is a basis repo's that basis cannot read."""
+    from basis.core import doctor  # noqa: PLC0415 -- doctor's checks of an environment load the drivers when it runs
+
     return doctor.doctor(repo.root if repo is not None else None, repo.parts if repo is not None else {}, doctor.Desktop.here(), describe=one_line, unread=unread, env=env)
 
 
@@ -868,6 +874,8 @@ def _ledger(argv: Sequence[str]) -> int:
     except SystemExit as exited:  # --help prints, then exits
         return exited.code if isinstance(exited.code, int) else 0
     args = LedgerArgs(namespace.ledger, "mssql" if namespace.dialect == "mssql" else "oracle")
+    from basis.core import ddl  # noqa: PLC0415 -- numpy loads when the DDL is written
+
     sys.stdout.write(ddl.ledger(args.table, args.dialect))
     return 0
 

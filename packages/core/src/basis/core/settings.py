@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from pathlib import Path
 from types import NoneType, UnionType
-from typing import Annotated, Literal, Self, TypeAliasType, Union, get_args, get_origin, override
+from typing import TYPE_CHECKING, Annotated, Literal, Self, TypeAliasType, Union, get_args, get_origin, override
 
 from pydantic import BaseModel, Field, FilePath, HttpUrl, SecretStr, model_validator
 from pydantic.fields import FieldInfo
@@ -19,8 +19,10 @@ from pydantic_settings.sources.utils import parse_env_vars
 
 from basis.core.errors import BasisError
 from basis.core.model import Model
-from basis.core.storage import Root
 from basis.core.tables import IDENTIFIER
+
+if TYPE_CHECKING:  # pyarrow loads with storage, when a verb opens the run store, never for `basis --version`
+    from basis.core.storage import Root
 
 PREFIX = "BASIS_"
 RENAMED = ("ETL_SNAPSHOT_ROOT", "ETL_DATABASES__", "ETL_LOG_", "ETL_GIT_SHA", "ETL_TEST_")
@@ -308,6 +310,8 @@ class Settings(BaseSettings):
         if self.snapshot_root is None:
             msg = "no snapshot root is set, which is where `basis run` saves its snapshots and where a replay finds a run by its id: set BASIS_SNAPSHOT_ROOT, as .env.example shows"
             raise SettingsError(msg)
+        from basis.core.storage import Root  # noqa: PLC0415 -- pyarrow loads when the run store is opened
+
         return Root.at(self.snapshot_root)
 
     def database(self, name: str) -> MssqlSettings | OracleSettings:

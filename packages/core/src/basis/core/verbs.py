@@ -63,15 +63,20 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from basis.core.databases import Database
 from basis.core.errors import BasisError
 from basis.core.settings import Settings
-from basis.core.storage import Root
 from basis.core.sync import AgentFiles, Problem
+
+if TYPE_CHECKING:  # pandas and every driver load with the databases, which `basis --version` and the hooks never open
+    from basis.core.databases import Database
+    from basis.core.storage import Root
 
 GROUP = "basis.verbs"
 """The entry point group each part lists its `Part` in, by the part's name."""
+QA_KEY = "qa"
+"""The `[tool.basis]` table that declares the QA tier (`basis.core.qa`), which every command reads past."""
 
 
 @dataclass(frozen=True)

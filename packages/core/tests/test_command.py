@@ -3,6 +3,7 @@ import io
 import json
 import os
 import signal
+import subprocess
 import sys
 from collections.abc import Callable, Mapping
 from functools import partial
@@ -683,3 +684,17 @@ def test_hook_answers_an_agents_hook_on_stdout_from_what_it_sends_on_stdin(tmp_p
     monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
     assert basis(folder, "hook", "shell", "--agent", "claude") == 1
     assert error_line(capsys).startswith("ERROR: basis hook shell read no JSON object on stdin")
+
+
+def test_basis_version_imports_no_pandas_numpy_or_pyarrow(tmp_path: Path) -> None:
+    """Every `basis` call pays for what the command imports before it runs a verb (step 9.6)."""
+    argv = ["--version"]
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "light"\n\n[tool.basis]\nparts = ["job"]\n', encoding="utf-8")
+    script = (
+        "import sys\nfrom pathlib import Path\nfrom basis.core import command\n"
+        f"try:\n    code = command.run({argv!r}, cwd=Path.cwd(), installed=command.installed())\n"
+        "except SystemExit as exited:  # --version and --help print, then exit\n    code = exited.code\n"
+        "print(sorted(name for name in ('pandas', 'pyarrow', 'numpy') if name in sys.modules), code, file=sys.stderr)\n"
+    )
+    ran = subprocess.run([sys.executable, "-c", script], cwd=tmp_path, capture_output=True, text=True, check=False, timeout=60)
+    assert ran.stderr.splitlines()[-1] == "[] 0"

@@ -18,8 +18,8 @@ step's own commit keeps it true.
 | 8.1 to 8.10 | Done | `b67e7bc`, `c4dbc9e`, `4937c8e`, `18e55d0`, `626087a`, `d4adf0a`, `1de8200`, `4d28bd4`, `e832eb5` (8.9), `9086a5b` (8.10) |
 | 9.1, 9.2, 9.3 | Done, in one commit | `c853677` |
 | 9.4 Skills and docs for APIs | Done | `8cbb279` |
-| 9.5 SQL is opened before the environment | Done; the sqlglot report waits on the firm's queries, a **(work)** step in [its spike](docs/spikes/sql-columns.md) | the commit "Step 9.5" |
-| 9.6 A lighter command | To do | |
+| 9.5 SQL is opened before the environment | Done; the sqlglot report waits on the firm's queries, a **(work)** step in [its spike](docs/spikes/sql-columns.md) | `e4c6343` |
+| 9.6 A lighter command | Done for `basis --version`; a verb in a repo still loads its declared parts, and `basis.job`'s package imports pandas, so `basis hook` in a job repo pays it: left for 11.4, the command's tables | the commit "Step 9.6" |
 | 10.1 to 10.3 | To do; 10.3 is **(work)** | |
 | 11.1 to 11.7 | To do | |
 | 12.1 to 12.9 | To do | |

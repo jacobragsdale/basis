@@ -8,9 +8,10 @@ will; `basis.job`'s write modes build them from a transform's frames."""
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
-import pandas as pd
+if TYPE_CHECKING:  # frames are only annotated here: `basis --version` and the hooks import this module, never pandas
+    import pandas as pd
 
 IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,127}$")
 """A column name: lower-case, so it reads the same unquoted in SQL Server and Oracle, and never needs quoting."""
