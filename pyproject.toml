@@ -5,7 +5,7 @@
 
 [project]
 name = "basis-workspace"
-version = "0.0.0"
+version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = ["basis-api", "basis-core[excel,mongo]", "basis-job"]  # what basis releases, with basis-core's extras, which its tests use; `uv sync --all-packages` installs every member
 

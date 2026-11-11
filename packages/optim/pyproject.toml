@@ -1,12 +1,12 @@
 [project]
 name = "optim"
-version = "0.0.0"
+version = "0.1.0"
 description = "The run loop that quants' portfolio models share: loading, parallelism, rounding, acceptance, snapshots and replay"
 readme = "README.md"
 authors = [{ name = "Jacob Ragsdale", email = "jacobragsdale@protonmail.com" }]
 requires-python = ">=3.14"
 dependencies = [
-    "basis-core==0.0.0",  # every basis package depends on basis-core at exactly its own version
+    "basis-core==0.1.0",  # every basis package depends on basis-core at exactly its own version
     "cvxpy>=1.9.3",
     "highspy>=1.15.1",
     "httpx>=0.28.1",

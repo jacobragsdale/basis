@@ -1,6 +1,6 @@
 [project]
 name = "basis-core"
-version = "0.0.0"
+version = "0.1.0"
 description = "The plumbing every basis part shares. Internal: repos depend on a part, which brings this with it."
 requires-python = ">=3.14"
 license = "MIT"

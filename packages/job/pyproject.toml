@@ -1,13 +1,13 @@
 [project]
 name = "basis-job"
-version = "0.0.0"
+version = "0.1.0"
 description = "The run loop that ETL jobs share: typed inputs and outputs, a pure transform, checks before any write, all-or-nothing publishing to SQL Server and Oracle, and snapshots that replay"
 readme = "README.md"
 authors = [{ name = "Jacob Ragsdale", email = "jacobragsdale@pm.me" }]
 license = "MIT"
 requires-python = ">=3.14"
 dependencies = [
-    "basis-core==0.0.0",  # every basis package depends on basis-core at exactly its own version
+    "basis-core==0.1.0",  # every basis package depends on basis-core at exactly its own version
     "pandas>=3.1.1",  # a job's frames, which its transform and check read and return
     "pydantic>=2.14.3",
     "python-dotenv>=1.2.1",

@@ -20,7 +20,9 @@ step's own commit keeps it true.
 | 9.4 Skills and docs for APIs | Done | `8cbb279` |
 | 9.5 SQL is opened before the environment | Done; the sqlglot report waits on the firm's queries, a **(work)** step in [its spike](docs/spikes/sql-columns.md) | `e4c6343` |
 | 9.6 A lighter command | Done for `basis --version`; a verb in a repo still loads its declared parts, and `basis.job`'s package imports pandas, so `basis hook` in a job repo pays it: left for 11.4, the command's tables | `f8996bb` |
-| 10.1 to 10.3 | To do; 10.3 is **(work)** | |
+| 10.1 The eval | To do | |
+| 10.2 `v0.1.0` | Cut from this commit, "basis 0.1.0", which the tag `v0.1.0` names once its CI passes | the commit "basis 0.1.0" |
+| 10.3 The pilot | To do; **(work)** | |
 | 11.1 to 11.7 | To do | |
 | 12.1 to 12.9 | To do | |
 

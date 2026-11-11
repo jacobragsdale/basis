@@ -78,7 +78,7 @@ wheels = [
 
 [[package]]
 name = "basis-api"
-version = "0.0.0"
+version = "0.1.0"
 source = { editable = "packages/api" }
 dependencies = [
     { name = "basis-core" },
@@ -112,7 +112,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "basis-core"
-version = "0.0.0"
+version = "0.1.0"
 source = { editable = "packages/core" }
 dependencies = [
     { name = "grimp" },
@@ -174,7 +174,7 @@ provides-extras = ["excel", "dev", "mongo"]
 
 [[package]]
 name = "basis-job"
-version = "0.0.0"
+version = "0.1.0"
 source = { editable = "packages/job" }
 dependencies = [
     { name = "basis-core" },
@@ -202,7 +202,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "basis-workspace"
-version = "0.0.0"
+version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "basis-api" },
@@ -1461,7 +1461,7 @@ wheels = [
 
 [[package]]
 name = "optim"
-version = "0.0.0"
+version = "0.1.0"
 source = { editable = "packages/optim" }
 dependencies = [
     { name = "basis-core" },
