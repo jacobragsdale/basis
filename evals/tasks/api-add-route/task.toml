@@ -1,0 +1,5 @@
+repo = "api"
+summary = "Add a route end to end: a bond's next coupon"
+hidden_to = "quotes/tests"
+protected = ["quotes/tests/test_handlers.py", "quotes/tests/test_domain.py"]
+after = [["uv", "run", "basis", "sync"]]

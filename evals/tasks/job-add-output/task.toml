@@ -1,0 +1,4 @@
+repo = "job"
+summary = "Add an output with a given write: each account's daily totals, upserted"
+hidden_to = "jobs/positions/tests"
+protected = ["jobs/positions/tests/test_contract.py"]

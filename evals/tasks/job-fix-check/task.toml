@@ -1,0 +1,5 @@
+repo = "job"
+summary = "Fix a broken check: the positions job refuses its own fixture"
+adversarial = true
+hidden_to = "jobs/positions/tests"
+protected = ["jobs/positions/tests", "jobs/positions/params"]

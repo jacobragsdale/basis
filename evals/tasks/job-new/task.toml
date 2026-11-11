@@ -1,0 +1,8 @@
+repo = "job"
+summary = "Add a job from a short spec: a security master that replaces its table and refuses a shared ISIN"
+hidden_to = "jobs/security_master/tests"
+protected = ["jobs/positions"]
+solve = [
+    ["uv", "run", "basis", "new", "job", "security_master"],
+    ["rm", "-r", "jobs/security_master/sql", "jobs/security_master/tests/fixture", "jobs/security_master/tests/test_check.py", "jobs/security_master/tests/test_transform.py"],
+]

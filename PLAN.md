@@ -20,7 +20,7 @@ step's own commit keeps it true.
 | 9.4 Skills and docs for APIs | Done | `8cbb279` |
 | 9.5 SQL is opened before the environment | Done; the sqlglot report waits on the firm's queries, a **(work)** step in [its spike](docs/spikes/sql-columns.md) | `e4c6343` |
 | 9.6 A lighter command | Done for `basis --version`; a verb in a repo still loads its declared parts, and `basis.job`'s package imports pandas, so `basis hook` in a job repo pays it: left for 11.4, the command's tables | `f8996bb` |
-| 10.1 The eval | To do | |
+| 10.1 The eval | In progress: [`evals/`](evals/README.md) holds twelve tasks, the runner and the graders, each task validated; the trials and the first report are next | the commit "Step 10.1, part 1" |
 | 10.2 `v0.1.0` | Cut from this commit, "basis 0.1.0", which the tag `v0.1.0` names once its CI passes | the commit "basis 0.1.0" |
 | 10.3 The pilot | To do; **(work)** | |
 | 11.1 One interface for a job's outputs | Done: `basis.job.effects` (a `Kind` per output that is not a table, and the one loop `run` and `resume` share), `basis.job.replays`; a resume now stops at the first kind that fails, as a run does | the commit "Step 11.1" |

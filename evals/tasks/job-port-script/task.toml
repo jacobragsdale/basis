@@ -1,0 +1,8 @@
+repo = "job"
+summary = "Port a plain-Python nightly script into a job that does what it did"
+hidden_to = "jobs/daily_cash/tests"
+protected = ["jobs/positions"]
+solve = [
+    ["uv", "run", "basis", "new", "job", "daily_cash"],
+    ["rm", "-r", "legacy", "jobs/daily_cash/sql", "jobs/daily_cash/tests/fixture", "jobs/daily_cash/tests/test_check.py", "jobs/daily_cash/tests/test_transform.py"],
+]

@@ -1,0 +1,4 @@
+repo = "job"
+summary = "Add a column: a position's quantity-weighted average price"
+hidden_to = "jobs/positions/tests"
+protected = ["jobs/positions/tests/test_contract.py"]

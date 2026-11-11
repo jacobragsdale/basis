@@ -1,0 +1,4 @@
+repo = "job"
+summary = "Add a param and use it: securities the positions job leaves out of every output"
+hidden_to = "jobs/positions/tests"
+protected = ["jobs/positions/tests/test_contract.py"]

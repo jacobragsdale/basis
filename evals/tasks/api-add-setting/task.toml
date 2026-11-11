@@ -1,0 +1,5 @@
+repo = "api"
+summary = "Add a setting and a problem: the dirty-price route's largest face amount"
+hidden_to = "quotes/tests"
+protected = ["quotes/tests/test_handlers.py", "quotes/tests/test_domain.py"]
+after = [["uv", "run", "basis", "sync"]]

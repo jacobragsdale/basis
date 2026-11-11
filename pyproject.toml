@@ -42,6 +42,7 @@ dev = [
 line-length = 200
 required-version = ">=0.17.4"
 force-exclude = true
+extend-exclude = ["evals/tasks"]  # a generated repo's files, which its own ruff checks when the eval grades them
 show-fixes = true
 unsafe-fixes = false
 
@@ -81,6 +82,8 @@ ignore = [
 "packages/*/src/basis/*/templates/**" = ["INP001"]
 # A module the scripts import from their own folder, which Python puts first on sys.path; scripts/ is no package.
 "scripts/shared.py" = ["INP001"]
+# The eval's entry point, which puts its own folder first on sys.path, as the scripts' do; evals/ is no package.
+"evals/run.py" = ["INP001"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["basis"]  # every member's portion of the namespace, wherever its src/ is
@@ -96,11 +99,14 @@ skip-magic-trailing-comma = true  # Collapse comma-forced multiline constructs w
 [tool.ty.rules]
 all = "error"  # Every rule is an error, including those ty leaves off by default. Opt out one rule at a time, with a reason.
 
+[tool.ty.src]
+exclude = ["evals/tasks"]  # a generated repo's files, which its own ty checks when the eval grades them
+
 [tool.ty.environment]
 # As pytest's `pythonpath`, so basis-job's tests can import `builders`. Their names differ, since ty, like Python,
 # resolves a name one way per run. A path that does not exist fails ty, so a member that basis does not release lists
 # none here: ty 0.0.99 finds a test's helper module in the test's folder or a folder above it.
-extra-paths = ["packages/job/tests", "scripts"]  # and the module the scripts share, which each imports from its own folder
+extra-paths = ["packages/job/tests", "scripts", "evals"]  # and the module the scripts share, which each imports from its own folder, and the eval's package
 
 [tool.ty.analysis]
 respect-type-ignore-comments = false  # Require a specific `# ty: ignore[rule]` suppression.
@@ -119,8 +125,8 @@ error-on-warning = true
 # off sockets: this workspace's own tests serve and reach real servers on sockets, by design, and the example's run
 # under it as a repo's do, in the tests of basis-api's checks.
 addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration' --ignore-glob=packages/*/src/*/templates -p pytester -p no:optim -p no:basis"
-testpaths = ["packages/*/tests", "packages/*/src/*/example", "packages/*/src/basis/*/example", "scripts/tests"]  # every member's tests, its example's, and the release script's
-pythonpath = ["packages/job/tests", "packages/optim/tests", "scripts"]  # each member's shared test modules, such as basis-job's `builders`, and scripts/release.py; a missing path adds nothing
+testpaths = ["packages/*/tests", "packages/*/src/*/example", "packages/*/src/basis/*/example", "scripts/tests", "evals/tests"]  # every member's tests, its example's, the release script's, and the eval's runner's
+pythonpath = ["packages/job/tests", "packages/optim/tests", "scripts", "evals"]  # each member's shared test modules, such as basis-job's `builders`, scripts/release.py, and the eval's package; a missing path adds nothing
 xfail_strict = true  # An xfail that starts passing is a failure, not a silent pass.
 filterwarnings = [
     "error",  # A warning is a defect until someone decides otherwise.
