@@ -44,6 +44,43 @@ jobs:
           version: "0.13.7"
       - run: uv run scripts/without_optim.py
 
+  windows:
+    # Where the firm's developers work: the unit tests, the hooks' tests among them, which Git for Windows' sh runs,
+    # and a generated repo's commit and push through its hooks. Every other job is Linux.
+    timeout-minutes: 40
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash  # Git for Windows' bash, which the hooks' sh is
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
+        with:
+          version: "0.13.7"
+      - run: uv sync --locked --all-packages
+      - run: uv run pytest -n auto
+      - name: Make a job repo from this checkout and run its checks
+        run: |
+          uv run basis-job new repo pricing-etl --dir "$RUNNER_TEMP" --framework-path .
+          cd "$RUNNER_TEMP/pricing-etl"
+          uv run basis check
+      - name: Commit through its hooks, which refuse a lint error, and push through its hook from a changed tree
+        working-directory: ${{ runner.temp }}/pricing-etl
+        run: |
+          test "$(git config core.hooksPath)" = .githooks
+          git config user.name ci && git config user.email ci@example.com
+          git add --all && git commit --quiet --message "First commit"
+          printf 'def total(values):\n    return eval("sum(values)")\n' > jobs/positions/totals.py
+          git add jobs/positions/totals.py
+          if git commit --quiet --message "A lint error"; then echo "the commit hook let a lint error through" >&2; exit 1; fi
+          git reset --quiet --hard
+          uv run basis sync && test -z "$(git status --porcelain)"
+          git init --quiet --bare "$RUNNER_TEMP/remote.git"
+          echo "A change not yet committed." >> README.md
+          git push --quiet "$RUNNER_TEMP/remote.git" main
+          test "$(git -C "$RUNNER_TEMP/remote.git" rev-parse main)" = "$(git rev-parse HEAD)"
+          test "$(git worktree list | wc -l)" = 1
+
   job-integration:
     # Every member's integration tier, against SQL Server 2025 (which has the json type), Oracle, Mongo and Azurite.
     # With CI set, as GitHub sets it, a test whose server is missing fails rather than skips.

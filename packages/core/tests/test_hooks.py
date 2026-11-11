@@ -95,8 +95,6 @@ def hooked(clone: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
 
 
 def stand_in_uv(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    if os.name == "nt":
-        pytest.skip("the hooks run in Git for Windows' sh, which these tests do not set up")
     hooks.ensure(repo)
     tools = tmp_path / "tools"
     tools.mkdir()
