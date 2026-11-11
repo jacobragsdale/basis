@@ -16,7 +16,8 @@ serialization alias, its alias, or its name. A row is flat, so each column has o
 Every number is a float (design.md, "Numbers"): an `int`, a `Decimal`, or a `Literal` or an `Enum` of integers is
 refused, each with its fix. A float column is always nullable, since NaN and ±inf travel as null; any other column is
 nullable where its field may be None, and only there. A row holds no field it computes and no keys beyond its fields,
-so its JSON and its Arrow hold the same values. Anything else is refused when the route is declared.
+and no serializer of its own, so its JSON and its Arrow hold the same values. Anything else is refused when the route
+is declared.
 
 This module only declares: `arrow.py` writes the stream, which a service's declarations never load."""
 
@@ -31,7 +32,7 @@ from typing import Annotated, Literal, cast, get_args, get_origin
 from uuid import UUID
 
 import annotated_types
-from pydantic import BaseModel, RootModel, TypeAdapter
+from pydantic import BaseModel, PlainSerializer, RootModel, TypeAdapter, WrapSerializer
 from pydantic.fields import FieldInfo
 
 from basis.api import strict
@@ -55,6 +56,8 @@ class Column:
     `basis.api.format`."""
     enum: bool = False
     """Whether its values are an `Enum`'s members, whose values the column holds."""
+    values: frozenset[str] | None = None
+    """A `Literal`'s or an `Enum`'s values, the only text the column holds; None for a column of any text."""
     text: bool = False
     """Whether its values are UUIDs, whose text the column holds."""
 
@@ -96,6 +99,13 @@ def rows(response: object, route: str, *, table: bool = False) -> Rows:
     if model.model_computed_fields:
         msg = f"{route}'s dataset rows, {model.__qualname__}, compute {', '.join(model.model_computed_fields)}, which no column holds: make each a field"
         raise DeclarationError(msg)
+    decorators = model.__pydantic_decorators__
+    serialized = [*(name for found in decorators.field_serializers.values() for name in found.info.fields), *(["the whole row"] if decorators.model_serializers else [])]
+    serialized += [name for name, field in model.model_fields.items() if any(isinstance(found, PlainSerializer | WrapSerializer) for found in _unwrapped(field.annotation, list(field.metadata))[2])]
+    if serialized:
+        fix = "drop the serializer, and give the field the value it answers, as the handler makes it"
+        msg = f"{route}'s dataset rows, {model.__qualname__} serializes {', '.join(dict.fromkeys(serialized))} itself, and a row's JSON and its Arrow hold the same values: {fix}"
+        raise DeclarationError(msg)
     columns = tuple(_column(route, model, name, field, table=table) for name, field in model.model_fields.items() if field.exclude is not True)
     return Rows(model, columns, TypeAdapter(cast("type[Sequence[BaseModel]]", kind)))  # a value's type, which ty cannot read as one
 
@@ -109,7 +119,8 @@ def _column(route: str, model: type[BaseModel], name: str, field: FieldInfo, *, 
         raise DeclarationError(msg)
     key = field.serialization_alias or field.alias or name
     if (choice := _choice(where, annotation)) is not None:
-        return Column(key, name, "utf8", nullable, enum=choice)
+        choices = get_args(annotation) if get_origin(annotation) is Literal else [member.value for member in cast("type[Enum]", annotation)]
+        return Column(key, name, "utf8", nullable, enum=choice, values=frozenset(str(value) for value in choices))
     if isinstance(annotation, type) and issubclass(annotation, Decimal | int) and not issubclass(annotation, bool):
         what = "a Decimal" if issubclass(annotation, Decimal) else "an int"
         msg = f"{where} is {what}, and every number in a dataset is a float: declare it float for an amount or a count, or str for an identifier"

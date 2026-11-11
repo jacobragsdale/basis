@@ -12,7 +12,7 @@ from uuid import UUID
 import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, RootModel, computed_field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, PlainSerializer, RootModel, computed_field, field_serializer
 
 from basis import api
 from basis.api import arrow, dataset, fakes
@@ -242,6 +242,20 @@ class Books(RootModel[list[str]]):
     pass
 
 
+class Rounded(BaseModel):
+    """A row whose JSON a serializer changes, and whose Arrow it would not."""
+
+    price: float
+
+    @field_serializer("price", when_used="json")
+    def rounded(self, price: float) -> float:
+        return round(price, 2)
+
+
+class Shown(BaseModel):
+    price: Annotated[float, PlainSerializer(lambda price: round(price, 2))]
+
+
 @pytest.mark.parametrize(
     ("response", "message"),
     [
@@ -258,8 +272,26 @@ class Books(RootModel[list[str]]):
         (list[Open], "allow keys beyond their fields"),
         (list[Computed], "compute doubled, which no column holds"),
         (list[Naive], "Naive.at, a datetime, which takes a time without its offset"),
+        (list[Rounded], "Rounded serializes price itself, and a row's JSON and its Arrow hold the same values"),
+        (list[Shown], "Shown serializes price itself, and a row's JSON and its Arrow hold the same values"),
     ],
-    ids=["one-row", "a-mapping", "not-models", "root-models", "a-nested-model", "a-list", "an-int", "a-decimal", "an-int-enum", "a-mixed-literal", "open", "computed", "a-naive-time"],
+    ids=[
+        "one-row",
+        "a-mapping",
+        "not-models",
+        "root-models",
+        "a-nested-model",
+        "a-list",
+        "an-int",
+        "a-decimal",
+        "an-int-enum",
+        "a-mixed-literal",
+        "open",
+        "computed",
+        "a-naive-time",
+        "a-field-serializer",
+        "an-annotated-serializer",
+    ],
 )
 def test_a_dataset_that_is_not_flat_rows_is_refused_when_its_route_is_declared(response: object, message: str) -> None:
     def handler() -> None: ...

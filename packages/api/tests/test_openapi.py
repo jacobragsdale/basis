@@ -122,7 +122,7 @@ def test_every_error_is_problem_details_and_a_422_names_its_fields() -> None:
 def test_every_model_is_strict_and_a_mapping_keeps_its_values() -> None:
     models = {name: schema for name, schema in schemas().items() if isinstance(schema, dict) and "properties" in schema}
     assert {name for name, schema in models.items() if schema.get("additionalProperties") is not False} == set()
-    assert {"Order", "Leg", "Placed", "Row", "Problem", "ValidationProblem"} <= set(models)  # a model is one schema now: no decimal reads differently in a request
+    assert {"Order", "Leg-Input", "Leg-Output", "Placed", "Row", "Problem", "ValidationProblem"} <= set(models)
     assert at("components", "schemas", "Order", "properties", "marks", "additionalProperties") == {"type": "number"}
 
 
@@ -132,8 +132,24 @@ def test_every_number_is_a_json_number_and_a_decimal_is_refused() -> None:
     assert order["price"] == {"type": "number", "title": "Price"}
     assert order["limit"] == {"anyOf": [{"type": "number", "exclusiveMinimum": 0}, {"type": "null"}], "title": "Limit"}
     assert order["quantity"] == {"type": "integer", "title": "Quantity", "default": 1}
-    assert at("components", "schemas", "Placed", "properties", "price") == {"type": "number", "title": "Price"}
+    assert at("components", "schemas", "Placed", "properties", "price") == {"type": ["number", "null"], "title": "Price"}  # NaN and ±inf answer null
     assert "x-basis-decimal" not in json.dumps(DOCUMENT)
+
+
+def test_a_responses_float_may_be_null_and_its_every_field_is_sent() -> None:
+    """NaN and ±inf answer null, and the app sends a field with a default as it sends any other: a request's model of
+    the same name keeps what it takes, as its own schema."""
+    placed = at("components", "schemas", "Placed", "properties")
+    assert isinstance(placed, dict)
+    assert placed["price"] == {"type": ["number", "null"], "title": "Price"}
+    assert at("components", "schemas", "Leg-Output", "properties", "rate") == {"type": ["number", "null"], "minimum": 0, "title": "Rate"}
+    assert at("components", "schemas", "Leg-Output", "required") == ["rate", "note"]
+    assert at("components", "schemas", "Leg-Input", "properties", "rate") == {"type": "number", "minimum": 0, "title": "Rate"}
+    assert at("components", "schemas", "Leg-Input", "required") == ["rate"]
+    assert placed["legs"] == {"type": "array", "items": {"$ref": "#/components/schemas/Leg-Output"}, "title": "Legs"}
+    assert at("components", "schemas", "Order", "properties", "legs", "items") == {"$ref": "#/components/schemas/Leg-Input"}
+    assert "Leg" not in schemas()
+    assert at("components", "schemas", "Row", "properties", "exposure") == {"type": ["number", "null"], "title": "Exposure"}
 
 
 def test_a_dataset_lists_arrow_beside_its_json() -> None:

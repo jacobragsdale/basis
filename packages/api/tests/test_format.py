@@ -46,7 +46,7 @@ def test_each_numbers_format_is_in_the_document_beside_its_type() -> None:
     properties = openapi.mapping(openapi.mapping(openapi.mapping(openapi.mapping(openapi.document(SERVICE).get("components")).get("schemas")).get("Quote")).get("properties"))
     found = {name: openapi.mapping(schema).get("x-basis-format") for name, schema in properties.items()}
     assert found == {"security": None, "plain": None, **FORMATS}
-    assert openapi.mapping(properties["notional"]).get("type") == "number"
+    assert openapi.mapping(properties["notional"]).get("type") == ["number", "null"]  # NaN and ±inf answer null
 
 
 def test_each_numbers_format_is_in_its_arrow_fields_metadata() -> None:

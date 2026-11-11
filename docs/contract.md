@@ -26,8 +26,11 @@ document at `/openapi.json`.
 | Each error | Its status, under `application/problem+json`: a 422 as `ValidationProblem`, any other as `Problem` |
 | A dataset route | Its success lists `application/vnd.apache.arrow.stream` as `{"type": "string", "format": "binary"}` beside its JSON |
 
-A model that a request and a response share has one schema, unless the two differ, as they do for a model with a
-default: then it has two, `NAME-Input` for requests and `NAME-Output` for responses, as FastAPI names them.
+What a success answers is what the app sends: each float is `{"type": ["number", "null"]}`, since NaN and ±inf
+answer null, and each of a model's fields is `required`, a field with a default among them, since the app sends every
+one. A model that a request and a response share has one schema, unless the two differ, as they do for a model with a
+float or a default: then it has two, `NAME-Input` for requests, which takes no null for a float and needs no
+defaulted field, and `NAME-Output` for responses, as FastAPI names them.
 
 ### Numbers
 

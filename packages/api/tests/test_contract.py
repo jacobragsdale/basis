@@ -170,7 +170,7 @@ BEFORE = (get_bond(), post_order(), get_rows(dataset=True))
         (BEFORE, [], []),
         ((get_bond(BondWithIssuer), *BEFORE[1:]), [], ["GET /bonds/{security} (bond): the response.issuer is added"]),
         ((get_bond(BondWithoutCoupon), *BEFORE[1:]), ["GET /bonds/{security} (bond): the response.coupon is removed, or renamed"], []),
-        ((get_bond(BondCouponAsNumber), *BEFORE[1:]), ["GET /bonds/{security} (bond): the response.coupon may be number"], []),
+        ((get_bond(BondCouponAsNumber), *BEFORE[1:]), ["GET /bonds/{security} (bond): the response.coupon may be null or number"], []),
         ((get_bond(BondMayHaveNoCoupon), *BEFORE[1:]), ["GET /bonds/{security} (bond): the response.coupon may be null"], []),
         ((get_bond(BondMonthly), *BEFORE[1:]), ["GET /bonds/{security} (bond): the response.frequency may be 12"], []),
         ((BEFORE[0], post_order(OrderWithoutNote), BEFORE[2]), ["POST /orders (place) no longer takes body.note"], []),
@@ -400,7 +400,7 @@ def _giving(response: type[BaseModel]) -> api.Route:
         (_taking(SizedAsNumber), _taking(Sized), ["POST /take (take) no longer takes body.size as number"], []),
         (_taking(Dated), _taking(DatedAsText), [], ["POST /take (take) takes body.on as string too"]),
         (_taking(Noted), _taking(MaybeNoted), [], ["POST /take (take) takes body.note as null too", "POST /take (take) no longer requires body.note"]),
-        (_giving(Sized), _giving(SizedAsNumber), ["GET /give (give): the response.size may be number"], []),
+        (_giving(Sized), _giving(SizedAsNumber), ["GET /give (give): the response.size may be null or number"], []),  # NaN answers null
         (_giving(SizedAsNumber), _giving(Sized), [], []),
         (_giving(DatedAsText), _giving(Dated), [], []),
     ],

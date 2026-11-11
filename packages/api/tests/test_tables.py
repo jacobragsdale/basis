@@ -2,11 +2,14 @@
 columns, answered as Arrow or as JSON written from it (step 2.12), and `Reader.fetch_table`, a query's Arrow checked the
 same way."""
 
+import re
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from enum import StrEnum
 from http import HTTPStatus
-from typing import Annotated
+from typing import Annotated, Literal
+from uuid import UUID
 
 import pandas as pd
 import pyarrow as pa
@@ -22,6 +25,11 @@ AT = datetime(2026, 11, 6, 14, 30, tzinfo=UTC)
 WAREHOUSE = api.database("warehouse", deadline_s=5, max_concurrent=2)
 POSITIONS = "SELECT book, quantity, as_of, at, note FROM positions"
 INSERT = "INSERT INTO marks (at) VALUES (%(at)s)"
+
+
+class Book(StrEnum):
+    RATES = "rates"
+    CREDIT = "credit"
 
 
 class Position(BaseModel):
@@ -143,6 +151,43 @@ def test_a_table_unlike_its_rows_is_refused_naming_the_column(changed: dict[str,
     found = a_frame().assign(**changed)  # ty: ignore[invalid-argument-type] -- each a column's values
     with pytest.raises(arrow.TableError, match=message):
         arrow.conform(dataset.rows(list[Position], "t", table=True), found, "the table t returned")
+
+
+class Holding(BaseModel):
+    side: Literal["buy", "sell"]
+    book: Book
+    trade_id: UUID
+    hedged: bool
+
+
+def _holding(**changed: list[object]) -> pa.Table:
+    columns: dict[str, list[object]] = {"side": ["buy", "sell"], "book": ["rates", "credit"], "trade_id": [str(UUID(int=1)), str(UUID(int=0xABC)).upper()], "hedged": [True, False]}
+    return pa.table(columns | changed)
+
+
+@pytest.mark.parametrize(
+    ("changed", "message"),
+    [
+        ({"side": ["buy", "hold"]}, "column side holds 'hold', which is not one of its values: buy, sell"),
+        ({"book": ["rates", "fx"]}, "column book holds 'fx', which is not one of its values: credit, rates"),
+        ({"trade_id": ["not-a-uuid", str(UUID(int=3))]}, "column trade_id holds 'not-a-uuid', which is not a UUID"),
+        ({"hedged": [7, 0]}, "column hedged holds 7, and a bool column takes true and false, or 1 and 0"),
+    ],
+    ids=["a-literal-of-another-value", "an-enum-of-another-value", "a-uuid-of-any-text", "a-bool-of-seven"],
+)
+def test_a_tables_text_and_bool_columns_hold_only_their_values(changed: dict[str, list[object]], message: str) -> None:
+    from basis.api import arrow, dataset  # noqa: PLC0415 -- the checker itself
+
+    with pytest.raises(arrow.TableError, match=re.escape(message)):
+        arrow.conform(dataset.rows(list[Holding], "t", table=True), _holding(**changed), "the table t returned")
+
+
+def test_a_tables_uuids_are_given_as_json_gives_them_and_its_ones_and_zeros_as_bools() -> None:
+    from basis.api import arrow, dataset  # noqa: PLC0415 -- the checker itself
+
+    found = arrow.conform(dataset.rows(list[Holding], "t", table=True), _holding(hedged=[1, 0]), "the table t returned")
+    assert found.column("trade_id").to_pylist() == [str(UUID(int=1)), str(UUID(int=0xABC))]
+    assert found.column("hedged").to_pylist() == [True, False]
 
 
 def test_a_route_is_called_and_a_service_served_on_its_fakes_from_python_too() -> None:

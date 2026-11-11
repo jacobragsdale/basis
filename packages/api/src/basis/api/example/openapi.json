@@ -623,7 +623,10 @@
             "title": "Year Days"
           },
           "interest": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "title": "Interest"
           }
         },
@@ -646,7 +649,10 @@
             "title": "Security Id"
           },
           "coupon_rate": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "title": "Coupon Rate"
           },
           "convention": {
@@ -707,7 +713,10 @@
             "title": "Pays"
           },
           "interest": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "title": "Interest",
             "x-basis-format": {
               "decimals": 4,
@@ -755,19 +764,31 @@
             "title": "Settle"
           },
           "face": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "title": "Face"
           },
           "clean": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "title": "Clean"
           },
           "accrued": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "title": "Accrued"
           },
           "dirty": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "title": "Dirty"
           }
         },
@@ -897,7 +918,10 @@
             "title": "Security Id"
           },
           "face": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "title": "Face"
           },
           "settle": {
@@ -906,7 +930,10 @@
             "title": "Settle"
           },
           "accrued": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "title": "Accrued"
           },
           "recorded_at": {
@@ -1041,15 +1068,24 @@
             "title": "Settle"
           },
           "clean": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "title": "Clean"
           },
           "dirty": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "title": "Dirty"
           },
           "annual_yield": {
-            "type": "number",
+            "type": [
+              "number",
+              "null"
+            ],
             "title": "Annual Yield"
           }
         },

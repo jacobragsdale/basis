@@ -90,6 +90,10 @@ def test_a_200_that_is_not_json_fails_as_one_line(repo: Path, path: str, reason:
     assert (reason, "check that BASIS_SMOKE__URL is the base the API's paths are under, where the ingress routes them to the API") in found
 
 
+def test_a_float_that_answers_null_for_nan_passes(repo: Path) -> None:
+    assert smoke.smoke(repo, "qa", service=SERVICE, transport=deployed(body={"security": "UST10Y", "price": None})) == []
+
+
 def test_an_api_that_is_not_ready_fails(repo: Path) -> None:
     [(reason, _)] = smoke.smoke(repo, "qa", service=SERVICE, transport=deployed(ready=503))
     assert reason == "https://qa.example.com/api/health/ready answered 503, so the API is not ready"

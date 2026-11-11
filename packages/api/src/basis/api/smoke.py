@@ -86,6 +86,32 @@ def _ready(client: httpx2.Client, base: str, commit: str | None) -> list[Problem
     return []
 
 
+def _finite(value: object, schema: object, root: object = None) -> object:
+    """`value`, as the response's JSON holds it, with a float of 0 for each `null` where `schema` has a float, which NaN
+    and ±inf answer as: the response model takes no null there, and the app sent one as the contract says."""
+    root = schema if root is None else root
+    given = _object(schema)
+    if isinstance(reference := given.get("$ref"), str):
+        given = _object(_object(_object(root).get("$defs")).get(reference.rsplit("/", 1)[-1]))
+    choices = given.get("anyOf")
+    arms = [_object(arm) for arm in choices if _object(arm).get("type") != "null"] if isinstance(choices, list) else [given]
+    found = arms[0] if len(arms) == 1 else given
+    properties, values, items = _object(found.get("properties")), found.get("additionalProperties"), found.get("items")
+    if value is None:
+        result: object = 0.0 if found.get("type") == "number" and given is found else None
+    elif isinstance(value, dict) and (properties or isinstance(values, dict)):
+        result = {key: _finite(item, properties.get(key, values), root) for key, item in value.items()}
+    elif isinstance(value, list) and isinstance(items, dict):
+        result = [_finite(item, items, root) for item in value]
+    else:
+        result = value
+    return result
+
+
+def _object(value: object) -> dict[str, object]:
+    return {str(key): item for key, item in value.items()} if isinstance(value, dict) else {}
+
+
 def _json(response: httpx2.Response) -> object | None:
     """The JSON `response` holds, or None where it holds none, as a UI's page answers a path the ingress gives it."""
     if not strict.is_json(response.headers.get("content-type")):
@@ -118,7 +144,9 @@ def _example(client: httpx2.Client, route: Route, base: str) -> list[Problem]:
     answered: object = routes.documented(route)
     adapter: TypeAdapter[object] = TypeAdapter(answered)  # ty: ignore[invalid-type-form] -- the route's response, a type held as a value
     try:
-        adapter.validate_json(response.content, strict=True)  # a number as a JSON number, as the contract has it
+        sent = _json(response)
+        given = json.dumps(_finite(sent, adapter.json_schema(mode="serialization"))) if sent is not None else response.content
+        adapter.validate_json(given, strict=True)  # a number as a JSON number, as the contract has it
     except ValidationError as error:
         first = error.errors(include_url=False)[0]
         where = ".".join(map(str, first["loc"]))

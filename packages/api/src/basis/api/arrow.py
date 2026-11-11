@@ -97,8 +97,9 @@ class TableError(ValueError):
 def conform(rows: Rows, found: object, what: str) -> pa.Table:
     """`found`, a pandas frame or an Arrow table, as the Arrow table of `rows`'s columns, checked once: each column by
     its row's field's name or its JSON name, in any case a database gives it; numbers as floats, each the nearest
-    double, through text for a decimal; NaN and ±inf as null; a column that may not be null holding none; and every
-    time with its zone, in UTC. A column missing, one the row does not declare, or one of another type raises
+    double, through text for a decimal; NaN and ±inf as null; a column that may not be null holding none; a `Literal`'s
+    or an `Enum`'s column holding only its values, a UUID's only UUIDs, in lower case, and a bool's only booleans, or 1
+    and 0; and every time with its zone, in UTC. A column missing, one the row does not declare, or one of another type raises
     `TableError`, naming it."""
     table = _arrow(found, what)
     declared = schema(rows)
@@ -145,6 +146,9 @@ def _column(values: pa.ChunkedArray, column: Column, field: pa.Field, what: str)
     if column.kind == "timestamp" and pa.types.is_timestamp(values.type) and values.type.tz is None:
         msg = f"{where} holds times without their zone, and every time basis gives carries one: give them a zone, as UTC"
         raise TableError(msg)
+    if column.kind == "bool" and pa.types.is_integer(values.type) and (wrong := _outside(values, pa.array([0, 1], values.type))) is not None:
+        msg = f"{where} holds {wrong}, and a bool column takes true and false, or 1 and 0"
+        raise TableError(msg)
     try:
         cast = values.cast(field.type, safe=True)
     except (pa.ArrowInvalid, pa.ArrowNotImplementedError) as error:
@@ -153,7 +157,29 @@ def _column(values: pa.ChunkedArray, column: Column, field: pa.Field, what: str)
     if not field.nullable and cast.null_count:
         msg = f"{where} holds {cast.null_count} nulls, and the row's field may not be None"
         raise TableError(msg)
+    if column.values is not None and (wrong := _outside(cast, pa.array(sorted(column.values), pa.string()))) is not None:
+        msg = f"{where} holds {wrong!r}, which is not one of its values: {', '.join(sorted(column.values))}"
+        raise TableError(msg)
+    if column.text:
+        cast = pc.call_function("utf8_lower", [cast])  # a UUID's text as JSON gives it, whatever case a database gives
+        if (wrong := _first(cast, pc.call_function("invert", [pc.call_function("match_substring_regex", [cast], pc.MatchSubstringOptions(_UUID))]))) is not None:
+            msg = f"{where} holds {wrong!r}, which is not a UUID in groups of 8-4-4-4-12 hex digits"
+            raise TableError(msg)
     return cast
+
+
+_UUID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+
+
+def _outside(values: pa.ChunkedArray, allowed: pa.Array) -> object:
+    """The first value of `values` but null that `allowed` does not hold, or None."""
+    return _first(values, pc.call_function("invert", [pc.call_function("is_in", [values], pc.SetLookupOptions(allowed))]))  # by name: pyarrow's stubs list neither
+
+
+def _first(values: pa.ChunkedArray, wrong: pa.ChunkedArray) -> object:
+    """The first value but null where `wrong` is true, or None."""
+    found = values.filter(pc.fill_null(wrong, False))  # noqa: FBT003 -- the value a null takes
+    return found[0].as_py() if len(found) else None
 
 
 def write(table: pa.Table) -> bytes:
