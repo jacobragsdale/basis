@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from basis.core import gates, sync
+from basis.core import gates, guard, sync
 from basis.core.sync import BEFORE, DENY, MARKER, REPO_FILES, SKILL_KEY, AgentFiles, SyncError, core, plan, stale, stamped, write
 
 SKILL = "---\nname: job-new\ndescription: Make a job, from its tables to its first passing contract tests.\n---\n\n# Make a job\n"
@@ -146,7 +146,11 @@ def test_claude_settings_keep_the_repos_own_keys_and_rules_and_gain_the_missing_
     own = {"permissions": {"allow": ["Bash(uv run pytest *)"], "deny": ["Read(./.env)", DENY[0]]}, "env": {"BASIS_LOG_LEVEL": "DEBUG"}}
     settings = put(tmp_path, ".claude/settings.json", json.dumps(own))
     write(tmp_path, [FILES])
-    assert json.loads(settings.read_text(encoding="utf-8")) == {"permissions": {"allow": ["Bash(uv run pytest *)"], "deny": ["Read(./.env)", *DENY]}, "env": {"BASIS_LOG_LEVEL": "DEBUG"}}
+    assert json.loads(settings.read_text(encoding="utf-8")) == {
+        "permissions": {"allow": ["Bash(uv run pytest *)"], "deny": ["Read(./.env)", *DENY]},
+        "env": {"BASIS_LOG_LEVEL": "DEBUG"},
+        "hooks": guard.hooks("claude"),
+    }
     reformatted = put(tmp_path, ".claude/settings.json", json.dumps(json.loads(settings.read_text(encoding="utf-8")), indent=4))
     assert stale(tmp_path, [FILES]) == []
     assert write(tmp_path, [FILES]).changed == []
@@ -159,7 +163,7 @@ def test_claude_settings_basis_cannot_read_are_one_problem_and_every_other_file_
     dockerfile = tmp_path / "Dockerfile"
     dockerfile.write_text(dockerfile.read_text(encoding="utf-8") + "# mine\n", encoding="utf-8")
     found = plan(tmp_path, [FILES])
-    assert [reason.split(" (")[0] for reason, _ in found.problems()] == [f"{settings} is not JSON, so basis cannot add its rules to it"]
+    assert [reason.split(" (")[0] for reason, _ in found.problems()] == [f"{settings} is not JSON, so basis cannot add its rules and hooks to it"]
     assert found.problems()[0][1] == "fix it, or remove it, and run `uv run basis sync`"
     assert found.stale() == [dockerfile]
     done = write(tmp_path, [FILES])

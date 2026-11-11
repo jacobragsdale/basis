@@ -1,4 +1,5 @@
 import argparse
+import io
 import json
 import os
 import signal
@@ -121,7 +122,7 @@ def error_line(capsys: pytest.CaptureFixture[str]) -> str:
 def test_help_lists_the_declared_parts_verbs_and_the_core_verbs_they_give_something_to_do(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert basis(repo(tmp_path), "--help") == 0
     listed = [line.split()[0] for line in capsys.readouterr().out.splitlines() if line.startswith("  ") and not line.lstrip().startswith("-")]
-    assert listed == ["check", "review", "sync", "upgrade", "doctor", "serve"]
+    assert listed == ["check", "review", "sync", "upgrade", "doctor", "hook", "serve"]
 
 
 def test_a_verb_runs_from_a_folder_inside_the_repo(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -671,3 +672,14 @@ def test_a_failure_whose_message_spans_lines_is_one_error_line(capsys: pytest.Ca
     """As a row mismatch's is, which lists each problem on a line of its own for pytest."""
     fail("prices's output does not match its row:\n  - price: 3 nulls\n  - when: no time zone\n", "fix the transform, and run the job again")
     assert capsys.readouterr().err == "ERROR: prices's output does not match its row: price: 3 nulls; when: no time zone: fix the transform, and run the job again\n"
+
+
+def test_hook_answers_an_agents_hook_on_stdout_from_what_it_sends_on_stdin(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    folder = repo(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"tool_name": "Bash", "tool_input": {"command": "git -c core.hooksPath=/dev/null commit -m x"}})))
+    assert basis(folder, "hook", "shell", "--agent", "claude") == 0
+    answered = json.loads(capsys.readouterr().out)
+    assert answered["hookSpecificOutput"]["permissionDecision"] == "deny"
+    monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
+    assert basis(folder, "hook", "shell", "--agent", "claude") == 1
+    assert error_line(capsys).startswith("ERROR: basis hook shell read no JSON object on stdin")

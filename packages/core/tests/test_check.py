@@ -132,7 +132,7 @@ def test_claude_settings_basis_cannot_read_fail_and_every_other_step_still_runs(
     assert check(repo, [FILES], run=run) == 1
     assert len(ran) == 5
     [line] = errors(capsys)
-    assert line.startswith(f"ERROR: {repo / '.claude/settings.json'} is not JSON, so basis cannot add its rules to it (")
+    assert line.startswith(f"ERROR: {repo / '.claude/settings.json'} is not JSON, so basis cannot add its rules and hooks to it (")
     assert line.endswith("): fix it, or remove it, and run `uv run basis sync`")
 
 

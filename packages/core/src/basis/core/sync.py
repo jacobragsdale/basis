@@ -44,9 +44,10 @@ import tomllib
 from collections import defaultdict
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-from basis.core import tools
+from basis.core import guard, tools
 from basis.core.errors import BasisError
 from basis.core.hooks import FOLDER, HOOKS
 from basis.core.tools import Tools
@@ -69,6 +70,8 @@ EXECUTABLE = frozenset(f"{FOLDER}/{hook}" for hook in HOOKS)
 SKILLS = Path(".agents") / "skills"
 CLAUDE_SKILLS = Path(".claude") / "skills"
 CLAUDE_SETTINGS = Path(".claude") / "settings.json"
+AGENT_HOOKS: dict[Path, guard.Agent] = {Path(".cursor") / "hooks.json": "cursor", Path(".codex") / "hooks.json": "codex"}
+"""Each agent's project hooks file, beside Claude Code's, which `.claude/settings.json` holds (`basis.core.guard`)."""
 CLAUDE_MD = "@AGENTS.md\n"
 APT = "apt-packages"
 """The `[tool.basis]` key naming the Debian packages a repo's image installs beside basis's own, such as `libpq5`."""
@@ -229,6 +232,7 @@ def plan(repo: Path, parts: Sequence[AgentFiles]) -> Plan:
         agents: lambda: (_agents(current, [*parts, core()]), True),
         repo / "CLAUDE.md": lambda: (CLAUDE_MD, not (repo / "CLAUDE.md").exists() or _read(repo / "CLAUDE.md").replace("\r\n", "\n") == CLAUDE_MD),
         repo / CLAUDE_SETTINGS: lambda: _claude_settings(repo / CLAUDE_SETTINGS),
+        **{repo / path: partial(_agent_hooks, repo / path, agent) for path, agent in AGENT_HOOKS.items()},
     }
     if tools.owned([files.tools for files in parts]):
         made.update(_tool_files(repo, [files.tools for files in parts if files.tools is not None]))
@@ -500,22 +504,60 @@ def _claude_settings(path: Path) -> tuple[str, bool]:
     """`.claude/settings.json` with every rule of `DENY` (as it is when it has them all, and otherwise with the missing
     ones added and every other key and rule kept), and whether the file there is one basis wrote: one that holds at
     least one of its rules."""
+    wanted = guard.hooks("claude")
     if not path.exists():
-        return _json({"$schema": SCHEMA, "permissions": {"deny": list(DENY)}}), True
+        return _json({"$schema": SCHEMA, "permissions": {"deny": list(DENY)}, "hooks": wanted}), True
     current = _read(path)
+    data = _json_object(path, current, "Claude Code's settings, an object whose permissions.deny is a list of rules")
+    if not isinstance(permissions := data.get("permissions", {}), dict) or not isinstance(deny := permissions.get("deny", []), list):
+        msg = f"{path} is not Claude Code's settings, an object whose permissions.deny is a list of rules"
+        raise SyncError(msg, "fix it, or remove it, and run `uv run basis sync`")
+    claimed = any(rule in deny for rule in DENY) or guard.ours(data.get("hooks"))
+    hooks_now = _merged_hooks(path, data.get("hooks", {}), wanted)
+    missing = [rule for rule in DENY if rule not in deny]
+    if not missing and hooks_now == data.get("hooks"):
+        return current, claimed
+    return _json({**data, "permissions": {**permissions, "deny": [*deny, *missing]}, "hooks": hooks_now}), claimed
+
+
+def _agent_hooks(path: Path, agent: guard.Agent) -> tuple[str, bool]:
+    """An agent's hooks file with basis's hooks (`basis.core.guard`), as it is when it has them, and otherwise with them
+    merged in, every other key and hook kept; always basis's to write, since nothing of the repo's is lost."""
+    wanted = guard.hooks(agent)
+    shape: dict[str, object] = {"version": 1} if agent == "cursor" else {}
+    if not path.exists():
+        return _json({**shape, "hooks": wanted}), True
+    current = _read(path)
+    data = _json_object(path, current, f"{agent}'s hooks, a JSON object")
+    hooks_now = _merged_hooks(path, data.get("hooks", {}), wanted)
+    if hooks_now == data.get("hooks") and all(key in data for key in shape):
+        return current, True
+    return _json({**shape, **data, "hooks": hooks_now}), True
+
+
+def _json_object(path: Path, text: str, shape: str) -> dict[str, object]:
     fix = "fix it, or remove it, and run `uv run basis sync`"
     try:
-        data: object = json.loads(current)
+        data: object = json.loads(text)
     except json.JSONDecodeError as error:
-        msg = f"{path} is not JSON, so basis cannot add its rules to it ({error})"
+        msg = f"{path} is not JSON, so basis cannot add its rules and hooks to it ({error})"
         raise SyncError(msg, fix) from error
-    if not isinstance(data, dict) or not isinstance(permissions := data.get("permissions", {}), dict) or not isinstance(deny := permissions.get("deny", []), list):
-        msg = f"{path} is not Claude Code's settings, an object whose permissions.deny is a list of rules"
+    if not isinstance(data, dict):
+        msg = f"{path} is not {shape}"
         raise SyncError(msg, fix)
-    claimed = any(rule in deny for rule in DENY)
-    if not (missing := [rule for rule in DENY if rule not in deny]):
-        return current, claimed
-    return _json({**data, "permissions": {**permissions, "deny": [*deny, *missing]}}), claimed
+    return {str(key): value for key, value in data.items()}
+
+
+def _merged_hooks(path: Path, given: object, wanted: Mapping[str, list[dict[str, object]]]) -> dict[str, object]:
+    """`given`, an agent's hooks by event, with basis's own as `wanted` gives them, in place of any earlier version of
+    them, after the repo's own."""
+    if not isinstance(given, dict) or not all(isinstance(entries, list) for entries in given.values()):
+        msg = f"{path}'s hooks are not a list of hooks for each event"
+        raise SyncError(msg, "fix it, or remove it, and run `uv run basis sync`")
+    merged: dict[str, list[object]] = {str(event): [entry for entry in entries if not guard.ours(entry)] for event, entries in given.items() if isinstance(entries, list)}
+    for event, entries in wanted.items():
+        merged[event] = [*merged.get(event, []), *entries]
+    return {event: entries for event, entries in merged.items() if entries}
 
 
 def _json(value: object) -> str:

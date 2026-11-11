@@ -7,8 +7,10 @@ line that starts with `ERROR`, gives the reason and ends with the fix.
   fixes and formats the staged Python files with ruff, then runs `basis check --staged`, which also refuses a staged
   private key, a file over 500 KB, and YAML or TOML that does not parse; the push hook runs `basis check --full` on
   each commit being pushed. Never skip either with `--no-verify` or `-n`: when one fails, fix what each `ERROR` line
-  says, and commit or push again. `.claude/settings.json` denies the usual ways to skip them, as best it can; the push
-  hook is the backstop.
+  says, and commit or push again. `.claude/settings.json` denies the usual ways to skip them, and the agent hooks in
+  it, `.cursor/hooks.json` and `.codex/hooks.json` run `basis hook`, which refuses a command that skips or repoints
+  the hooks, and sends an agent that stops while `basis check` fails back once with its `ERROR` lines; the push hook
+  is the backstop.
 - `basis check` holds the tests to three gates. The unit tests cover at least the percentage of the code's lines and
   branches that `[tool.basis] coverage` gives, every module counted but tests and repository modules, which the
   integration tier covers; lower it only in a change of its own. A test uses no `unittest.mock` or pytest-mock, but in
@@ -25,7 +27,8 @@ line that starts with `ERROR`, gives the reason and ends with the fix.
 - `uv run basis doctor` checks this desktop's uv, git, hooks, feed and settings, and `uv run basis upgrade` takes a
   basis release: it relocks, syncs, checks in full and says what changed, for a commit of its own.
 - basis writes, and owns: each file whose first lines say basis manages it, skills in `.agents/skills/` and their
-  copies in `.claude/skills/` among them, `CLAUDE.md`, the deny rules in `.claude/settings.json`, and the blocks of
+  copies in `.claude/skills/` among them, `CLAUDE.md`, the deny rules and hooks in `.claude/settings.json`, the
+  hooks in `.cursor/hooks.json` and `.codex/hooks.json`, and the blocks of
   this file between `basis sync`'s markers. Never edit them: `basis check`
   fails when one differs from what the installed version writes, and `uv run basis sync` rewrites it, so a change to
   one is a change to basis. Everything else, in this file too, is the repo's own. A Debian package the image needs

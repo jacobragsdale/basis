@@ -615,6 +615,15 @@ a developer runs on a clone (`basis check`, `sync` and `new`, and `dev` and `doc
 `core.hooksPath` when it is unset, so a fresh clone has them after its first check, and `basis check` fails, with that
 fix, when they are missing. The verbs a container or a scheduler runs, such as `basis run`, leave git alone.
 
+The firm's CI is months away or unknown (the review's step 8.9), and a deny rule on a shell command is no boundary, so
+the gates reach into the agent's own harness too ([the spike](spikes/agent-hooks.md)). `basis sync` writes hooks for
+Claude Code, Cursor and Codex, merged with each repo's own, that run `basis hook`: before a shell command it refuses a
+commit or push that skips or repoints the git hooks, by `--no-verify`, `-n`, `core.hooksPath` or the plumbing that
+makes a commit without them, and any change to the hooks or the agents' settings; when the agent stops with changes
+no commit holds, it runs `basis check` and sends the agent back once with its `ERROR` lines. A hook is best effort, as
+a deny rule is: a script the agent writes and runs is out of its sight, and the push hook stays the backstop. Managed
+agent settings, which a repo cannot edit, would close it, and are the firm's to deploy.
+
 The gates are only as strong as the settings they run with, so basis owns them (the review's step 8.1): `basis sync`
 writes each repo's `ruff.toml`, `ty.toml` and `pytest.ini` from basis's settings and each part's share, as framework
 files, and `basis check` refuses a `[tool.ruff]`, `[tool.ty]` or `[tool.pytest]` table in `pyproject.toml`, which would

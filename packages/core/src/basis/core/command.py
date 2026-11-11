@@ -36,17 +36,17 @@ from typing import Literal, NoReturn, override
 
 from pydantic import ValidationError
 
-from basis.core import check, ddl, doctor, environments, full, gates, hooks, invalid, logs, qa, review, settings, sync, upgrade
+from basis.core import check, ddl, doctor, environments, full, gates, guard, hooks, invalid, logs, qa, review, settings, sync, upgrade
 from basis.core.destination import Dialect
 from basis.core.errors import BasisError
 from basis.core.logs import utc_now
 from basis.core.verbs import GROUP, Part, ProjectError, Runs, Shared, Verb, basis_table, error_line, fail, holding, not_a_table
 
-CORE = ("check", "review", "new", "sync", "upgrade", "doctor", "docs", "smoke")
-"""Core's verbs, which no part may add: in the order `basis --help` lists them. `check`, `review`, `sync`, `upgrade`
-and `doctor` are always listed, since every repo has basis's own files and gates, and each of the others when a
+CORE = ("check", "review", "new", "sync", "upgrade", "doctor", "hook", "docs", "smoke")
+"""Core's verbs, which no part may add: in the order `basis --help` lists them. `check`, `review`, `sync`, `upgrade`,
+`doctor` and `hook` are always listed, since every repo has basis's own files and gates, and each of the others when a
 declared part gives it something to do."""
-ALWAYS = frozenset({"check", "review", "sync", "upgrade", "doctor"})
+ALWAYS = frozenset({"check", "review", "sync", "upgrade", "doctor", "hook"})
 
 
 @dataclass(frozen=True)
@@ -346,6 +346,7 @@ def _core(repo: Repo) -> list[Verb]:
         "review": Verb("review", "print the pull request's summary of what basis check --full found on a commit, as Markdown", _review_arguments, lambda n: review.review(repo.root, str(n.commit))),
         "upgrade": Verb("upgrade", "relock basis's packages, sync, check in full, and print what changed", _no_arguments, lambda _: _upgrade(repo)),
         "doctor": Verb("doctor", DOCTOR, _doctor_arguments, lambda n: _diagnose(repo, None, n.env)),
+        "hook": Verb("hook", HOOK, _hook_arguments, lambda n: guard.hook(repo.root, n.event, n.agent, sys.stdin.read())),
         "new": Verb("new", f"add a {' or a '.join(kinds)} to the repo", partial(_new_arguments, kinds), lambda n: _new(repo, kinds[str(n.kind)], str(n.name))),
         "sync": Verb("sync", "rewrite the repo's framework and agent files from the installed version", _sync_arguments, run_sync),
         "docs": Verb("docs", "list the docs of the installed parts, or print one", _docs_arguments, lambda n: _docs(_pages(repo.parts), n.page)),
@@ -734,6 +735,14 @@ def _check_arguments(parser: argparse.ArgumentParser) -> None:
         help="with --full, read a relative BASIS_SNAPSHOT_ROOT from DIR, the clone's own folder: for a commit the push hook checks in a worktree of its own",
     )
     parser.add_argument("--no-qa", action="store_true", help="with --full, leave the QA tier to the push, as basis upgrade does for a relock not yet committed")
+
+
+HOOK = "answer an agent's hook, as the hooks basis sync writes for Claude Code, Cursor and Codex run it: refuse a way past the repo's hooks, or send back a failing check"
+
+
+def _hook_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("event", choices=guard.EVENTS, help="shell, before the agent runs a shell command; edit, before its edit tool writes a file; stop, as it ends its turn")
+    parser.add_argument("--agent", required=True, choices=guard.AGENTS, help="whose hook it is, which says what it sends on stdin and reads on stdout")
 
 
 def _review_arguments(parser: argparse.ArgumentParser) -> None:

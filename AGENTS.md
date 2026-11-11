@@ -106,7 +106,8 @@ holds the interface, and its docstring is the reference.
   hooks in `.githooks/` and `.gitattributes`, from `packages/core/src/basis/core/templates/sync/`), the repo's
   `ruff.toml`, `ty.toml` and `pytest.ini` where every declared part gives its share of them (`basis.core.tools`), with
   the repo's `[tool.basis] exceptions`, each a rule at a path with its reason, basis's own block
-  of `AGENTS.md` and each part's, `CLAUDE.md`, the deny rules in `.claude/settings.json`, and each file whose first
+  of `AGENTS.md` and each part's, `CLAUDE.md`, the deny rules and agent hooks in `.claude/settings.json`, the agent
+  hooks in `.cursor/hooks.json` and `.codex/hooks.json` (`basis.core.guard`, which `basis hook` runs), and each file whose first
   lines carry `basis.core.sync.MARKER`: each skill in `.agents/skills/` and its copy in `.claude/skills/` among them,
   whose front matter's `metadata` starts with the marker (`sync.SKILL_KEY`), so a skill is basis's whatever its name
   and whether or not the part that wrote it is still installed, and each file a part makes from the repo's own code
