@@ -66,7 +66,7 @@ def test_each_database_commits_its_tables_with_a_ledger_row_for_each_in_name_ord
 def test_a_run_the_ledger_holds_is_not_written_again() -> None:
     found = databases("warehouse")
     run(found)
-    assert run(found)["warehouse"] == PublishRecord(status="committed", at=AT, counts={})
+    assert run(found)["warehouse"] == PublishRecord(status="committed", at=AT, counts={"warehouse_prices": vars(Counts(inserted=2))}, earlier=True)  # what the commit counted
     assert len(found["warehouse"].rows("warehouse.prices")) == 2
 
 

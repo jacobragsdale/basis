@@ -362,6 +362,9 @@ class _GuardedWriter:
     def published(self, run_id: str) -> bool:
         return self.writer.published(run_id)
 
+    def recorded(self, run_id: str) -> dict[str, Counts]:
+        return self.writer.recorded(run_id)
+
     def overlapping(self, job: str, output: str, interval: Interval) -> list[str]:
         return self.writer.overlapping(job, output, interval)
 

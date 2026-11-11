@@ -164,7 +164,7 @@ def test_a_replay_of_a_run_on_the_same_code_changes_nothing(repo: Path, capsys: 
 def test_a_resume_of_a_run_that_never_published_is_refused_in_one_line(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     run_id = ran(repo, capsys)
     assert basis(repo, "resume", run_id) == 1
-    assert only_error(capsys.readouterr().err).startswith(f"ERROR: run {run_id} is checked and never published")
+    assert only_error(capsys.readouterr().err) == f"ERROR: run {run_id} is checked, and was not asked to publish: run it again with --publish"
 
 
 def test_a_run_told_again_records_it_and_resume_takes_again_too(repo: Path, snapshot_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -173,7 +173,7 @@ def test_a_run_told_again_records_it_and_resume_takes_again_too(repo: Path, snap
     run_id = next(json.loads(line)["run_id"] for line in capsys.readouterr().err.splitlines() if '"run_id"' in line)
     assert snapshots.find(Root.at(snapshot_root), run_id).record().again
     assert basis(repo, "resume", run_id, "--again") == 1
-    assert error_line(capsys).startswith(f"ERROR: run {run_id} is checked and never published")
+    assert error_line(capsys) == f"ERROR: run {run_id} is checked, and was not asked to publish: run it again with --publish"
 
 
 @pytest.mark.parametrize(
@@ -302,7 +302,10 @@ OVERLAPPED = {
         ),
         (
             {"status": "failed", "publishes": {"alpha": OVERLAPPED}},
-            (f"run R1 of prices committed to no database: alpha: {OVERLAPPED['error']}", "run the job again with --again, if its rows are meant to be inserted a second time"),
+            (
+                f"run R1 of prices committed to no database: alpha: {OVERLAPPED['error']}",
+                "where a run it names stopped before it finished publishing, `basis resume` finishes it; run the job again with --again only if its rows are meant to be inserted a second time",
+            ),
         ),
     ],
     ids=["a-partial-run-told-again", "a-partial-run-a-ledger-refused", "a-run-a-ledger-refused"],

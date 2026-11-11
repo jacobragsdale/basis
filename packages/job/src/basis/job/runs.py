@@ -215,12 +215,17 @@ def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
         run_id=run_id, job=job.name, module=job.module, version=VERSION, git_sha=request.git_sha, started_at=started,
         interval=str(request.interval) if request.interval is not None else None, params_path=str(request.params),
         params_sha256=snapshots.params_digest(params_text), labels=dict(request.labels), data=str(request.data) if request.data is not None else None,
-        again=request.again,
+        again=request.again, publish=request.publish,
     )  # fmt: skip
     targets = targets_of(job)
-    specs, reasons = _check_destinations(targets, settings, databases, publishing=request.publish)
-    reasons += _check_messages(job, settings, this.faked, publishing=request.publish) + _check_reports(job, settings, this.open_folder, publishing=request.publish)
-    reasons += _check_upserts(job, settings, this.faked, publishing=request.publish) + _check_lakes(job, settings, this.open_lake, publishing=request.publish)
+    try:
+        specs, reasons = _check_destinations(targets, settings, databases, publishing=request.publish)
+        reasons += _check_ledgers(job, settings, databases, publishing=request.publish)
+        reasons += _check_messages(job, settings, this.faked, publishing=request.publish) + _check_reports(job, settings, this.open_folder, publishing=request.publish)
+        reasons += _check_upserts(job, settings, this.faked, publishing=request.publish) + _check_lakes(job, settings, this.open_lake, publishing=request.publish)
+    except Exception as error:
+        log.exception("could not check the destinations")
+        return _summarized(_finish(record.done("failed", error=_headline(error), finished_at=clock()), snapshot_root, params_text, {}, {}))
     if reasons:
         return _summarized(_finish(record.done("failed", reasons=reasons, finished_at=clock()), snapshot_root, params_text, {}, {}))
     try:
@@ -241,7 +246,7 @@ def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
     for name, entry in planned.items():
         if (spec := specs.get(name)) is not None and entry.changes is not None:
             reasons.extend(f"{name}: {reason}" for reason in check_values(entry.target, spec, entry.changes))
-    status: Status = "failed" if reasons else "checked"
+    status: Status = "failed" if reasons else "publishing" if request.publish else "checked"  # saved before the first commit, so a run stopped while it publishes says so
     record = record.with_outputs(planned, inputs).with_made(kept).with_messages(made.messages).with_reports(made.reports).with_documents(made.documents).with_archives(made.archives)
     result = _finish(record.done(status, reasons=reasons, finished_at=clock()), snapshot_root, params_text, tables, planned, reports=made.frames)
     if reasons or not request.publish or result.snapshot is None:
@@ -334,7 +339,7 @@ def failure_of(record: RunRecord, *, publish: bool) -> tuple[str, str] | None:
     if record.status == ("published" if publish else "checked"):
         return None
     run = f"run {record.run_id} of {record.job}"
-    if record.status == "partial":
+    if record.status in {"partial", "publishing"}:
         return _partial(run, record)
     if record.error is not None:
         return f"{run} failed: {record.error}", "fix it, and run the job again"
@@ -346,13 +351,18 @@ def failure_of(record: RunRecord, *, publish: bool) -> tuple[str, str] | None:
         again = refused_overlap(record.publishes)
         return (
             f"{run} committed to no database: {'; '.join(errors)}",
-            "run the job again with --again, if its rows are meant to be inserted a second time" if again else "fix it, and run the job again",
+            "where a run it names stopped before it finished publishing, `basis resume` finishes it; run the job again with --again only if its rows are meant to be inserted a second time"
+            if again
+            else "fix it, and run the job again",
         )
     return f"{run} ended {record.status} with no reason recorded, when it was asked to publish", "its log records say what happened; run it again, and report it if it does the same"
 
 
 def _partial(run: str, record: RunRecord) -> tuple[str, str]:
-    """Why a run that published to some of its databases, or could not send a message, is not done, and the fix."""
+    """Why a run that published to some of its databases, or could not send a message, or stopped while it published,
+    is not done, and the fix."""
+    if record.status == "publishing":
+        return f"{run} began to publish and stopped before it recorded what it published", f"`{resume_command(record)}`, which asks each ledger what it holds and publishes the rest"
     if unsent := [f"{name}: {entry.error}" for name, entry in record.sent.items() if entry.status == "failed"]:
         return f"{run} published, and could not send {'; '.join(unsent)}", f"fix it, then `{resume_command(record)}`, which sends what it has not"
     if unarchived := [f"{name}: {entry.error}" for name, entry in record.archived.items() if entry.status == "failed"]:
@@ -394,6 +404,25 @@ def _check_destinations(targets: Mapping[str, Target], settings: Settings, datab
                 specs[name] = spec
                 reasons.extend(f"{name}: {reason}" for reason in check_table(target, spec))
     return specs, reasons
+
+
+def _check_ledgers(job: Job, settings: Settings, databases: Callable[[str], Database], *, publishing: bool) -> list[str]:
+    """Every reason a run that publishes cannot write a ledger row: the ledger table of a database it publishes to, or
+    whose ledger records a message or an archive, does not exist, which would otherwise be found only once the
+    databases before it had committed."""
+    if not publishing:
+        return []
+    names = {target.database for target in targets_of(job).values()}
+    names |= {message.ledger for message in job.outputs.declared_messages().values()} | {declared.ledger for declared in job.outputs.declared_lakes().values()}
+    reasons: list[str] = []
+    for name in sorted(names):
+        found = settings.databases.get(name)
+        if found is None or found.write is None or (ledger := found.write.ledger) is None:
+            continue  # its own reason
+        with databases(name).reading() as reader:
+            if reader.describe(ledger) is None:
+                reasons.append(f"database {name!r} has no ledger table {ledger}, which a publish writes in its transaction: `basis ddl --ledger {ledger} --dialect {found.kind}` prints it")
+    return reasons
 
 
 def fresh(tables: Mapping[str, pa.Table]) -> dict[str, pd.DataFrame]:
@@ -647,6 +676,7 @@ class _Record:
     data: str | None
     replay_of: str | None = None
     again: bool = False
+    publish: bool = False
     inputs: dict[str, InputRecord] = field(default_factory=dict)
     outputs: dict[str, snapshots.OutputRecord] = field(default_factory=dict)
     clocks: dict[str, list[datetime]] = field(default_factory=dict)
@@ -692,7 +722,7 @@ class _Record:
         return RunRecord(
             run_id=self.run_id, job=self.job, module=self.module, version=self.version, git_sha=self.git_sha, started_at=self.started_at,
             finished_at=finished_at, interval=self.interval, params_path=self.params_path, params_sha256=self.params_sha256, labels=self.labels,
-            data=self.data, replay_of=self.replay_of, again=self.again, status=status, inputs=self.inputs, outputs=self.outputs, reasons=reasons or [], error=error,
+            data=self.data, replay_of=self.replay_of, again=self.again, publish=self.publish, status=status, inputs=self.inputs, outputs=self.outputs, reasons=reasons or [], error=error,
             publishes=publishes or {}, messages=self.messages, sent=sent or {}, reports=self.reports, written=written or {},
             documents=self.documents, upserted=upserted or {}, archives=self.archives, archived=archived or {}, clocks=self.clocks, ids=self.ids,
         )  # fmt: skip
@@ -803,6 +833,7 @@ def resume(  # noqa: PLR0913 -- resume's, by keyword
         if record.status == "published":
             log.info("already published")
             return record
+        core_runs.check_resumable(record)
         databases = databases if databases is not None else core_runs.opener(settings)
         count = len({output.database for output in record.outputs.values()})
         final = record

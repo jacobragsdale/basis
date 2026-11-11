@@ -29,9 +29,11 @@ from basis.core.model import Model
 from basis.core.storage import DIGEST, Root, Store
 from basis.core.tables import Changes, Delete, Range
 
-type Status = Literal["failed", "checked", "published", "partial"]
+type Status = Literal["failed", "checked", "publishing", "published", "partial"]
 """`failed`: an error, or a reason not to write; `checked`: every check passed, and the run was not asked to publish;
-`published`: every database committed; `partial`: some committed and one failed, which `basis resume` finishes."""
+`publishing`: every check passed and the run began to publish, saved before its first commit, so a run stopped while it
+publishes says so, and `basis resume` finishes it, asking each ledger what it holds; `published`: every database
+committed; `partial`: some committed and one failed, which `basis resume` finishes."""
 
 
 class InputRecord(Model):
@@ -64,6 +66,9 @@ class PublishRecord(Model):
     counts: dict[str, dict[str, int]] = Field(default_factory=dict)
     """What the database counted, by output and operation."""
     error: str | None = None
+    earlier: bool = False
+    """Whether an earlier attempt of the run committed it, which the ledger held, so `counts` are what that commit
+    counted, as its ledger rows recorded them."""
 
 
 class MessageRecord(Model):
@@ -186,6 +191,8 @@ class RunRecord(Model):
     replay_of: str | None = None
     again: bool = False
     """Whether the run was told to publish a plain insert for an interval the ledger has already, as its resume is."""
+    publish: bool | None = None
+    """Whether the run was asked to publish; None in a record from before basis recorded it."""
     status: Status
     inputs: dict[str, InputRecord] = Field(default_factory=dict)
     outputs: dict[str, OutputRecord] = Field(default_factory=dict)

@@ -356,6 +356,13 @@ class OracleWriter(OracleReader):
             row = cursor.fetchone()
         return row is not None and int(str(row[0])) > 0
 
+    def recorded(self, run_id: str) -> dict[str, Counts]:
+        sql = f"SELECT output, deleted, upserted, inserted_new, inserted FROM {self.ledger} WHERE run_id = :run_id"
+        with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql):
+            cursor.execute(sql, {"run_id": run_id})
+            rows = cursor.fetchall()
+        return {str(row[0]): Counts(*(int(str(value)) for value in row[1:])) for row in rows}
+
     def overlapping(self, job: str, output: str, interval: Interval) -> list[str]:
         binds = {"job": job, "output": output} | interval.binds()
         lock = f"LOCK TABLE {self.ledger} IN SHARE ROW EXCLUSIVE MODE"

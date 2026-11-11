@@ -89,6 +89,11 @@ class Writer(Reader, Protocol):
         """Whether the ledger holds a publish of this run to this database."""
         ...
 
+    def recorded(self, run_id: str) -> dict[str, Counts]:
+        """What the ledger holds of this run, by output: what the database counted when each committed, so a resume of
+        a run stopped after its commit reports what that commit wrote."""
+        ...
+
     def overlapping(self, job: str, output: str, interval: Interval) -> list[str]:
         """The runs the ledger holds of `job`'s `output` for an interval that overlaps `interval`, locked until the
         transaction ends, so two runs of one interval never both insert."""

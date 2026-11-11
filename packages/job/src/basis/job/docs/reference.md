@@ -348,7 +348,7 @@ basis's.
 | `basis upgrade` | With nothing uncommitted, relocks basis's packages within what `pyproject.toml` allows, runs `basis sync` and `basis check --full --no-qa` with the newly locked version, and prints each package's version before and after and each file it changed. The QA tier runs when the upgrade is committed and pushed, so QA publishes it once, with a record for `basis review`. |
 | `basis run JOB --env ENV --params FILE [--interval INTERVAL] [--data DIR] [--label KEY=VALUE]... [--publish] [--again]` | Runs a job in an environment (see [Environments](#environments)), saves its snapshot, and with `--publish` writes its changes, which prod refuses unless the deployment allows it. `--again` publishes an `Append()` table for an interval the ledger already has. |
 | `basis replay [JOB] RUN_ID --env ENV [--params FILE]` | Runs a saved run's transform again on its inputs; prints the replay's status, reasons and differences as JSON. Without `JOB`, the run is found by its id alone. |
-| `basis resume [JOB] RUN_ID --env ENV [--again]` | Writes a partly published run's changes to each database whose ledger lacks the run, told `--again` if the run was, or if given now. Without `JOB`, the run is found by its id alone. |
+| `basis resume [JOB] RUN_ID --env ENV [--again]` | Writes a partly published run's changes, or a run's that stopped while it published, to each database whose ledger lacks the run, told `--again` if the run was, or if given now; a run not asked to publish, and a replay, are refused. Without `JOB`, the run is found by its id alone. |
 | `basis regress [JOB] (--env ENV \| --snapshots ROOT) [--last N] [--label KEY=VALUE]...` | Replays the last `N` (default 10) published runs of `JOB`, or of every job the repo lists, whose labels include every `--label`, from the environment's run store or `ROOT`; prints each run's job, reasons and differences as JSON: rows added, removed and changed, by column, and each column added, removed or retyped, the rows comparing by the columns both runs hold alike. |
 | `basis describe [JOB]` | Prints the job's params schema, inputs and outputs as JSON; without `JOB`, every job the repo lists, with its module. |
 | `basis ddl JOB --dialect mssql\|oracle` | Prints `CREATE TABLE` for each of the job's tables. |
@@ -513,7 +513,8 @@ each input, as `inputs/NAME`, and of each table's frames, as `outputs/NAME/upser
 | `status` | Meaning |
 |---|---|
 | `failed` | An error, or at least one reason not to write. |
-| `checked` | Every check passed; the run did not publish. |
+| `checked` | Every check passed; the run was not asked to publish. |
+| `publishing` | Every check passed and the run began to publish, then stopped, as a killed process does, before it recorded the outcome; `basis resume` finishes it, asking each ledger what it committed. |
 | `published` | Every database the job writes committed. |
 | `partial` | Some databases committed and one failed; `basis resume` finishes it. |
 

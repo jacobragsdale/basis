@@ -26,7 +26,7 @@ import httpx2
 import pandas as pd
 import pyarrow as pa
 
-from basis.core.databases.base import Bind, Counts, LedgerEntry, Statements, check_count, for_writing, naive_in_zone, rows_of
+from basis.core.databases.base import LEDGER_COLUMNS, Bind, Counts, LedgerEntry, Statements, check_count, for_writing, naive_in_zone, rows_of
 from basis.core.databases.failures import failure
 from basis.core.ddl import ORACLE_VARCHAR_LIMIT
 from basis.core.destination import DestColumn, Dialect, TableSpec, Unit
@@ -359,20 +359,20 @@ class Database:
     the database's only on `commit()`, as a transaction's changes do: a block that ends without one leaves nothing. The
     rerun guard's lookup, `overlapping`, holds the database's lock until the writer's block ends, as the real ledgers'
     row locks do, so a second writer of the same output waits for the first and then sees its ledger row. With
-    `ledger=False`, its ledger table does not exist.
+    `ledger=None`, its ledger table does not exist.
 
     A query is answered from `answers`, by its SQL exactly; a query it has no answer for fails, so a test says what each
     returns. `fails` makes a call fail with a kind of `ServiceError`, every time or the next `times`, as the real
     database's failures reach a part (`basis.core.databases.failures`). The contract suite in basis-core's tests holds
     it to SQL Server's and Oracle's writers."""
 
-    def __init__(self, name: str, *, dialect: Dialect = "mssql", writable: bool = True, ledger: bool = True) -> None:
+    def __init__(self, name: str, *, dialect: Dialect = "mssql", writable: bool = True, ledger: str | None = "etl.publishes") -> None:
         self.name = name
         self.dialect: Dialect = dialect
         self._writable = writable
         self.ledger = ledger
-        """Whether its ledger table exists: without it, every call that reads or writes the ledger fails, as a
-        statement on a table that does not exist does."""
+        """Its ledger table's name, which `describe` finds; None where there is none, and every call that reads or
+        writes the ledger fails, as a statement on a table that does not exist does."""
         self.tables: dict[str, _Held] = {}
         self.entries: list[LedgerEntry] = []
         """The ledger, as committed."""
@@ -457,6 +457,8 @@ class _DatabaseReader:
 
     def describe(self, table: str) -> TableSpec | None:
         self.database.fail("describe")
+        if table == self.database.ledger:
+            return TableSpec(self.database.dialect, table, {name: DestColumn(name, "NVARCHAR", None, None, None, nullable=True, generated=False, defaulted=False) for name in LEDGER_COLUMNS})
         return held.spec if (held := self.tables.get(table)) is not None else None
 
 
@@ -488,6 +490,11 @@ class _DatabaseWriter(_DatabaseReader):
         self.database.fail("published")
         self._ledger()
         return any(entry.run_id == run_id for entry in [*self.database.entries, *self.entries])
+
+    def recorded(self, run_id: str) -> dict[str, Counts]:
+        self.database.fail("published")
+        self._ledger()
+        return {entry.output: entry.counts for entry in [*self.database.entries, *self.entries] if entry.run_id == run_id}
 
     def overlapping(self, job: str, output: str, interval: Interval) -> list[str]:
         self.database.fail("overlapping")
@@ -560,7 +567,7 @@ class _DatabaseWriter(_DatabaseReader):
         return len(rows)
 
     def _ledger(self) -> None:
-        if not self.database.ledger:
+        if self.database.ledger is None:
             raise failure(self.database.name, Failed, RuntimeError(f"the fake database {self.database.name} has no ledger table"))
 
     def _values(self, target: Target, frame: pd.DataFrame) -> list[dict[str, object]]:

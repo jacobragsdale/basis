@@ -58,22 +58,24 @@ def publish(
         names = sorted(name for name, target in targets.items() if target.database == database and name in changes)
         try:
             with timed(log, "published", database=database, outputs=names) as fields:
-                counts = _publish_database(publication, open_database(database), {name: targets[name] for name in names}, changes, checked or {})
+                counts, earlier = _publish_database(publication, open_database(database), {name: targets[name] for name in names}, changes, checked or {})
                 fields["counts"] = {name: vars(found) for name, found in counts.items()}
         except Exception as error:
             log.exception("could not publish to %s; nothing there is committed", database)
             records[database] = PublishRecord(status="failed", at=publication.clock(), error=f"{type(error).__name__}: {error}")
             break
-        records[database] = PublishRecord(status="committed", at=publication.clock(), counts={name: vars(found) for name, found in counts.items()})
+        records[database] = PublishRecord(status="committed", at=publication.clock(), counts={name: vars(found) for name, found in counts.items()}, earlier=earlier)
     return records
 
 
-def _publish_database(publication: Publication, database: Database, targets: Mapping[str, Target], changes: Mapping[str, Changes], checked: Mapping[str, TableSpec]) -> dict[str, Counts]:
+def _publish_database(publication: Publication, database: Database, targets: Mapping[str, Target], changes: Mapping[str, Changes], checked: Mapping[str, TableSpec]) -> tuple[dict[str, Counts], bool]:
+    """What the database counted, by output, and whether an earlier attempt had committed it, whose counts the ledger
+    holds."""
     counts: dict[str, Counts] = {}
     with database.writing() as writer:
-        if writer.published(publication.run_id):
+        if recorded := writer.recorded(publication.run_id):
             log.info("already published", extra={"database": database.name})
-            return {}
+            return recorded, True
         for name, target in targets.items():
             spec = writer.describe(target.table)
             if spec is None:
@@ -84,10 +86,13 @@ def _publish_database(publication: Publication, database: Database, targets: Map
                 raise PublishRefusedError(f"{name}: {target.table} changed since the run checked it:\n" + "\n".join(reasons))
             interval = publication.interval if not changes[name].rerun_safe and not publication.again else None
             if interval is not None and (runs := writer.overlapping(publication.job, name, interval)):
-                msg = f"{name} appends, and runs {', '.join(runs)} {OVERLAP} {publication.interval}: pass --again to insert its rows a second time"
+                msg = (
+                    f"{name} appends, and runs {', '.join(runs)} {OVERLAP} {publication.interval}: where one of them stopped before it finished publishing,"
+                    f" `basis resume {publication.job} RUN_ID` finishes it; pass --again only to insert its rows a second time"
+                )
                 raise PublishRefusedError(msg)
             counts[name] = writer.apply(target, changes[name], spec)
             entry = LedgerEntry(publication.run_id, publication.job, name, target.table, publication.interval, changes[name].rerun_safe, counts[name], publication.clock(), publication.version)
             writer.record(entry)
         writer.commit()
-    return counts
+    return counts, False

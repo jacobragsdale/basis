@@ -3,7 +3,10 @@ fake database, which its contract suite holds to SQL Server's and Oracle's write
 table, an append publishes an interval once, a failure in a database's transaction writes nothing there, and a run that
 committed to one database and failed on another resumes from its snapshot."""
 
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Literal, override
 
 import pandas as pd
 import pytest
@@ -11,7 +14,8 @@ from builders import Price, prices
 
 import basis.job as etl
 from basis.core import fakes, snapshots
-from basis.core.errors import Rejected
+from basis.core.databases import Counts, Writer
+from basis.core.errors import Rejected, Unavailable
 from basis.core.interval import Interval
 from basis.core.settings import GivenSettings
 from basis.core.storage import Root
@@ -59,7 +63,7 @@ def two_databases() -> Job:
     return Job("two_databases", "tests.two_databases", etl.Params, Inputs, Outputs, transform, None, Path(__file__).parent)
 
 
-def database(name: str, *tables: tuple[str, tuple[str, ...] | None], ledger: bool = True) -> fakes.Database:
+def database(name: str, *tables: tuple[str, tuple[str, ...] | None], ledger: str | None = "etl.publishes") -> fakes.Database:
     found = fakes.Database(name, ledger=ledger)
     for table, key in tables:
         found.create(Target(Price, name, table, etl.Append(), key))
@@ -79,7 +83,7 @@ def settings(*names: str) -> GivenSettings:
     )  # fmt: skip
 
 
-def run(job: Job, found: dict[str, fakes.Database], frame: pd.DataFrame, root: Path, *, again: bool = False, interval: str = "2026-11-05..2026-11-06") -> runs.Result:  # noqa: PLR0913 -- a test's knobs, each by keyword
+def run(job: Job, found: Mapping[str, fakes.Database], frame: pd.DataFrame, root: Path, *, again: bool = False, interval: str = "2026-11-05..2026-11-06") -> runs.Result:  # noqa: PLR0913 -- a test's knobs, each by keyword
     folder = root / "data"
     folder.mkdir(exist_ok=True)
     frame.to_parquet(folder / "prices.parquet", index=False)
@@ -144,12 +148,12 @@ def test_the_ledger_records_each_publish_with_what_the_database_counted(tmp_path
 
 
 def test_a_run_that_committed_to_one_database_resumes_on_the_other(tmp_path: Path) -> None:
-    alpha, beta = database("alpha", (TABLE, None)), database("beta", (TABLE, None), ledger=False)  # beta's publish fails after alpha's commits
+    alpha, beta = database("alpha", (TABLE, None)), database("beta", (TABLE, None))
+    beta.fails(Rejected, on="apply", times=1)  # beta's publish fails after alpha's commits
     job = two_databases()
     partial = run(job, {"alpha": alpha, "beta": beta}, TODAY, tmp_path)
     assert partial.record.status == "partial"
     assert [record.status for record in partial.record.publishes.values()] == ["committed", "failed"]
-    beta.ledger = True
     assert partial.snapshot is not None
     resumed = runs.resume(job, partial.snapshot, settings("alpha", "beta"), databases={"alpha": alpha, "beta": beta}.__getitem__)
     assert resumed.status == "published"
@@ -161,10 +165,96 @@ def test_a_resume_of_a_run_told_again_inserts_again_on_the_database_it_failed_on
     alpha, beta = database("alpha", (TABLE, None)), database("beta", (TABLE, None))
     job = two_databases()
     assert run(job, {"alpha": alpha, "beta": beta}, TODAY, tmp_path).record.status == "published"
-    beta.ledger = False
+    beta.fails(Rejected, on="apply", times=1)
     partial = run(job, {"alpha": alpha, "beta": beta}, TODAY, tmp_path, again=True)
     assert (partial.record.status, partial.record.again) == ("partial", True)
-    beta.ledger = True
     assert partial.snapshot is not None
     assert runs.resume(job, partial.snapshot, settings("alpha", "beta"), databases={"alpha": alpha, "beta": beta}.__getitem__).status == "published"
     assert (len(contents(alpha)), len(contents(beta))) == (4, 4)
+
+
+class Killed(BaseException):
+    """The process stopped, as a kill or a lost pod stops it: nothing after it runs, no handler records it."""
+
+
+class Dying(fakes.Database):
+    """A fake database whose writer the process dies in: at its first statement (`before`), or once it commits
+    (`after`)."""
+
+    def __init__(self, name: str, *, dies: Literal["before", "after"] | None = None) -> None:
+        super().__init__(name)
+        self.dies = dies
+
+    @override
+    @contextmanager
+    def writing(self) -> Generator[Writer]:
+        if self.dies == "before":
+            raise Killed
+        with super().writing() as writer:
+            yield writer
+        if self.dies == "after" and self.entries:
+            raise Killed
+
+
+@pytest.mark.parametrize(("alpha", "beta"), [("before", None), ("after", None), (None, "after")], ids=["before-alpha", "after-alpha", "after-beta"])
+def test_a_run_killed_at_any_point_of_its_publish_resumes_with_each_row_written_once(tmp_path: Path, alpha: Literal["before", "after"] | None, beta: Literal["after"] | None) -> None:
+    databases = {"alpha": Dying("alpha", dies=alpha), "beta": Dying("beta", dies=beta)}
+    for found in databases.values():
+        found.create(Target(Price, found.name, TABLE, etl.Append(), None))
+    job = two_databases()
+    with pytest.raises(Killed):
+        run(job, databases, TODAY, tmp_path)
+    [saved] = snapshots.runs_of(Root.at(tmp_path / "snapshots"), job.name, package="job")
+    record = saved.record()
+    assert (record.status, record.publish, record.publishes) == ("publishing", True, {})
+    for found in databases.values():
+        found.dies = None
+    resumed = runs.resume(job, saved, settings("alpha", "beta"), databases=databases.__getitem__)
+    assert resumed.status == "published"
+    assert (len(contents(databases["alpha"])), len(contents(databases["beta"]))) == (2, 2)
+    assert {name: entry.counts for name, entry in resumed.publishes.items()} == {name: {name[0]: vars(Counts(inserted=2))} for name in ("alpha", "beta")}
+
+
+def test_a_resume_keeps_the_record_of_a_database_that_committed(tmp_path: Path) -> None:
+    alpha, beta = database("alpha", (TABLE, None)), database("beta", (TABLE, None))
+    beta.fails(Rejected, on="apply", times=1)
+    job = two_databases()
+    partial = run(job, {"alpha": alpha, "beta": beta}, TODAY, tmp_path)
+    committed = partial.record.publishes["alpha"]
+    assert partial.snapshot is not None
+    resumed = runs.resume(job, partial.snapshot, settings("alpha", "beta"), databases={"alpha": alpha, "beta": beta}.__getitem__)
+    assert resumed.publishes["alpha"] == committed
+
+
+def test_a_run_not_asked_to_publish_is_never_resumed(tmp_path: Path) -> None:
+    warehouse = database("warehouse", (TABLE, KEY))
+    folder = tmp_path / "data"
+    folder.mkdir()
+    TODAY.to_parquet(folder / "prices.parquet", index=False)
+    (tmp_path / "params.json").write_text("{}", encoding="utf-8")
+    request = runs.Request(tmp_path / "params.json", Interval.parse("2026-11-05..2026-11-06"), folder, publish=False)
+    job = price_job(etl.Upsert())
+    checked = runs.run(job, settings("warehouse"), request, snapshot_root=Root.at(tmp_path / "snapshots"), databases={"warehouse": warehouse}.__getitem__)
+    assert (checked.record.status, checked.record.publish) == ("checked", False)
+    assert checked.snapshot is not None
+    with pytest.raises(ValueError, match="was not asked to publish: run it again with --publish"):
+        runs.resume(job, checked.snapshot, settings("warehouse"), databases={"warehouse": warehouse}.__getitem__)
+    assert (contents(warehouse), warehouse.entries) == ([], [])
+
+
+def test_a_missing_ledger_stops_the_run_before_it_loads_and_no_database_commits(tmp_path: Path) -> None:
+    alpha, beta = database("alpha", (TABLE, None)), database("beta", (TABLE, None), ledger=None)
+    result = run(two_databases(), {"alpha": alpha, "beta": beta}, TODAY, tmp_path)
+    assert result.record.status == "failed"
+    assert result.record.reasons == ["database 'beta' has no ledger table etl.publishes, which a publish writes in its transaction: `basis ddl --ledger etl.publishes --dialect mssql` prints it"]
+    assert (contents(alpha), alpha.entries, result.record.inputs) == ([], [], {})
+
+
+def test_a_destination_that_cannot_be_reached_in_the_preflight_is_a_failed_run_with_a_record(tmp_path: Path) -> None:
+    warehouse = database("warehouse", (TABLE, KEY))
+    warehouse.fails(Unavailable, on="describe")
+    result = run(price_job(etl.Upsert()), {"warehouse": warehouse}, TODAY, tmp_path)
+    assert result.record.status == "failed"
+    assert result.record.error is not None
+    assert result.record.error.startswith("Unavailable: database warehouse could not be reached")
+    assert result.snapshot is not None

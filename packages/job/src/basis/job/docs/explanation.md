@@ -53,9 +53,11 @@ ledger is also the only DDL the framework asks for, once per database: runs neve
 Within one database, a run is all or nothing: every check passes for every output before any database is touched, and
 then each database's tables and ledger rows commit together. Across databases, true atomicity would need distributed
 transactions, which the drivers do not make dependable. Instead, databases commit one at a time, in name order, and a
-run that fails between two commits is `partial`. The ledgers say which databases have the run, and `basis resume` writes
-the rest from the snapshot: the same rows, not a fresh extract, so the databases end up as if one transaction had
-written them.
+run that fails between two commits is `partial`. A run saves itself as `publishing` before its first commit, so one
+stopped between two commits, as a killed process is, says so too. The ledgers say which databases have the run, and
+`basis resume` writes the rest from the snapshot: the same rows, not a fresh extract, so the databases end up as if one
+transaction had written them. Before it loads anything, a run that publishes checks that every ledger it writes
+exists, so a missing one stops it before any database commits.
 
 ## Exact values
 

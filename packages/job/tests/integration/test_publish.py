@@ -171,13 +171,15 @@ def test_a_run_that_committed_to_one_database_resumes_on_the_other(both: tuple[S
     table = f"prices_{alpha.suffix}"
     create(alpha, table, key=None)
     create(beta, table, key=None)
-    alpha.with_ledger()  # beta has no ledger yet, so its publish fails after alpha's commits
+    alpha.with_ledger()
+    beta.with_ledger()
+    refuse(beta, table)  # so its publish fails after alpha's commits
 
     job = two_databases(table)
     partial = run(job, {"alpha": alpha, "beta": beta}, TODAY, tmp_path)
     assert partial.record.status == "partial"
     assert [record.status for record in partial.record.publishes.values()] == ["committed", "failed"]
-    beta.with_ledger()
+    allow(beta, table)
     assert partial.snapshot is not None
     settings = GivenSettings(databases={"alpha": alpha.settings, "beta": beta.settings})
     resumed = runs.resume(job, partial.snapshot, settings)
@@ -204,7 +206,7 @@ def test_a_run_told_again_that_committed_to_one_database_resumes_again_on_the_ot
     both: tuple[Scratch, Scratch], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Both ledgers hold the interval, from the run before; the run told `--again` commits to alpha, and fails on beta,
-    whose ledger it is pointed away from. `basis resume` inserts beta's rows again, as the run was told to."""
+    whose table refuses its rows. `basis resume` inserts beta's rows again, as the run was told to."""
     alpha, beta = both
     table = f"prices_{alpha.suffix}"
     create(alpha, table, key=None)
@@ -213,11 +215,10 @@ def test_a_run_told_again_that_committed_to_one_database_resumes_again_on_the_ot
     beta.with_ledger()
     job = two_databases(table)
     assert run(job, {"alpha": alpha, "beta": beta}, TODAY, tmp_path).record.status == "published"
-    write = beta.settings["write"]
-    assert isinstance(write, dict)
-    unledgered = dataclasses.replace(beta, settings=beta.settings | {"write": write | {"ledger": f"no_ledger_{beta.suffix}"}})
-    partial = run(job, {"alpha": alpha, "beta": unledgered}, TODAY, tmp_path, again=True)
+    refuse(beta, table)
+    partial = run(job, {"alpha": alpha, "beta": beta}, TODAY, tmp_path, again=True)
     assert (partial.record.status, partial.record.again) == ("partial", True)
+    allow(beta, table)
     settings = GivenSettings(databases={"alpha": alpha.settings, "beta": beta.settings}, snapshot_root=str(tmp_path / "snapshots"))
     monkeypatch.setattr(environments, "load", lambda _given, _kind: environments.Environment("dev", settings, None, writes=True))  # the containers' databases, as dev's settings
     monkeypatch.setattr("basis.job.job.load", lambda _: job)  # the test's own job, which no module holds
@@ -231,8 +232,8 @@ def test_a_run_told_again_that_committed_to_one_database_resumes_again_on_the_ot
 
 def test_a_resume_told_again_is_saved_so_its_next_attempt_is_too(both: tuple[Scratch, Scratch], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """The run is not told `--again`. Beta's ledger holds the interval, from the run before, and alpha's, a fresh one,
-    does not: the run commits to alpha and fails on beta, whose ledger it is pointed away from. A plain resume is
-    refused by beta's interval guard, and its fix says to resume with `--again`, which publishes, and is saved."""
+    does not: the run commits to alpha and beta's interval guard refuses it. A plain resume is refused by the same
+    guard, and its fix says to resume with `--again`, which publishes, and is saved."""
     alpha, beta = both
     table, fresh = f"prices_{alpha.suffix}", f"fresh_ledger_{alpha.suffix}"
     create(alpha, table, key=None)
@@ -243,7 +244,7 @@ def test_a_resume_told_again_is_saved_so_its_next_attempt_is_too(both: tuple[Scr
     try:
         assert run(job, {"alpha": alpha, "beta": beta}, TODAY, tmp_path).record.status == "published"
         alpha.execute(ddl.ledger(fresh, alpha.dialect))
-        partial = run(job, {"alpha": ledgered(alpha, fresh), "beta": ledgered(beta, f"no_ledger_{beta.suffix}")}, TODAY, tmp_path)
+        partial = run(job, {"alpha": ledgered(alpha, fresh), "beta": beta}, TODAY, tmp_path)
         assert (partial.record.status, partial.record.again) == ("partial", False)
         settings = GivenSettings(databases={"alpha": ledgered(alpha, fresh).settings, "beta": beta.settings}, snapshot_root=str(tmp_path / "snapshots"))
         monkeypatch.setattr(environments, "load", lambda _given, _kind: environments.Environment("dev", settings, None, writes=True))  # the containers' databases, as dev's settings
@@ -267,3 +268,15 @@ def ledgered(scratch: Scratch, ledger: str) -> Scratch:
     write = scratch.settings["write"]
     assert isinstance(write, dict)
     return dataclasses.replace(scratch, settings=scratch.settings | {"write": write | {"ledger": ledger}})
+
+
+def refuse(scratch: Scratch, table: str) -> None:
+    """Make `table` refuse every row the tests write, whose prices are all under 1,000, leaving the rows it has."""
+    if scratch.dialect == "mssql":
+        scratch.execute(f"ALTER TABLE {table} WITH NOCHECK ADD CONSTRAINT ck_{scratch.suffix} CHECK (price > 1000)")
+    else:
+        scratch.execute(f"ALTER TABLE {table} ADD CONSTRAINT ck_{scratch.suffix} CHECK (price > 1000) ENABLE NOVALIDATE")
+
+
+def allow(scratch: Scratch, table: str) -> None:
+    scratch.execute(f"ALTER TABLE {table} DROP CONSTRAINT ck_{scratch.suffix}")

@@ -96,9 +96,7 @@ def resume(  # noqa: PLR0913 -- the part says what it is and writes, by keyword
     its snapshot, and save its record. `targets` are where the part writes each output now, which must be where the
     run wrote it. It publishes a plain insert for an interval the ledger has already when the run was told to, or when
     `again` says so now."""
-    if record.reasons or not record.publishes:
-        msg = f"run {record.run_id} is {record.status} and never published: only a run that failed while publishing resumes; run it again instead"
-        raise ValueError(msg)
+    check_resumable(record)
     for output_name, output in record.outputs.items():
         now = (targets[output_name].database, targets[output_name].table) if output_name in targets else None
         if now != (output.database, output.table):
@@ -106,11 +104,34 @@ def resume(  # noqa: PLR0913 -- the part says what it is and writes, by keyword
             raise ValueError(msg)
     told = record.again or again
     publication = publish.Publication(record.run_id, name, record.parsed_interval(), version, told, clock)
-    publishes = record.publishes | publish.publish(publication, targets, source.changes(), databases)
+    committed = {database: entry for database, entry in record.publishes.items() if entry.status == "committed"}
+    unwritten = {output: target for output, target in targets.items() if target.database not in committed}
+    publishes = committed | publish.publish(publication, unwritten, source.changes(), databases)
     status = status_of(publishes, len({output.database for output in record.outputs.values()}))
     final = RunRecord.model_validate(record.model_dump() | {"publishes": publishes, "status": status, "again": told})  # so that the next resume is told the same
     source.save_record(final)
     return final
+
+
+def asked_to_publish(record: RunRecord) -> bool:
+    """Whether the run was asked to publish: as its record says, or, in a record from before basis recorded it, as
+    its publishes show."""
+    return record.publish if record.publish is not None else bool(record.publishes) or record.status == "partial"
+
+
+def check_resumable(record: RunRecord) -> None:
+    """Refuse a run a resume must not publish: a replay, which never publishes; a run not asked to publish; and one
+    that stopped before it began to, for a reason or an error. A run stopped while it published (`publishing`), one
+    that committed to some databases (`partial`), and one whose every database refused it resume."""
+    if record.replay_of is not None:
+        msg = f"run {record.run_id} replays run {record.replay_of}, and a replay never publishes: resume run {record.replay_of}, or run the job again with --publish"
+        raise ValueError(msg)
+    if not asked_to_publish(record):
+        msg = f"run {record.run_id} is {record.status}, and was not asked to publish: run it again with --publish"
+        raise ValueError(msg)
+    if record.reasons or (record.status == "failed" and not record.publishes):
+        msg = f"run {record.run_id} is {record.status} and never began to publish: only a run that stopped or failed while publishing resumes; run it again instead"
+        raise ValueError(msg)
 
 
 @dataclass(frozen=True)

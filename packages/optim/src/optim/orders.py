@@ -167,9 +167,9 @@ class Orders:
         publication = publish.Publication(run_id, model, interval(as_of_date), optim.__version__, again, clock)
         records = publish.publish(publication, {OUTPUT: self.table}, {OUTPUT: Changes(insert=rows(run_id, orders))}, self.databases)
         found = records.get(self.table.database)
-        if found is None or found.status != "committed" or found.counts:
+        if found is None or found.status != "committed" or not found.earlier:
             return Published(records)
-        # basis-core's publish counts nothing for a run the ledger holds, which it leaves as it is
+        # a run the ledger holds, which basis-core's publish leaves as it is: its outcome is when the ledger says it committed
         if (earlier := self.ledgered(run_id)) is None:
             msg = f"the ledger {self.ledger} held run {run_id} as it published, and holds no row of its orders now"
             raise LookupError(msg)
