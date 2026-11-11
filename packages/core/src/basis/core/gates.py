@@ -28,7 +28,6 @@ import ast
 import io
 import json
 import math
-import os
 import re
 import tempfile
 import tokenize
@@ -38,8 +37,7 @@ from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
 
-from basis.core.sync import UNREAD as _UNREAD
-from basis.core.sync import Problem
+from basis.core.sync import Problem, walk
 from basis.core.verbs import ProjectError, basis_table
 
 KEY = "coverage"
@@ -183,10 +181,8 @@ def rounding(repo: Path) -> list[Problem]:
 
 
 def _python(repo: Path) -> Iterator[Path]:
-    for folder, names, files in os.walk(repo):
-        here = Path(folder)
-        names[:] = sorted(name for name in names if name not in _UNREAD and not (here / name / "pyvenv.cfg").exists())
-        yield from (here / name for name in sorted(files) if name.endswith(".py"))
+    for folder, _, files in walk(repo):
+        yield from (folder / name for name in files if name.endswith(".py"))
 
 
 def _rounding(tree: ast.Module) -> list[tuple[int, str]]:
@@ -208,11 +204,9 @@ def _rounding(tree: ast.Module) -> list[tuple[int, str]]:
 
 
 def _tests(repo: Path) -> Iterator[Path]:
-    for folder, names, files in os.walk(repo):
-        here = Path(folder)
-        names[:] = sorted(name for name in names if name not in _UNREAD and not (here / name / "pyvenv.cfg").exists())
+    for here, _, files in walk(repo):
         inside = "tests" in here.relative_to(repo).parts
-        for name in sorted(files):
+        for name in files:
             if name.endswith(".py") and (inside or name.startswith("test_") or name.endswith("_test.py") or name == "conftest.py"):
                 yield here / name
 

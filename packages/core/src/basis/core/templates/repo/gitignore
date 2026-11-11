@@ -6,3 +6,4 @@ snapshots/
 .env
 .env.*
 !.env.example
+.claude/worktrees/

@@ -374,7 +374,14 @@ def _method_of(called: ast.expr, given: frozenset[str]) -> tuple[str, str] | Non
 def _packages(repo: Path) -> Iterator[str]:
     """The repo's packages: each folder at its root with an `__init__.py`, but those basis never reads."""
     for entry in sorted(os.scandir(repo), key=lambda found: found.name):
-        if entry.is_dir() and entry.name not in _UNREAD and not entry.name.startswith(".") and entry.name.isidentifier() and (Path(entry.path) / "__init__.py").is_file():
+        if (
+            entry.is_dir()
+            and entry.name not in _UNREAD
+            and not entry.name.startswith(".")
+            and entry.name.isidentifier()
+            and (Path(entry.path) / "__init__.py").is_file()
+            and not (Path(entry.path) / ".git").exists()
+        ):
             yield entry.name
 
 

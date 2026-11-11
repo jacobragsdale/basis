@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from basis.core import gates, sync
 from basis.core.sync import BEFORE, DENY, MARKER, REPO_FILES, SKILL_KEY, AgentFiles, SyncError, core, plan, stale, stamped, write
 
 SKILL = "---\nname: job-new\ndescription: Make a job, from its tables to its first passing contract tests.\n---\n\n# Make a job\n"
@@ -437,3 +438,19 @@ def test_each_refusal_of_one_path_is_its_own_problem(tmp_path: Path) -> None:
     found = plan(tmp_path, [FILES, made(path="AGENTS.md"), made(path="AGENTS.md", part="basis-job")])
     assert [reason for reason, _ in found.problems()] == ["the basis-api part makes AGENTS.md, which basis writes itself", "the basis-job part makes AGENTS.md, which basis writes itself"]
     assert [reason for reason, _ in write(tmp_path, [FILES, made(path="AGENTS.md"), made(path="AGENTS.md", part="basis-job")]).problems()] == [reason for reason, _ in found.problems()]
+
+
+def test_another_checkout_inside_the_repo_is_never_read_or_written_as_the_repos(tmp_path: Path) -> None:
+    """A worktree an agent works in, under `.claude/worktrees/`, with basis's files of its own: neither checkout's sync
+    undoes the other's, and neither's check reads the other's files as stale."""
+    sync.write(tmp_path, [])
+    worktree = tmp_path / ".claude" / "worktrees" / "feature"
+    worktree.mkdir(parents=True)
+    sync.write(worktree, [AgentFiles("basis-alpha", "the alpha block\n", {})])
+    (worktree / ".git").write_text("gitdir: /elsewhere/.git/worktrees/feature\n", encoding="utf-8")  # as a worktree's is
+    assert sync.stale(tmp_path, []) == []
+    assert not sync.write(tmp_path, []).changed
+    assert (worktree / "Dockerfile").exists()
+    (worktree / "tests").mkdir()
+    (worktree / "tests" / "test_x.py").write_text("from unittest import mock\n\nx = 1  # noqa\n", encoding="utf-8")
+    assert (gates.mocks(tmp_path), gates.suppressions(tmp_path)) == ([], [])

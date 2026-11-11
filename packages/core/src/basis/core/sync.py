@@ -547,17 +547,27 @@ def _agents(current: str, parts: Sequence[AgentFiles]) -> str:
     return updated.rstrip("\n") + "\n"
 
 
+def walk(repo: Path) -> Iterator[tuple[Path, list[str], list[str]]]:
+    """The repo's folders, as `os.walk` gives them, in order, and never one basis does not read: one of `UNREAD`, a
+    virtual environment whatever its name, or another checkout, a folder that holds a `.git` of its own, as a
+    worktree an agent works in under `.claude/worktrees/` does, whose files are that checkout's and not the repo's.
+    Sync, the gates and mutation testing all walk the repo by it; a caller may prune `names` further in place."""
+    for folder, names, files in os.walk(repo):
+        here = Path(folder)
+        names[:] = sorted(name for name in names if not _unread(here, name))
+        yield here, names, sorted(files)
+
+
 def _marked(repo: Path) -> Iterator[Path]:
     """Each file in `repo` whose first lines carry `MARKER`, outside the folders basis never writes in."""
-    for folder, names, files in os.walk(repo):
-        names[:] = sorted(name for name in names if not _unread(Path(folder), name))
-        for name in sorted(files):
-            path = Path(folder) / name
+    for folder, _, files in walk(repo):
+        for name in files:
+            path = folder / name
             if path.exists() and _carries_marker(path):
                 yield path
 
 
 def _unread(folder: Path, name: str) -> bool:
-    """Whether the folder `name` in `folder` is one basis never writes in, nor looks for its marker in: one of `_UNREAD`,
-    or a virtual environment, whatever its name."""
-    return name in _UNREAD or (folder / name / "pyvenv.cfg").exists()
+    """Whether the folder `name` in `folder` is one basis never reads or writes in, nor looks for its marker in: one of
+    `UNREAD`, a virtual environment, whatever its name, or another checkout."""
+    return name in _UNREAD or (folder / name / "pyvenv.cfg").exists() or (folder / name / ".git").exists()

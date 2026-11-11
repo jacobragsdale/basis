@@ -33,6 +33,7 @@ from pathlib import Path
 from basis.core import clone
 from basis.core.review import MutantRecord, MutationRecord
 from basis.core.sync import UNREAD as _UNREAD
+from basis.core.sync import walk
 
 DOMAIN = "domain"
 """The name of a domain module, at any depth."""
@@ -120,9 +121,8 @@ def _base(found: clone.Clone) -> str | None:
 def domain_modules(repo: Path) -> Iterator[tuple[Path, str]]:
     """Each domain module of the repo, by its file and its dotted name, outside its tests: each `domain.py`, and every
     module of a `domain` package."""
-    for folder, names, files in os.walk(repo):
-        here = Path(folder)
-        names[:] = sorted(name for name in names if name not in _UNREAD and name != "tests" and not (here / name / "pyvenv.cfg").exists())
+    for here, names, files in walk(repo):
+        names[:] = [name for name in names if name != "tests"]
         parts = here.relative_to(repo).parts
         if f"{DOMAIN}.py" in files:
             yield here / f"{DOMAIN}.py", ".".join((*parts, DOMAIN))
@@ -192,7 +192,8 @@ def _copy(repo: Path, copy: Path, functions: Sequence[Function]) -> None:
     """Copy the repo's folder to `copy`, with basis's settings for mutmut in its `pyproject.toml`."""
 
     def ignored(folder: str, names: list[str]) -> set[str]:
-        return {name for name in names if name in _UNREAD or name in {".coverage", "uv.lock.tmp"} or (Path(folder) / name / "pyvenv.cfg").exists()}
+        here = Path(folder)
+        return {name for name in names if name in _UNREAD or name in {".coverage", "uv.lock.tmp"} or (here / name / "pyvenv.cfg").exists() or (here / name / ".git").exists()}
 
     shutil.copytree(repo, copy, ignore=ignored, symlinks=True)
     files = sorted({function.path for function in functions})
