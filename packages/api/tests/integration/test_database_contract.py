@@ -230,13 +230,15 @@ def test_a_deadlock_is_a_conflict_from_the_fake_and_the_real_one(contract: Contr
 def test_binds_that_do_not_match_the_statement_fail_from_the_fake_and_the_real_one(contract: Contract, given: str) -> None:
     """SQL Server takes a bind its statement does not name, which Oracle refuses: the fake refuses it, as Oracle does,
     so a test catches it on the fake."""
-    if contract.dialect == "mssql" and given == "extra":
-        pytest.skip("SQL Server's driver ignores a bind its statement does not name")
     placeholder = ":security" if contract.dialect == "oracle" else "%(security)s"
     sql = f"SELECT price FROM {contract.table} WHERE security = {placeholder}"
     if contract.dialect == "fake":
         contract.fake.answers[sql] = [{"price": 1.0}]
     binds: dict[str, Bind] = {} if given == "missing" else {"security": "S1", "securty": "S1"}
+    if contract.dialect == "mssql" and given == "extra":  # SQL Server's driver ignores it: the fake is the stricter, as Oracle is
+        with contract.port().statements(writes=False) as statements:
+            statements.query(sql, binds, timeout_s=10)
+        return
     with pytest.raises(Failed) as raised, contract.port().statements(writes=False) as statements:
         statements.query(sql, binds, timeout_s=10)
     assert (raised.value.resource, raised.value.detail) == (NAME, failure(NAME, Failed, RuntimeError()).detail)
