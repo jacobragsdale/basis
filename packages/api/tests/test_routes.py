@@ -20,7 +20,7 @@ from opentelemetry.trace import NoOpTracer
 from pydantic import AfterValidator, AliasChoices, AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, field_validator
 
 from basis import api
-from basis.api import deadlines, fakes, opened, strict
+from basis.api import deadlines, fakes, opened, planning, strict
 
 
 class Side(StrEnum):
@@ -423,7 +423,7 @@ def test_a_write_whose_routes_deadline_passed_before_its_commit_is_rolled_back()
 
     async def main() -> None:
         given: fakes.Fakes = {WAREHOUSE: warehouse, PRICING: fakes.Http(_pricing()), PRICES: fakes.Cache()}
-        resources = await opened.Resources.open(opened.plan(service, api.Settings.given(), given), NoOpTracer())
+        resources = await opened.Resources.open(planning.plan(service, api.Settings.given(), given), NoOpTracer())
         try:
             session = resources.session(WAREHOUSE, writes=True)
             await session.execute(INSERT, security="X")

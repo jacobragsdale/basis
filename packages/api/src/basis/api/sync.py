@@ -7,7 +7,7 @@ without its document fails the commit hook until `basis sync` writes it again.""
 import logging
 from pathlib import Path
 
-from basis.api.service import load
+from basis.api.loading import load
 from basis.api.version import VERSION
 from basis.core import sync as core_sync
 from basis.core.errors import BasisError

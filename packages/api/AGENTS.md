@@ -17,11 +17,17 @@ Paths are under `src/basis/api/`.
 | Path | Holds |
 |---|---|
 | `__init__.py` | The declarations' names; `api.build` and `api.serve` load on first use, so a service's modules import no server. |
-| `service.py` | `Service`, `Route` and `get`/`post`/`put`/`patch`/`delete`, with what each route declares (its deadline, its response, its errors, and whether it answers a dataset) and `Route.answers`; `given`, what a handler asks basis for, and the checks of what it asks for; `load`, a service by entry point (`basis.apis`) or module. |
+| `service.py` | `Service`, `Route` and `get`/`post`/`put`/`patch`/`delete`, with what each route declares (its deadline, its response, its errors, and whether it answers a dataset) and `Route.answers`, and the checks of what each handler asks for. |
+| `dependencies.py` | `given`, what a handler asks basis for, as FastAPI's dependencies, and `Runtime` and `running`, what a started app gives them; a database's is the request's transaction. |
+| `loading.py` | `load`, a service by entry point (`basis.apis`) or module. |
+| `internals.py` | The parts of FastAPI's internals basis builds on (`ModelField`, `Dependant`, `get_dependant`, a dependant's `body_params` and `call`), and `ValidatedOnce`; `tests/test_internals.py` fails on a FastAPI upgrade that moves one. Nothing else imports them. |
 | `strict.py` | How a request is read, strictly: a JSON body in pydantic's strict mode, with every number a JSON number, a `Decimal` refused, and times with offsets, and query and path text by each type's grammar. Its docstring is the reference. |
 | `compute.py` | `compute`, which declares a pure function a route runs in the process pool, and `Compute`, what a handler gets for it. Its docstring is the reference. |
 | `resources.py` | The resources a service declares (`database`, `http`, `cache`, `clock`, `ids`), a database's `outbox`, and what a handler gets for each (`Reader`, `Writer`, `Client`, `Cache`, `Clock`, `Ids`), with `Client.send`. `http`, `clock` and `ids` are basis-core's declarations, which jobs share. Its docstring is the reference. |
-| `opened.py` | Each resource as the app opens it, through basis-core's databases, basis-core's resources (another service's client, the clock and ids, `basis.core.opened`) and memory, or a fake: every database and cache call's deadline and span, a request's transaction with its outbox rows, the calls made after its commit, `Client.send`, and the checks at build and startup. |
+| `opened.py` | Each resource as the app opens it, through basis-core's databases, basis-core's resources (another service's client, the clock and ids, `basis.core.opened`) and memory, or a fake (`Resources`), and the check at startup that each database answers. Its docstring says what every call gets. |
+| `planning.py` | `plan`, the checks when the app is built: each fake fakes a resource of the service's, of its kind, and the settings configure every other. |
+| `sessions.py` | A request's side of a database: `OpenDatabase`, its threads and spans; `DatabaseSession`, the request's transaction, every statement's and the commit's deadline; the outbox rows a route that writes sends, made once it commits; and `HttpClient`, `api.Client`, whose `send` writes them. |
+| `caches.py` | `MemoryCache`, a cache resource in the process's memory. |
 | `outboxes.py` | The outbox: a row's life from `send` to `done`, `refused` or `expired`, the 4xx a call is retried after, its backoff, its one compare-and-set change (`Table.update`) and the transitions built on it, its statements in each dialect (`Sql`), and its table's DDL. Its docstring is the reference. |
 | `relay.py` | `basis relay`: one run over a service's outboxes, which claims each due row, makes its call and records it, and reports each refused one, each statement with a span and a deadline, a failure stopping only its row; it fails, naming each call refused or expired, and each row a failure stopped. |
 | `deadlines.py` | A route's deadline, basis-core's deadline around a block's calls (`basis.core.deadlines`, of kind `route`), which caps each call its request makes, basis-core's client's included: `limit`, how long one call may take, and whose deadline sets it, and `exceeded`, its 504. |
@@ -77,13 +83,13 @@ Paths are under `src/basis/api/`.
   have their own JSON types, every number is a JSON number a float holds and a `Decimal` is refused when the route is declared, an object gives each key once, a time has its offset, and query and path text reads by its type's
   grammar. A body is no larger than `serve.max_body_bytes`, a 413 `BodyTooLargeError` otherwise, and one over `routes.OFF_THE_LOOP` is parsed in a thread. A type basis cannot read strictly is refused when the route is declared, and so is a request model that
   reads a field by any key but a plain alias or its name, and `BackgroundTasks`. The body is
-  validated once: FastAPI's handler gets basis's value through `routes._ValidatedOnce`, and never validates it again.
+  validated once: FastAPI's handler gets basis's value through `internals.ValidatedOnce`, and never validates it again.
   A body sent to a route that declares none is a 422.
 - A route's deadline caps every call its request makes, the commit included; never the rollback, so a connection
   always goes back. A compute call has only its route's deadline.
 - Every resource is declared by name with everything it needs, its deadline and a database's `max_concurrent`
   included, and basis guesses none of it. Every call through one has a span, and every call that can wait a deadline,
-  in `opened.py` or basis-core's `opened.py`, whether the resource is real or fake; a fake replaces only what the
+  in `opened.py`, `sessions.py`, `caches.py` or basis-core's `opened.py`, whether the resource is real or fake; a fake replaces only what the
   resource reaches. Every resource, real or fake, fails with one of basis-core's kinds of `ServiceError`, which
   `api` gives as they are, with no class of its own and no conversion: a handler, or the repository it passes a
   resource to, catches a kind that means something to it, and any other answers its problem (`errors.described`), a
@@ -100,7 +106,7 @@ Paths are under `src/basis/api/`.
   `basis relay`, run by the repo's scheduler and never in the API, makes it again until it is accepted, refused for
   good by a 4xx but 408, 409, 425 or 429, or ages out: the rule is the status's, whatever kind the call fails with, so
   a `Conflict` and an `Unavailable` are made again, and a `NotFound`, a `Rejected` and a `Denied` refused. A route that writes no database makes it at once. Only the
-  route whose transaction it is sends through it (`opened._WRITING`, set with the route's deadline and reset when the
+  route whose transaction it is sends through it (`sessions._WRITING`, set with the route's deadline and reset when the
   transaction ends), so another app reached in the process never does. `outboxes.py`'s docstring says what each row's
   `status` and `next_at` mean; every change to a row but its insert is one compare-and-set on its status and attempts,
   in the SQL and in the fake, and an outbox's `max_age_s` outlasts the deadline, and a backoff, of every route that

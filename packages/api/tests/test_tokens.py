@@ -25,7 +25,7 @@ from jwt.algorithms import get_default_algorithms
 from opentelemetry.trace import NoOpTracer
 
 from basis import api
-from basis.api import opened, tokens
+from basis.api import opened, planning, tokens
 from basis.api.identity import InvalidTokenError, Jwks, KeysUnavailableError
 
 type Records = Callable[[], list[dict[str, object]]]  # the `logged` fixture's
@@ -531,7 +531,7 @@ def test_a_set_that_cannot_be_fetched_at_startup_leaves_no_client_open(signin: S
     keys = tokens.KeySet(Jwks.model_validate(signin.settings()), monotonic=Clock())
 
     async def main() -> bool:
-        resources = opened.Resources.open(opened.plan(SERVICE, api.Settings.given(identity=identity(signin.settings())), {}), NoOpTracer(), keys)
+        resources = opened.Resources.open(planning.plan(SERVICE, api.Settings.given(identity=identity(signin.settings())), {}), NoOpTracer(), keys)
         with pytest.raises(KeysUnavailableError):
             await resources
         return keys.closed

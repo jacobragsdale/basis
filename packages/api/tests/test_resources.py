@@ -34,9 +34,10 @@ from pydantic import BaseModel, ConfigDict
 from basis import api
 from basis.api import fakes
 from basis.api.app import Stage
-from basis.api.opened import MemoryCache, adapter
+from basis.api.caches import MemoryCache
 from basis.core.databases.base import Statements
 from basis.core.databases.failures import failure
+from basis.core.opened import adapter
 from basis.core.settings import SettingsError
 
 type Records = Callable[[], list[dict[str, object]]]  # the `logged` fixture's

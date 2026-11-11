@@ -41,8 +41,9 @@ from pydantic import ValidationError
 from pydantic_settings import SettingsError as SourceError
 
 from basis.api import docs, sync
+from basis.api.loading import GROUP, load
 from basis.api.resources import DatabaseResource
-from basis.api.service import GROUP, Service, load
+from basis.api.service import Service
 from basis.api.settings import Settings, unreadable
 from basis.core import command, environments, hooks
 from basis.core.destination import Dialect

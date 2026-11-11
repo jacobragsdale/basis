@@ -22,7 +22,8 @@ import uvicorn
 from basis.api.app import Lifecycle, build
 from basis.api.fakes import Fakes
 from basis.api.identity import Development
-from basis.api.service import Service, load
+from basis.api.loading import load
+from basis.api.service import Service
 from basis.api.settings import Settings
 from basis.core import logs
 from basis.core.settings import SettingsError, variable

@@ -56,36 +56,29 @@ read from it. A helper takes what the handler was given as an argument.
 A repo lists its service as an entry point in the `basis.apis` group, `NAME = "module:attribute"`, which is how
 `basis serve` finds it."""
 
-import importlib
 import inspect
 import math
 import re
-from collections.abc import AsyncIterator, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import InitVar, dataclass, field
 from http import HTTPStatus
-from importlib.metadata import EntryPoint, entry_points
 from pathlib import PurePosixPath, PureWindowsPath
 from types import FunctionType
 from typing import Annotated, Literal, Protocol, TypeAliasType, assert_never, get_args, get_origin
 
 from fastapi import params
 from pydantic import JsonValue, PydanticSchemaGenerationError, TypeAdapter, ValidationError
-from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.routing import Route as StarletteRoute
 
 from basis.api import strict, tables
 from basis.api.compute import Compute, ComputeFunction
 from basis.api.dataset import Rows, rows
+from basis.api.dependencies import GivenCompute, GivenDatabase, GivenResource, GivenSettings
 from basis.api.errors import Answerable, BodyTooLargeError, DeclarationError, DomainError, Error, NotReadyError, OutcomeUnknownError
 from basis.api.identity import GivenUser, SignInRequiredError, User, annotation_refusal
 from basis.api.resources import Cache, CacheResource, Client, Clock, ClockResource, DatabaseResource, HttpResource, Ids, IdsResource, Opened, Reader, Resource, Session, Writer, check_outboxes
 from basis.api.settings import Settings
 from basis.core.errors import DATABASE_KINDS, KINDS, ServiceError, Timeout
 
-GROUP = "basis.apis"
-STATE = "basis"
-"""The key of the app's lifespan state that holds its `Runtime`."""
 RESERVED = ("/health", "/docs", "/redoc", "/openapi.json")
 """Paths the app itself answers: its health endpoints and its OpenAPI document and pages."""
 NAME = re.compile(r"[a-z][a-z0-9-]{0,62}")
@@ -445,100 +438,6 @@ def _check_ui(name: str, folder: str | None) -> None:
         raise DeclarationError(msg)
 
 
-@dataclass(frozen=True)
-class Runtime:
-    """What a started app gives its handlers through `given`: its settings, and the resources its lifespan opened."""
-
-    settings: Settings
-    resources: Opened
-    writes: Mapping[object, DatabaseResource]
-    """The database each handler that writes one writes, by the handler."""
-
-
-def running(request: Request) -> Runtime:
-    """The started app's `Runtime`, which serves `request`."""
-    state = request.scope.get("state")
-    runtime = state.get(STATE) if isinstance(state, dict) else None
-    if not isinstance(runtime, Runtime):
-        msg = "the app has not started, so it has nothing to give: run its lifespan, as `basis serve` and `with TestClient(app.asgi)` do"
-        raise RuntimeError(msg)  # noqa: TRY004 -- not a caller's wrong type: an app used before it started
-    return runtime
-
-
-@dataclass(frozen=True)
-class _Given:
-    kind: type[Settings]
-
-    async def __call__(self, request: Request) -> Settings:
-        runtime = running(request)
-        if not isinstance(runtime.settings, self.kind):
-            msg = f"the app's settings are {type(runtime.settings).__qualname__}, not {self.kind.__qualname__}"
-            raise TypeError(msg)
-        return runtime.settings
-
-
-@dataclass(frozen=True)
-class _GivenResource:
-    resource: HttpResource | CacheResource[object] | ClockResource | IdsResource
-
-    async def __call__(self, request: Request) -> object:
-        return running(request).resources.handle(self.resource)
-
-
-@dataclass(frozen=True)
-class _GivenCompute:
-    declared: ComputeFunction[..., object]
-
-    async def __call__(self, request: Request) -> object:
-        return running(request).resources.compute(self.declared)
-
-
-@dataclass(frozen=True)
-class _GivenDatabase:
-    """A request's transaction in a database, which ends when the handler has returned and FastAPI has validated its
-    response, before the response is sent: FastAPI ends a dependency of scope `function` there, and throws into it
-    what the handler or the validation raised."""
-
-    resource: DatabaseResource
-
-    async def __call__(self, request: Request) -> AsyncIterator[Session]:
-        runtime = running(request)
-        route = request.scope.get("route")
-        writes = isinstance(route, StarletteRoute) and runtime.writes.get(route.endpoint) == self.resource
-        session = runtime.resources.session(self.resource, writes=writes)
-        try:
-            yield session
-        except GeneratorExit:  # closed without being finished, so nothing may be awaited here
-            session.abandon()
-            raise
-        except BaseException:
-            await session.end(commit=False)
-            raise
-        await session.end(commit=True)
-
-
-def given(kind: type[Settings | User] | Resource | ComputeFunction[..., object]) -> params.Depends:
-    """What basis gives a handler, as the metadata of its parameter's type: `Annotated[Settings, api.given(Settings)]`,
-    the service's settings; `Annotated[User | None, api.given(User)]`, the request's user, or None when it is
-    anonymous; one of its resources, as `Annotated[api.Reader, api.given(WAREHOUSE)]`; or a compute function, as
-    `Annotated[api.Compute[[Bond, Decimal], Decimal], api.given(SOLVE)]`."""
-    if isinstance(kind, type) and issubclass(kind, Settings):
-        return params.Depends(_Given(kind))
-    if isinstance(kind, type) and issubclass(kind, User):
-        return params.Depends(GivenUser(kind))
-    if isinstance(kind, ComputeFunction):
-        return params.Depends(_GivenCompute(kind))
-    if isinstance(kind, DatabaseResource):
-        return params.Depends(_GivenDatabase(kind), scope="function")
-    if isinstance(kind, HttpResource | CacheResource | ClockResource | IdsResource):
-        return params.Depends(_GivenResource(kind))
-    msg = (
-        f"api.given({kind!r}): basis gives a handler its service's settings, a subclass of api.Settings, the request's user,"
-        " a subclass of api.User, one of its resources, as api.database(...) declares, or a compute function, as api.compute(...) declares"
-    )
-    raise DeclarationError(msg)
-
-
 def _annotated(annotation: object) -> tuple[object, tuple[object, ...]]:
     """`annotation`'s type and its metadata, through type aliases, as `type Warehouse = Annotated[api.Reader,
     api.given(WAREHOUSE)]` names one, and nested `Annotated`s, as FastAPI reads them."""
@@ -559,11 +458,11 @@ def _asks_for(handler: FunctionType) -> Iterator[Ask]:
     for parameter in inspect.signature(handler, eval_str=True).parameters.values():
         base, metadata = _annotated(parameter.annotation)
         for marker in (*metadata, parameter.default):
-            if isinstance(marker, params.Depends) and isinstance(marker.dependency, _Given | GivenUser):
+            if isinstance(marker, params.Depends) and isinstance(marker.dependency, GivenSettings | GivenUser):
                 yield Ask(parameter.name, base, marker.dependency.kind)
-            elif isinstance(marker, params.Depends) and isinstance(marker.dependency, (_GivenDatabase, _GivenResource)):
+            elif isinstance(marker, params.Depends) and isinstance(marker.dependency, (GivenDatabase, GivenResource)):
                 yield Ask(parameter.name, base, marker.dependency.resource)
-            elif isinstance(marker, params.Depends) and isinstance(marker.dependency, _GivenCompute):
+            elif isinstance(marker, params.Depends) and isinstance(marker.dependency, GivenCompute):
                 yield Ask(parameter.name, base, marker.dependency.declared)
 
 
@@ -584,16 +483,16 @@ def _asked_within(call: object, path: tuple[str, ...], seen: set[int]) -> Iterat
             if not isinstance(marker, params.Depends):
                 continue
             dependency = marker.dependency if marker.dependency is not None else base  # `Depends()` depends on the type
-            if isinstance(dependency, _GivenDatabase | _GivenResource):
+            if isinstance(dependency, GivenDatabase | GivenResource):
                 if path:
                     yield (*path, parameter.name), dependency.resource.name
             elif isinstance(dependency, GivenUser):
                 if path:
                     yield (*path, parameter.name), "the user"
-            elif isinstance(dependency, _GivenCompute):
+            elif isinstance(dependency, GivenCompute):
                 if path:
                     yield (*path, parameter.name), dependency.declared.name
-            elif not isinstance(dependency, _Given) and callable(dependency):
+            elif not isinstance(dependency, GivenSettings) and callable(dependency):
                 yield from _asked_within(dependency, (*path, getattr(dependency, "__name__", type(dependency).__name__)), seen)
 
 
@@ -738,37 +637,3 @@ def _check_resources(service: str, resources: Sequence[object]) -> None:
             msg = f"service {service} declares {resource.name} twice: give each resource a name of its own"
             raise DeclarationError(msg)
         names.add(resource.name)
-
-
-def load(reference: str | None = None, *, listed: Iterable[EntryPoint] | None = None) -> Service:
-    """The service `reference` names: an entry point in the `basis.apis` group, a module whose `service` it is, or
-    `module:attribute`. With none, the one service listed. `listed` is the entry points to choose from, by default the
-    installed packages' `basis.apis`."""
-    entries = {entry.name: entry for entry in (listed if listed is not None else entry_points(group=GROUP))}
-    if reference is None:
-        if len(entries) != 1:
-            listing = f'[project.entry-points."{GROUP}"]'
-            msg = f"the installed packages list {sorted(entries) or 'no services'} in the {GROUP} entry points: name the service to serve, or list the repo's one under {listing} in its pyproject.toml"
-            raise DeclarationError(msg)
-        reference = next(iter(entries))
-    entry = entries.get(reference) or EntryPoint(name=reference, value=reference, group=GROUP)
-    try:
-        module = importlib.import_module(entry.module)
-    except ModuleNotFoundError as error:
-        if error.name is not None and (entry.module == error.name or entry.module.startswith(f"{error.name}.")):
-            reason = f"no service named {reference!r}: the installed packages list {sorted(entries) or 'none'} in the {GROUP} entry points, and no module has that path"
-            msg = f'{reason}: give its module path, as basis.api.example.service, or list it under [project.entry-points."{GROUP}"]'
-            raise DeclarationError(msg) from error
-        raise  # the module exists, and something it imports does not
-    attribute = entry.attr or "service"
-    found: object = module
-    for part in attribute.split("."):
-        found = getattr(found, part, None)
-    if isinstance(found, Service):
-        return found
-    where = f"{entry.module}:{attribute}"
-    if isinstance(found, Starlette):
-        msg = f"{where} is an app the service made itself, which basis does not serve: declare `service = api.Service(name=..., settings=..., routes=[...])`, and basis builds its app"
-        raise DeclarationError(msg)
-    msg = f"{where} is not an api.Service: declare `service = api.Service(name=..., settings=..., routes=[...])` there"
-    raise DeclarationError(msg)

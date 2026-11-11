@@ -16,7 +16,8 @@ import httpx2
 from pydantic import TypeAdapter, ValidationError
 
 from basis.api import routes, strict
-from basis.api.service import Route, Service, load
+from basis.api.loading import load
+from basis.api.service import Route, Service
 from basis.core import environments
 from basis.core.sync import Problem
 

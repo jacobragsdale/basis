@@ -20,12 +20,10 @@ import functools
 import inspect
 from collections.abc import Callable, Coroutine
 from contextvars import ContextVar
-from dataclasses import dataclass
 from http import HTTPStatus
 from typing import ClassVar, override
 
 from fastapi import FastAPI
-from fastapi._compat import ModelField  # the field of a parameter, whose `validate` is where FastAPI's handler validates a body
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from starlette.exceptions import HTTPException
@@ -35,9 +33,11 @@ from starlette.types import Receive, Scope, Send
 
 from basis.api import arrow, deadlines, strict
 from basis.api.dataset import Rows
+from basis.api.dependencies import running
 from basis.api.errors import BodyTooLargeError, DomainError, Error, Problem, ValidationProblem, described
 from basis.api.identity import SignInRequiredError
-from basis.api.service import Route, Service, running
+from basis.api.internals import Validated, replace_call, validate_body_once
+from basis.api.service import Route, Service
 from basis.core.errors import ServiceError
 
 _INVALID = "invalid-request: The request is not valid"
@@ -49,20 +49,13 @@ class UndeclaredError(RuntimeError):
     """A route that raised an error it does not declare: a defect, whose 500 says nothing of it to the caller."""
 
 
-@dataclass(frozen=True)
-class _Validated:
-    """A body basis has read and validated, as FastAPI's handler gets it for its JSON."""
-
-    value: object
-
-
 class _Read(Request):
     """The request as FastAPI's handler gets it, once basis has read its body: the value it validated, as its JSON."""
 
     def __init__(self, request: Request, raw: bytes, value: object) -> None:
         super().__init__(request.scope, request.receive)
         self._raw = raw
-        self._value = _Validated(value)
+        self._value = Validated(value)
 
     @override
     async def body(self) -> bytes:
@@ -71,20 +64,6 @@ class _Read(Request):
     @override
     async def json(self) -> object:
         return self._value
-
-
-class _ValidatedOnce(ModelField):
-    """A route's body field, as FastAPI's handler validates it: the value basis validated passes as it is, so no
-    validator of the body's runs twice. The OpenAPI document reads the field as FastAPI made it."""
-
-    @override
-    def validate(self, value: object, values: dict[str, object] | None = None, *, loc: tuple[int | str, ...] = ()) -> tuple[object, list[dict[str, object]]]:
-        if isinstance(value, _Validated):
-            return value.value, []
-        validated, wrong = super().validate(value, values if values is not None else {}, loc=loc)
-        found: object = validated
-        errors: list[dict[str, object]] = [dict(entry) for entry in wrong]
-        return found, errors
 
 
 class Served(APIRoute):
@@ -102,11 +81,9 @@ class Served(APIRoute):
     def get_route_handler(self) -> Callable[[Request], Coroutine[object, object, Response]]:
         dependant = self.dependant
         declared = self.declared
-        if dependant.body_params and not isinstance(field := dependant.body_params[0], _ValidatedOnce):  # the handler's own, as strict.shape sees to
-            once = _ValidatedOnce(field_info=field.field_info, name=field.name, mode=field.mode, config=field.config)
-            dependant.body_params[0] = once
-        if declared.rows is not None and dependant.call is declared.handler:  # the endpoint stays the handler, which `given` finds the route's writes by
-            dependant.call = _answering_table(declared, declared.rows) if declared.table else _answering_arrow(declared, declared.rows)
+        validate_body_once(dependant)
+        if declared.rows is not None:  # the endpoint stays the handler, which `given` finds the route's writes by
+            replace_call(dependant, declared.handler, _answering_table(declared, declared.rows) if declared.table else _answering_arrow(declared, declared.rows))
         handle = super().get_route_handler()
         meanings: dict[type, type[DomainError]] = {error.exception: error for error in declared.errors if issubclass(error, DomainError)}
 

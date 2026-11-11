@@ -51,10 +51,12 @@ from typing import TYPE_CHECKING
 
 from basis.api import format  # noqa: A004 -- `api.format.money("USD")`, a namespace of display formats
 from basis.api.compute import Compute, ComputeFunction, compute
+from basis.api.dependencies import given
 from basis.api.errors import DeclarationError, DomainError, Error, FieldError, ParameterError, PointerError, Problem, ValidationProblem, error, pointer
 from basis.api.identity import SignInRequiredError, User
+from basis.api.loading import load
 from basis.api.resources import Bind, Cache, Client, Clock, Ids, Outbox, Reader, Resource, Writer, cache, clock, database, http, ids, outbox
-from basis.api.service import Route, Service, delete, get, given, load, patch, post, put
+from basis.api.service import Route, Service, delete, get, patch, post, put
 from basis.api.settings import Serve, Settings, SettingsError
 from basis.api.tables import Table
 from basis.core.errors import BadReply, Conflict, Denied, Failed, NotFound, Rejected, ServiceError, Timeout, Unavailable

@@ -16,8 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from basis.api import example, fuzz
-from basis.api import service as services
+from basis.api import example, fuzz, loading
 from basis.core import check, command, mutation, review
 
 type Git = Callable[..., str]
@@ -73,7 +72,7 @@ def repo(tmp_path: Path, git: Git, monkeypatch: pytest.MonkeyPatch) -> Iterator[
         path.write_text(path.read_text(encoding="utf-8").replace("basis.api.example", "accruals"), encoding="utf-8")
     (root / "pyproject.toml").write_text(PYPROJECT, encoding="utf-8")
     monkeypatch.syspath_prepend(str(root))
-    monkeypatch.setattr(services, "entry_points", lambda **_: [EntryPoint(name="accruals", value="accruals.service:service", group=services.GROUP)])
+    monkeypatch.setattr(loading, "entry_points", lambda **_: [EntryPoint(name="accruals", value="accruals.service:service", group=loading.GROUP)])
     monkeypatch.setattr(fuzz, "EXAMPLES", 5)  # enough to find a route that answers 500 to every request; the example's own test makes the full run
     monkeypatch.setattr(sys, "dont_write_bytecode", True)  # so an edit of the same length within a second is never read from stale bytecode
     git(root, "init", "--quiet")

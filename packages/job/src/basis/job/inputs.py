@@ -321,7 +321,7 @@ class Handles:
     ids: Mapping[str, NewIds] = field(default_factory=dict[str, NewIds])
 
 
-class _Given:
+class GivenSettings:
     """A clock or ids, named by its attribute on a job's `Inputs`, which must be a resource's name, as basis-core's
     `resources.NAME` says, checked when the class is made."""
 
@@ -352,7 +352,7 @@ class _Given:
         return LookupError(f"{owner.__qualname__}.{self.name} is a {self.kind} the run gives, and these inputs have none: build them with one, as basis.job.testing.inputs does")
 
 
-class Clock(_Given):
+class Clock(GivenSettings):
     """The time, which a transform reads as `inputs.NAME.now()`, in UTC: the system's clock in a run, and in a replay
     the times its run read, in order."""
 
@@ -374,7 +374,7 @@ class Clock(_Given):
         return found
 
 
-class Ids(_Given):
+class Ids(GivenSettings):
     """New ids, UUIDv7s, which a transform makes as `inputs.NAME.new()`, or `inputs.NAME.new(count)` for a column's:
     random in a run, and in a replay the ids its run made, in order."""
 

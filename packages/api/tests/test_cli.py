@@ -16,7 +16,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import JsonValue, TypeAdapter
 
 from basis import api
-from basis.api import dev, fakes, openapi, service, tokens
+from basis.api import dev, fakes, loading, openapi, tokens
 from basis.api import sync as api_sync
 from basis.api.example import resources as declared
 from basis.api.example import service as example
@@ -43,7 +43,7 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 @pytest.fixture
 def listed(monkeypatch: pytest.MonkeyPatch) -> None:
     """The example, as the one service the installed packages list, as an API repo's own package lists its."""
-    monkeypatch.setattr(service, "entry_points", lambda **_: [EntryPoint(name="accruals", value="basis.api.example.service:service", group=service.GROUP)])
+    monkeypatch.setattr(loading, "entry_points", lambda **_: [EntryPoint(name="accruals", value="basis.api.example.service:service", group=loading.GROUP)])
 
 
 def basis(repo: Path, *argv: str) -> int:
@@ -93,7 +93,7 @@ def test_a_repo_that_lists_no_service_has_no_document_and_every_other_file_is_wr
 def test_a_service_that_does_not_load_is_one_error_line(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     (repo / "broken.py").write_text("import nowhere_at_all\n", encoding="utf-8")
     monkeypatch.syspath_prepend(str(repo))
-    monkeypatch.setattr(service, "entry_points", lambda **_: [EntryPoint(name="broken", value="broken:service", group=service.GROUP)])
+    monkeypatch.setattr(loading, "entry_points", lambda **_: [EntryPoint(name="broken", value="broken:service", group=loading.GROUP)])
     assert basis(repo, "sync") == 1
     line = capsys.readouterr().err.splitlines()[-1]
     assert line == (

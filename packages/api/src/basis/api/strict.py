@@ -64,13 +64,12 @@ from typing import Annotated, Literal, TypeAliasType, get_args, get_origin
 from uuid import UUID
 
 from fastapi import params
-from fastapi.dependencies.models import Dependant
-from fastapi.dependencies.utils import get_dependant
 from fastapi.exceptions import FastAPIError
 from pydantic import AwareDatetime, BaseModel, FutureDatetime, NaiveDatetime, PastDatetime, PydanticSchemaGenerationError, TypeAdapter, ValidationError
 from pydantic.fields import FieldInfo
 
 from basis.api.errors import DeclarationError
+from basis.api.internals import Dependant, get_dependant
 
 type ErrorEntry = dict[str, object]
 """One error as pydantic and FastAPI give them: `type`, `loc`, `msg` and `input`, which `errors.problem` turns into a

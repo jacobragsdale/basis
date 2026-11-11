@@ -40,8 +40,9 @@ from basis.api import call, dev, fakes, layers
 from basis.api.app import App, build
 from basis.api.compute import ComputeFunction
 from basis.api.identity import User
+from basis.api.loading import load
 from basis.api.resources import DatabaseResource, HttpResource
-from basis.api.service import Service, load
+from basis.api.service import Service
 from basis.api.settings import Settings
 from basis.core.errors import BasisError
 from basis.core.sync import Problem

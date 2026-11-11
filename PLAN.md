@@ -27,7 +27,8 @@ step's own commit keeps it true.
 | 11.2 One descriptor per kind of resource | Done: `basis.core.kinds` (each kind but a database: its settings, its fake, doctor's check, the QA tier's refusal), `basis.core.ledgered` (the one ledgered effect, which sending and the lake share), `opened.transport_failure`; `basis doctor --env` now checks HTTP services, Slack, email relays and Mongo | the commit "Step 11.2" |
 | 11.3 One object per database dialect | Done: `basis.core.dialects` (`SqlDialect`: types, reserved words, DDL, ledger columns, binds, ping, a first-rows query), which `destination`, `ddl`, `doctor`, `fakes` and basis-api's outbox read; the ledger's queries that both writers duplicated are `databases.base.published`, `recorded` and `overlapping` | the commit "Step 11.3" |
 | 11.4 The command's tables | Done: `Runs.verbs`, a mapping of each shared verb (`verbs.SHARED_VERBS`) to its `Shared`; `command.verb_parser`, where every verb's own parser is made, each setting `repo_root`; `basis.core.project`, the one reader of `[tool.basis]`, which also stops `basis` refusing `exceptions`, 8.1's key; `BasisError(reason, fix)` and its `problem`, which doctor reads; and `basis hook`, which loads no part, closing 9.6's pandas import | the commit "Step 11.4" |
-| 11.5 to 11.7 | To do | |
+| 11.5 basis-api's seams | Done: `api.internals` holds every FastAPI internal basis uses, held by `tests/test_internals.py`; `opened.py` split into `planning`, `sessions` (the request's transaction and its outbox side) and `caches`; `service.py` into the declarations, `dependencies` (`given`) and `loading` (`load`) | the commit "Step 11.5" |
+| 11.6 to 11.7 | To do | |
 | 12.1 to 12.9 | To do | |
 
 Phases 6 to 8 first reached GitHub's CI on 2026-11-11; what it found is fixed in commits of their own, named

@@ -40,10 +40,11 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
-from basis.api import errors, openapi, opened, origins, routes, tokens, ui
+from basis.api import errors, openapi, opened, origins, planning, routes, tokens, ui
+from basis.api.dependencies import STATE, Runtime
 from basis.api.fakes import Fakes
 from basis.api.requests import HEALTH, REQUEST_ID, Requests
-from basis.api.service import STATE, DeclarationError, Runtime, Service
+from basis.api.service import DeclarationError, Service
 from basis.api.settings import Settings, read
 from basis.core import traces
 from basis.core.errors import ServiceError
@@ -120,7 +121,7 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | 
         msg = f"service {service.name}'s settings are {service.settings.__qualname__}, so build it with those, not a {type(settings).__qualname__}"
         raise DeclarationError(msg)
     configured = settings
-    planned = opened.plan(service, configured, fakes or {})
+    planned = planning.plan(service, configured, fakes or {})
     identity = tokens.plan(service, configured)
     writes = {route.handler: route.writes for route in service.routes if route.writes is not None}
     lifecycle = Lifecycle()

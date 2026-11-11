@@ -19,7 +19,7 @@ from hypothesis import configuration
 from pydantic import BaseModel, ConfigDict
 
 from basis import api
-from basis.api import call, cli, fuzz
+from basis.api import call, cli, fuzz, loading
 from basis.api import service as services
 
 CLOCK = api.clock("clock")
@@ -63,7 +63,7 @@ class Required(api.Settings):
 def test_basis_check_builds_the_app_and_check_full_sends_it_schemathesiss_requests(monkeypatch: pytest.MonkeyPatch) -> None:
     """The requests take longer than a commit should wait, so the push hook's check alone makes them."""
     sent: list[api.Service] = []
-    monkeypatch.setattr(services, "entry_points", lambda **_: [EntryPoint(name="accruals", value="basis.api.example.service:service", group=services.GROUP)])
+    monkeypatch.setattr(loading, "entry_points", lambda **_: [EntryPoint(name="accruals", value="basis.api.example.service:service", group=loading.GROUP)])
     monkeypatch.setattr(fuzz, "fuzz", lambda service, **_: sent.append(service) or [])
     part = cli.part()
     assert part.checks is not None
@@ -152,7 +152,7 @@ def test_without_schemathesis_the_repo_is_told_to_install_it(monkeypatch: pytest
 
 
 def test_a_service_that_does_not_load_is_left_to_openapi_jsons_line(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(services, "entry_points", lambda **_: [EntryPoint(name="broken", value="nowhere_at_all:service", group=services.GROUP)])
+    monkeypatch.setattr(loading, "entry_points", lambda **_: [EntryPoint(name="broken", value="nowhere_at_all:service", group=loading.GROUP)])
     assert (fuzz.built(tmp_path), fuzz.fuzzed(tmp_path)) == ([], [])
 
 
@@ -184,14 +184,14 @@ def test_the_repos_own_code_is_checked_not_an_installed_copy_of_it(monkeypatch: 
         (tmp_path / folder / "shadowed" / "__init__.py").write_text("", encoding="utf-8")
         (tmp_path / folder / "shadowed" / "service.py").write_text(SHADOWED.replace("{body}", body), encoding="utf-8")
     monkeypatch.syspath_prepend(str(tmp_path / "installed"))
-    monkeypatch.setattr(services, "entry_points", lambda **_: [EntryPoint(name="shadowed", value="shadowed.service:service", group=services.GROUP)])
+    monkeypatch.setattr(loading, "entry_points", lambda **_: [EntryPoint(name="shadowed", value="shadowed.service:service", group=loading.GROUP)])
     [(reason, _)] = fuzz.built(tmp_path / "repo")
     assert reason == "service shadowed's app does not build on the fakes it declares, since it raised RuntimeError: the commit under check"
     assert "shadowed" not in sys.modules
 
 
 def test_the_example_answers_every_request_as_its_document_says(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(services, "entry_points", lambda **_: [EntryPoint(name="accruals", value="basis.api.example.service:service", group=services.GROUP)])
+    monkeypatch.setattr(loading, "entry_points", lambda **_: [EntryPoint(name="accruals", value="basis.api.example.service:service", group=loading.GROUP)])
     assert fuzz.fuzzed(Path(fuzz.__file__).parent / "example") == []  # a folder with no package of its own: the installed example
 
 
