@@ -21,8 +21,9 @@ EXAMPLE_FILES = (
     "tests/__init__.py", "tests/test_compute.py", "tests/test_domain.py", "tests/test_handlers.py", "tests/test_repository.py",
 )  # fmt: skip
 """What a new app copies of the example, by name, so a cache or a stray file in a checkout's example is never copied.
-Left out: its `ruff.toml`, and what writes and tests the example's own samples (`__main__.py`, `openapi.json`, `coupons.arrows`,
-`tests/test_openapi.py`), which a repo's `basis sync` writes at its root instead."""
+Left out: its `ruff.toml`, and what writes and tests the example's own samples (`__main__.py`, `openapi.json`,
+`openapi.released.json`, which a release writes, `coupons.arrows`, `tests/test_openapi.py`), which a repo's `basis sync`
+writes at its root instead."""
 EXAMPLE_NAME = re.compile(r'name="accruals"')
 
 

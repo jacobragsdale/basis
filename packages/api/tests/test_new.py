@@ -58,4 +58,4 @@ def test_an_app_copies_the_files_it_names_and_no_cache_or_stray_file_of_the_exam
 
 def test_the_files_an_app_copies_are_every_file_of_the_example_but_its_sample_and_settings() -> None:
     tracked = subprocess.run([GIT, "ls-files"], cwd=new.EXAMPLE, capture_output=True, text=True, check=True).stdout.split()
-    assert sorted(tracked) == sorted([*new.EXAMPLE_FILES, "ruff.toml", "__main__.py", "openapi.json", "coupons.arrows", "tests/test_openapi.py"])
+    assert sorted(tracked) == sorted([*new.EXAMPLE_FILES, "ruff.toml", "__main__.py", "openapi.json", "openapi.released.json", "coupons.arrows", "tests/test_openapi.py"])
