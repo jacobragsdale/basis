@@ -16,7 +16,7 @@ from urllib.parse import quote
 
 import pyarrow.fs as pafs
 import pytest
-from integration.scratch import Scratch, configured, mssql
+from integration.scratch import Scratch, configured, missing, mssql
 
 import basis.job as etl
 from basis.core import lake
@@ -41,7 +41,7 @@ class Trade(etl.Row):
 @pytest.fixture
 def emulator() -> str:
     if (found := configured().azurite) is None:
-        pytest.skip("set BASIS_TEST_AZURITE to a scratch Azurite's HOST:PORT (see tests/integration/README.md)")
+        missing("set BASIS_TEST_AZURITE to a scratch Azurite's HOST:PORT (see tests/integration/README.md)")
     return found
 
 

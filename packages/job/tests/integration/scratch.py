@@ -1,10 +1,11 @@
 """Scratch databases for the integration tier: real SQL Server and Oracle, configured only by `BASIS_TEST_*` variables
 that name scratch databases (see README.md)."""
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NoReturn
 
 import mssql_python
 import oracledb
@@ -90,6 +91,14 @@ class Scratch:
 
 def configured() -> TestDatabases:
     return TestDatabases()
+
+
+def missing(reason: str) -> NoReturn:
+    """Skip a test whose server this machine lacks, but fail it in CI (`CI` set), which has every one: a test that
+    skips there tests nothing while the job passes."""
+    if os.environ.get("CI", "") != "":
+        pytest.fail(f"{reason}, which CI must have")
+    pytest.skip(reason)
 
 
 def mssql(databases: TestDatabases, suffix: str) -> Scratch:

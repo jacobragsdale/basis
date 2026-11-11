@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated
 
 import pytest
-from integration.scratch import Scratch, configured, mssql
+from integration.scratch import Scratch, configured, missing, mssql
 
 import basis.job as etl
 from basis.core.settings import GivenSettings
@@ -31,7 +31,7 @@ def scratch() -> Iterator[Scratch]:
     [(version, json_type)] = found.rows("SELECT CAST(SERVERPROPERTY('ProductVersion') AS nvarchar(32)), TYPE_ID('json')")
     if json_type is None:
         found.drop(found.ledger())
-        pytest.skip(f"SQL Server {version} has no json type, which SQL Server 2025 (17.x) added")
+        missing(f"SQL Server {version} has no json type, which SQL Server 2025 (17.x) added")
     yield found
     found.drop(found.ledger(), f"bonds_{found.suffix}")
 
@@ -39,7 +39,7 @@ def scratch() -> Iterator[Scratch]:
 @pytest.fixture
 def mongo_uri() -> str:
     if (uri := configured().mongo) is None:
-        pytest.skip("set BASIS_TEST_MONGO to a scratch Mongo server (see tests/integration/README.md)")
+        missing("set BASIS_TEST_MONGO to a scratch Mongo server (see tests/integration/README.md)")
     return uri.get_secret_value()
 
 

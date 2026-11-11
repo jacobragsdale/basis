@@ -15,6 +15,9 @@ export BASIS_TEST_ORACLE_DSN=127.0.0.1:15221/FREEPDB1 BASIS_TEST_ORACLE_USER=etl
 uv run pytest -m integration
 ```
 
+A test whose server this machine lacks skips, but fails where `CI` is set, as CI sets it, since CI has them all
+(`scratch.missing`). CI's integration job runs SQL Server 2025, Oracle, Mongo and Azurite.
+
 The Mongo tests (`test_mongo.py`) run where `BASIS_TEST_MONGO` names a scratch Mongo server, and publish to SQL
 Server's `json` type, which only SQL Server 2025 has, so they skip on 2022:
 

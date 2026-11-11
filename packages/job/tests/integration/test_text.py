@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from integration.scratch import Scratch, configured, mssql
+from integration.scratch import Scratch, configured, missing, mssql
 
 import basis.job as etl
 from basis.core import frames
@@ -167,7 +167,7 @@ def test_a_json_column_reads_exactly() -> None:
     scratch = mssql(configured(), uuid.uuid4().hex[:8])
     [(version, json_type)] = scratch.rows("SELECT CAST(SERVERPROPERTY('ProductVersion') AS nvarchar(32)), TYPE_ID('json')")
     if json_type is None:
-        pytest.skip(f"SQL Server {version} has no json type, which SQL Server 2025 (17.x) added")
+        missing(f"SQL Server {version} has no json type, which SQL Server 2025 (17.x) added")
     table = f"etl_it_json_{scratch.suffix}"
     document = TEXTS[0]
     scratch.execute(f"CREATE TABLE {table} (id int NOT NULL PRIMARY KEY, doc json NULL)")

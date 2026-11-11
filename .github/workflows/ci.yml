@@ -45,12 +45,13 @@ jobs:
       - run: uv run scripts/without_optim.py
 
   job-integration:
-    # Every member's integration tier, against SQL Server and Oracle.
+    # Every member's integration tier, against SQL Server 2025 (which has the json type), Oracle, Mongo and Azurite.
+    # With CI set, as GitHub sets it, a test whose server is missing fails rather than skips.
     timeout-minutes: 40
     runs-on: ubuntu-latest
     services:
       mssql:
-        image: mcr.microsoft.com/mssql/server:2022-latest
+        image: mcr.microsoft.com/mssql/server:2025-latest
         env:
           ACCEPT_EULA: "Y"
           MSSQL_SA_PASSWORD: Etl-test-1234
@@ -64,12 +65,19 @@ jobs:
         ports: ["1521:1521"]
         options: >-
           --health-cmd healthcheck.sh --health-interval 10s --health-timeout 5s --health-retries 30
+      mongo:
+        image: mongo:8
+        ports: ["27017:27017"]
     env:
       BASIS_TEST_MSSQL: Server=127.0.0.1,1433;Database=etltest;UID=sa;PWD=Etl-test-1234;Encrypt=yes;TrustServerCertificate=yes
       BASIS_TEST_ORACLE_DSN: 127.0.0.1:1521/FREEPDB1
       BASIS_TEST_ORACLE_USER: etl
       BASIS_TEST_ORACLE_PASSWORD: etltest
+      BASIS_TEST_MONGO: mongodb://127.0.0.1:27017/?directConnection=true
+      BASIS_TEST_AZURITE: 127.0.0.1:10000
     steps:
+      - name: Start Azurite's blob service, as tests/integration/README.md does; a service container cannot be given its command
+        run: docker run -d --name azurite -p 127.0.0.1:10000:10000 mcr.microsoft.com/azure-storage/azurite azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck --loose
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
         with:
