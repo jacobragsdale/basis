@@ -40,7 +40,6 @@ import os
 import re
 import shutil
 import stat
-import tomllib
 from collections import defaultdict
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -50,6 +49,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from basis.core import guard, tools
 from basis.core.errors import BasisError
 from basis.core.hooks import FOLDER, HOOKS
+from basis.core.project import ProjectError, project
 from basis.core.tools import Tools
 
 MARKER = "managed by basis: `basis sync` rewrites it"
@@ -161,8 +161,7 @@ class SyncError(BasisError, ValueError):
     """A file basis writes, or writes part of, which it cannot work out what to write in."""
 
     def __init__(self, reason: str, fix: str) -> None:
-        super().__init__(f"{reason}: {fix}")
-        self.problem: Problem = (reason, fix)
+        super().__init__(reason, fix)
 
 
 @dataclass(frozen=True)
@@ -306,12 +305,11 @@ def apt_packages(repo: Path) -> tuple[str, ...]:
         return ()
     fix = f'give [tool.basis] {APT} = ["libpq5"], a list of Debian package names, each with an optional =VERSION, and run `uv run basis sync`'
     try:
-        tool: object = tomllib.loads(pyproject.read_text(encoding="utf-8")).get("tool")
-    except tomllib.TOMLDecodeError as error:
-        msg = f"{pyproject} is not TOML, so the Dockerfile's packages are unknown ({error})"
+        read = project(pyproject)
+    except ProjectError as error:
+        msg = f"{pyproject} is not TOML, so the Dockerfile's packages are unknown ({error.toml})"
         raise SyncError(msg, "fix it") from error
-    table = tool.get("basis") if isinstance(tool, dict) else None
-    names = table.get(APT, []) if isinstance(table, dict) else []
+    names = read.apt_packages if read is not None and read.apt_packages is not None else []
     if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
         msg = f"{pyproject}'s [tool.basis] {APT} is not a list of package names"
         raise SyncError(msg, fix)

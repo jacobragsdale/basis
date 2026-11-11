@@ -57,7 +57,6 @@ A result that a caller reads, such as `describe`'s, is JSON on stdout, and logs 
 
 import argparse
 import sys
-import tomllib
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -65,7 +64,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from basis.core.errors import BasisError
+from basis.core.project import ProjectError, basis_table
 from basis.core.settings import Settings
 from basis.core.sync import AgentFiles, Problem
 
@@ -73,10 +72,11 @@ if TYPE_CHECKING:  # pandas and every driver load with the databases, which `bas
     from basis.core.databases import Database
     from basis.core.storage import Root
 
+SHARED_VERBS = ("run", "describe", "resume", "replay", "regress", "runs", "ddl")
+"""The verbs core shares among the parts that run things by name, as `basis --help` lists them: `Runs.verbs` names
+each part's side of them, and `basis.core.command.SHARED` how core parses each before the part reads the rest."""
 GROUP = "basis.verbs"
 """The entry point group each part lists its `Part` in, by the part's name."""
-QA_KEY = "qa"
-"""The `[tool.basis]` table that declares the QA tier (`basis.core.qa`), which every command reads past."""
 
 
 @dataclass(frozen=True)
@@ -164,32 +164,33 @@ class Regress:
 @dataclass(frozen=True)
 class Runs:
     """What a part runs by name, such as a repo's jobs, and its side of each verb core shares among the parts that run
-    things by name; a verb left None is one the part does not have."""
+    things by name: a verb is one entry of `verbs`, so a new one is a name in `SHARED_VERBS` and core's parsing of it."""
 
     noun: str
     """What the part runs, in the singular, such as `job`, as `basis --help` and its errors name one."""
     names: Callable[[], Mapping[str, str]]
     """Each one the part runs, by name, with its module path: how `basis` finds the part a NAME belongs to, when
     more than one declared part runs things, and what `basis describe` prints without NAME."""
-    run: Shared | None = None
-    """`basis run NAME`, with the part's options, such as a job's `--interval`."""
-    describe: Shared | None = None
-    """`basis describe NAME`, which prints NAME's params, inputs and outputs as JSON; it is never handed None."""
-    resume: Shared | None = None
-    """`basis resume [NAME] RUN_ID`, which finishes publishing a run that failed partway."""
-    replay: Shared | None = None
-    """`basis replay [NAME] RUN_ID`, which reruns a saved run with today's code."""
-    regress: Shared | None = None
-    """`basis regress [NAME]`, which replays recent published runs and lists what changed."""
-    runs: Shared | None = None
-    """`basis runs [NAME]`, which lists the store's recent runs, newest first, as JSON: the first question of every
-    production issue."""
-    ddl: Shared | None = None
-    """`basis ddl [NAME]`, which prints the CREATE TABLE statements for NAME's tables, or without NAME, the ledger's."""
+    verbs: Mapping[str, Shared] = field(default_factory=dict)
+    """The part's side of each verb in `SHARED_VERBS` it has, by the verb's name; one it leaves out it does not have:
+
+    - `run NAME`, with the part's options, such as a job's `--interval`;
+    - `describe NAME`, which prints NAME's params, inputs and outputs as JSON; it is never handed None;
+    - `resume [NAME] RUN_ID`, which finishes publishing a run that failed partway;
+    - `replay [NAME] RUN_ID`, which reruns a saved run with today's code;
+    - `regress [NAME]`, which replays recent published runs and lists what changed;
+    - `runs [NAME]`, which lists the store's recent runs, newest first, as JSON: the first question of every
+      production issue;
+    - `ddl [NAME]`, which prints the CREATE TABLE statements for NAME's tables, or without NAME, the ledger's."""
     regressions: Callable[[Regress], Regressions] | None = None
     """What `basis check --full` replays, as data it records for `basis review`: the runs `Regress` chooses, from
     `Regress.snapshots`, writing nothing. `check --full` skips a part that has `regress` but not this, with a
     `SKIPPED:` line."""
+
+    def __post_init__(self) -> None:
+        if unknown := sorted(set(self.verbs) - set(SHARED_VERBS)):
+            msg = f"a part's Runs gives {', '.join(unknown)}, which core does not share: give its side of {', '.join(SHARED_VERBS)}, or add the verb as one of its own"
+            raise TypeError(msg)
 
 
 @dataclass(frozen=True)
@@ -331,21 +332,6 @@ def holding() -> Generator[list[str]]:
         _held.reset(token)
 
 
-class ProjectError(BasisError, ValueError):
-    """A repo's `pyproject.toml` that basis cannot read its `[tool.basis]` from."""
-
-
-def basis_table(pyproject: Path) -> dict[str, object] | None:
-    """`pyproject`'s `[tool.basis]`, as TOML reads it, or None when it has none: the one place basis reads it, for
-    `basis` itself and for each part's `table`."""
-    try:
-        data: object = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    except tomllib.TOMLDecodeError as error:
-        msg = f"{pyproject} is not TOML: {error}: fix it"
-        raise ProjectError(msg) from error
-    return _mapping(_mapping(data, "tool"), "basis")
-
-
 def not_a_table(pyproject: Path, part: str) -> str:
     """Why `[tool.basis] PART`, when it is not a table, is refused, and the fix."""
     return f"{pyproject}'s [tool.basis] {part} is not a table: give the {part} part's own as [tool.basis.{part}], or remove it"
@@ -361,10 +347,3 @@ def table(repo: Path, part: str) -> Mapping[str, object]:
     if not isinstance(found, dict):
         raise ProjectError(not_a_table(pyproject, part))
     return {str(key): value for key, value in found.items()}
-
-
-def _mapping(value: object, key: str) -> dict[str, object] | None:
-    if not isinstance(value, dict):
-        return None
-    found = {str(name): entry for name, entry in value.items()}.get(key)
-    return {str(name): entry for name, entry in found.items()} if isinstance(found, dict) else None

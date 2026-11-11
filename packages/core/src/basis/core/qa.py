@@ -29,7 +29,6 @@ writing, a table `writes` does not list, and refuse statements of a part's own t
 which tables those write cannot be told. A connection string's login can still reach another database by a
 three-part name in a query, which no check of its settings can see: give QA's logins access to QA alone."""
 
-import tomllib
 from collections.abc import Callable, Generator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
@@ -46,11 +45,12 @@ from basis.core.errors import BasisError
 from basis.core.interval import Interval
 from basis.core.kinds import carries
 from basis.core.model import Model
+from basis.core.project import QA_KEY, project
 from basis.core.settings import LEDGER, MssqlSettings, OracleSettings, Settings, locate, read
 from basis.core.storage import Root
 from basis.core.sync import Problem
 from basis.core.tables import IDENTIFIER, Changes, Target
-from basis.core.verbs import QA_KEY, Part, Qa, QaPlan, QaRun
+from basis.core.verbs import Part, Qa, QaPlan, QaRun
 
 KEY = QA_KEY
 """The `[tool.basis]` table that declares the tier."""
@@ -92,9 +92,8 @@ class Declared:
 def declared(pyproject: Path, parts: Mapping[str, Part]) -> Declared | None:
     """The QA tier `pyproject` declares, or None when it declares none. A key basis does not read is refused: one of
     the four, or the table of a declared part that has QA runs."""
-    tool: object = tomllib.loads(pyproject.read_text(encoding="utf-8")).get("tool")
-    basis = tool.get("basis") if isinstance(tool, dict) else None
-    table = basis.get(KEY) if isinstance(basis, dict) else None
+    read = project(pyproject)
+    table = read.qa if read is not None else None
     if table is None:
         return None
     if not isinstance(table, dict):

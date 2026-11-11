@@ -33,8 +33,8 @@ from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
 
+from basis.core.project import ProjectError, basis_table
 from basis.core.sync import Problem, walk
-from basis.core.verbs import ProjectError, basis_table
 
 KEY = "coverage"
 """The key of `[tool.basis]` that gives the floor."""

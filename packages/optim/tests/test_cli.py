@@ -36,7 +36,7 @@ def test_basis_finds_the_optim_part_through_its_entry_point() -> None:
 
     assert [verb.name for verb in part.verbs] == ["sweep", "warm"]
     assert part.runs is not None
-    assert [name for name in ("run", "describe", "resume", "replay", "regress", "ddl") if getattr(part.runs, name) is not None] == ["run", "describe", "resume", "replay", "regress", "ddl"]
+    assert [name for name in ("run", "describe", "resume", "replay", "regress", "ddl") if name in part.runs.verbs] == ["run", "describe", "resume", "replay", "regress", "ddl"]
     assert (part.runs.noun, list(part.new), part.docs) == ("model", ["model"], cli.DOCS)
 
 

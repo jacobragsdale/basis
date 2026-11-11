@@ -155,13 +155,15 @@ def part() -> Part:
         runs=Runs(
             "model",
             models.installed,
-            run=Shared("decide portfolios with a model, save the run, and with --publish write its orders", _optim(_run_from), _run_arguments),
-            describe=Shared("print a model's params schema, datasets and metrics as JSON, or every model's name", _describe_from),
-            resume=Shared("publish a run's orders that it did not commit, from the run", _optim(_resume_from), _resume_arguments),
-            replay=Shared("decide a saved run again with today's code, and other params if given; reads only the run", _optim(_replay_from), _replay_arguments),
-            regress=Shared("replay a model's recent runs with today's code, and list every trade that changed", _optim(_regress_from), _regress_arguments),
-            ddl=Shared("print the CREATE TABLE for the orders table the settings name, or for the ledger", _ddl_from, _ddl_arguments),
             regressions=_regressions,
+            verbs={
+                "run": Shared("decide portfolios with a model, save the run, and with --publish write its orders", _optim(_run_from), _run_arguments),
+                "describe": Shared("print a model's params schema, datasets and metrics as JSON, or every model's name", _describe_from),
+                "resume": Shared("publish a run's orders that it did not commit, from the run", _optim(_resume_from), _resume_arguments),
+                "replay": Shared("decide a saved run again with today's code, and other params if given; reads only the run", _optim(_replay_from), _replay_arguments),
+                "regress": Shared("replay a model's recent runs with today's code, and list every trade that changed", _optim(_regress_from), _regress_arguments),
+                "ddl": Shared("print the CREATE TABLE for the orders table the settings name, or for the ledger", _ddl_from, _ddl_arguments),
+            },
         ),
         renamed=refuse_renamed,
     )

@@ -29,6 +29,7 @@ from pydantic import Field, ValidationError
 
 from basis.core.errors import BasisError
 from basis.core.model import Model
+from basis.core.project import ProjectError, project
 
 RUFF = "0.17.4"
 """The ruff every repo checks with, which each part's `dev` extra pins."""
@@ -83,12 +84,14 @@ def exceptions(pyproject: Path) -> list[Exception_]:
     """The repo's exceptions, `[tool.basis] exceptions`, each checked: a ruff rule's code or a ty rule's name, a path,
     and a reason."""
     try:
-        tool: object = tomllib.loads(pyproject.read_text(encoding="utf-8")).get("tool", {})
-    except (OSError, tomllib.TOMLDecodeError) as error:
+        read = project(pyproject)
+    except OSError as error:
         msg = f"{pyproject} cannot be read as TOML ({error}), so the repo's exceptions are unknown: fix it"
         raise ToolsError(msg) from error
-    table = tool.get("basis", {}) if isinstance(tool, dict) else {}
-    given = table.get("exceptions", []) if isinstance(table, dict) else []
+    except ProjectError as error:
+        msg = f"{pyproject} cannot be read as TOML ({error.toml}), so the repo's exceptions are unknown: fix it"
+        raise ToolsError(msg) from error
+    given = read.exceptions if read is not None and read.exceptions is not None else []
     fix = 'give each as { rule = "PLR0913", path = "jobs/x/job.py", reason = "why the rule does not fit there" }'
     if not isinstance(given, list):
         msg = f"{pyproject}'s [tool.basis] exceptions is not a list: {fix}"

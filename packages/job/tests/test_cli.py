@@ -69,7 +69,7 @@ def ran(repo: Path, capsys: pytest.CaptureFixture[str]) -> str:
 
 def test_basis_finds_the_job_part_through_its_entry_point() -> None:
     runs = command.installed()["job"]().runs
-    assert [name for name in ("run", "resume", "describe", "ddl") if runs is not None and getattr(runs, name) is not None] == ["run", "resume", "describe", "ddl"]
+    assert [name for name in ("run", "resume", "describe", "ddl") if runs is not None and name in runs.verbs] == ["run", "resume", "describe", "ddl"]
 
 
 def test_a_run_that_passes_every_check_exits_zero(repo: Path) -> None:

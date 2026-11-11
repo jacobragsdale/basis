@@ -121,6 +121,14 @@ def doctor(  # noqa: PLR0913 -- what it checks and how it reaches the databases,
     return 1 if problems else 0
 
 
+def _problem(error: Exception, describe: Describe) -> Problem:
+    """A failure's reason and its fix: a `BasisError`'s own, where nothing was noted on it on its way up, and
+    otherwise its line as `basis` prints it, split."""
+    if isinstance(error, BasisError) and not getattr(error, "__notes__", None):
+        return error.problem
+    return _split(describe(error))
+
+
 def _split(line: str) -> Problem:
     """A failure's line as its reason and its fix, which it ends with after the last `: `."""
     reason, _, fix = line.rpartition(": ")
@@ -258,7 +266,7 @@ def _environment(repo: Path, desktop: Desktop, describe: Describe) -> list[Found
         settings.refuse_renamed(desktop.environ)
         configured = Settings().snapshot_root
     except (ValidationError, BasisError) as error:
-        return [Found("the settings", _split(describe(error)))]
+        return [Found("the settings", _problem(error, describe))]
     if configured is not None:
         location = settings.locate(configured, repo)
         try:
@@ -281,7 +289,7 @@ def _environment_of(  # noqa: PLR0913 -- the environment, and how doctor reaches
     try:
         environment = environments.load(given, Settings, windows=desktop.system == "Windows", home=desktop.home)
     except (ValidationError, BasisError) as error:
-        return [Found(f"the {given} environment", _split(describe(error)))]
+        return [Found(f"the {given} environment", _problem(error, describe))]
     env, configured = environment.name, environment.settings
     where = str(environment.source) if environment.source is not None else "the process's environment"
     found: list[Found] = [Found(f"{env}'s settings, from {where}")]
@@ -333,7 +341,7 @@ def _qa(repo: Path, parts: Mapping[str, Part], desktop: Desktop, describe: Descr
     try:
         declared = qa.declared(repo / "pyproject.toml", parts)
     except BasisError as error:
-        return [Found("the QA tier", _split(describe(error)))]
+        return [Found("the QA tier", _problem(error, describe))]
     if declared is None:
         return [Found("the repo declares no QA tier, so the push hook runs none", note=True)]
     source = environments.user_file("qa", desktop.environ, windows=desktop.system == "Windows", home=desktop.home)
@@ -343,7 +351,7 @@ def _qa(repo: Path, parts: Mapping[str, Part], desktop: Desktop, describe: Descr
     try:
         read = settings.read(source)
     except ValidationError as error:
-        reason, fix = _split(describe(error))
+        reason, fix = _problem(error, describe)
         return [Found("the QA tier", (f"{source}: {reason}", fix))]
     problems = qa.problems(read, declared, source=source)
     return [Found("the QA tier", problem) for problem in problems] or [Found(f"the QA settings in {source}, each pointing at QA")]

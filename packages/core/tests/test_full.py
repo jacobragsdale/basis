@@ -72,7 +72,7 @@ def regressing(*found: Regressed, failures: Sequence[Exception] = ()) -> tuple[l
         asked.append(args)
         return Regressions(found, tuple(failures))
 
-    return asked, Runs("job", lambda: {"prices": "prices.job"}, regress=Shared("replay recent published runs", lambda _: 0), regressions=regress)
+    return asked, Runs("job", lambda: {"prices": "prices.job"}, regressions=regress, verbs={"regress": Shared("replay recent published runs", lambda _: 0)})
 
 
 def checked(repo: Path, part: Part, *, run: Callable[[Sequence[str], Path], int] = passing) -> int:
@@ -164,7 +164,7 @@ def test_a_part_that_gives_no_regressions_is_skipped_by_name_and_the_others_stil
     (repo.parent / "store").mkdir()
     monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", str(repo.parent / "store"))
     asked, runs = regressing(SAME)
-    models = Runs("model", lambda: {"income": "models.income"}, regress=Shared("replay a model's recent runs", lambda _: 0))
+    models = Runs("model", lambda: {"income": "models.income"}, verbs={"regress": Shared("replay a model's recent runs", lambda _: 0)})
     code = full.full(repo, [], {"alpha": Part(runs=runs), "beta": Part(runs=models)}, run=passing, report=command.reported, folder=repo, clock=lambda: AT)
     assert code == 0
     assert lines(capsys)[:2] == [
@@ -189,7 +189,7 @@ def test_a_part_whose_regress_raises_is_one_failure_and_the_record_is_kept(repo:
         msg = "no module named 'jobs.prices'"
         raise ImportError(msg)
 
-    assert checked(repo, Part(runs=Runs("job", lambda: {"prices": "prices.job"}, regress=Shared("replay recent published runs", lambda _: 0), regressions=regress))) == 1
+    assert checked(repo, Part(runs=Runs("job", lambda: {"prices": "prices.job"}, regressions=regress, verbs={"regress": Shared("replay recent published runs", lambda _: 0)}))) == 1
     assert record(repo).regress.failures == ["ImportError: while regressing the alpha part's runs: no module named 'jobs.prices': a defect"]
 
 

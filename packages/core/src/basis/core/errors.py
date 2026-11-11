@@ -28,7 +28,31 @@ from http import HTTPStatus
 
 
 class BasisError(Exception):
-    """A failure the caller can fix, raised on purpose; its message gives the reason and ends with the fix."""
+    """A failure the caller can fix, raised on purpose; its message gives the reason and ends with the fix. Raised as
+    `BasisError(reason, fix)`, it keeps each; raised with the whole message, as most are, each is the message split at
+    its last `: `."""
+
+    _given: tuple[str, str] | None = None
+
+    def __init__(self, reason: str = "", fix: str | None = None) -> None:
+        super().__init__(reason if fix is None else f"{reason}: {fix}")
+        self._given = (reason, fix) if fix is not None else None
+
+    @property
+    def problem(self) -> tuple[str, str]:
+        """The reason and the fix, notes left out."""
+        if self._given is not None:
+            return self._given
+        reason, _, fix = str(self).rpartition(": ")
+        return (reason, fix) if reason else (str(self), "fix it")
+
+    @property
+    def reason(self) -> str:
+        return self.problem[0]
+
+    @property
+    def fix(self) -> str:
+        return self.problem[1]
 
 
 @contextmanager

@@ -36,10 +36,11 @@ from typing import TYPE_CHECKING, Literal, NoReturn, override
 
 from pydantic import ValidationError
 
-from basis.core import check, environments, gates, guard, hooks, invalid, logs, review, settings, sync, upgrade
+from basis.core import check, environments, guard, hooks, invalid, logs, review, settings, sync, upgrade
 from basis.core.errors import BasisError
 from basis.core.logs import utc_now
-from basis.core.verbs import GROUP, QA_KEY, Part, ProjectError, Runs, Shared, Verb, basis_table, error_line, fail, holding, not_a_table
+from basis.core.project import KEYS, ProjectError, basis_table, project
+from basis.core.verbs import GROUP, Part, Runs, Shared, Verb, error_line, fail, holding, not_a_table
 
 if TYPE_CHECKING:  # numpy loads with the destinations, when a verb writes DDL, never for `basis --version`
     from basis.core.destination import Dialect
@@ -134,6 +135,8 @@ def _run(argv: Sequence[str], *, cwd: Path, installed: Installed) -> int:
             if found is None:
                 return _doctor_outside(argv, unread)
             repo = found
+        elif list(argv[:1]) == ["hook"]:  # which runs before each of an agent's tool calls, so it loads no part
+            return _hook(argv[1:], cwd)
         elif list(argv[:1]) == ["docs"] and _for_doctor(cwd, installed) == (None, None):
             return _docs_outside(argv, installed)  # outside a basis repo, such as a ctzd app, every installed part's docs, which write nothing
         else:
@@ -243,18 +246,19 @@ def declared(pyproject: Path) -> list[str]:
     declared part may have a table of its own, `[tool.basis.PART]`, which the part reads (`verbs.table`); one for a
     part the repo does not declare is refused."""
     try:
-        table = basis_table(pyproject)
+        table = project(pyproject)
     except ProjectError as error:
         raise CommandError(str(error)) from error
     example = '[tool.basis] parts = ["job"], naming each part the repo has, such as job or api'
     if table is None:
         msg = f"{pyproject} declares no basis parts: add {example}"
         raise CommandError(msg)
-    names = table.get("parts")
+    names = table.parts
     listed = {str(name) for name in names} if isinstance(names, list) else set[str]()
-    unknown = sorted(set(table) - {"parts", sync.APT, gates.KEY, QA_KEY} - listed)
-    if unread := [key for key in unknown if not isinstance(table[key], dict)]:
-        reads = f"parts, as {example}, {sync.APT}, {gates.KEY}, {QA_KEY}, and a table of each declared part's own, as [tool.basis.job]"
+    own = table.own
+    unknown = sorted(set(own) - listed)
+    if unread := [key for key in unknown if not isinstance(own[key], dict)]:
+        reads = f"parts, as {example}, {', '.join(KEYS[1:])}, and a table of each declared part's own, as [tool.basis.job]"
         msg = f"{pyproject}'s [tool.basis] has {', '.join(unread)}, which basis does not read: remove it; basis reads {reads}"
         raise CommandError(msg)
     if not isinstance(names, list) or not names or not all(isinstance(name, str) for name in names):
@@ -269,7 +273,7 @@ def declared(pyproject: Path) -> list[str]:
         msg = f"{pyproject} has [tool.basis.{part}], a part's own table, and its [tool.basis] parts does not declare the {part} part: add {part!r} to its parts, or remove the table"
         raise CommandError(msg)
     for part in found:
-        if part in table and not isinstance(table[part], dict):
+        if part in own and not isinstance(own[part], dict):
             raise CommandError(not_a_table(pyproject, part))
     return found
 
@@ -370,8 +374,7 @@ def _gives(part: Part) -> set[str]:
 
 def _sides(runs: Runs) -> dict[str, Shared]:
     """The part's side of each verb in `SHARED` it has, by the verb's name."""
-    sides = {"run": runs.run, "describe": runs.describe, "resume": runs.resume, "replay": runs.replay, "regress": runs.regress, "runs": runs.runs, "ddl": runs.ddl}
-    return {name: side for name, side in sides.items() if side is not None}
+    return {name: runs.verbs[name] for name in SHARED if name in runs.verbs}
 
 
 def _offers(part: Part) -> set[str]:
@@ -505,8 +508,7 @@ class _Sharing:
     def _parser(self, part: str) -> argparse.ArgumentParser:
         """`part`'s parser for the verb: core's NAME and RUN_ID, and the part's own arguments."""
         runs, side = self.sides[part]
-        parser = _Parser(prog=f"basis {self.verb}", description=side.help)
-        parser.set_defaults(repo_root=self.root)
+        parser = verb_parser(self.verb, side.help, self.root)
         metavar, path = (runs.noun.upper(), ", or its module path") if len(self.sides) == 1 else ("NAME", "")
         parser.add_argument("name", metavar=metavar, nargs=None if self.spec.required else "?", help=self.spec.name.format(noun=runs.noun, path=path))
         if self.spec.run_id:
@@ -629,9 +631,18 @@ def _refusal(parser: argparse.ArgumentParser, argv: Sequence[str]) -> str:
 
 
 def _own_parser(verb: Verb, root: Path) -> argparse.ArgumentParser:
-    parser = _Parser(prog=f"basis {verb.name}", description=verb.help)
-    parser.set_defaults(repo_root=root)
+    parser = verb_parser(verb.name, verb.help, root)
     verb.arguments(parser)
+    return parser
+
+
+def verb_parser(verb: str, description: str, root: Path | None) -> argparse.ArgumentParser:
+    """The parser of one verb's own command line, where core's parser hands it on, as a shared verb's is and `basis
+    VERB` in `unparsed`: every such parser is made here, so each sets `repo_root`, as `basis.core.verbs` tells a
+    handler to read it."""
+    parser = _Parser(prog=f"basis {verb}", description=description)
+    if root is not None:
+        parser.set_defaults(repo_root=root)
     return parser
 
 
@@ -788,6 +799,20 @@ def _check_arguments(parser: argparse.ArgumentParser) -> None:
 HOOK = "answer an agent's hook, as the hooks basis sync writes for Claude Code, Cursor and Codex run it: refuse a way past the repo's hooks, or send back a failing check"
 
 
+def _hook(argv: Sequence[str], cwd: Path) -> int:
+    """`basis hook`, answered from the repo's folder alone: it loads none of the repo's declared parts, whose imports,
+    such as the job part's pandas, an agent would otherwise wait on before each of its tool calls."""
+    settings.refuse_renamed(os.environ)
+    pyproject = _nearest(cwd)
+    if pyproject is None:
+        return report(CommandError(f"no pyproject.toml in {cwd} or a folder above it, so it is in no basis repo: run basis hook in one"))
+    declared(pyproject)  # a repo that declares no parts is no basis repo, as for every other verb
+    parser = verb_parser("hook", HOOK, pyproject.parent)
+    _hook_arguments(parser)
+    namespace = parser.parse_args(argv)
+    return guard.hook(pyproject.parent, namespace.event, namespace.agent, sys.stdin.read())
+
+
 def _hook_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("event", choices=guard.EVENTS, help="shell, before the agent runs a shell command; edit, before its edit tool writes a file; stop, as it ends its turn")
     parser.add_argument("--agent", required=True, choices=guard.AGENTS, help="whose hook it is, which says what it sends on stdin and reads on stdout")
@@ -866,7 +891,7 @@ class LedgerArgs:
 def _ledger(argv: Sequence[str]) -> int:
     """`basis ddl --ledger TABLE --dialect DIALECT` without NAME, in a repo where several parts publish: the ledger's
     CREATE TABLE, which is the same for every part."""
-    parser = _Parser(prog="basis ddl", description="print the ledger's CREATE TABLE, or name what a part runs, such as a job, to print its tables")
+    parser = verb_parser("ddl", "print the ledger's CREATE TABLE, or name what a part runs, such as a job, to print its tables", None)
     parser.add_argument("--ledger", metavar="TABLE", required=True, help="the ledger, as BASIS_DATABASES__NAME__WRITE__LEDGER names it")
     parser.add_argument("--dialect", choices=["mssql", "oracle"], required=True)
     try:

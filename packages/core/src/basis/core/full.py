@@ -97,7 +97,7 @@ def full(  # noqa: PLR0913 -- the repo, its parts, and how the check reaches the
 
 
 def _regress(parts: Mapping[str, Part], folder: Path, report: Report) -> review.RegressRecord:
-    saving = {name: part.runs for name, part in parts.items() if part.runs is not None and part.runs.regress is not None}
+    saving = {name: part.runs for name, part in parts.items() if part.runs is not None and "regress" in part.runs.verbs}
     if not saving:
         return _skip_regress("no part of this repo saves runs")
     try:

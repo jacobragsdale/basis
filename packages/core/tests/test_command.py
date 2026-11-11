@@ -15,9 +15,10 @@ import pytest
 from basis.core import command, sync
 from basis.core.ddl import ledger
 from basis.core.errors import BasisError, deliberate
+from basis.core.project import ProjectError
 from basis.core.settings import Settings
 from basis.core.sync import AgentFiles, stamped
-from basis.core.verbs import Part, ProjectError, Runs, Shared, Verb, fail, table
+from basis.core.verbs import Part, Runs, Shared, Verb, fail, table
 
 ALPHA = '[project]\nname = "repo"\n\n[tool.basis]\nparts = ["alpha"]\n'
 
@@ -77,12 +78,14 @@ def runs(prefix: str, *names: str, noun: str = "job", option: str = "--interval"
     return Runs(
         noun,
         listed,
-        run=Shared(f"run a {noun}", says("runs"), options),
-        describe=Shared(f"describe a {noun}", says("describes")),
-        resume=Shared(f"resume a {noun}'s run", says("resumes"), options),
-        replay=Shared(f"replay a {noun}'s run", says("replays"), options),
-        regress=Shared(f"regress {noun}s", regresses, regress_options),
-        ddl=Shared(f"print a {noun}'s tables", says("prints")),
+        verbs={
+            "run": Shared(f"run a {noun}", says("runs"), options),
+            "describe": Shared(f"describe a {noun}", says("describes")),
+            "resume": Shared(f"resume a {noun}'s run", says("resumes"), options),
+            "replay": Shared(f"replay a {noun}'s run", says("replays"), options),
+            "regress": Shared(f"regress {noun}s", regresses, regress_options),
+            "ddl": Shared(f"print a {noun}'s tables", says("prints")),
+        },
     )
 
 
@@ -698,3 +701,26 @@ def test_basis_version_imports_no_pandas_numpy_or_pyarrow(tmp_path: Path) -> Non
     )
     ran = subprocess.run([sys.executable, "-c", script], cwd=tmp_path, capture_output=True, text=True, check=False, timeout=60)
     assert ran.stderr.splitlines()[-1] == "[] 0"
+
+
+def test_every_key_of_tool_basis_basis_reads_is_one_the_command_takes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """`exceptions`, `coverage`, `apt-packages` and `qa` are each read by a part of core: the command refuses none."""
+    folder = repo(
+        tmp_path, '[tool.basis]\nparts = ["alpha"]\ncoverage = 85\napt-packages = ["libpq5"]\nexceptions = [{ rule = "PLR0913", path = "x.py", reason = "the run takes what it reads by keyword" }]\n'
+    )
+    assert basis(folder, "serve", installed={"alpha": lambda: Part(verbs=(verb("serve", lambda _: 0),))}) == 0, capsys.readouterr().err
+
+
+def test_hook_loads_no_declared_part_so_it_pays_no_parts_imports(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    """An agent's hook runs before each of its tool calls: it answers from the repo's folder alone, so a job repo's
+    hook imports no pandas through the job part."""
+    loaded: list[str] = []
+
+    def alpha() -> Part:
+        loaded.append("alpha")
+        return Part(verbs=(verb("serve"),))
+
+    folder = repo(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls"}})))
+    assert basis(folder, "hook", "shell", "--agent", "claude", installed={"alpha": alpha}) == 0, capsys.readouterr().err
+    assert loaded == []

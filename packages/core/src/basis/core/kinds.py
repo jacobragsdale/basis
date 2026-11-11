@@ -159,8 +159,7 @@ class _ProblemError(BasisError):
     """A check whose problem is its kind's own, not `does not answer`."""
 
     def __init__(self, problem: Problem) -> None:
-        super().__init__(f"{problem[0]}: {problem[1]}")
-        self.problem = problem
+        super().__init__(*problem)
 
 
 def _mongo_marked(name: str, settings: MongoSettings, marker: str, where: str) -> Problem | None:

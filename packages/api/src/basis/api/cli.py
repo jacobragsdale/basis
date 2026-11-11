@@ -104,7 +104,9 @@ def part() -> Part:
         runs=Runs(
             noun="service",
             names=_services,
-            ddl=Shared("print the CREATE TABLE of each outbox the service's databases declare", lambda n: _ddl(DdlArgs(n.name, "mssql" if n.dialect == "mssql" else "oracle")), _ddl_arguments),
+            verbs={
+                "ddl": Shared("print the CREATE TABLE of each outbox the service's databases declare", lambda n: _ddl(DdlArgs(n.name, "mssql" if n.dialect == "mssql" else "oracle")), _ddl_arguments)
+            },
         ),
         contract=_contract,
         smoke=_smoke,
