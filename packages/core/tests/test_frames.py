@@ -223,3 +223,17 @@ def test_the_values_whose_time_in_their_zone_names_two_instants_are_found() -> N
     values = pd.Series(at, dtype=frames.dtype(Column("t", "datetime", nullable=True, zone="UTC")))
     assert frames.twice_named(values, "America/New_York").tolist() == [False, True, True, False, False]
     assert not frames.twice_named(values, "UTC").any()
+
+
+@pytest.mark.parametrize(
+    "given",
+    [pd.Series(["", "a"], dtype=object), pd.Series(["", "a"], dtype=pd.ArrowDtype(pa.string())), pd.Series(["", "a"], dtype=pd.ArrowDtype(pa.large_string())), pd.Series(["", "a"], dtype="string")],
+    ids=["object", "arrow-string", "arrow-large-string", "pandas-string"],
+)
+def test_an_empty_string_stays_empty_whichever_dtype_holds_it_and_is_null_only_parsed_into_another_kind(given: pd.Series) -> None:
+    text, problem = frames.convert(given, Column("t", "str", nullable=True), "reject")
+    assert (problem, text.tolist()) == (None, ["", "a"])
+    number, problem = frames.convert(given.replace("a", "1.5"), Column("n", "float", nullable=True), "reject")
+    assert problem is None
+    assert pd.isna(number.iloc[0])
+    assert number.iloc[1] == 1.5

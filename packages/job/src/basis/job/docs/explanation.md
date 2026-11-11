@@ -71,7 +71,9 @@ types are checked at every boundary, in both directions, and a conversion is all
 Arrow's safe casts refuse a rounded or truncated value, and the framework checks the rest itself, such as a time of
 day that a cast to a date would drop. Floats never become decimals implicitly; the transform rounds, as the data
 needs. The destination is checked too, against what the database says the table is: a string longer than its column,
-or a time finer than `DATE` keeps, stops the run before the database would truncate it or fail halfway.
+a time finer than `DATE` or `DATETIME2(3)` keeps, a float a `REAL` would round, an identifier's text an integer column
+would store as other text, such as `'00123'`, or an empty string, which Oracle stores as NULL, stops the run before the
+database would change it or fail halfway.
 
 ## Snapshots, replay and regression
 

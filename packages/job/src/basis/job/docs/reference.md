@@ -43,7 +43,7 @@ Every column is backed by Arrow, so a null is `pd.NA` in every type, an `int` wi
 `Decimal` stays exact through arithmetic and sums, and no column is `object`. Job code, which may not import pyarrow,
 names a dtype through its row: `Row.dtypes()` gives each column's by name, for `frame.astype(Row.dtypes())`, and
 `Row.empty()` a frame with no rows. `T | None`, or
-`Annotated[T, ...] | None`, makes a column nullable. A column name is lower-case letters, digits and underscores,
+`Annotated[T, ...] | None`, makes a column nullable. A column name is lower-case letters, digits and underscores, never a word its database reserves (basis quotes no name, so `key`, `order` or Oracle's `date` are refused before a publish),
 starting with a letter or an underscore. `Zone` names the zone a datetime's naive values are in, in sources and
 destinations; in a frame, every datetime is UTC.
 
@@ -92,7 +92,8 @@ A query binds only the run's interval, as naive UTC datetimes, or naive times in
 New York times gives `zone="America/New_York"`, so it reads the run's span and not one shifted by the offset; an
 interval that starts or ends inside the hour that zone shows twice is refused. A query that names them in a run
 without an interval fails.
-An Oracle `NUMBER` without a precision arrives as a float; cast it in the query for a `Decimal` column.
+An Oracle `NUMBER` without a precision arrives as a float, whatever digits it holds, so one beyond 2^53 fails the run:
+select an identifier as text, as `TO_CHAR(id)`, and cast an amount `AS NUMBER(p,s)`.
 
 ### `etl.Fetch(row, *, http, path, deadline_s, empty)`
 

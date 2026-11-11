@@ -64,6 +64,15 @@ log = logging.getLogger(__name__)
 CONNECT_TIMEOUT_S = 30
 """The longest a login waits, however long its round trips may take."""
 _BIND = r"(?<![:\w]):{name}\b"
+_NO_SCALE = -127
+"""The scale the driver describes a `NUMBER` with no precision by."""
+
+
+def no_rows(sql: str) -> str:
+    """A query that selects `sql`'s columns and none of its rows, which the database describes as it would `sql`."""
+    return f"SELECT * FROM ({sql}) WHERE 1 = 0"
+
+
 _KIND = "oracle"
 _TIMEOUTS = frozenset({1013, 3156})
 """A call cancelled, as its timeout cancels it, and a call past its timeout, in thick mode."""
@@ -143,6 +152,14 @@ class Cursor:
 
     def fetchall(self) -> list[tuple[Any, ...]]:
         return self.boundary.call(self.raw.fetchall)
+
+    def unconstrained_numbers(self, sql: str, binds: Mapping[str, object] | None) -> list[str]:
+        """The query's columns of Oracle's `NUMBER` with no precision, as the query wrapped to select no row describes
+        them: the driver's Arrow reads give each as a double, whatever digits it holds. Not `parse`, after which the
+        driver's Arrow reads of the query give its `NUMBER(p)`s as doubles too."""
+        self.boundary.call(self.raw.execute, no_rows(sql), dict(binds) if binds is not None else None)
+        described = self.raw.description or []
+        return [str(column.name) for column in described if column.type_code is oracledb.DB_TYPE_NUMBER and column.precision == 0 and column.scale == _NO_SCALE]
 
     def close(self) -> None:
         quietly(self.boundary.database, self.raw.close, "close a cursor")
@@ -268,6 +285,8 @@ class OracleReader:
         tables: list[pa.Table] = []
         rows = 0
         try:
+            with closing(self.connection.cursor()) as cursor, span(self.database, _KIND, "describe", no_rows(sql)):
+                unconstrained = cursor.unconstrained_numbers(sql, binds)
             with statement(self.database, _KIND, sql) as traced:
                 for batch in self.connection.fetch_df_batches(sql, binds or None, size=FETCH_ROWS):
                     table = pa.table(batch)
@@ -283,7 +302,15 @@ class OracleReader:
                     " run again, or set the database's ISOLATION=read_committed"
                 )
             raise
-        return frames.from_arrow(frames.floats(pa.concat_tables(tables) if len(tables) > 1 else tables[0], what=what))
+        table = pa.concat_tables(tables) if len(tables) > 1 else tables[0]
+        for name in unconstrained:
+            if name in table.column_names and (beyond := frames.beyond_whole(table.column(name))) is not None:
+                msg = (
+                    f"{what}: column {name.lower()} is a NUMBER with no precision, which the driver reads as a float, and holds {beyond}, beyond 2^53, which a float"
+                    f" holds only roughly: select it as text if it names something, as TO_CHAR({name.lower()}), or CAST it AS NUMBER(p,s) for an amount"
+                )
+                raise frames.NumberError(msg)
+        return frames.from_arrow(frames.floats(table, what=what))
 
     def describe(self, table: str) -> TableSpec | None:
         owner, _, name = table.upper().rpartition(".")

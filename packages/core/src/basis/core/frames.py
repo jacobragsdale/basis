@@ -114,6 +114,13 @@ def floats(table: pa.Table, *, what: str) -> pa.Table:
     return table
 
 
+def beyond_whole(values: Array) -> float | None:
+    """The first of a float column's values beyond ±2^53, where a double holds whole numbers only roughly, so the digits
+    it was read from may be lost; None when there is none."""
+    found = _call("filter", values, _call("greater", _call("abs", values), pa.scalar(float(WHOLE))))
+    return float(found[0].as_py()) if len(found) else None
+
+
 def _is_number(found: pa.DataType) -> bool:
     return bool(pa.types.is_integer(found) or pa.types.is_floating(found) or pa.types.is_decimal(found))
 
@@ -152,7 +159,9 @@ def convert(series: pd.Series, column: Column, naive: Naive) -> tuple[pd.Series,
             converted, problem = array, None
         elif pa.types.is_null(array.type):
             converted, problem = pa.nulls(len(array), target), None
-        elif _is_text(array.type):
+        elif _is_text(array.type) and column.kind == "str":
+            converted, problem = _PARSERS["str"](array, column)  # an empty string is text, whatever dtype holds it
+        elif _is_text(array.type):  # text parsed into another kind, as a CSV's or a fetch's: an empty field is null
             converted, problem = _PARSERS[column.kind](_call("if_else", _call("equal", array, pa.scalar("", array.type)), pa.scalar(None, array.type), array), column)
         else:
             converted, problem = _CONVERTERS[column.kind](array, column, naive)

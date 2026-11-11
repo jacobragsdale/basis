@@ -352,6 +352,10 @@ class _Cursor:
     def fetchone(self) -> tuple[int]:
         return (0,)
 
+    def unconstrained_numbers(self, sql: str, binds: object) -> list[str]:
+        del sql, binds
+        return []
+
     def close(self) -> None:
         pass
 
@@ -389,6 +393,10 @@ def test_each_statement_a_reader_or_a_writer_runs_has_a_span_on_the_runs_tracer(
         ("source SELECT", {"db.system.name": "microsoft.sql_server", "basis.resource": "source", "db.query.text": "SELECT price FROM prices", "db.response.returned_rows": 2}),
         ("warehouse SELECT", {"db.system.name": "microsoft.sql_server", "basis.resource": "warehouse", "db.query.text": "SELECT COUNT(*) FROM etl.publishes WHERE run_id = %(run_id)s"}),
         ("warehouse commit", {"db.system.name": "microsoft.sql_server", "basis.resource": "warehouse"}),
+        (
+            "ledger describe",
+            {"db.system.name": "oracle.db", "basis.resource": "ledger", "db.query.text": "SELECT * FROM (SELECT price FROM prices) WHERE 1 = 0"},
+        ),  # its columns, for a NUMBER with no precision
         ("ledger SELECT", {"db.system.name": "oracle.db", "basis.resource": "ledger", "db.query.text": "SELECT price FROM prices", "db.response.returned_rows": 3}),
     ]
 

@@ -105,13 +105,47 @@ _SECONDS_ONLY = frozenset({"DATETIME", "SMALLDATETIME", "DATE"})
 minute, and Oracle's `DATE` to the second."""
 
 
+RESERVED: dict[Dialect, frozenset[str]] = {
+    "mssql": frozenset(
+        """ADD ALL ALTER AND ANY AS ASC AUTHORIZATION BACKUP BEGIN BETWEEN BREAK BROWSE BULK BY CASCADE CASE CHECK
+        CHECKPOINT CLOSE CLUSTERED COALESCE COLLATE COLUMN COMMIT COMPUTE CONSTRAINT CONTAINS CONTAINSTABLE CONTINUE
+        CONVERT CREATE CROSS CURRENT CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER CURSOR DATABASE DBCC
+        DEALLOCATE DECLARE DEFAULT DELETE DENY DESC DISK DISTINCT DISTRIBUTED DOUBLE DROP DUMP ELSE END ERRLVL ESCAPE
+        EXCEPT EXEC EXECUTE EXISTS EXIT EXTERNAL FETCH FILE FILLFACTOR FOR FOREIGN FREETEXT FREETEXTTABLE FROM FULL
+        FUNCTION GOTO GRANT GROUP HAVING HOLDLOCK IDENTITY IDENTITY_INSERT IDENTITYCOL IF IN INDEX INNER INSERT
+        INTERSECT INTO IS JOIN KEY KILL LEFT LIKE LINENO LOAD MERGE NATIONAL NOCHECK NONCLUSTERED NOT NULL NULLIF OF
+        OFF OFFSETS ON OPEN OPENDATASOURCE OPENQUERY OPENROWSET OPENXML OPTION OR ORDER OUTER OVER PERCENT PIVOT PLAN
+        PRECISION PRIMARY PRINT PROC PROCEDURE PUBLIC RAISERROR READ READTEXT RECONFIGURE REFERENCES REPLICATION
+        RESTORE RESTRICT RETURN REVERT REVOKE RIGHT ROLLBACK ROWCOUNT ROWGUIDCOL RULE SAVE SCHEMA SECURITYAUDIT SELECT
+        SEMANTICKEYPHRASETABLE SEMANTICSIMILARITYDETAILSTABLE SEMANTICSIMILARITYTABLE SESSION_USER SET SETUSER
+        SHUTDOWN SOME STATISTICS SYSTEM_USER TABLE TABLESAMPLE TEXTSIZE THEN TO TOP TRAN TRANSACTION TRIGGER TRUNCATE
+        TRY_CONVERT TSEQUAL UNION UNIQUE UNPIVOT UPDATE UPDATETEXT USE USER VALUES VARYING VIEW WAITFOR WHEN WHERE
+        WHILE WITH WITHIN WRITETEXT""".split()  # noqa: SIM905 -- a list of words, which a string holds legibly
+    ),
+    "oracle": frozenset(
+        """ACCESS ADD ALL ALTER AND ANY AS ASC AUDIT BETWEEN BY CHAR CHECK CLUSTER COLUMN COMMENT COMPRESS CONNECT CREATE
+        CURRENT DATE DECIMAL DEFAULT DELETE DESC DISTINCT DROP ELSE EXCEPT EXCLUSIVE EXISTS FILE FLOAT FOR FROM GRANT
+        GROUP HAVING IDENTIFIED IMMEDIATE IN INCREMENT INDEX INITIAL INSERT INTEGER INTERSECT INTO IS LEVEL LIKE LOCK
+        LONG MAXEXTENTS MINUS MLSLABEL MODE MODIFY NOAUDIT NOCOMPRESS NOT NOWAIT NULL NUMBER OF OFFLINE ON ONLINE
+        OPTION OR ORDER PCTFREE PRIOR PUBLIC RAW RENAME RESOURCE REVOKE ROW ROWID ROWNUM ROWS SELECT SESSION SET SHARE
+        SIZE SMALLINT START SUCCESSFUL SYNONYM SYSDATE TABLE THEN TO TRIGGER UID UNION UNIQUE UPDATE USER VALIDATE
+        VALUES VARCHAR VARCHAR2 VIEW WHENEVER WHERE WITH""".split()  # noqa: SIM905 -- as above
+    ),
+}
+"""The words each dialect reserves, which an unquoted column may not be named: SQL Server's reserved keywords, and
+Oracle's reserved words, 23ai's `V$RESERVED_WORDS` with those 19c reserves too."""
+_DIALECT_NAMES: dict[Dialect, str] = {"mssql": "SQL Server", "oracle": "Oracle"}
+
+
 def check_table(target: Target, spec: TableSpec) -> list[str]:
     """Why the table cannot take the row's columns, whatever their values."""
     reasons: list[str] = []
     names = {column.name for column in target.columns}
     for column in target.columns:
         found = spec.columns.get(column.name)
-        if found is None:
+        if column.name.upper() in RESERVED[spec.dialect]:
+            reasons.append(f"{column.name}: {_DIALECT_NAMES[spec.dialect]} reserves the word {column.name.upper()}, and basis never quotes a column's name: rename the row's column, and the table's")
+        elif found is None:
             reasons.append(f"{column.name}: {spec.table} has no such column")
         elif found.generated:
             reasons.append(f"{column.name}: {spec.table} fills it itself (identity, computed or virtual): leave it out of the row")
@@ -164,6 +198,11 @@ def _value_problems(column: Column, found: DestColumn, series: pd.Series, dialec
         case "str" if found.type in _WHOLE or found.type == "NUMBER":
             problems.extend(_identifier_problems(found, values))
         case "str":
+            if dialect == "oracle" and (empty := int((values == "").sum())):
+                problems.append(
+                    f"{empty} empty strings, which Oracle stores as NULL, so a key or a match on them never finds the row:"
+                    f" give the row None for them, as frame.replace({{{column.name!r}: {{'': None}}}})"
+                )
             problems.extend(_text_problems(found, values, dialect))
         case "float":
             problems.extend(_number_problems(found, values))
@@ -172,9 +211,19 @@ def _value_problems(column: Column, found: DestColumn, series: pd.Series, dialec
                 problems.append(f"fractions of a second, which {found.type} does not keep")
             if found.type == "SMALLDATETIME" and (values.dt.second != 0).any():
                 problems.append("seconds, which SMALLDATETIME does not keep")
+        case "datetime" if found.type in {"DATETIME2", "TIMESTAMP"} and found.scale is not None and found.scale < _MICROSECONDS:
+            microseconds = values.dt.microsecond.to_numpy(dtype="int64")
+            if (microseconds % 10 ** (_MICROSECONDS - found.scale) != 0).any():
+                problems.append(f"times finer than {found.type}({found.scale}) keeps, which would round them")
         case _:
             pass
     return problems
+
+
+_MICROSECONDS = 6
+"""The fractional digits of a second a datetime column holds in a frame."""
+_SINGLE = frozenset({"REAL", "BINARY_FLOAT"})
+"""The single-precision float types, which keep a float to about 7 significant digits."""
 
 
 def _number_problems(found: DestColumn, values: pd.Series) -> list[str]:
@@ -184,6 +233,13 @@ def _number_problems(found: DestColumn, values: pd.Series) -> list[str]:
     numbers = values.to_numpy(dtype="float64")
     if count := int(np.isinf(numbers).sum()):
         return [f"{count} infinite values, which {found.type} column {found.name} cannot store: replace them in the transform, with NaN for NULL"]
+    if found.type in _SINGLE and len(rounded := values[numbers.astype(np.float32).astype(np.float64) != numbers]):
+        return [
+            (
+                f"{len(rounded)} values {found.type} would round, such as {rounded.iloc[0]}, since it keeps a float to about 7 digits:"
+                " store them in a FLOAT or BINARY_DOUBLE column, or round them in the transform"
+            )
+        ]
     match binding(found):
         case "whole":
             if fractions := int((numbers != np.trunc(numbers)).sum()):
@@ -215,6 +271,9 @@ def _identifier_problems(found: DestColumn, values: pd.Series) -> list[str]:
     if len(bad := text[~text.str.fullmatch(r"[+-]?\d+")]):
         return [f"{len(bad)} values that are not whole numbers, which {found.type} column {found.name} cannot store, such as {bad.iloc[0]!r}"]
     numbers = [int(value) for value in text]
+    if len(changed := text[[str(number) != value for number, value in zip(numbers, text, strict=True)]]):
+        first = changed.iloc[0]
+        return [f"{len(changed)} values the server would store as other text, such as {first!r}, which {found.type} column {found.name} reads back as {int(first)}: store them in a text column"]
     low, high = _INTEGER_RANGES.get(found.type, (-(10 ** (found.precision or 38)) + 1, 10 ** (found.precision or 38) - 1))
     if min(numbers) < low or max(numbers) > high:
         return [f"values from {min(numbers)} to {max(numbers)}, beyond {found.type}'s {low} to {high}"]

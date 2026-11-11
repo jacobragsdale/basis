@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from builders import Price, prices
-from integration.scratch import Scratch, configured, mssql
+from integration.scratch import Scratch, configured, mssql, oracle
 
 import basis.job as etl
 from basis.core.interval import Interval
@@ -146,3 +146,31 @@ def test_an_oracle_read_only_read_of_a_table_defined_moments_ago_says_why_it_fai
     assert result.record.status == "failed"
     assert result.record.error is not None
     assert "ORA-01466" in result.record.error
+
+
+def test_an_oracle_number_with_no_precision_beyond_2_53_fails_the_run_rather_than_round(tmp_path: Path) -> None:
+    """The driver reads an unconstrained NUMBER as a double, so an 18-digit id would arrive rounded."""
+    scratch = oracle(configured(), "nprec")
+    params = tmp_path / "params.json"
+    params.write_text("{}", encoding="utf-8")
+
+    class Ids(etl.Row):
+        id: float
+
+    sql = tmp_path / "ids.sql"
+    sql.write_text("SELECT CAST(123456789012345678 AS NUMBER) AS id FROM dual", encoding="utf-8")
+
+    class Inputs(etl.Inputs):
+        ids = etl.Query(Ids, database="source", sql=str(sql), empty="allow")
+
+    class Outputs(etl.Outputs):
+        ids = etl.Table(Ids, database="unused", table="ids", write=etl.Append())
+
+    def transform(inputs: Inputs, _params: etl.Params) -> Outputs:
+        return Outputs(ids=inputs.ids)
+
+    job = Job("ids", "tests.ids", etl.Params, Inputs, Outputs, transform, None, Path(__file__).parent)
+    result = runs.run(job, GivenSettings(databases={"source": scratch.settings}), runs.Request(params, None), snapshot_root=Root.at(tmp_path))
+    assert result.record.status == "failed"
+    assert result.record.error is not None
+    assert "column id is a NUMBER with no precision, which the driver reads as a float, and holds 1.2345678901234568e+17, beyond 2^53" in result.record.error

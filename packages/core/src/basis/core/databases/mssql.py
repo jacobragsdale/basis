@@ -390,7 +390,7 @@ def _column(row: Sequence[object]) -> DestColumn:
         type=kind,
         length=(length // 2 if unit == "UTF-16 units" else length) if bounded else None,
         precision=int(str(precision)) if numeric else None,
-        scale=int(str(scale)) if numeric else None,
+        scale=int(str(scale)) if numeric or kind in {"DATETIME2", "DATETIMEOFFSET", "TIME"} else None,  # a time's: its digits of a second
         nullable=bool(nullable),
         generated=bool(identity) or bool(computed) or kind in {"TIMESTAMP", "ROWVERSION"},
         defaulted=int(str(default)) != 0,

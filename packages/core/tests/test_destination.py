@@ -198,3 +198,44 @@ def test_a_character_set_basis_does_not_know_refuses_text_beyond_ascii_and_names
         " Unicode, or add EE8ISO8859P2 to basis.core.databases.oracle.CHARSETS"
     )
     assert check_values(TARGET, oracle(note=column), notes("hello", "Zoë")) == [refusal]
+
+
+@pytest.mark.parametrize("kind", ["REAL", "BINARY_FLOAT"])
+def test_a_float_a_single_precision_column_would_round_is_refused(kind: str) -> None:
+    spec = TableSpec("mssql" if kind == "REAL" else "oracle", "prices", mssql().columns | {"price": column("price", kind, nullable=False)})
+    assert check_values(TARGET, spec, Changes(insert=prices({"price": 0.5}))) == []
+    assert check_values(TARGET, spec, Changes(insert=prices({"price": 100.1}))) == [
+        f"insert: price: 1 values {kind} would round, such as 100.1, since it keeps a float to about 7 digits: store them in a FLOAT or BINARY_DOUBLE column, or round them in the transform"
+    ]
+
+
+@pytest.mark.parametrize(("kind", "digits"), [("DATETIME2", 3), ("TIMESTAMP", 0)])
+def test_a_time_finer_than_a_columns_fractional_seconds_is_refused(kind: str, digits: int) -> None:
+    spec = TableSpec("mssql" if kind == "DATETIME2" else "oracle", "prices", mssql().columns | {"booked_at": column("booked_at", kind, digits=(0, digits))})
+    fine = datetime(2026, 11, 5, 14, 30, 0, 123_456, tzinfo=UTC)
+    assert check_values(TARGET, spec, Changes(insert=prices({"booked_at": fine}))) == [f"insert: booked_at: times finer than {kind}({digits}) keeps, which would round them"]
+    kept = datetime(2026, 11, 5, 14, 30, 0, 0, tzinfo=UTC)
+    assert check_values(TARGET, spec, Changes(insert=prices({"booked_at": kept}))) == []
+
+
+def test_an_identifiers_text_the_server_would_change_is_refused() -> None:
+    spec = mssql(security_id=column("security_id", "BIGINT", nullable=False))
+    assert check_values(TARGET, spec, Changes(insert=prices({"security_id": "00123"}, {"security_id": "+7"}, {"security_id": "42"}))) == [
+        "insert: security_id: 2 values the server would store as other text, such as '00123', which BIGINT column security_id reads back as 123: store them in a text column"
+    ]
+
+
+def test_oracle_refuses_an_empty_string_which_it_stores_as_null() -> None:
+    spec = TableSpec("oracle", "prices", mssql().columns | {"note": column("note", "VARCHAR2", length=40)})
+    assert check_values(TARGET, spec, Changes(insert=prices({"note": ""}))) == [
+        "insert: note: 1 empty strings, which Oracle stores as NULL, so a key or a match on them never finds the row: give the row None for them, as frame.replace({'note': {'': None}})"
+    ]
+    assert check_values(TARGET, mssql(), Changes(insert=prices({"note": ""}))) == []
+
+
+@pytest.mark.parametrize(("dialect", "name"), [("mssql", "key"), ("mssql", "order"), ("oracle", "date"), ("oracle", "order")])
+def test_a_column_named_a_word_its_database_reserves_is_refused_since_basis_quotes_no_name(dialect: str, name: str) -> None:
+    target = Table((Column(name=name, kind="str", nullable=False),), key=None)
+    spec = TableSpec(dialect, "prices", {name: column(name, "NVARCHAR" if dialect == "mssql" else "VARCHAR2", nullable=False)})  # ty: ignore[invalid-argument-type] -- each case's dialect
+    reserved = "SQL Server" if dialect == "mssql" else "Oracle"
+    assert check_table(target, spec) == [f"{name}: {reserved} reserves the word {name.upper()}, and basis never quotes a column's name: rename the row's column, and the table's"]
