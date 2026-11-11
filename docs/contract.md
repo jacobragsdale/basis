@@ -48,6 +48,9 @@ each field at fault (see [Errors](#errors)).
 | A JSON body | Sent with `Content-Type: application/json`, or a JSON type such as `application/merge-patch+json` |
 | A key | Refused at any depth unless the model declares it |
 | A value | Of its own JSON type: a string for text, a number for a `float`, an integer without a fraction for an `int`, `true` or `false` for a boolean |
+| A number | One a float holds: `NaN`, `Infinity` and a number too large for a float, as `1e999`, are refused |
+| An object | Each key given once |
+| Its size | At most the API's `serve.max_body_bytes`, 1 MiB unless its settings say otherwise; a larger body answers 413 `body-too-large` |
 | A time | A string with its offset, as `"2026-11-06T14:30:00Z"` or `"2026-11-06T09:30:00-05:00"` |
 | A route that takes no body | Refuses one |
 | A query key | Refused unless the route declares it; given twice for one value, refused |
@@ -99,6 +102,7 @@ The errors basis answers itself, besides each API's own:
 | `type` | Status | When | Headers |
 |---|---|---|---|
 | `invalid-request` | 422 | The request is not read: see [Requests](#requests) | |
+| `body-too-large` | 413 | The body is larger than the API takes: see [Requests](#requests) | |
 | `sign-in-required` | 401 | A route that needs a user has an anonymous request | `WWW-Authenticate: Bearer` |
 | `invalid-token` | 401 | The bearer token does not verify, or has expired | `WWW-Authenticate: Bearer error="invalid_token"` |
 | `keys-unavailable` | 503 | The sign-in system's keys cannot be fetched, for a token whose key the API does not hold; a UI retries, and does not sign the user out | |
@@ -119,7 +123,7 @@ as `unpriced`, answers its own error instead. Its
 `detail` names what was called, as `pricing answered 503 to GET /prices/US0001`, and never holds what a database's
 driver said. An operation lists the kinds that what its route asks for can raise: every kind for another service, all
 but `service-not-found` and `service-bad-reply` for a database, and `service-timeout` for a cache or a compute
-function.
+function; and `body-too-large` for every route that takes a body.
 
 Each operation lists, under each status, the type and title of every error it may answer, in its description.
 

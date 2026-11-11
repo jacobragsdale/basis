@@ -8,7 +8,11 @@ value has its own type in JSON: a string for a `str`, a number without a fractio
 as `"019a5c3e-..."`. Two rules go further than pydantic's strict mode:
 
 - Every number is a JSON number, a `float` or an `int`, and a `Decimal` anywhere in a request or a response is refused
-  when the route is declared (`aware`; design.md, "Numbers").
+  when the route is declared (`aware`; design.md, "Numbers"). A number is one a float holds: `NaN`, `Infinity` and
+  `-Infinity`, which JSON's grammar has not, and a number too large for a float, as `1e999`, are refused, since
+  pydantic would read each as NaN or infinity, which a response, and another service's call, would then carry as null.
+- An object gives each key once: pydantic would keep the last of a key given twice, which another reader of the same
+  bytes may not.
 - A time carries its offset, as `"2026-11-06T14:30:00Z"`: a time without one could be any zone's. A time is pydantic's
   `AwareDatetime`, which refuses one without, in a request and a response alike; a plain `datetime`, which takes one
   without, or a time of day, `datetime.time`, whose offset pydantic cannot require, is refused when the route is
@@ -21,7 +25,9 @@ gets the value it made, which it does not validate again, so a validator never r
 
 Each of a request model's fields reads from one key of the JSON, its plain `alias` or else its name, which a 422 names
 it by: no `validation_alias` of its own, `AliasChoices` or `AliasPath`, and no `populate_by_name`, `validate_by_name` or
-`validate_by_alias=False`. The body is parsed once.
+`validate_by_alias=False`. The body is parsed twice, by Python's own parser for what pydantic's lets through, and
+then by pydantic's, and a large one off the event loop (`routes.py`); a body over the settings' `serve.max_body_bytes`
+is refused, 413 `body-too-large`, before it is read whole.
 
 **Query and path parameters** arrive as text, so basis reads each by its type's grammar before FastAPI converts it,
 and FastAPI's conversion of what the grammar accepts is exact:
@@ -43,6 +49,7 @@ twice for one value. A route declares its query parameters one by one, or as one
 parameter's type is the handler's, so a path never names a converter, as `{n:int}` would."""
 
 import dataclasses
+import json
 import math
 import re
 import types
@@ -59,7 +66,7 @@ from uuid import UUID
 from fastapi import params
 from fastapi.dependencies.models import Dependant
 from fastapi.dependencies.utils import get_dependant
-from pydantic import AwareDatetime, BaseModel, FutureDatetime, JsonValue, NaiveDatetime, PastDatetime, TypeAdapter, ValidationError
+from pydantic import AwareDatetime, BaseModel, FutureDatetime, NaiveDatetime, PastDatetime, TypeAdapter, ValidationError
 from pydantic.fields import FieldInfo
 
 from basis.api.errors import DeclarationError
@@ -329,7 +336,6 @@ def _refused(where: str, parameter: Parameter, value: str) -> ErrorEntry:
 
 
 _JSON = re.compile(r"application/(?:[\w.+-]+\+)?json", re.IGNORECASE)
-_TREE: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 
 def is_json(content_type: str | None) -> bool:
@@ -342,18 +348,69 @@ def body(declared: Body, raw: bytes, content_type: str | None) -> tuple[object, 
     if not is_json(content_type):
         message = "The body is not JSON: send it with Content-Type: application/json" if content_type is None else f"The body is {content_type}, not JSON: send it as application/json"
         return None, [{"type": "content_type", "loc": ("body",), "msg": message, "input": content_type}]
+    sent = _tree(raw)
+    if sent is not None and (unsound := list(_unsound(sent, ()))):
+        return None, unsound
     try:
         value = declared.adapter.validate_json(raw, strict=True, extra="forbid")
     except ValidationError as error:
-        try:
-            sent: JsonValue | None = _TREE.validate_json(raw)
-        except ValidationError:  # not JSON, which its one error says
-            sent = None
         return None, [_entry(entry, sent) for entry in error.errors(include_url=False)]
     return value, []
 
 
-def _entry(entry: Mapping[str, object], sent: JsonValue | None) -> ErrorEntry:
+class _Object(dict[str, object]):
+    """An object of a body, with the keys it gives more than once, which pydantic's parser takes the last value of."""
+
+    repeated: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _Infinite:
+    """A number of a body that no float holds: `NaN`, `Infinity` or `-Infinity`, which pydantic's parser takes, and
+    JSON's grammar does not, or one too large, as `1e999`, which every parser reads as infinity."""
+
+    text: str
+
+
+def _pairs(pairs: list[tuple[str, object]]) -> _Object:
+    found = _Object(pairs)
+    if len(found) < len(pairs):
+        counted = Counter(key for key, _ in pairs)
+        found.repeated = tuple(key for key, count in counted.items() if count > 1)
+    return found
+
+
+def _number(text: str) -> float | _Infinite:
+    number = float(text)
+    return number if math.isfinite(number) else _Infinite(text)
+
+
+def _tree(raw: bytes) -> object:
+    """The body `raw` as the JSON it holds, each object an `_Object` and each number no float holds an `_Infinite`, or
+    None where it is not JSON, which pydantic's own error then says."""
+    try:
+        found: object = json.loads(raw, object_pairs_hook=_pairs, parse_float=_number, parse_constant=_Infinite)
+    except ValueError:  # not JSON, or an integer of more digits than Python reads, which pydantic refuses itself
+        return None
+    return found
+
+
+def _unsound(node: object, at: tuple[str | int, ...]) -> Iterator[ErrorEntry]:
+    """What `node`, at `at` in a body, holds that pydantic would read as something else: a number no float holds,
+    which would reach the handler as infinity or NaN, and a key given twice, of which it would keep the last."""
+    if isinstance(node, _Infinite):
+        yield {"type": "finite_number", "loc": ("body", *at), "msg": "Input should be a finite number: send a number a float holds, and null for none", "input": node.text}
+    elif isinstance(node, _Object):
+        for key in node.repeated:
+            yield {"type": "repeated_key", "loc": ("body", *at, key), "msg": "The key is given twice: give each key of an object once", "input": key}
+        for key, value in node.items():
+            yield from _unsound(value, (*at, key))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from _unsound(value, (*at, index))
+
+
+def _entry(entry: Mapping[str, object], sent: object) -> ErrorEntry:
     location = entry.get("loc")
     given = tuple(part for part in location if isinstance(part, str | int)) if isinstance(location, tuple) else ()
     at = _in_body(given, sent, missing=entry.get("type") == "missing")
@@ -365,14 +422,14 @@ def _entry(entry: Mapping[str, object], sent: JsonValue | None) -> ErrorEntry:
     return found
 
 
-def _in_body(location: tuple[str | int, ...], sent: JsonValue | None, *, missing: bool) -> tuple[str | int, ...]:
+def _in_body(location: tuple[str | int, ...], sent: object, *, missing: bool) -> tuple[str | int, ...]:
     """pydantic's `location` of an error in the body `sent`, as the keys and indices of the body alone: pydantic puts
     a union member's tag, such as `Leg` or `list[int]`, and a validator's, such as `function-after[...]`, between them,
     which no body holds. A key the body lacks is kept where it ends the location of a missing field."""
     if sent is None:
         return location
     found: list[str | int] = []
-    node: JsonValue | None = sent
+    node: object = sent
     for index, part in enumerate(location):
         if (child := _step(node, part)) is not None:
             found.append(part)
@@ -382,9 +439,9 @@ def _in_body(location: tuple[str | int, ...], sent: JsonValue | None, *, missing
     return tuple(found)
 
 
-def _step(node: JsonValue | None, part: str | int) -> tuple[JsonValue] | None:
+def _step(node: object, part: str | int) -> tuple[object] | None:
     """The body's value at `part` of `node`, or None where `node` holds nothing there."""
-    if isinstance(node, dict) and isinstance(part, str):
+    if isinstance(node, _Object) and isinstance(part, str):
         return (node[part],) if part in node else None
     if isinstance(node, list) and isinstance(part, int):
         return (node[part],) if 0 <= part < len(node) else None

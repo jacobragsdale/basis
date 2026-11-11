@@ -30,6 +30,10 @@ class Serve(Model):
     shutdown_s: Annotated[int, Field(ge=1)] = 15
     """Seconds the requests still in flight then have to finish, before they are cancelled. With `drain_s` and the
     last export of spans, which `traces.timeout_s` bounds, the defaults fit in Kubernetes' 30-second grace period."""
+    max_body_bytes: Annotated[int, Field(ge=1)] = 1_048_576
+    """The largest request body a route takes, in bytes: a larger one answers 413 `body-too-large`, refused by its
+    `Content-Length` before any of it is read, or once that many bytes have arrived. A body is read whole and parsed
+    in memory, so this bounds what one request holds."""
 
 
 class Pool(Model):

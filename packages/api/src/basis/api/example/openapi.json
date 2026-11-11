@@ -523,6 +523,16 @@
               }
             }
           },
+          "413": {
+            "description": "body-too-large: The request body is too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "422": {
             "description": "invalid-request: The request is not valid; matured: The bond matures on or before the settlement date; not-issued: The bond is issued after the settlement date",
             "content": {

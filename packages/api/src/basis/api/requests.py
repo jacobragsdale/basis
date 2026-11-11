@@ -2,7 +2,8 @@
 it to every log line logged while the request is served, its handler's included, as basis-core's logs add the ids of
 the trace and of the span each line is logged in. It returns the
 id as `X-Request-Id` and the server span as `traceparent`, logs one line when the request ends, and turns an exception
-nothing expected into a 500 problem, logged once, with its traceback. FastAPI's telemetry, around it, has already read
+nothing expected into a 500 problem, logged once, with its traceback. A caller that leaves before it has sent its body is
+logged as that, at INFO, and answered nothing. FastAPI's telemetry, around it, has already read
 the caller's `traceparent` and started the server span, which is the current span here.
 
 A health check makes no span, and logs only when it fails, at INFO, since one fails on purpose during a shutdown: the
@@ -15,6 +16,7 @@ from uuid import uuid7
 
 from opentelemetry import trace
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+from starlette.requests import ClientDisconnect
 from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -59,6 +61,9 @@ class Requests:
         with logs.fields(request_id=str(request_id)):
             try:
                 await self.app(scope, receive, respond)
+            except ClientDisconnect:  # the caller's doing, not a defect, and no one is left to answer
+                log.info("%s %s: the caller left before sending its body", scope["method"], scope["path"], extra=_summary(scope, status, started))
+                return
             except Exception as error:
                 log.exception("%s %s failed", scope["method"], scope["path"], extra=_summary(scope, HTTPStatus.INTERNAL_SERVER_ERROR if status is None else status, started))
                 span.record_exception(error)  # FastAPI's telemetry, outside, sees only the 500

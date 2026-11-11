@@ -35,9 +35,9 @@ from starlette.types import Receive, Scope, Send
 
 from basis.api import arrow, deadlines, strict
 from basis.api.dataset import Rows
-from basis.api.errors import DomainError, Error, Problem, ValidationProblem, described
+from basis.api.errors import BodyTooLargeError, DomainError, Error, Problem, ValidationProblem, described
 from basis.api.identity import SignInRequiredError
-from basis.api.service import Route, Service
+from basis.api.service import Route, Service, running
 from basis.core.errors import ServiceError
 
 _INVALID = "invalid-request: The request is not valid"
@@ -114,8 +114,9 @@ class Served(APIRoute):
             reads = declared.reads
             errors = [*strict.path_errors(reads, request.path_params), *strict.query_errors(reads, request.query_params.multi_items())]
             given = request
-            if reads.body is not None and (raw := await request.body()):
-                value, wrong = strict.body(reads.body, raw, request.headers.get("content-type"))
+            if reads.body is not None and (raw := await _body(request, running(request).settings.serve.max_body_bytes)):
+                kind = request.headers.get("content-type")
+                value, wrong = await asyncio.to_thread(strict.body, reads.body, raw, kind) if len(raw) > OFF_THE_LOOP else strict.body(reads.body, raw, kind)
                 errors.extend(wrong)
                 given = _Read(request, raw, value)
             elif reads.body is None and await _sent_a_body(request):
@@ -214,6 +215,31 @@ def _answering_table(declared: Route, rows: Rows) -> Callable[..., object]:
         return answer(handler(**values))
 
     return answer_sync
+
+
+OFF_THE_LOOP = 64 * 1024
+"""The size of body, in bytes, above which it is parsed and validated in a thread, so that other requests are served
+meanwhile: about a millisecond's work, below which a thread costs more than it saves."""
+
+
+async def _body(request: Request, limit: int) -> bytes:
+    """The request's body, refused once it is larger than `limit`: at once by its `Content-Length`, or when that many
+    bytes have arrived, so no more than that is ever held."""
+    length = request.headers.get("content-length", "")
+    if length.isdigit() and int(length) > limit:
+        raise _too_large(limit)
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > limit:
+            raise _too_large(limit)
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _too_large(limit: int) -> BodyTooLargeError:
+    return BodyTooLargeError(f"The body is over {limit} bytes, the most this API takes: send a smaller one")
 
 
 async def _sent_a_body(request: Request) -> bool:

@@ -76,7 +76,7 @@ from starlette.routing import Route as StarletteRoute
 from basis.api import strict, tables
 from basis.api.compute import Compute, ComputeFunction
 from basis.api.dataset import Rows, rows
-from basis.api.errors import Answerable, DeclarationError, DomainError, Error, NotReadyError
+from basis.api.errors import Answerable, BodyTooLargeError, DeclarationError, DomainError, Error, NotReadyError
 from basis.api.identity import GivenUser, SignInRequiredError, User, annotation_refusal
 from basis.api.resources import Cache, CacheResource, Client, Clock, ClockResource, DatabaseResource, HttpResource, Ids, IdsResource, Opened, Reader, Resource, Session, Writer, check_outboxes
 from basis.api.settings import Settings
@@ -90,10 +90,10 @@ RESERVED = ("/health", "/docs", "/redoc", "/openapi.json")
 NAME = re.compile(r"[a-z][a-z0-9-]{0,62}")
 _PARAMETER = re.compile(r"\{[^}]*\}")
 _REFERENCE = re.compile(r"[A-Za-z_][\w.]*:[A-Za-z_]\w*")
-BASIS_ERRORS: tuple[Answerable, ...] = (*KINDS, NotReadyError)
+BASIS_ERRORS: tuple[Answerable, ...] = (*KINDS, NotReadyError, BodyTooLargeError)
 """The errors basis raises itself, which a route never declares: `Route.answers` adds each where the route can meet it:
-every kind another service's calls can raise, those a database's statements can (`DATABASE_KINDS`), and a cache's
-read's or a compute call's `Timeout`."""
+every kind another service's calls can raise, those a database's statements can (`DATABASE_KINDS`), a cache's read's
+or a compute call's `Timeout`, and `BodyTooLargeError` where it takes a body."""
 
 type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
 _RESOURCES = (DatabaseResource, HttpResource, CacheResource, ClockResource, IdsResource)
@@ -196,8 +196,8 @@ class Route:
                 raise DeclarationError(msg)
         object.__setattr__(self, "asks", asks)
         object.__setattr__(self, "writes", _written(self, asks))
-        object.__setattr__(self, "answers", (*self.errors, *_met(asks)))
         object.__setattr__(self, "reads", strict.shape(self.path, handler, self.name))
+        object.__setattr__(self, "answers", (*self.errors, *_met(asks), *((BodyTooLargeError,) if self.reads.body is not None else ())))
 
     @property
     def shape(self) -> tuple[Method, str]:
@@ -411,7 +411,8 @@ class Runtime:
     """The database each handler that writes one writes, by the handler."""
 
 
-def _runtime(request: Request) -> Runtime:
+def running(request: Request) -> Runtime:
+    """The started app's `Runtime`, which serves `request`."""
     state = request.scope.get("state")
     runtime = state.get(STATE) if isinstance(state, dict) else None
     if not isinstance(runtime, Runtime):
@@ -425,7 +426,7 @@ class _Given:
     kind: type[Settings]
 
     async def __call__(self, request: Request) -> Settings:
-        runtime = _runtime(request)
+        runtime = running(request)
         if not isinstance(runtime.settings, self.kind):
             msg = f"the app's settings are {type(runtime.settings).__qualname__}, not {self.kind.__qualname__}"
             raise TypeError(msg)
@@ -437,7 +438,7 @@ class _GivenResource:
     resource: HttpResource | CacheResource[object] | ClockResource | IdsResource
 
     async def __call__(self, request: Request) -> object:
-        return _runtime(request).resources.handle(self.resource)
+        return running(request).resources.handle(self.resource)
 
 
 @dataclass(frozen=True)
@@ -445,7 +446,7 @@ class _GivenCompute:
     declared: ComputeFunction[..., object]
 
     async def __call__(self, request: Request) -> object:
-        return _runtime(request).resources.compute(self.declared)
+        return running(request).resources.compute(self.declared)
 
 
 @dataclass(frozen=True)
@@ -457,7 +458,7 @@ class _GivenDatabase:
     resource: DatabaseResource
 
     async def __call__(self, request: Request) -> AsyncIterator[Session]:
-        runtime = _runtime(request)
+        runtime = running(request)
         route = request.scope.get("route")
         writes = isinstance(route, StarletteRoute) and runtime.writes.get(route.endpoint) == self.resource
         session = runtime.resources.session(self.resource, writes=writes)

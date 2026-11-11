@@ -265,6 +265,13 @@ class NotReadyError(Error):
     title = "The service is not ready"
 
 
+class BodyTooLargeError(Error):
+    """A request body over the settings' `serve.max_body_bytes`, which every route that takes a body may answer."""
+
+    status = HTTPStatus.REQUEST_ENTITY_TOO_LARGE
+    title = "The request body is too large"
+
+
 class UiNotBuiltError(Error):
     status = HTTPStatus.SERVICE_UNAVAILABLE
     title = "The UI is not built"
