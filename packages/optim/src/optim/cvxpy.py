@@ -11,10 +11,15 @@ constraint's size: a solver proves its answer for the problem as it read it, and
 1e-9, such as a unit's weight in a portfolio of a billion, so a constraint written in weights can vanish. One that
 stopped at its time limit, or breaks a constraint, keeps its trades, for the snapshot, and is rejected.
 
-To read another solver's status exactly, add a reader to `_READERS`; any other solver is read from cvxpy's status."""
+To read another solver's status exactly, add a reader to `_READERS`; any other solver is read from cvxpy's status.
+
+HiGHS 1.16 prints its banner on stdout, from C, as a process makes its first solver, ahead of the JSON a caller reads
+there; importing this module makes that first solver with stdout pointed at stderr."""
 
 import logging
 import math
+import os
+import sys
 from collections import Counter
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
@@ -34,6 +39,21 @@ log = logging.getLogger(__name__)
 _FEASIBLE = 1e-6  # a constraint holds at the solution within this much of its size, or of 1 where it is smaller
 _NOISE = 1e-6  # a trade smaller than this, in the holdings' units, is solver noise: no trade
 _problems: ContextVar[list[cp.Problem] | None] = ContextVar("_problems", default=None)  # see `captured`
+
+
+def _banner_to_stderr() -> None:
+    """Make the process's first HiGHS solver, whose banner HiGHS prints once, with file descriptor 1 on stderr's."""
+    sys.stdout.flush()
+    saved = os.dup(1)
+    try:
+        os.dup2(2, 1)
+        highspy.Highs()
+    finally:
+        os.dup2(saved, 1)
+        os.close(saved)
+
+
+_banner_to_stderr()
 
 
 class SolveSettings(Params):

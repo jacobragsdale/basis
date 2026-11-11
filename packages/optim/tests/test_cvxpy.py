@@ -1,6 +1,9 @@
 """How `optim.cvxpy` solves a model's problem and reads it back: trades by security, whether it solved, and the solver's
 own account of why it stopped."""
 
+import subprocess
+import sys
+
 import cvxpy as cp
 import numpy as np
 import pytest
@@ -127,3 +130,14 @@ def test_trades_for_one_security_twice_are_refused_rather_than_one_dropped() -> 
 
     with pytest.raises(ValueError, match=r"securities names \['A'\] more than once"):
         solve(problem, SolveSettings(), securities=["A", "A"], buy=1000 * buy, sell=sell)
+
+
+def test_a_solve_prints_nothing_on_stdout_where_basis_prints_its_results() -> None:
+    """HiGHS 1.16 prints its banner on stdout, from C, as the process makes its first solver: ahead of the JSON a
+    caller reads, which no `redirect_stdout` catches."""
+    script = "import cvxpy as cp, highspy, optim.cvxpy; highspy.Highs(); x = cp.Variable(); cp.Problem(cp.Minimize(x), [x >= 1]).solve(solver='HIGHS')"
+
+    ran = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)  # noqa: S603 -- this interpreter
+
+    assert ran.stdout == ""
+    assert "HiGHS" in ran.stderr
