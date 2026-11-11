@@ -52,6 +52,11 @@ entry per row of the universe, and a param for its limit. This one caps how many
        return [buy <= cp.multiply(value / universe["unit_value"].to_numpy(dtype=float), chosen), cp.sum(chosen) <= count]
    ```
 
+   Write a limit on value in the portfolio's currency, as the example's caps are: `unit @ (held + buy - sell) <= cap *
+   value`, never `(unit / value) @ (held + buy - sell) <= cap`. A unit's weight in a portfolio of a billion is 1e-9,
+   a coefficient HiGHS drops as noise, so a cap written in weights caps nothing there, and `optim.cvxpy` rejects the
+   answer as `not solved: violated`.
+
 2. Add its param to `Params` in `model.py`, with a docstring and a default, and to `params/default.json`:
 
    ```python
@@ -187,7 +192,7 @@ To confirm it worked, run `uv run pytest`, then run the model on its fixture, wi
 `main.py`, before and after the change, and compare the trades. Name the constraint, in business terms, under
 "Constraints" in the model's `README.md`, and a new dataset under "Data".
 
-A constraint needs no second check after the solve. The solver proved its decision meets every constraint before the
-core rounds it, and the core rejects a decision that rounding moves by more than a millionth of the portfolio's value,
+A constraint needs no second check after the solve. `optim.cvxpy` checks the solver's answer against every constraint
+at the values it returned, rejecting one that breaks any as `not solved: violated`, before the core rounds it, and the core rejects a decision that rounding moves by more than a millionth of the portfolio's value,
 so what the solver proved still holds. A portfolio whose constraints cannot all be met is rejected as `not solved:
 infeasible`. For the objective, see [how to change the objective](change-the-objective.md).

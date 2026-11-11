@@ -185,7 +185,7 @@ A quantity that is not a finite number is refused when the decision is made. `So
 |---|---|
 | `solver` | The solver's name. |
 | `status` | The solver's own status, for diagnosis. |
-| `stop` | `optimal` (proved optimal within the gap asked), `limit` (stopped by a limit, usually the time), `imprecise`, `infeasible`, `unbounded` or `failed`. |
+| `stop` | `optimal` (proved optimal within the gap asked), `limit` (stopped by a limit, usually the time), `imprecise`, `violated` (the answer breaks a constraint at the values returned), `infeasible`, `unbounded` or `failed`. |
 | `gap` | For an integer problem with a solution: the relative gap the solver reports. |
 | `nodes` | For an integer problem: branch-and-bound nodes explored. |
 | `iterations`, `seconds` | Iterations, and time in the solver itself. |
@@ -205,8 +205,9 @@ A quantity that is not a finite number is refused when the decision is made. `So
 `warm_start=False`, then reads it. `read(problem, *, securities, buy=None, sell=None, metrics=None) -> Decision` reads a
 problem the model solved itself. `buy` and `sell` are cvxpy expressions in the holdings'
 units, one entry per id in `securities`. `metrics` maps names to expressions or numbers, evaluated at the solution. A
-trade smaller than 1e-6 is dropped. The decision is solved only when the solver stopped `optimal`; without a solution
-it has no trades. A problem with no variables is solved with no trades, without calling a solver.
+trade smaller than 1e-6 is dropped. The decision is solved only when the solver stopped `optimal` and the answer meets
+every constraint at the values returned, within 1e-6 of the constraint's size, or of 1 below that, else it stops
+`violated`, keeping its trades for the snapshot; without a solution it has no trades. A problem with no variables is solved with no trades, without calling a solver.
 
 ## Rounding and acceptance
 

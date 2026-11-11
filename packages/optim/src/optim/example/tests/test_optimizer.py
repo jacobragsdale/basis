@@ -55,3 +55,14 @@ def test_a_cap_leaves_the_portfolio_a_holding_it_may_not_sell() -> None:
     assert decision.solved
     assert decision.buy == {}
     assert decision.sell == {}
+
+
+def test_a_cap_holds_in_a_portfolio_of_a_billion() -> None:
+    """A unit of a bond is a billionth of the portfolio's value, a weight a solver drops as noise: the caps are in
+    currency, so they still hold."""
+    found = portfolio({"security_id": "A"}, {"security_id": "B", "expected_return": 0.04}, cash=1_100_000_000.0)
+
+    decision = decide(found, max_bond_weight=0.1, max_turnover=0.5)
+
+    assert decision.solved
+    assert decision.buy == {"A": pytest.approx(110_000_000.0), "B": pytest.approx(110_000_000.0)}

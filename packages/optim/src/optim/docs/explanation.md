@@ -250,8 +250,11 @@ several or none. Instead, `optim.cvxpy` standardizes solving. `solve` passes the
 solver's own option names, and `warm_start=False`, since cvxpy's default warm start made HiGHS re-solves about six times
 slower. `read` takes a problem the model solved itself. Both read the solver's own status, because cvxpy's loses what
 acceptance needs: it reports COPT stopped by its time limit as `optimal_inaccurate` with a solution and
-`infeasible_inaccurate` without one. A decision is solved only when the solver proved it optimal within the gap asked;
-one that stopped at its time limit keeps its trades, for the snapshot, and is rejected.
+`infeasible_inaccurate` without one. A decision is solved only when the solver proved it optimal within the gap asked,
+and its answer meets every constraint at the values returned, within a millionth of the constraint's size: a solver
+proves its answer for the problem as it read it, and HiGHS drops a matrix entry at or below 1e-9, such as a unit's
+weight in a portfolio of a billion. One that stopped at its time limit, or breaks a constraint, keeps its trades, for
+the snapshot, and is rejected.
 
 ## Portfolios that compete for supply
 

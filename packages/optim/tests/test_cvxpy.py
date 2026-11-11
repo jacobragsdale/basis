@@ -86,3 +86,29 @@ def test_copt_solves_a_quadratic_objective_with_integer_variables() -> None:
     assert (decision.solver.solver, decision.solver.stop) == ("COPT", "optimal")
     assert decision.solver.gap is not None
     assert decision.buy == {"A": pytest.approx(3.0), "B": pytest.approx(1.0)}  # near-integers, as solvers return them
+
+
+def test_an_answer_that_breaks_a_constraint_is_not_solved() -> None:
+    """HiGHS drops a matrix entry at or below 1e-9, so a cap written as a weight of a $10bn portfolio, a coefficient of
+    1e-10 a unit, caps nothing: it reports the problem optimal with all of it in A. The answer is checked against every
+    constraint at the values returned."""
+    buy = cp.Variable(2, nonneg=True)
+    problem = cp.Problem(cp.Maximize(np.array([0.05, 0.03]) @ buy), [cp.sum(buy) <= 1e10, buy / 1e10 <= 0.1])
+
+    decision = solve(problem, SolveSettings(), securities=SECURITIES, buy=buy)
+
+    assert not decision.solved
+    assert decision.buy == {"A": pytest.approx(1e10)}  # kept, for the snapshot
+    assert decision.solver is not None
+    assert decision.solver.stop == "violated"
+
+
+def test_an_answer_within_the_solvers_tolerance_of_a_large_constraint_is_solved() -> None:
+    """A cap in currency, on a $10bn portfolio: the solver's tolerance is relative to the constraint's size."""
+    buy = cp.Variable(2, nonneg=True)
+    problem = cp.Problem(cp.Maximize(np.array([0.05, 0.03]) @ buy), [cp.sum(buy) <= 1e10, buy <= 0.1 * 1e10, 1e10 - cp.sum(buy) >= 0])
+
+    decision = solve(problem, SolveSettings(), securities=SECURITIES, buy=buy)
+
+    assert decision.solved
+    assert decision.buy == {"A": pytest.approx(1e9), "B": pytest.approx(1e9)}

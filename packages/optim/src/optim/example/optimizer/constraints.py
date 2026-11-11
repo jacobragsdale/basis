@@ -1,5 +1,10 @@
 """The model's constraints, in cvxpy, on the `buy` and `sell` that `problem.build` makes, one function each: the sizes
-trades come in, cash, turnover, and caps on weights. Each returns a list, which `build` adds to the problem."""
+trades come in, cash, turnover, and caps on weights. Each returns a list, which `build` adds to the problem.
+
+Each is written in the portfolio's currency, its limit a weight times the portfolio's value, never as a weight: a
+unit's weight in a portfolio of a billion is 1e-9, a coefficient HiGHS drops as noise, and a cap written so caps
+nothing. `optim.cvxpy` rejects an answer that breaks a constraint, so such a cap rejects the portfolio rather than
+trading it."""
 
 from collections.abc import Mapping
 
@@ -47,7 +52,7 @@ def cash(portfolio: model.Portfolio, buy: cp.Variable, sell: cp.Variable) -> lis
 
 def turnover(universe: pd.DataFrame, buy: cp.Variable, sell: cp.Variable, cap: float, *, value: float) -> list[cp.Constraint]:
     """What it buys and sells together at most `cap` of the portfolio's value."""
-    return [(universe["unit_value"].to_numpy(dtype=float) / value) @ (buy + sell) <= cap]
+    return [universe["unit_value"].to_numpy(dtype=float) @ (buy + sell) <= cap * value]
 
 
 def max_weight(universe: pd.DataFrame, buy: cp.Variable, sell: cp.Variable, per: str, cap: float | Mapping[str, float], *, value: float) -> list[cp.Constraint]:
@@ -60,5 +65,5 @@ def max_weight(universe: pd.DataFrame, buy: cp.Variable, sell: cp.Variable, per:
         return []
     member = groups[caps.index].to_numpy(dtype=float).T
     unit, held = (universe[column].to_numpy(dtype=float) for column in ("unit_value", "held"))
-    kept = np.where(universe["sellable"].to_numpy(dtype=bool), 0.0, unit * held / value)
-    return [sp.csr_array(member) @ cp.multiply(unit / value, held + buy - sell) <= np.maximum(caps.to_numpy(), member @ kept)]
+    kept = np.where(universe["sellable"].to_numpy(dtype=bool), 0.0, unit * held)
+    return [sp.csr_array(member) @ cp.multiply(unit, held + buy - sell) <= np.maximum(caps.to_numpy() * value, member @ kept)]

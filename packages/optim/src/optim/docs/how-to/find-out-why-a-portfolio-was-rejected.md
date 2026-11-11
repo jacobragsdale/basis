@@ -92,6 +92,7 @@ To find out why a portfolio was rejected:
 |---|---|
 | `not solved: infeasible` | No trades meet every constraint: two that contradict, such as a turnover cap smaller than the sale a weight cap forces, or a control that forbids the sale a cap needs. |
 | `not solved: limit` | The solve stopped at its time limit, `solve.time_limit_s` in the params, before proving its answer optimal. Its trades are in the snapshot, but may not trade. |
+| `not solved: violated` | The solver's answer breaks a constraint of the problem at the values it returned, which the run's log names: usually a constraint written in weights, whose coefficients are too small for the solver in a large portfolio. Write it in currency (see [how to add a constraint](add-a-constraint.md)). |
 | `not solved: imprecise`, `unbounded` or `failed` | The solver doubts its answer, or found the problem unbounded, or failed: usually a constraint or objective term built wrong. |
 | `not solved: the model says so` | The model's `decide` returned a decision with `solved=False`. |
 | `KeyError: 'matures', at models/income/rules/maturity.py:14 in max_years` | A hook raised: the error, and the last line of the model's own code it passed through. The run's log holds its whole traceback. |

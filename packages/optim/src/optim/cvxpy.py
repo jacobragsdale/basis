@@ -6,10 +6,14 @@ never solves a model's problem itself.
 cvxpy's default warm start made HiGHS re-solves about six times slower. `read` reads the solver's own status, because
 cvxpy's loses what acceptance needs: it reports COPT stopped by its time limit as `optimal_inaccurate` with a solution
 and `infeasible_inaccurate` without one. A decision is solved only when the solver proved its answer optimal within the
-gap asked; one that stopped at its time limit keeps its trades, for the snapshot, and is rejected.
+gap asked, and the answer meets every constraint of the problem at the values it returned, within a millionth of the
+constraint's size: a solver proves its answer for the problem as it read it, and HiGHS drops a matrix entry at or below
+1e-9, such as a unit's weight in a portfolio of a billion, so a constraint written in weights can vanish. One that
+stopped at its time limit, or breaks a constraint, keeps its trades, for the snapshot, and is rejected.
 
 To read another solver's status exactly, add a reader to `_READERS`; any other solver is read from cvxpy's status."""
 
+import logging
 import math
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
@@ -19,10 +23,14 @@ from typing import Literal
 import cvxpy as cp
 import highspy
 import numpy as np
+from cvxpy.atoms.affine.add_expr import AddExpression
+from cvxpy.atoms.affine.unary_operators import NegExpression
 from pydantic import Field
 
 from optim.contract import Decision, Params, SolverStats, Stop
 
+log = logging.getLogger(__name__)
+_FEASIBLE = 1e-6  # a constraint holds at the solution within this much of its size, or of 1 where it is smaller
 _NOISE = 1e-6  # a trade smaller than this, in the holdings' units, is solver noise: no trade
 _problems: ContextVar[list[cp.Problem] | None] = ContextVar("_problems", default=None)  # see `captured`
 
@@ -77,6 +85,9 @@ def read(
     solver = SolverStats(solver=stats.solver_name, status=str(problem.status), stop=stop, gap=gap, nodes=nodes, iterations=stats.num_iters, seconds=stats.solve_time)
     if not has_solution:
         return Decision(solved=False, solver=solver)
+    if (broken := _broken(problem)) is not None:
+        log.warning("the solver's answer breaks a constraint of the problem: write it in larger units, such as currency rather than weights", extra={"constraint": broken})
+        stop, solver = "violated", solver.model_copy(update={"stop": "violated"})
     objective = float(problem.value) if problem.value is not None and math.isfinite(problem.value) else None
     return Decision(
         buy=_quantities(buy, securities),
@@ -97,6 +108,29 @@ def captured() -> Generator[list[cp.Problem]]:
         yield problems
     finally:
         _problems.reset(token)
+
+
+def _broken(problem: cp.Problem) -> str | None:
+    """The first constraint the problem's values break by more than `_FEASIBLE` of its size, in a few words; None where
+    every one holds. A side's size is that of the terms it adds up, so a sum that nets to little, as cash after trading
+    may, is held to the tolerance of what it sums."""
+    for index, constraint in enumerate(problem.constraints):
+        violation = np.asarray(constraint.violation(), dtype=float)
+        size = np.zeros(violation.shape)
+        for side in constraint.args:
+            size = np.maximum(size, _size(side))
+        if np.any(over := violation > _FEASIBLE * np.maximum(size, 1.0)):
+            return f"constraint {index}, {str(constraint)[:120]}, by {float(np.max(np.where(over, violation, 0.0))):.3g}"
+    return None
+
+
+def _size(expression: cp.Expression) -> np.ndarray:
+    """The magnitude of the terms `expression` adds up, at the problem's values, elementwise or one for every element."""
+    if isinstance(expression, AddExpression):
+        return sum((_size(term) for term in expression.args), start=np.zeros(()))
+    if isinstance(expression, NegExpression):
+        return _size(expression.args[0])
+    return np.abs(np.asarray(expression.value, dtype=float))
 
 
 def _quantities(expression: cp.Expression | None, securities: Sequence[str]) -> dict[str, float]:

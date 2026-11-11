@@ -153,7 +153,7 @@ class DecisionRow(Row):
     solver_status: str | None
     """The solver's own status, such as cvxpy's `optimal`."""
     stop: str | None
-    """`optimal`, `limit`, `imprecise`, `infeasible`, `unbounded` or `failed`."""
+    """`optimal`, `limit`, `imprecise`, `violated`, `infeasible`, `unbounded` or `failed`."""
     gap: float | None
     nodes: int | None
     iterations: int | None

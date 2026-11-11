@@ -43,13 +43,16 @@ To add a term:
 2. In `terms`, in `optimizer/problem.py`, add its amount, in the portfolio's currency:
 
    ```python
-   weights = cp.multiply(unit / portfolio.value, held + buy - sell)
+   worth = cp.multiply(unit, held + buy - sell)  # each bond's value after trading
    return {
        "income": (universe["expected_return"].to_numpy(dtype=float) * unit) @ (held + buy - sell),
        "cost": (unit * params.cost_bps / 1e4) @ (buy + sell),
-       "excess": params.soft_cap_penalty * portfolio.value * cp.sum(cp.pos(weights - params.soft_cap)),
+       "excess": params.soft_cap_penalty * cp.sum(cp.pos(worth - params.soft_cap * portfolio.value)),
    }
    ```
+
+   Write it in currency, comparing each bond's value with the weight times the portfolio's value, never as a weight:
+   a unit's weight in a portfolio of a billion is 1e-9, a coefficient HiGHS drops as noise.
 
    A term must keep the problem one the solver solves. The example's problem has integer variables, for trade sizes, and
    HiGHS solves linear and piecewise-linear terms, such as `cp.pos` of a linear expression, alongside them, but not

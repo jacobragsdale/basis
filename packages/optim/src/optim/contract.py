@@ -67,7 +67,7 @@ class Metrics(Model):
     `basis describe` prints them, and a `Decision` takes an instance as its `metrics`."""
 
 
-type Stop = Literal["optimal", "limit", "imprecise", "infeasible", "unbounded", "failed"]
+type Stop = Literal["optimal", "limit", "imprecise", "violated", "infeasible", "unbounded", "failed"]
 
 
 class SolverStats(Model):
@@ -78,7 +78,9 @@ class SolverStats(Model):
     """The solver's own status, for diagnosis."""
     stop: Stop
     """`optimal`: proved optimal within the gap asked. `limit`: stopped by a limit, usually the time limit, before
-    proving it. `imprecise`: the solver doubts its own answer. The rest found nothing to trade on."""
+    proving it. `imprecise`: the solver doubts its own answer. `violated`: its answer breaks a constraint of the problem
+    at the values it returned, as when a solver drops a coefficient too small for it. The rest found nothing to trade
+    on."""
     gap: float | None = None
     """Integer problems with a solution: how far it may be from the best possible, relative, as the solver reports it."""
     nodes: int | None = None
