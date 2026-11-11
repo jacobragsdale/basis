@@ -216,6 +216,7 @@ def deliver(delivery: Delivery, output: str, message: MessageRecord, send: Calla
     docstring says, and what became of it."""
     destination = f"{message.destination}:{message.to}"
     with database.writing() as writer:
+        writer.lock(delivery.job, output)
         if delivery.interval is not None and not delivery.again and (runs := [run for run in writer.overlapping(delivery.job, output, delivery.interval) if run != delivery.run_id]):
             reason = f"runs {', '.join(runs)} sent {output} for an interval that overlaps {delivery.interval}: pass --again to send it again"
             log.warning("not sending %s: %s", output, reason, extra={"output": output})

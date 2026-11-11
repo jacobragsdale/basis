@@ -3,6 +3,8 @@ integration tier, against SQL Server and Oracle (packages/job/tests/integration/
 apply the same, with the same counts and the same refusals, commit only on `commit()`, and leave the same ledger, so a
 test that publishes to the fake sees what production would."""
 
+import threading
+import time
 import uuid
 from collections.abc import Callable, Generator, Mapping
 from dataclasses import dataclass, field
@@ -82,6 +84,11 @@ class Contract:
         return Table(f"basis_contract_{self.suffix}")
 
     @property
+    def keys(self) -> Table:
+        """A table whose every column is its key."""
+        return Table(f"basis_keys_{self.suffix}", columns=COLUMNS[:1])
+
+    @property
     def ledger(self) -> str:
         return f"basis_ledger_{self.suffix}"
 
@@ -123,6 +130,7 @@ def contract(request: pytest.FixtureRequest) -> Generator[Contract]:
     if found.dialect in {"fake", "fake-oracle"}:
         found.fake = fakes.Database(NAME, dialect="oracle" if found.dialect == "fake-oracle" else "mssql")
         found.fake.create(found.target)
+        found.fake.create(found.keys)
         yield found
         return
     databases = ScratchDatabases()
@@ -159,9 +167,9 @@ def contract(request: pytest.FixtureRequest) -> Generator[Contract]:
             connection.close()
 
     found.execute = execute
-    execute(ddl.create_table(found.target, dialect), ddl.ledger(found.ledger, dialect))
+    execute(ddl.create_table(found.target, dialect), ddl.create_table(found.keys, dialect), ddl.ledger(found.ledger, dialect))
     yield found
-    for table in (found.target.table, found.ledger):
+    for table in (found.target.table, found.keys.table, *ddl.ledger_tables(found.ledger, dialect)):
         execute(f"DROP TABLE {table}")
 
 
@@ -291,3 +299,61 @@ def test_a_runs_second_ledger_row_for_one_output_is_a_conflict(contract: Contrac
         writer.record(entry(R1))
         with pytest.raises(Conflict):
             writer.record(entry(R1))
+
+
+def test_a_ledger_with_no_interval_given_says_which_runs_published_the_output_at_all(contract: Contract) -> None:
+    with contract.database().writing() as writer:
+        writer.record(entry(R1, interval=None))
+        writer.record(entry(R2))
+        writer.commit()
+    with contract.database().writing() as writer:
+        assert writer.overlapping("prices", "prices", None) == [R1, R2]
+        assert writer.overlapping("prices", "other", None) == []
+
+
+def test_an_upsert_of_rows_whose_every_column_is_the_key_inserts_the_new_keys_and_counts_every_row(contract: Contract) -> None:
+    keys = contract.keys
+    rows = lambda *ids: pd.DataFrame({"security_id": pd.Series(ids, dtype=frames.dtype(COLUMNS[0]))})  # noqa: E731 -- the one column's frame
+    with contract.database().writing() as writer:
+        spec = writer.describe(keys.table)
+        assert spec is not None
+        assert writer.apply(keys, Changes(upsert=rows("A")), spec) == Counts(upserted=1)
+        writer.commit()
+    with contract.database().writing() as writer:
+        spec = writer.describe(keys.table)
+        assert spec is not None
+        assert writer.apply(keys, Changes(upsert=rows("A", "B")), spec) == Counts(upserted=2)
+        writer.commit()
+
+
+def test_two_publishes_of_one_output_take_turns_so_neither_writes_beside_the_other(contract: Contract) -> None:
+    """Each deletes the interval's rows and inserts its own. Without the output's lock, the second deletes before the
+    first has inserted, and both sets of rows remain; with it, the second waits for the first to commit, and replaces
+    its rows."""
+    within = Range("priced_at", datetime(2026, 11, 5, 5, tzinfo=UTC), datetime(2026, 11, 6, 5, tzinfo=UTC))
+    at = datetime(2026, 11, 5, 15, tzinfo=UTC)
+    locked, failures = threading.Barrier(2, timeout=30), list[BaseException]()
+
+    def publish(first: bool, security_id: str) -> None:  # noqa: FBT001 -- which of the two it is
+        try:
+            with contract.database().writing() as writer:
+                if not first:
+                    locked.wait()  # the first holds the lock
+                writer.lock("prices", "prices")
+                if first:
+                    locked.wait()
+                    time.sleep(0.5)  # the second asks for the lock meanwhile
+                spec = writer.describe(contract.target.table)
+                assert spec is not None
+                writer.apply(contract.target, Changes(delete=Delete(within=within), insert=frame(priced(security_id, 1.0, at=at))), spec)
+                writer.commit()
+        except BaseException as error:  # noqa: BLE001 -- the thread's failure, which the test raises
+            failures.append(error)
+
+    threads = [threading.Thread(target=publish, args=(True, "A")), threading.Thread(target=publish, args=(False, "B"))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+    assert failures == []
+    assert [row[0] for row in contract.rows()] == ["B"]

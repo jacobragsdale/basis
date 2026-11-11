@@ -57,7 +57,9 @@ run that fails between two commits is `partial`. A run saves itself as `publishi
 stopped between two commits, as a killed process is, says so too. The ledgers say which databases have the run, and
 `basis resume` writes the rest from the snapshot: the same rows, not a fresh extract, so the databases end up as if one
 transaction had written them. Before it loads anything, a run that publishes checks that every ledger it writes
-exists, so a missing one stops it before any database commits.
+exists, so a missing one stops it before any database commits. Each publish of an output holds that output's lock
+until it commits, an application lock on SQL Server and a row of the ledger's lock table on Oracle, so two runs of one
+output take turns, and neither deletes or inserts beside the other.
 
 ## Exact values
 

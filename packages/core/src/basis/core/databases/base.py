@@ -94,9 +94,15 @@ class Writer(Reader, Protocol):
         a run stopped after its commit reports what that commit wrote."""
         ...
 
-    def overlapping(self, job: str, output: str, interval: Interval) -> list[str]:
-        """The runs the ledger holds of `job`'s `output` for an interval that overlaps `interval`, locked until the
-        transaction ends, so two runs of one interval never both insert."""
+    def lock(self, job: str, output: str) -> None:
+        """Hold `job`'s `output`'s lock until the transaction ends: every publish of an output takes it before it reads
+        the ledger or writes, so two runs of one output take turns, and neither deletes or inserts beside the other.
+        A second writer waits, within the database's timeout."""
+        ...
+
+    def overlapping(self, job: str, output: str, interval: Interval | None) -> list[str]:
+        """The runs the ledger holds of `job`'s `output` for an interval that overlaps `interval`, or, with no interval,
+        every run of it. The caller holds the output's `lock`, so no other run of it records one meanwhile."""
         ...
 
     def apply(self, target: Target, changes: Changes, spec: TableSpec) -> Counts: ...

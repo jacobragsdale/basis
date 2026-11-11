@@ -258,3 +258,24 @@ def test_a_destination_that_cannot_be_reached_in_the_preflight_is_a_failed_run_w
     assert result.record.error is not None
     assert result.record.error.startswith("Unavailable: database warehouse could not be reached")
     assert result.snapshot is not None
+
+
+def test_an_append_in_a_run_with_no_interval_publishes_once_unless_told_again(tmp_path: Path) -> None:
+    warehouse = database("warehouse", (TABLE, None))
+    job = price_job(etl.Append(), key=None)
+    folder = tmp_path / "data"
+    folder.mkdir()
+    TODAY.to_parquet(folder / "prices.parquet", index=False)
+    (tmp_path / "params.json").write_text("{}", encoding="utf-8")
+
+    def plain(*, again: bool = False) -> runs.Result:
+        request = runs.Request(tmp_path / "params.json", None, folder, publish=True, again=again)
+        return runs.run(job, settings("warehouse"), request, snapshot_root=Root.at(tmp_path / "snapshots"), databases={"warehouse": warehouse}.__getitem__)
+
+    assert plain().record.status == "published"
+    refused = plain()
+    assert refused.record.status == "failed"
+    assert "already published it, and this run has no interval to tell theirs apart" in str(refused.record.publishes["warehouse"].error)
+    assert len(contents(warehouse)) == 2
+    assert plain(again=True).record.status == "published"
+    assert len(contents(warehouse)) == 4

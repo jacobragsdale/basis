@@ -32,7 +32,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from basis.core import frames
+from basis.core import ddl, frames
 from basis.core.databases.base import (
     FETCH_ROWS,
     LEDGER_COLUMNS,
@@ -363,25 +363,43 @@ class OracleWriter(OracleReader):
             rows = cursor.fetchall()
         return {str(row[0]): Counts(*(int(str(value)) for value in row[1:])) for row in rows}
 
-    def overlapping(self, job: str, output: str, interval: Interval) -> list[str]:
-        binds = {"job": job, "output": output} | interval.binds()
-        lock = f"LOCK TABLE {self.ledger} IN SHARE ROW EXCLUSIVE MODE"
-        sql = f"SELECT run_id FROM {self.ledger} WHERE job = :job AND output = :output AND interval_start < :interval_end AND interval_end > :interval_start"
+    def lock(self, job: str, output: str) -> None:
+        """The output's row of the lock table beside the ledger (`basis.core.ddl.locks`), inserted the first time and
+        locked `FOR UPDATE` until the transaction ends; it waits as long as the call timeout allows. Two first
+        publishes of an output both insert it: the second waits on the key until the first commits, is refused, and
+        then waits for the row's lock like any other."""
+        table, binds = ddl.locks(self.ledger), {"job": job, "output": output}
+        insert = f"INSERT INTO {table} (job, output) SELECT :job, :output FROM dual WHERE NOT EXISTS (SELECT 1 FROM {table} WHERE job = :job AND output = :output)"
+        select = f"SELECT job FROM {table} WHERE job = :job AND output = :output FOR UPDATE"
         with closing(self.connection.cursor()) as cursor:
-            # Oracle has no range locks: a row lock covers only ledger rows that exist, so a second run of the same new
-            # interval would pass. Locking the table holds every other append to this database until this one commits.
-            with statement(self.database, _KIND, lock):
-                cursor.execute(lock)
-            with statement(self.database, _KIND, sql):
-                cursor.execute(sql, binds)
-                return sorted({str(row[0]) for row in cursor.fetchall()})
+            try:
+                with statement(self.database, _KIND, insert):
+                    cursor.execute(insert, binds)
+            except Conflict:  # another run's first publish inserted it, and committed
+                log.debug("the lock's row was inserted meanwhile", extra={"database": self.database, "output": output})
+            with statement(self.database, _KIND, select):
+                cursor.execute(select, binds)
+                cursor.fetchall()
+
+    def overlapping(self, job: str, output: str, interval: Interval | None) -> list[str]:
+        binds: dict[str, object] = {"job": job, "output": output}
+        sql = f"SELECT run_id FROM {self.ledger} WHERE job = :job AND output = :output"
+        if interval is not None:
+            binds |= interval.binds()
+            sql += " AND interval_start < :interval_end AND interval_end > :interval_start"
+        with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql):
+            cursor.execute(sql, binds)
+            return sorted({str(row[0]).strip() for row in cursor.fetchall()})
 
     def apply(self, target: Target, changes: Changes, spec: TableSpec) -> Counts:
         deleted = upserted = inserted_new = inserted = 0
         if changes.delete is not None:
             deleted = self._delete(target, changes.delete, spec)
         if changes.upsert is not None and len(changes.upsert):
-            upserted = self._merge(target, _bound(target, changes.upsert, spec), update=True)
+            rows = _bound(target, changes.upsert, spec)
+            merged = self._merge(target, rows, update=True)
+            # a MERGE whose every column is the key only inserts: a row the table has is upserted already
+            upserted = rows.num_rows if set(rows.column_names) <= set(target.key or ()) else merged
             check_count(f"the upsert into {target.table}", len(changes.upsert), upserted)
         if changes.insert_new is not None and len(changes.insert_new):
             inserted_new = self._merge(target, _bound(target, changes.insert_new, spec), update=False)

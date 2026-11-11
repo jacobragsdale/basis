@@ -435,7 +435,7 @@ Later, and not yet stepped:
   first;
 - Slack bot apps;
 - recorded HTTP responses, for replay;
-- run locks;
+- run locks (the review's step 7.2: a lock per job and output for every publish);
 - output checks;
 - Azure Key Vault;
 - deleting the rows a lake archive holds from its source database, as an explicit step of its own.

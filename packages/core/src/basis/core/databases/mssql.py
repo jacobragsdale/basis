@@ -518,15 +518,26 @@ class MssqlWriter(MssqlReader):
             rows = cursor.fetchall()
         return {str(row[0]): Counts(*(int(str(value)) for value in row[1:])) for row in rows}
 
-    def overlapping(self, job: str, output: str, interval: Interval) -> list[str]:
-        binds = {"job": job, "output": output} | interval.binds()
-        sql = (
-            f"SELECT DISTINCT run_id FROM {self.ledger} WITH (UPDLOCK, HOLDLOCK)"
-            " WHERE job = %(job)s AND output = %(output)s AND interval_start < %(interval_end)s AND interval_end > %(interval_start)s"
-        )
+    def lock(self, job: str, output: str) -> None:
+        """An application lock, `sp_getapplock`, owned by the transaction, which any login may take; it waits as long
+        as the statement's timeout allows."""
+        sql = "SET NOCOUNT ON; DECLARE @granted int; EXEC @granted = sp_getapplock @Resource = %(resource)s, @LockMode = 'Exclusive', @LockOwner = 'Transaction'; SELECT @granted"
+        with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql):
+            cursor.execute(sql, {"resource": f"basis {self.ledger} {job} {output}"[:255]})
+            row = cursor.fetchone()
+        if row is None or int(str(row[0])) < 0:
+            detail = f"database {self.database} did not grant the lock of {job}'s {output} (sp_getapplock returned {row[0] if row is not None else None})"
+            raise Conflict(detail, resource=self.database)
+
+    def overlapping(self, job: str, output: str, interval: Interval | None) -> list[str]:
+        binds: dict[str, object] = {"job": job, "output": output}
+        sql = f"SELECT DISTINCT run_id FROM {self.ledger} WHERE job = %(job)s AND output = %(output)s"
+        if interval is not None:
+            binds |= interval.binds()
+            sql += " AND interval_start < %(interval_end)s AND interval_end > %(interval_start)s"
         with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql):
             cursor.execute(sql, binds)
-            return sorted(str(row[0]) for row in cursor.fetchall())
+            return sorted(str(row[0]).strip() for row in cursor.fetchall())
 
     def apply(self, target: Target, changes: Changes, spec: TableSpec) -> Counts:
         deleted = upserted = inserted_new = inserted = 0
@@ -613,9 +624,11 @@ class MssqlWriter(MssqlReader):
         key = target.key or ()
         self._stage(_STAGE, target, rows, spec)
         on = " AND ".join(f"t.{name} = s.{name}" for name in key)
-        updated = 0
-        if values := [name for name in rows.column_names if name not in key]:
-            updated = self._execute(f"UPDATE t SET {', '.join(f't.{name} = s.{name}' for name in values)} FROM {target.table} AS t INNER JOIN {_STAGE} AS s ON {on}")
+        if not (values := [name for name in rows.column_names if name not in key]):  # every column is the key: a row the table has is upserted already
+            self._insert_missing(target.table, rows.column_names, on)
+            self._execute(f"DROP TABLE {_STAGE}")
+            return int(rows.num_rows)
+        updated = self._execute(f"UPDATE t SET {', '.join(f't.{name} = s.{name}' for name in values)} FROM {target.table} AS t INNER JOIN {_STAGE} AS s ON {on}")
         inserted = self._insert_missing(target.table, rows.column_names, on)
         self._execute(f"DROP TABLE {_STAGE}")
         check_count(f"the upsert into {target.table}", rows.num_rows, updated + inserted)

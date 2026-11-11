@@ -141,6 +141,7 @@ def archive(archiving: Archiving, output: str, rows: pa.Table, store: Lake, data
     temporary, old = f"{base}/.tmp-{archiving.run_id}", f"{base}/.old-{archiving.run_id}"
     _container(store)
     with database.writing() as writer:
+        writer.lock(archiving.job, output)
         if not archiving.again and (runs := [run for run in writer.overlapping(archiving.job, output, archiving.interval) if run != archiving.run_id]):
             reason = f"runs {', '.join(runs)} archived {output} for an interval that overlaps {archiving.interval}: pass --again to archive it again"
             log.warning("not archiving %s: %s", output, reason, extra={"output": output})

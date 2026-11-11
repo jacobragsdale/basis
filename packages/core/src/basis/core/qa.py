@@ -365,7 +365,10 @@ class _GuardedWriter:
     def recorded(self, run_id: str) -> dict[str, Counts]:
         return self.writer.recorded(run_id)
 
-    def overlapping(self, job: str, output: str, interval: Interval) -> list[str]:
+    def lock(self, job: str, output: str) -> None:
+        self.writer.lock(job, output)
+
+    def overlapping(self, job: str, output: str, interval: Interval | None) -> list[str]:
         return self.writer.overlapping(job, output, interval)
 
     def apply(self, target: Target, changes: Changes, spec: TableSpec) -> Counts:

@@ -38,10 +38,25 @@ _LEDGER: dict[Dialect, list[str]] = {
 
 def ledger(table: str, dialect: Dialect) -> str:
     """The ledger, one table per database a part publishes to: a row per table each run published, in the transaction
-    that wrote it, keyed by run and output, and indexed for the rerun guard's lookup by job, output and interval."""
+    that wrote it, keyed by run and output, and indexed for the rerun guard's lookup by job, output and interval. On
+    Oracle, beside it, a row per output for the publish's lock (`locks`): SQL Server takes an application lock, which
+    needs no table, and Oracle's own, `DBMS_LOCK`, needs a grant a login seldom has."""
     bare = table.rsplit(".", 1)[-1].lower()
     columns = ",\n".join(f"    {column}" for column in _LEDGER[dialect])
-    return f"CREATE TABLE {table} (\n{columns},\n    CONSTRAINT pk_{bare} PRIMARY KEY (run_id, output)\n);\nCREATE INDEX ix_{bare}_interval ON {table} (job, output, interval_start, interval_end);\n"
+    text = f"CREATE TABLE {table} (\n{columns},\n    CONSTRAINT pk_{bare} PRIMARY KEY (run_id, output)\n);\nCREATE INDEX ix_{bare}_interval ON {table} (job, output, interval_start, interval_end);\n"
+    if dialect == "oracle":
+        text += f"CREATE TABLE {locks(table)} (\n    job VARCHAR2(200 CHAR) NOT NULL,\n    output VARCHAR2(128 CHAR) NOT NULL,\n    CONSTRAINT pk_{bare}_locks PRIMARY KEY (job, output)\n);\n"
+    return text
+
+
+def locks(ledger: str) -> str:
+    """The table of Oracle's publish locks beside the ledger `ledger`."""
+    return f"{ledger}_locks"
+
+
+def ledger_tables(ledger: str, dialect: Dialect) -> tuple[str, ...]:
+    """The tables `ledger` prints for the ledger `ledger`, which a publish needs."""
+    return (ledger, locks(ledger)) if dialect == "oracle" else (ledger,)
 
 
 _FIXED: dict[tuple[Kind, Dialect], str] = {

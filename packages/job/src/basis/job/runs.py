@@ -37,6 +37,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Tracer
 from pydantic import ValidationError
 
+from basis.core import ddl as core_ddl
 from basis.core import fakes, folders, frames, lake, logs, mongo, publish, sending, snapshots, traces
 from basis.core import runs as core_runs
 from basis.core.databases import Database
@@ -420,8 +421,9 @@ def _check_ledgers(job: Job, settings: Settings, databases: Callable[[str], Data
         if found is None or found.write is None or (ledger := found.write.ledger) is None:
             continue  # its own reason
         with databases(name).reading() as reader:
-            if reader.describe(ledger) is None:
-                reasons.append(f"database {name!r} has no ledger table {ledger}, which a publish writes in its transaction: `basis ddl --ledger {ledger} --dialect {found.kind}` prints it")
+            if missing := [table for table in core_ddl.ledger_tables(ledger, found.kind) if reader.describe(table) is None]:
+                what = f"ledger table {ledger}" if missing == [ledger] else f"table {' or '.join(missing)} of its ledger"
+                reasons.append(f"database {name!r} has no {what}, which a publish writes in its transaction: `basis ddl --ledger {ledger} --dialect {found.kind}` prints it")
     return reasons
 
 

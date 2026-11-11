@@ -496,14 +496,19 @@ class _DatabaseWriter(_DatabaseReader):
         self._ledger()
         return {entry.output: entry.counts for entry in [*self.database.entries, *self.entries] if entry.run_id == run_id}
 
-    def overlapping(self, job: str, output: str, interval: Interval) -> list[str]:
+    def lock(self, job: str, output: str) -> None:  # noqa: ARG002 -- the Writer protocol's signature; one lock serves every output
         self.database.fail("overlapping")
-        self._ledger()
         if not self.locked:
             self.database._lock.acquire()  # noqa: SLF001 -- the database's own lock, which its writer holds until its block ends
             self.locked = True
-        entries = [*self.database.entries, *self.entries]
-        return sorted({e.run_id for e in entries if (e.job, e.output) == (job, output) and e.interval is not None and e.interval.start < interval.end and interval.start < e.interval.end})
+
+    def overlapping(self, job: str, output: str, interval: Interval | None) -> list[str]:
+        self.database.fail("overlapping")
+        self._ledger()
+        found = {e.run_id: e.interval for e in [*self.database.entries, *self.entries] if (e.job, e.output) == (job, output)}
+        if interval is None:
+            return sorted(found)
+        return sorted(run for run, at in found.items() if at is not None and at.start < interval.end and interval.start < at.end)
 
     def apply(self, target: Target, changes: Changes, spec: TableSpec) -> Counts:  # noqa: ARG002 -- the Writer protocol's signature
         self.database.fail("apply")
@@ -540,13 +545,15 @@ class _DatabaseWriter(_DatabaseReader):
     def _upsert(self, target: Target, held: _Held, rows: list[dict[str, object]]) -> int:
         key = target.key or ()
         values = [name for name in rows[0] if name not in key]
+        if not values:  # every column is the key: a row the table has is upserted already
+            self._insert_new(target, held, rows)
+            return len(rows)
         updated = 0
         for row in rows:
             found = [there for there in held.rows if all(_equal(there.get(name), row[name]) for name in key)]
-            if values:  # SQL Server and Oracle update the rows a key matches only where the row has values beside its key
-                for there in found:
-                    there.update({name: row[name] for name in values})
-                updated += len(found)
+            for there in found:
+                there.update({name: row[name] for name in values})
+            updated += len(found)
         inserted = self._insert_new(target, held, rows)
         check_count(f"the upsert into {target.table}", len(rows), updated + inserted)
         return updated + inserted

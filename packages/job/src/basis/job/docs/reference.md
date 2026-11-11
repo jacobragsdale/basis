@@ -168,7 +168,7 @@ new keys, insert. Each write mode makes them from the frame the transform return
 
 | Mode | Operations | Needs `key` | Rerun leaves the table unchanged |
 |---|---|---|---|
-| `etl.Append()` | insert | no | no: the ledger refuses a second publish of an overlapping interval |
+| `etl.Append()` | insert | no | no: the ledger refuses a second publish of an overlapping interval, or, in a run with no interval, any second publish |
 | `etl.Replace()` | delete every row, insert | no | yes |
 | `etl.ReplaceWhere(interval=COLUMN, matching=(COLUMN, ...))` | delete rows whose `interval` column is in the run's interval and whose `matching` columns equal a row of the frame's, insert | no | yes |
 | `etl.Upsert()` | update rows whose key exists, insert the rest | yes | yes |
@@ -352,7 +352,7 @@ basis's.
 | `basis regress [JOB] (--env ENV \| --snapshots ROOT) [--last N] [--label KEY=VALUE]...` | Replays the last `N` (default 10) published runs of `JOB`, or of every job the repo lists, whose labels include every `--label`, from the environment's run store or `ROOT`; prints each run's job, reasons and differences as JSON: rows added, removed and changed, by column, and each column added, removed or retyped, the rows comparing by the columns both runs hold alike. |
 | `basis describe [JOB]` | Prints the job's params schema, inputs and outputs as JSON; without `JOB`, every job the repo lists, with its module. |
 | `basis ddl JOB --dialect mssql\|oracle` | Prints `CREATE TABLE` for each of the job's tables. |
-| `basis ddl --ledger TABLE --dialect mssql\|oracle` | Prints `CREATE TABLE` and `CREATE INDEX` for the ledger. |
+| `basis ddl --ledger TABLE --dialect mssql\|oracle` | Prints `CREATE TABLE` and `CREATE INDEX` for the ledger, and on Oracle the table of its publishes' locks, `TABLE_locks`, beside it. |
 | `basis new job NAME` | Adds a job to the repo, copied from the example, and lists it in `pyproject.toml`. |
 | `basis sync` | Rewrites the framework files from the installed version (the `Dockerfile`, `azure-pipelines.yml`, `.githooks/pre-commit` and `pre-push`, `.gitattributes`), `AGENTS.md`'s basis and basis-job blocks, `CLAUDE.md`, `.agents/skills/job-*` and their copies in `.claude/skills/`, and adds the rules that refuse `--no-verify` to `.claude/settings.json`, keeping its other keys. It removes what basis wrote that no installed part writes now: the block of a part the repo no longer has, a `job-*` skill the version dropped, a file whose first lines say basis manages it, and what basis-job wrote before 1.5 (its `etl-*` skills and `tests/test_agent_files.py`). A file of the repo's own at one of these paths (one without the marker, a `CLAUDE.md` that holds anything but `@AGENTS.md`, or settings with none of basis's rules) is left alone, with an `ERROR` line; `basis sync --adopt` saves it as `NAME.before-basis`, for you to compare and delete, and writes basis's. It points a clone that names no hooks folder at `.githooks/`, as `basis check` and `basis new` do. |
 | `basis docs [PAGE]` | Lists the docs, as `job/PAGE`, or prints one; `PAGE` alone does where no other part has a page of that name. |

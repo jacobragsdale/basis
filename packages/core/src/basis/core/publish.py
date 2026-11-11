@@ -4,9 +4,10 @@ back; a database that committed stays committed, and `basis resume` writes the o
 same rows, not a fresh extract. The ledger, written in the same transaction as the data, says which databases a run
 committed to, so a resume never writes one twice.
 
-Inside each transaction, before writing, the table is described again and checked, and a table written by a plain
-insert refuses a second publish of an overlapping interval, unless the run says `again`: every other write leaves the
-table as one publish would. The values are checked again only where the table is not the one the run checked them
+Inside each transaction, before writing, each output's lock is taken, so two runs of one output take turns, the table
+is described again and checked, and a table written by a plain insert refuses a second publish of an overlapping
+interval, or of any interval where the run has none, unless the run says `again`: every other write leaves the table
+as one publish would. The values are checked again only where the table is not the one the run checked them
 against (`checked`), so a run's values are checked once."""
 
 import logging
@@ -28,8 +29,8 @@ class PublishRefusedError(RuntimeError):
     pass
 
 
-OVERLAP = "already published an interval that overlaps"
-"""What a database's refusal of a plain insert for an interval its ledger has says, which `--again` overrides."""
+OVERLAP = "already published"
+"""What a database's refusal of a plain insert its ledger has a publish of says, which `--again` overrides."""
 
 
 def refused_overlap(publishes: Mapping[str, PublishRecord]) -> bool:
@@ -84,10 +85,12 @@ def _publish_database(publication: Publication, database: Database, targets: Map
             values = check_values(target, spec, changes[name]) if checked.get(name) != spec else []
             if reasons := check_table(target, spec) + values:
                 raise PublishRefusedError(f"{name}: {target.table} changed since the run checked it:\n" + "\n".join(reasons))
-            interval = publication.interval if not changes[name].rerun_safe and not publication.again else None
-            if interval is not None and (runs := writer.overlapping(publication.job, name, interval)):
+            writer.lock(publication.job, name)
+            guarded = not changes[name].rerun_safe and not publication.again
+            if guarded and (runs := writer.overlapping(publication.job, name, publication.interval)):
+                what = f"an interval that overlaps {publication.interval}" if publication.interval is not None else "it, and this run has no interval to tell theirs apart"
                 msg = (
-                    f"{name} appends, and runs {', '.join(runs)} {OVERLAP} {publication.interval}: where one of them stopped before it finished publishing,"
+                    f"{name} appends, and runs {', '.join(runs)} {OVERLAP} {what}: where one of them stopped before it finished publishing,"
                     f" `basis resume {publication.job} RUN_ID` finishes it; pass --again only to insert its rows a second time"
                 )
                 raise PublishRefusedError(msg)

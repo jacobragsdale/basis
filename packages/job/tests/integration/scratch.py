@@ -14,6 +14,7 @@ import pytest
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from basis.core import ddl as core_ddl
 from basis.core.interval import Interval
 from basis.core.settings import GivenSettings
 from basis.core.storage import Root
@@ -70,6 +71,9 @@ class Scratch:
             connection.close()
 
     def drop(self, *tables: str) -> None:
+        """Drop each table that exists, and on Oracle, beside each ledger, its lock table (`ddl.locks`)."""
+        if self.dialect == "oracle":
+            tables = (*tables, *(core_ddl.locks(table) for table in tables))
         for table in tables:
             mssql = f"IF OBJECT_ID('{table}') IS NOT NULL DROP TABLE {table}"
             oracle = f"BEGIN EXECUTE IMMEDIATE 'DROP TABLE {table} PURGE'; EXCEPTION WHEN OTHERS THEN NULL; END;"
