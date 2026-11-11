@@ -20,6 +20,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from basis.api import fakes
 from basis.core.databases import Statements, open_database
+from basis.core.databases.base import Bind
 from basis.core.databases.failures import failure
 from basis.core.errors import Conflict, Denied, Failed, Rejected, ServiceError, Timeout, Unavailable
 from basis.core.settings import GivenSettings
@@ -223,3 +224,27 @@ def test_a_deadlock_is_a_conflict_from_the_fake_and_the_real_one(contract: Contr
     other.join(timeout=30)
     assert [(type(error), error.resource, error.detail) for error in raised] == [(Conflict, NAME, failure(NAME, Conflict, RuntimeError()).detail)]
     assert time.monotonic() - started < 30
+
+
+@pytest.mark.parametrize("given", ["missing", "extra"])
+def test_binds_that_do_not_match_the_statement_fail_from_the_fake_and_the_real_one(contract: Contract, given: str) -> None:
+    """SQL Server takes a bind its statement does not name, which Oracle refuses: the fake refuses it, as Oracle does,
+    so a test catches it on the fake."""
+    if contract.dialect == "mssql" and given == "extra":
+        pytest.skip("SQL Server's driver ignores a bind its statement does not name")
+    placeholder = ":security" if contract.dialect == "oracle" else "%(security)s"
+    sql = f"SELECT price FROM {contract.table} WHERE security = {placeholder}"
+    if contract.dialect == "fake":
+        contract.fake.answers[sql] = [{"price": 1.0}]
+    binds: dict[str, Bind] = {} if given == "missing" else {"security": "S1", "securty": "S1"}
+    with pytest.raises(Failed) as raised, contract.port().statements(writes=False) as statements:
+        statements.query(sql, binds, timeout_s=10)
+    assert (raised.value.resource, raised.value.detail) == (NAME, failure(NAME, Failed, RuntimeError()).detail)
+
+
+def test_a_statement_takes_its_binds_whichever_way_it_names_them_on_the_fake() -> None:
+    fake = fakes.Database(answers={"SELECT 1 WHERE a = %(a)s": [{"x": 1}], "SELECT 1 FROM dual WHERE a = :a AND b = ':c'": [{"x": 1}]})
+    fake.opened_as(NAME)
+    with fake.statements(writes=False) as statements:
+        assert statements.query("SELECT 1 WHERE a = %(a)s", {"a": 1}, timeout_s=1).num_rows == 1
+        assert statements.query("SELECT 1 FROM dual WHERE a = :a AND b = ':c'", {"a": 1}, timeout_s=1).num_rows == 1

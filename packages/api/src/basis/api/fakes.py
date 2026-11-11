@@ -17,6 +17,7 @@ too, as one that cannot be reached, or refuses the login, does: the app's check 
 the kind's problem as it would the real resource's. Each fake keeps what it fails with in basis-core's
 `fakes.Failures`, and another service's fake makes its client wait no time between attempts (`Http.waits`)."""
 
+import re
 import threading
 from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
@@ -31,7 +32,7 @@ from basis.api.outboxes import Row
 from basis.api.resources import Bind, Resource
 from basis.core.databases.base import Statements
 from basis.core.databases.failures import failure
-from basis.core.errors import DATABASE_KINDS, Denied, ServiceError, Unavailable
+from basis.core.errors import DATABASE_KINDS, Denied, Failed, ServiceError, Unavailable
 from basis.core.fakes import Clock, Failures, Http, Ids
 
 __all__ = [
@@ -62,6 +63,10 @@ OUTBOX_UPDATE: Final = "outbox update"
 """The fake outbox's statements, as `Database.fails(kind, statement=...)` names them: the check at startup, a row's
 insert, the read of the rows due, and a row's compare-and-set."""
 _LOGIN: frozenset[type[ServiceError]] = frozenset({Unavailable, Denied})
+_QUOTED = re.compile(r"'(?:[^']|'')*'")
+"""A string literal in SQL, whose text names no bind."""
+_PYFORMAT = re.compile(r"%\(([A-Za-z_]\w*)\)s")
+_NAMED = re.compile(r"(?<![:\w]):([A-Za-z_]\w*)")
 """What a database that fails every statement fails its logins with too."""
 
 
@@ -85,7 +90,8 @@ class Database:
     Its outbox, where a database declares one, is in memory, and needs no answers: `outbox` holds its rows, which a
     test may start with rows of its own, as `basis relay` finds them. A row a transaction adds is there once the
     transaction commits; a change to a row is there at once, as a compare-and-set, as the databases' own `UPDATE`
-    makes it, and is undone if its transaction rolls back."""
+    makes it, and is undone if its transaction rolls back. A statement whose binds are not the names it binds, as
+    `%(name)s` or `:name`, fails, as Oracle fails one."""
 
     def __init__(self, *, answers: Mapping[str, Answer] | None = None, outbox: Iterable[Row] = ()) -> None:
         self.answers: dict[str, Answer] = dict(answers or {})
@@ -134,6 +140,17 @@ class Database:
         cause = FakedDriverError(f"the test made the fake database fail {what} with {kind.__name__}")
         raise failure(self.name, kind, cause) from cause
 
+    def _bound(self, sql: str, binds: Mapping[str, Bind]) -> None:
+        """Fail a statement whose binds are not the names it binds, `%(name)s` in SQL Server and `:name` in Oracle, as
+        Oracle fails one either way, and SQL Server one that lacks a bind."""
+        unquoted = _QUOTED.sub("''", sql)
+        named = set(_PYFORMAT.findall(unquoted)) | set(_NAMED.findall(unquoted))
+        missing, extra = named - set(binds), set(binds) - named
+        if missing or extra:
+            said = f"no bind for {', '.join(sorted(missing))}" if missing else f"no placeholder for the binds {', '.join(sorted(extra))}"
+            cause = FakedDriverError(f"the statement's binds do not match its placeholders: {said}")
+            raise failure(self.name, Failed, cause) from cause
+
     @property
     def outbox(self) -> list[Row]:
         """The outbox's rows, as committed, in the order they were sent."""
@@ -181,6 +198,7 @@ class Database:
 
     def answer(self, sql: str, binds: Mapping[str, Bind]) -> Rows | int:
         self.check(sql)
+        self._bound(sql, binds)
         with self._lock:
             found = self.answers.get(sql)
         if found is None:

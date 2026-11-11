@@ -2,10 +2,12 @@
 API on one origin (design.md, "One origin").
 
 The folder is found from the folder the app runs in, as it is when the request comes, so a UI built after the app
-started is served. A file the folder holds is served as it is; any other path that names no file, as a client-side
-route such as `/positions/7` does, is the UI's `index.html`, which routes it in the browser. A path under `/api` that no
-route matches is the API's 404, never the UI. A folder not built yet answers 503, saying how to build it, and the
-app's routes go on answering.
+started is served. A file the folder holds is served as it is; any other path that names no file is the UI's
+`index.html`, which routes it in the browser, when the request is a page's, one that accepts `text/html`, as a
+browser's navigation to a client-side route such as `/positions/7` or `/positions/BRK.B` is, and a 404 when it is not,
+as a script's or an image's that the build did not write is. A path under `/api` that no route matches is the API's
+404, never the UI, and a call that is not a page's to a route's path without `/api` is a 404 that says where the routes
+are. A folder not built yet answers 503, saying how to build it, and the app's routes go on answering.
 
 A file is served compressed where the build wrote its compressed copy beside it, `FILE.br` for a request that accepts
 Brotli and `FILE.gz` for one that accepts gzip, with its own type, `Content-Encoding` and `Vary: Accept-Encoding`, and
@@ -16,8 +18,10 @@ Arrow among them, are `app.py`'s."""
 
 import mimetypes
 import os
+import re
+from collections.abc import Sequence
 from http import HTTPStatus
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import override
 
 from starlette.datastructures import Headers
@@ -32,6 +36,7 @@ from basis.api.routes import API
 INDEX = "index.html"
 ASSETS = "assets"
 """The folder of the files whose names the build hashes, which never change under one name."""
+_PARAMETER = re.compile(r"\{[^}]*\}")
 IMMUTABLE = "public, max-age=31536000, immutable"
 REVALIDATE = "no-cache"
 ENCODINGS = (("br", ".br"), ("gzip", ".gz"))
@@ -39,11 +44,13 @@ ENCODINGS = (("br", ".br"), ("gzip", ".gz"))
 
 
 class Folder(StaticFiles):
-    """The UI's folder, `folder`, relative to the folder the app runs in."""
+    """The UI's folder, `folder`, relative to the folder the app runs in, beside the API's routes, which match
+    `routes`, each a path as it is under `/api` with its parameters as patterns."""
 
-    def __init__(self, folder: str) -> None:
+    def __init__(self, folder: str, routes: Sequence[str] = ()) -> None:
         super().__init__(directory=folder, html=True, check_dir=False)
         self.folder = folder
+        self.routes = tuple(re.compile(_PARAMETER.sub("[^/]+", re.escape(path).replace(r"\{", "{").replace(r"\}", "}"))) for path in routes)
 
     @override
     async def check_config(self) -> None:
@@ -59,9 +66,14 @@ class Folder(StaticFiles):
         try:
             return await super().get_response(path, scope)
         except HTTPException as missing:
-            if missing.status_code != HTTPStatus.NOT_FOUND or "." in PurePosixPath(path).name:  # a file the folder lacks stays a 404
+            if missing.status_code != HTTPStatus.NOT_FOUND:
                 raise
-            return await super().get_response(INDEX, scope)
+            if _page(Headers(scope=scope).get("accept", "")):
+                return await super().get_response(INDEX, scope)
+            if any(route.fullmatch(f"/{path}") for route in self.routes):
+                detail = f"the API's routes are under {API}, and this path is one of them: request {API}/{path}"
+                raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail=detail) from None
+            raise  # a file the folder lacks, which no page is
 
     @override
     def file_response(self, full_path: str | os.PathLike[str], stat_result: os.stat_result, scope: Scope, status_code: int = HTTPStatus.OK) -> Response:
@@ -86,6 +98,12 @@ class Folder(StaticFiles):
         if self.is_not_modified(response.headers, request):
             return NotModifiedResponse(response.headers)
         return response
+
+
+def _page(accept: str) -> bool:
+    """Whether a request whose `Accept` is `accept` is a page's, as a browser's navigation is: one that names
+    `text/html`, which no script, style, image or call of a client asks for."""
+    return any(part.partition(";")[0].strip().lower() == "text/html" and "q=0" not in part.replace(" ", "").split(";")[1:] for part in accept.split(","))
 
 
 def _accepted(header: str) -> set[str]:

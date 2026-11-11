@@ -73,6 +73,23 @@ def test_a_deploy_of_another_document_fails_saying_to_deploy_this_commit(repo: P
     assert (reason, fix) == ("the document https://qa.example.com/api serves is not this repo's openapi.json", "deploy this commit, or check out the commit that is deployed")
 
 
+@pytest.mark.parametrize(("path", "reason"), [
+    ("/api/openapi.json", "https://qa.example.com/api/openapi.json answered 200 with text/html, not JSON"),
+    ("/api/health/ready", "https://qa.example.com/api/health/ready answered 200 with text/html, not JSON"),
+], ids=["document", "readiness"])  # fmt: skip
+def test_a_200_that_is_not_json_fails_as_one_line(repo: Path, path: str, reason: str) -> None:
+    """As a UI's own page answers a path the ingress routes to it, not to the API."""
+    served = deployed()
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == path:
+            return httpx2.Response(200, text="<!doctype html><title>positions</title>", headers={"content-type": "text/html"})
+        return served.handle_request(request)
+
+    found = smoke.smoke(repo, "qa", service=SERVICE, transport=httpx2.MockTransport(answer))
+    assert (reason, "check that BASIS_SMOKE__URL is the base the API's paths are under, where the ingress routes them to the API") in found
+
+
 def test_an_api_that_is_not_ready_fails(repo: Path) -> None:
     [(reason, _)] = smoke.smoke(repo, "qa", service=SERVICE, transport=deployed(ready=503))
     assert reason == "https://qa.example.com/api/health/ready answered 503, so the API is not ready"

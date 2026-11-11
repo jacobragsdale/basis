@@ -200,7 +200,9 @@ call, and the API allows none.
 
 An app can serve a built UI folder itself, from step 2.14, which gives one origin without an ingress split. Its routes
 then mount under `/api` and the UI at `/`. The document's paths stay unprefixed, as above, and its `servers` lists
-`/api`. An app without a UI is unchanged, and the ingress strips `/api` as before.
+`/api`. A path the UI's folder holds no file for answers its `index.html` to a page's request, one whose `Accept` names
+`text/html`, as a browser's navigation to a client-side route such as `/positions/BRK.B` does, and a 404 to any other;
+a call to one of the API's paths without `/api` is a 404 whose `detail` names the path under `/api`. An app without a UI is unchanged, and the ingress strips `/api` as before.
 
 Where that routing is not possible, the API's settings name each other origin whose pages may call it, per environment,
 as the browser sends it: a scheme, `https` or `http`, and a host, with a port only where it is not the scheme's own, in

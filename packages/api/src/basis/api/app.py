@@ -239,7 +239,7 @@ def _routes(app: openapi.Application, service: Service, *, docs: bool) -> None:
         return
     routes.add(app, service, prefix=routes.API)
     app._document = openapi.document(service)  # noqa: SLF001 -- the one document, unprefixed, which the app serves
-    app.mount("/", ui.Folder(service.ui), name="ui")
+    app.mount("/", ui.Folder(service.ui, [route.path for route in service.routes]), name="ui")
 
 
 async def _problem(request: Request, error: Exception) -> Response:

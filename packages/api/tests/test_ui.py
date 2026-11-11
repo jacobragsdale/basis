@@ -48,16 +48,31 @@ def test_the_ui_is_served_at_the_root_and_its_files_as_they_are(client: TestClie
     assert client.get("/assets/app.js").text == "console.log('hi')"
 
 
-def test_a_client_side_route_is_the_ui_and_a_missing_file_is_a_404(client: TestClient) -> None:
-    assert "<title>greeter</title>" in client.get("/positions/7").text
+PAGE = {"accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
+"""What a browser's navigation to a page accepts."""
+
+
+@pytest.mark.parametrize("path", ["/positions/7", "/positions/BRK.B", "/hello"], ids=["a-route", "a-dot-in-its-last-segment", "an-api-path-too"])
+def test_a_page_the_browser_navigates_to_is_the_ui(client: TestClient, path: str) -> None:
+    page = client.get(path, headers=PAGE)
+    assert (page.status_code, "<title>greeter</title>" in page.text) == (HTTPStatus.OK, True)
+
+
+def test_a_missing_file_is_a_404(client: TestClient) -> None:
     assert client.get("/assets/missing.js").status_code == HTTPStatus.NOT_FOUND
+    assert client.get("/favicon.ico", headers={"accept": "image/avif,image/webp,*/*"}).status_code == HTTPStatus.NOT_FOUND
 
 
 def test_the_routes_are_under_api_and_an_unknown_one_is_the_apis_404(client: TestClient) -> None:
     assert client.get("/api/hello").json() == {"greeting": "hello"}
-    assert "<title>greeter</title>" in client.get("/hello").text  # without /api, a path is the UI's
     missing = client.get("/api/nothing")
     assert (missing.status_code, missing.headers["content-type"]) == (HTTPStatus.NOT_FOUND, "application/problem+json")
+
+
+def test_a_call_to_a_route_without_api_says_where_the_routes_are(client: TestClient) -> None:
+    called = client.get("/hello", headers={"accept": "application/json"})
+    assert (called.status_code, called.headers["content-type"]) == (HTTPStatus.NOT_FOUND, "application/problem+json")
+    assert called.json()["detail"] == "the API's routes are under /api, and this path is one of them: request /api/hello"
 
 
 def test_the_document_keeps_the_routes_paths_and_lists_api_as_its_server(client: TestClient) -> None:
@@ -114,7 +129,7 @@ def test_a_file_is_sent_as_the_compressed_copy_the_request_accepts(compressed: P
 def test_a_hashed_asset_is_immutable_and_every_other_file_is_revalidated(client: TestClient) -> None:
     assert client.get("/assets/app.js").headers["cache-control"] == "public, max-age=31536000, immutable"
     assert client.get("/").headers["cache-control"] == "no-cache"
-    assert client.get("/positions/7").headers["cache-control"] == "no-cache"  # the UI's index.html, for a client-side route
+    assert client.get("/positions/7", headers=PAGE).headers["cache-control"] == "no-cache"  # the UI's index.html, for a client-side route
 
 
 def test_a_reload_of_an_unchanged_file_is_a_304(compressed: Path, client: TestClient) -> None:

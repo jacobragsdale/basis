@@ -15,7 +15,7 @@ from pathlib import Path
 import httpx2
 from pydantic import TypeAdapter, ValidationError
 
-from basis.api import routes
+from basis.api import routes, strict
 from basis.api.service import Route, Service, load
 from basis.core import environments
 from basis.core.sync import Problem
@@ -63,7 +63,9 @@ def _document(client: httpx2.Client, repo: Path, base: str) -> list[Problem]:
         return [(f"{base}/{DOCUMENT} cannot be reached: {error}", "check that the deploy finished, and that BASIS_SMOKE__URL is where it serves")]
     if response.status_code != 200:  # noqa: PLR2004 -- OK
         return [(f"{base}/{DOCUMENT} answered {response.status_code}", "check that BASIS_SMOKE__URL is the base the API's paths are under")]
-    if response.json() != committed:
+    if (served := _json(response)) is None:
+        return [_not_json(response, f"{base}/{DOCUMENT}")]
+    if served != committed:
         return [(f"the document {base} serves is not this repo's {DOCUMENT}", "deploy this commit, or check out the commit that is deployed")]
     return []
 
@@ -75,11 +77,29 @@ def _ready(client: httpx2.Client, base: str, commit: str | None) -> list[Problem
         return [(f"{base}/health/ready cannot be reached: {error}", "check that the deploy finished")]
     if response.status_code != 200:  # noqa: PLR2004 -- OK
         return [(f"{base}/health/ready answered {response.status_code}, so the API is not ready", "look at its logs for why its startup failed, as its pod's show them")]
-    served = response.json().get("commit") if commit is not None else None
+    if not isinstance(answered := _json(response), dict):
+        return [_not_json(response, f"{base}/health/ready")]
+    served = answered.get("commit") if commit is not None else None
     if commit is not None and served != commit:
         what = f"commit {served}" if served is not None else "no commit (its image sets no BASIS_GIT_SHA)"
         return [(f"{base} serves {what}, not {commit}", f"wait until the deploy of {commit} finishes, and check that its release reached the environment")]
     return []
+
+
+def _json(response: httpx2.Response) -> object | None:
+    """The JSON `response` holds, or None where it holds none, as a UI's page answers a path the ingress gives it."""
+    if not strict.is_json(response.headers.get("content-type")):
+        return None
+    try:
+        found: object = response.json()
+    except ValueError:
+        return None
+    return found
+
+
+def _not_json(response: httpx2.Response, where: str) -> Problem:
+    kind = response.headers.get("content-type", "no content type").partition(";")[0]
+    return (f"{where} answered {response.status_code} with {kind}, not JSON", "check that BASIS_SMOKE__URL is the base the API's paths are under, where the ingress routes them to the API")
 
 
 def _example(client: httpx2.Client, route: Route, base: str) -> list[Problem]:
