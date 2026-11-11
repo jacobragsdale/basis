@@ -5,8 +5,7 @@ store; and `Basis`, the type of the `basis` fixture, which runs the command in a
 basis-job's `builders`, since the root's pytest run puts both packages' tests folders on the path."""
 
 from collections.abc import Callable, Generator, Iterator, Mapping
-from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass, field
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -14,11 +13,11 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.fs as pafs
 
-from basis.core.databases import Bind, Counts, LedgerEntry, Reader
+from basis.core import fakes
+from basis.core.databases import Bind
 from basis.core.destination import DestColumn, TableSpec
-from basis.core.interval import Interval
+from basis.core.errors import Rejected
 from basis.core.storage import Root
-from basis.core.tables import Changes, Target
 from optim import snapshots
 from optim.data.dataset import Dataset
 from optim.data.frames import to_columns
@@ -86,104 +85,36 @@ ORDERS_SPEC = TableSpec(
 """The orders table as SQL Server describes the one `basis ddl` creates."""
 
 
-class Trading:
-    """The database `trading`, with the orders table and its ledger in memory. A write transaction stages its rows and
-    ledger entries, which only its commit keeps, so a write that fails leaves both as they were. An insert fails at the
-    first order of `fail_on`, a portfolio, after staging the orders before it, as a constraint on the table would.
-    `spec` is the table as `describe` finds it, None where it does not exist."""
-
-    name = "trading"
-    writable = True
-
-    def __init__(self, *, spec: TableSpec | None = ORDERS_SPEC, fail_on: str | None = None) -> None:
-        self.spec, self.fail_on = spec, fail_on
-        self.orders: list[dict[str, object]] = []
-        self.ledger: list[LedgerEntry] = []
-
-    def reading(self) -> AbstractContextManager[Reader]:
-        raise NotImplementedError
-
-    @contextmanager
-    def writing(self) -> Generator[TradingWriter]:
-        yield TradingWriter(self)
-
-    @contextmanager
-    def statements(self, *, writes: bool) -> Generator[LedgerQuery]:
-        assert writes, "the ledger is read through the write login"
-        yield LedgerQuery(self)
+LEDGER_QUERY = f"SELECT deleted, upserted, inserted_new, inserted, published_at FROM {LEDGER} WHERE run_id = %(run_id)s AND output = %(output)s"  # noqa: S608 -- the ledger's name, a constant
+"""The one statement optim runs itself: its ledger row, as the database stored it, with times naive UTC."""
 
 
-@dataclass
-class LedgerQuery:
-    """The one statement optim runs itself: its ledger row, as the database stored it, with times naive UTC."""
+def trading(*, spec: TableSpec | None = ORDERS_SPEC, fails: bool = False) -> fakes.Database:
+    """The database `trading`, basis-core's fake, with the orders table as `spec` describes it, None where it does not
+    exist, and the answer to optim's ledger query. With `fails`, its first insert fails, as a constraint on the table
+    would refuse it, so the write commits nothing."""
+    found = fakes.Database("trading")
+    if spec is not None:
+        found.create(Table("trading", ORDERS_TABLE), spec=spec)
 
-    database: Trading
+    def ledgered(binds: Mapping[str, Bind]) -> pd.DataFrame:
+        rows = [vars(entry.counts) | {"published_at": entry.published_at.replace(tzinfo=None)} for entry in found.entries if (entry.run_id, entry.output) == (binds["run_id"], binds["output"])]
+        return pd.DataFrame(rows, columns=["deleted", "upserted", "inserted_new", "inserted", "published_at"])
 
-    def query(self, sql: str, binds: Mapping[str, Bind], *, timeout_s: float) -> pa.Table:
-        assert sql == "SELECT deleted, upserted, inserted_new, inserted, published_at FROM trading.publishes WHERE run_id = %(run_id)s AND output = %(output)s"
-        assert timeout_s == 30
-        found = [entry for entry in self.database.ledger if (entry.run_id, entry.output) == (binds["run_id"], binds["output"])]
-        return pa.Table.from_pylist([vars(entry.counts) | {"published_at": entry.published_at.replace(tzinfo=None)} for entry in found])
-
-    def execute(self, sql: str, binds: Mapping[str, Bind], *, timeout_s: float) -> int:
-        raise NotImplementedError
-
-    def commit(self) -> None:
-        raise NotImplementedError
-
-
-@dataclass
-class TradingWriter:
-    database: Trading
-    orders: list[dict[str, object]] = field(default_factory=list[dict[str, object]])
-    ledger: list[LedgerEntry] = field(default_factory=list[LedgerEntry])
-
-    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pd.DataFrame:
-        raise NotImplementedError
-
-    def describe(self, table: str) -> TableSpec | None:
-        return self.database.spec if table == ORDERS_TABLE else None
-
-    def published(self, run_id: str) -> bool:
-        return any(entry.run_id == run_id for entry in self.database.ledger)
-
-    def overlapping(self, job: str, output: str, interval: Interval) -> list[str]:
-        return sorted(
-            {
-                entry.run_id
-                for entry in self.database.ledger
-                if (entry.job, entry.output) == (job, output) and entry.interval is not None and entry.interval.start < interval.end and entry.interval.end > interval.start
-            }
-        )
-
-    def apply(self, target: Target, changes: Changes, spec: TableSpec) -> Counts:
-        del spec
-        assert target.table == ORDERS_TABLE
-        assert changes.insert is not None
-        assert (changes.delete, changes.upsert, changes.insert_new) == (None, None, None), "orders are a plain insert"
-        for row in ({str(name): value for name, value in record.items()} for record in changes.insert.to_dict("records")):
-            if row["portfolio_id"] == self.database.fail_on:
-                msg = f"the INSERT statement conflicted with the CHECK constraint on {ORDERS_TABLE}"
-                raise RuntimeError(msg)
-            self.orders.append(row)
-        return Counts(inserted=len(changes.insert))
-
-    def record(self, entry: LedgerEntry) -> None:
-        self.ledger.append(entry)
-
-    def commit(self) -> None:
-        self.database.orders += self.orders
-        self.database.ledger += self.ledger
+    found.answers[LEDGER_QUERY] = ledgered
+    if fails:
+        found.fails(Rejected, on="apply", times=1)
+    return found
 
 
-def publishing_to(trading: Trading) -> Orders:
-    """Orders published to `trading`'s orders table."""
+def publishing_to(database: fakes.Database) -> Orders:
+    """Orders published to `database`'s orders table."""
 
-    def databases(name: str) -> Trading:
-        assert name == trading.name
-        return trading
+    def databases(name: str) -> fakes.Database:
+        assert name == database.name
+        return database
 
-    return Orders(Table(trading.name, ORDERS_TABLE), databases, "mssql", LEDGER, timeout_s=30)
+    return Orders(Table(database.name, ORDERS_TABLE), databases, "mssql", LEDGER, timeout_s=30)
 
 
 class ReadsRecorded(pafs.FileSystemHandler):

@@ -33,8 +33,9 @@ TEMPLATES = Path(__file__).parent / "templates" / "repo"
 """The files every part's repo holds."""
 _DOTTED = {"gitignore", "dockerignore", "env.example", "python-version"}
 _REPO = re.compile(r"^[a-z0-9][a-z0-9._-]{0,99}$")
-OWN_NAMES = frozenset({"basis", "jobs", "models", "optim", "tests", "snapshots"})
-"""Names a repo's own top-level package may not take: basis's namespace and the folders basis puts in every repo."""
+OWN_NAMES = frozenset({"basis", "jobs", "tests", "snapshots"})
+"""Names a repo's own top-level package may not take: basis's namespace and the folders basis puts in a repo. A part's
+own package, once installed, is refused as any installed package is."""
 _COMMIT = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
 """A git commit's full id: SHA-1, or SHA-256 in a repository that uses it."""
 

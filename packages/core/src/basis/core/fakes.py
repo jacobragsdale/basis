@@ -13,18 +13,27 @@ waits as its `waits` do, which take no time, so a GET made again until its deadl
 import json
 import smtplib
 import threading
-from collections.abc import Awaitable, Callable, Hashable, Mapping, MutableMapping, Sequence
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from collections.abc import Awaitable, Callable, Generator, Hashable, Mapping, MutableMapping, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext
+from dataclasses import dataclass, field
+from datetime import UTC, date, datetime, time, timedelta
 from email.message import EmailMessage
 from http import HTTPStatus
 from typing import Any, Literal
 from uuid import UUID
 
 import httpx2
+import pandas as pd
+import pyarrow as pa
 
-from basis.core.errors import KINDS, BadReply, Conflict, Denied, Failed, NotFound, Rejected, ServiceError, Timeout, Unavailable
+from basis.core.databases.base import Bind, Counts, LedgerEntry, Statements, check_count, for_writing, naive_in_zone, rows_of
+from basis.core.databases.failures import failure
+from basis.core.ddl import ORACLE_VARCHAR_LIMIT
+from basis.core.destination import DestColumn, Dialect, TableSpec, Unit
+from basis.core.errors import DATABASE_KINDS, KINDS, BadReply, Conflict, Denied, Failed, NotFound, Rejected, ServiceError, Timeout, Unavailable
+from basis.core.interval import Interval
 from basis.core.mongo import Upserted
+from basis.core.tables import Changes, Delete, Target
 
 type _Message = MutableMapping[str, Any]
 type ASGIApp = Callable[[_Message, Callable[[], Awaitable[_Message]], Callable[[_Message], Awaitable[None]]], Awaitable[None]]
@@ -316,8 +325,8 @@ _COMPARE: dict[str, Callable[[Any, Any], bool]] = {
 
 
 def _matches(document: Mapping[str, object], query: Mapping[str, object]) -> bool:
-    for field, wanted in query.items():
-        found = document.get(field)
+    for name, wanted in query.items():
+        found = document.get(name)
         if isinstance(wanted, Mapping) and wanted and all(str(operator).startswith("$") for operator in wanted):
             if not all(_COMPARE[str(operator)](found, value) for operator, value in wanted.items()):
                 return False
@@ -327,3 +336,267 @@ def _matches(document: Mapping[str, object], query: Mapping[str, object]) -> boo
 
 
 type Fake = Http | Clock | Ids | Slack | Email | Mongo
+
+
+type Operation = Literal["fetch", "describe", "published", "overlapping", "apply", "record", "commit", "any"]
+"""What a fake database's `fails` makes fail: one of a reader's or a writer's calls, or each."""
+
+
+@dataclass
+class _Held:
+    """A table of a fake database: its description, and its rows as the database holds them, each a dict of its
+    columns' values, a datetime naive in its column's zone (`databases.base.for_writing`)."""
+
+    spec: TableSpec
+    key: tuple[str, ...] | None
+    rows: list[dict[str, object]]
+
+
+class Database:
+    """A database in memory, for tests, which `basis.core.databases.Database` describes: its tables, each made by
+    `create` as `basis ddl`'s `CREATE TABLE` makes it, primary key and all, and its ledger, `entries`. A writer applies a
+    run's changes as SQL Server's and Oracle's writers do, the same counts and the same refusals, to copies that become
+    the database's only on `commit()`, as a transaction's changes do: a block that ends without one leaves nothing. The
+    rerun guard's lookup, `overlapping`, holds the database's lock until the writer's block ends, as the real ledgers'
+    row locks do, so a second writer of the same output waits for the first and then sees its ledger row. With
+    `ledger=False`, its ledger table does not exist.
+
+    A query is answered from `answers`, by its SQL exactly; a query it has no answer for fails, so a test says what each
+    returns. `fails` makes a call fail with a kind of `ServiceError`, every time or the next `times`, as the real
+    database's failures reach a part (`basis.core.databases.failures`). The contract suite in basis-core's tests holds
+    it to SQL Server's and Oracle's writers."""
+
+    def __init__(self, name: str, *, dialect: Dialect = "mssql", writable: bool = True, ledger: bool = True) -> None:
+        self.name = name
+        self.dialect: Dialect = dialect
+        self._writable = writable
+        self.ledger = ledger
+        """Whether its ledger table exists: without it, every call that reads or writes the ledger fails, as a
+        statement on a table that does not exist does."""
+        self.tables: dict[str, _Held] = {}
+        self.entries: list[LedgerEntry] = []
+        """The ledger, as committed."""
+        self.answers: dict[str, pd.DataFrame | Callable[[Mapping[str, Bind]], pd.DataFrame]] = {}
+        """What each query returns, by its SQL: its rows, or a function of what it binds that gives them."""
+        self._failing = Failures[Operation]("a fake database", DATABASE_KINDS)
+        self._lock = threading.Lock()
+
+    @property
+    def writable(self) -> bool:
+        return self._writable
+
+    def create(self, target: Target, *, spec: TableSpec | None = None) -> None:
+        """Make `target`'s table, as `basis ddl` prints it for this database's dialect, or as `spec` describes it."""
+        self.tables[target.table] = _Held(spec or described(target, self.dialect), target.key, [])
+
+    def rows(self, table: str) -> list[dict[str, object]]:
+        """The table's committed rows, as the database holds them."""
+        return [dict(row) for row in self.tables[table].rows]
+
+    def fails(self, kind: type[ServiceError], *, times: int | None = None, on: Operation = "any") -> None:
+        self._failing.set(on, kind, times)
+
+    def reading(self) -> AbstractContextManager[_DatabaseReader]:
+        return nullcontext(_DatabaseReader(self, self.tables))
+
+    @contextmanager
+    def writing(self) -> Generator[_DatabaseWriter]:
+        writer = _DatabaseWriter(self, {table: _Held(held.spec, held.key, [dict(row) for row in held.rows]) for table, held in self.tables.items()})
+        try:
+            yield writer
+        finally:
+            if writer.locked:
+                self._lock.release()
+
+    def statements(self, *, writes: bool) -> AbstractContextManager[Statements]:
+        """Statements of the caller's own: each query answered from `answers`, by its SQL, as a reader's is. A
+        statement that changes rows it cannot run, since it holds no SQL: basis-api's `fakes.Database` answers an
+        API's, by their SQL."""
+        return nullcontext(_DatabaseStatements(self, writes=writes))
+
+    def answer(self, sql: str, binds: Mapping[str, Bind], *, what: str) -> pd.DataFrame:
+        """What the query `sql` returns, binding `binds`, from `answers`."""
+        if (answer := self.answers.get(sql)) is None:
+            msg = f"the fake database {self.name} has no answer for {what}: give one, as `answers[SQL] = frame`"
+            raise LookupError(msg)
+        return answer.copy() if isinstance(answer, pd.DataFrame) else answer(binds)
+
+    def fail(self, operation: Operation) -> None:
+        if (taken := self._failing.take(operation, "any")) is not None:
+            raise failure(self.name, taken[1], RuntimeError(f"the fake database fails {operation}"))
+
+
+def described(target: Target, dialect: Dialect) -> TableSpec:
+    """The table `basis ddl` makes for `target` in `dialect`, as the database would describe it."""
+    columns: dict[str, DestColumn] = {}
+    for column in target.columns:
+        length = column.max_length if column.kind == "str" else None
+        if column.kind == "str" and dialect == "oracle" and (length is None or length > ORACLE_VARCHAR_LIMIT):
+            kind, length = "CLOB", None
+        elif column.kind == "str":
+            kind = "JSON" if column.json and dialect == "mssql" else ("NVARCHAR" if dialect == "mssql" else "VARCHAR2")
+        else:
+            kind = {"float": ("FLOAT", "BINARY_DOUBLE"), "bool": ("BIT", "NUMBER"), "date": ("DATE", "DATE"), "datetime": ("DATETIME2", "TIMESTAMP")}[column.kind][dialect == "oracle"]
+        unit: Unit = "UTF-16 units" if kind == "NVARCHAR" else "characters"
+        encoding = ("utf-16-le" if dialect == "mssql" else "utf-8") if column.kind == "str" else None
+        precision = 1 if (column.kind, dialect) == ("bool", "oracle") else None
+        scale = 0 if precision is not None else (6 if column.kind == "datetime" else None)
+        columns[column.name] = DestColumn(column.name, kind, length, precision, scale, column.nullable, generated=False, defaulted=False, unit=unit, encoding=encoding)
+    return TableSpec(dialect, target.table, columns)
+
+
+@dataclass
+class _DatabaseReader:
+    database: Database
+    tables: dict[str, _Held]
+    """The tables it reads: the database's, or a writer's copies of them."""
+
+    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pd.DataFrame:
+        self.database.fail("fetch")
+        return self.database.answer(sql, interval.binds() if interval is not None else {}, what=f"{what}'s query")
+
+    def describe(self, table: str) -> TableSpec | None:
+        self.database.fail("describe")
+        return held.spec if (held := self.tables.get(table)) is not None else None
+
+
+@dataclass
+class _DatabaseStatements:
+    database: Database
+    writes: bool
+
+    def query(self, sql: str, binds: Mapping[str, Bind], *, timeout_s: float) -> pa.Table:  # noqa: ARG002 -- the Statements protocol's signature
+        self.database.fail("fetch")
+        return pa.Table.from_pandas(self.database.answer(sql, binds, what=f"the query {sql!r}"), preserve_index=False)
+
+    def execute(self, sql: str, binds: Mapping[str, Bind], *, timeout_s: float) -> int:
+        msg = f"the fake database {self.database.name} runs no statement that changes rows ({sql!r}): basis-api's fakes.Database answers an API's"
+        raise NotImplementedError(msg)
+
+    def commit(self) -> None:
+        if not self.writes:
+            msg = f"the fake database {self.database.name}'s statements only read, as the read login's do: there is nothing to commit"
+            raise RuntimeError(msg)
+
+
+@dataclass
+class _DatabaseWriter(_DatabaseReader):
+    entries: list[LedgerEntry] = field(default_factory=list[LedgerEntry])
+    locked: bool = False
+
+    def published(self, run_id: str) -> bool:
+        self.database.fail("published")
+        self._ledger()
+        return any(entry.run_id == run_id for entry in [*self.database.entries, *self.entries])
+
+    def overlapping(self, job: str, output: str, interval: Interval) -> list[str]:
+        self.database.fail("overlapping")
+        self._ledger()
+        if not self.locked:
+            self.database._lock.acquire()  # noqa: SLF001 -- the database's own lock, which its writer holds until its block ends
+            self.locked = True
+        entries = [*self.database.entries, *self.entries]
+        return sorted({e.run_id for e in entries if (e.job, e.output) == (job, output) and e.interval is not None and e.interval.start < interval.end and interval.start < e.interval.end})
+
+    def apply(self, target: Target, changes: Changes, spec: TableSpec) -> Counts:  # noqa: ARG002 -- the Writer protocol's signature
+        self.database.fail("apply")
+        held = self.tables.get(target.table)
+        if held is None:
+            msg = f"the fake database {self.database.name} has no table {target.table}"
+            raise failure(self.database.name, Failed, RuntimeError(msg))
+        deleted = upserted = inserted_new = inserted = 0
+        if changes.delete is not None:
+            deleted = self._delete(target, held, changes.delete)
+        if changes.upsert is not None and len(changes.upsert):
+            upserted = self._upsert(target, held, self._values(target, changes.upsert))
+        if changes.insert_new is not None and len(changes.insert_new):
+            inserted_new = self._insert_new(target, held, self._values(target, changes.insert_new))
+        if changes.insert is not None and len(changes.insert):
+            inserted = self._insert(held, self._values(target, changes.insert))
+        return Counts(deleted, upserted, inserted_new, inserted)
+
+    def _delete(self, target: Target, held: _Held, delete: Delete) -> int:
+        def deleted(row: dict[str, object]) -> bool:
+            if (within := delete.within) is not None:
+                zone = target.column(within.column).zone
+                value = _instant(row.get(within.column))
+                if value is None or not naive_in_zone(within.start, zone) <= value < naive_in_zone(within.end, zone):
+                    return False
+            if delete.matching is not None:
+                return any(all(_equal(row.get(name), wanted.get(name)) for name in delete.matching.columns) for wanted in self._values(target, delete.matching))
+            return True
+
+        kept = [row for row in held.rows if not deleted(row)]
+        count, held.rows = len(held.rows) - len(kept), kept
+        return count
+
+    def _upsert(self, target: Target, held: _Held, rows: list[dict[str, object]]) -> int:
+        key = target.key or ()
+        values = [name for name in rows[0] if name not in key]
+        updated = 0
+        for row in rows:
+            found = [there for there in held.rows if all(_equal(there.get(name), row[name]) for name in key)]
+            if values:  # SQL Server and Oracle update the rows a key matches only where the row has values beside its key
+                for there in found:
+                    there.update({name: row[name] for name in values})
+                updated += len(found)
+        inserted = self._insert_new(target, held, rows)
+        check_count(f"the upsert into {target.table}", len(rows), updated + inserted)
+        return updated + inserted
+
+    def _insert_new(self, target: Target, held: _Held, rows: list[dict[str, object]]) -> int:
+        key = target.key or ()
+        new = [row for row in rows if not any(all(_equal(there.get(name), row[name]) for name in key) for there in held.rows)]
+        return self._insert(held, new)
+
+    def _insert(self, held: _Held, rows: list[dict[str, object]]) -> int:
+        for row in rows:
+            for name, column in held.spec.columns.items():
+                if row.get(name) is None and not column.nullable:
+                    raise failure(self.database.name, Rejected, RuntimeError(f"cannot insert NULL into {held.spec.table}.{name}"))
+            if held.key is not None and any(all(_equal(there.get(name), row.get(name)) for name in held.key) for there in held.rows):
+                raise failure(self.database.name, Conflict, RuntimeError(f"a row of {held.spec.table} already has the key {tuple(row.get(name) for name in held.key)}"))
+            held.rows.append({name: row.get(name) for name in held.spec.columns})
+        return len(rows)
+
+    def _ledger(self) -> None:
+        if not self.database.ledger:
+            raise failure(self.database.name, Failed, RuntimeError(f"the fake database {self.database.name} has no ledger table"))
+
+    def _values(self, target: Target, frame: pd.DataFrame) -> list[dict[str, object]]:
+        """A conformed frame's rows as the database stores them: each datetime naive in its column's zone, and on
+        Oracle, which stores an empty string as NULL, each empty string a null."""
+        table = for_writing(target, frame)
+        names = [str(name) for name in table.column_names]
+        rows = [dict(zip(names, values, strict=True)) for values in rows_of(table)]
+        if self.database.dialect == "oracle":
+            return [{name: None if value == "" else value for name, value in row.items()} for row in rows]
+        return rows
+
+    def record(self, entry: LedgerEntry) -> None:
+        self.database.fail("record")
+        self._ledger()
+        if any((there.run_id, there.output) == (entry.run_id, entry.output) for there in [*self.database.entries, *self.entries]):
+            raise failure(self.database.name, Conflict, RuntimeError(f"the ledger already has run {entry.run_id}'s {entry.output}"))
+        self.entries.append(entry)
+
+    def commit(self) -> None:
+        self.database.fail("commit")
+        self.database.tables = self.tables
+        self.database.entries.extend(self.entries)
+        self.tables = {table: _Held(held.spec, held.key, [dict(row) for row in held.rows]) for table, held in self.tables.items()}
+        self.entries = []
+
+
+def _instant(value: object) -> datetime | None:
+    """A date or datetime value as a naive datetime, as a date column compares: its midnight."""
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, time())
+    return None
+
+
+def _equal(found: object, wanted: object) -> bool:
+    """Whether two values match as SQL's `=` does: a null matches nothing."""
+    return found is not None and wanted is not None and found == wanted

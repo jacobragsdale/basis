@@ -44,6 +44,7 @@ UNCHECKED = (
     OPTIM,
     "docs",  # the design and the roadmap, which say what optim is and when it releases
     "AGENTS.md",  # the root's, whose checks include optim's generated repo
+    "PLAN.md",  # the review's plan, whose lane C is optim's
     "README.md",
     "CLAUDE.md",
     "uv.lock",  # which lists every member

@@ -1,19 +1,15 @@
-from collections.abc import Generator, Mapping, Sequence
-from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
-import pyarrow as pa
 import pytest
 
-from basis.core import environments, qa
-from basis.core.databases import Bind, Counts, LedgerEntry, Reader, Statements, Writer
-from basis.core.destination import TableSpec
+from basis.core import environments, fakes, frames, qa
+from basis.core.databases import Counts
 from basis.core.errors import BasisError
-from basis.core.interval import Interval
 from basis.core.settings import GivenSettings, locate
-from basis.core.tables import Changes, Column, Target
+from basis.core.tables import Changes, Column
 from basis.core.verbs import Part, Qa, QaPlan, QaRun
 
 QA = "Server=sqlqa01.example.com;Database=Trading;Encrypt=yes"
@@ -165,63 +161,6 @@ def test_a_repo_that_declares_no_qa_tier_has_none(tmp_path: Path) -> None:
     assert qa.declared(tmp_path / "pyproject.toml", {"alpha": Part()}) is None
 
 
-@dataclass
-class FakeWriter:
-    applied: list[str] = field(default_factory=list[str])
-
-    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pd.DataFrame:
-        raise NotImplementedError
-
-    def describe(self, table: str) -> TableSpec | None:
-        raise NotImplementedError
-
-    def published(self, run_id: str) -> bool:
-        raise NotImplementedError
-
-    def overlapping(self, job: str, output: str, interval: Interval) -> list[str]:
-        raise NotImplementedError
-
-    def apply(self, target: Target, changes: Changes, spec: TableSpec) -> Counts:  # noqa: ARG002 -- the Writer protocol's signature; the guard passes them on
-        self.applied.append(target.table)
-        return Counts()
-
-    def record(self, entry: LedgerEntry) -> None:
-        raise NotImplementedError
-
-    def commit(self) -> None:
-        raise NotImplementedError
-
-
-@dataclass(frozen=True)
-class FakeDatabase:
-    writer: FakeWriter
-    name: str = "warehouse"
-    writable: bool = True
-
-    def reading(self) -> AbstractContextManager[Reader]:
-        raise NotImplementedError
-
-    @contextmanager
-    def writing(self) -> Generator[Writer]:
-        yield self.writer
-
-    @contextmanager
-    def statements(self, *, writes: bool) -> Generator[Statements]:
-        self.writer.applied.append(f"statements, writes={writes}")
-        yield FakeStatements()
-
-
-class FakeStatements:
-    def query(self, sql: str, binds: Mapping[str, Bind], *, timeout_s: float) -> pa.Table:
-        raise NotImplementedError
-
-    def execute(self, sql: str, binds: Mapping[str, Bind], *, timeout_s: float) -> int:
-        raise NotImplementedError
-
-    def commit(self) -> None:
-        raise NotImplementedError
-
-
 @dataclass(frozen=True)
 class Table:
     """A table to write, as the guard sees it: by its name."""
@@ -229,31 +168,38 @@ class Table:
     table: str
     database: str = "warehouse"
     key: tuple[str, ...] | None = None
-    columns: tuple[Column, ...] = ()
+    columns: tuple[Column, ...] = (Column("security_id", "str", nullable=False),)
 
     def column(self, name: str) -> Column:
-        raise NotImplementedError
+        return next(column for column in self.columns if column.name == name)
+
+
+SECURITIES = pd.DataFrame({"security_id": pd.Series(["A", "B"], dtype=frames.dtype(Column("security_id", "str", nullable=False)))})
 
 
 def test_the_tiers_databases_refuse_a_table_writes_does_not_list_before_writing_it() -> None:
-    writer = FakeWriter()
-    guarded = qa._Guarded(FakeDatabase(writer), frozenset({"prices"}))  # noqa: SLF001 -- what `context` hands a part, on a database of the test's own
-    spec = TableSpec("mssql", "prices", {})
+    database = fakes.Database("warehouse")
+    for name in ("PRICES", "positions"):
+        database.create(Table(name))
+    guarded = qa._Guarded(database, frozenset({"prices"}))  # noqa: SLF001 -- what `context` hands a part, on basis-core's fake database
     with guarded.writing() as opened:
-        opened.apply(Table("PRICES"), Changes(), spec)
+        spec = opened.describe("PRICES")
+        assert spec is not None
+        assert opened.apply(Table("PRICES"), Changes(insert=SECURITIES), spec) == Counts(inserted=2)
         with pytest.raises(qa.QaError, match=r"the QA tier refused to write positions in warehouse, which \[tool\.basis\.qa\] writes does not list"):
-            opened.apply(Table("positions"), Changes(), spec)
-    assert writer.applied == ["PRICES"]
+            opened.apply(Table("positions"), Changes(insert=SECURITIES), spec)
+        opened.commit()
+    assert (len(database.rows("PRICES")), database.rows("positions")) == (2, [])
 
 
 def test_the_tiers_databases_refuse_statements_of_a_parts_own_through_the_write_login() -> None:
-    writer = FakeWriter()
-    guarded = qa._Guarded(FakeDatabase(writer), frozenset({"prices"}))  # noqa: SLF001 -- as above
+    database = fakes.Database("warehouse")
+    database.answers["SELECT 1 AS one"] = pd.DataFrame({"one": [1]})
+    guarded = qa._Guarded(database, frozenset({"prices"}))  # noqa: SLF001 -- as above
     with pytest.raises(qa.QaError, match="the QA tier refused statements of the part's own through warehouse's write login"):
         guarded.statements(writes=True)
-    with guarded.statements(writes=False):
-        pass
-    assert writer.applied == ["statements, writes=False"]
+    with guarded.statements(writes=False) as statements:
+        assert statements.query("SELECT 1 AS one", {}, timeout_s=5).to_pylist() == [{"one": 1}]
 
 
 def test_a_write_block_with_no_ledger_needs_none_listed(declared: qa.Declared) -> None:

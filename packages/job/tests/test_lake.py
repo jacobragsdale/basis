@@ -6,8 +6,6 @@ namespace; the integration tier runs the same calls against Azurite."""
 
 import hashlib
 import json
-from collections.abc import Generator
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,9 +18,8 @@ from builders import DAY, Price, data_folder, params_file, prices
 from pydantic import ValidationError
 
 import basis.job as etl
-from basis.core import lake
-from basis.core.databases import LedgerEntry
-from basis.core.errors import Conflict
+from basis.core import fakes, lake
+from basis.core.errors import Unavailable
 from basis.core.interval import Interval
 from basis.core.settings import GivenSettings, LakeSettings, SettingsError
 from basis.core.storage import Root
@@ -61,45 +58,11 @@ JOB = Job("archive", "tests.archive", Params, Inputs, Outputs, transform, None, 
 
 
 @dataclass
-class Ledger:
-    """The warehouse, as far as an archive reaches it: its ledger, keyed by run and output as the real one is."""
-
-    name: str = "warehouse"
-    rows: list[LedgerEntry] = field(default_factory=list)
-    fail_commit: bool = False
-
-    @contextmanager
-    def writing(self) -> Generator[Ledger.Writer]:
-        yield Ledger.Writer(self)
-
-    @dataclass
-    class Writer:
-        ledger: Ledger
-        pending: list[LedgerEntry] = field(default_factory=list)
-
-        def overlapping(self, job: str, output: str, interval: Interval) -> list[str]:
-            found = [(row.run_id, row.interval) for row in self.ledger.rows if (row.job, row.output) == (job, output)]
-            return sorted({run for run, at in found if at is not None and at.start < interval.end and at.end > interval.start})
-
-        def record(self, entry: LedgerEntry) -> None:
-            if any((row.run_id, row.output) == (entry.run_id, entry.output) for row in self.ledger.rows):
-                detail = "the ledger has the run's output"
-                raise Conflict(detail, resource="warehouse")
-            self.pending.append(entry)
-
-        def commit(self) -> None:
-            if self.ledger.fail_commit:
-                msg = "the connection dropped at the commit"
-                raise ConnectionError(msg)
-            self.ledger.rows += self.pending
-
-
-@dataclass
 class World:
     """What a run of the job reaches: the warehouse's ledger and the lake, a folder holding the container `archive`."""
 
     root: Path
-    ledger: Ledger = field(default_factory=Ledger)
+    ledger: fakes.Database = field(default_factory=lambda: fakes.Database("warehouse"))
     reachable: bool = True
 
     def __post_init__(self) -> None:
@@ -118,7 +81,7 @@ class World:
     def run(self, *, publish: bool = True, again: bool = False, scale: float = 1.0, interval: Interval | None = DAY) -> runs.Result:
         folder = data_folder(self.root, prices({}, {"security_id": "S2", "price": 1134.5}))
         request = runs.Request(params_file(self.root, json.dumps({"scale": scale})), interval, folder, publish=publish, again=again)
-        return runs.run(JOB, SETTINGS, request, snapshot_root=Root.at(self.root / "snapshots"), clock=clock, databases=lambda _: self.ledger, open_lake=self.open_lake)  # ty: ignore[invalid-argument-type] -- the ledger, all an archive reaches of a database
+        return runs.run(JOB, SETTINGS, request, snapshot_root=Root.at(self.root / "snapshots"), clock=clock, databases=lambda _: self.ledger, open_lake=self.open_lake)
 
     def partition(self) -> list[float]:
         return sorted(pq.read_table(self.root / "lake" / PARTITION).column("price").to_pylist())
@@ -139,7 +102,7 @@ def test_a_published_run_archives_its_interval_s_partition_checked_and_recorded_
     assert result.record.archives["archived"].partition == "date=2026-11-05"
     assert world.partition() == [100.0, 1134.5]
     assert world.hidden() == []
-    [entry] = world.ledger.rows
+    [entry] = world.ledger.entries
     file = world.root / "lake" / PARTITION / "part-0.parquet"
     detail = json.loads(entry.detail or "{}")
     assert (entry.output, entry.table, entry.interval, entry.counts.inserted) == ("archived", "lake:history:prices", DAY, 2)
@@ -149,7 +112,7 @@ def test_a_published_run_archives_its_interval_s_partition_checked_and_recorded_
 
 def test_a_run_without_publish_archives_nothing(world: World) -> None:
     result = world.run(publish=False)
-    assert (result.record.status, result.record.archived, world.ledger.rows) == ("checked", {}, [])
+    assert (result.record.status, result.record.archived, world.ledger.entries) == ("checked", {}, [])
     assert result.record.archives["archived"].rows == 2
     assert not (world.root / "lake" / PARTITION).exists()
 
@@ -163,7 +126,7 @@ def test_a_rerun_for_the_same_interval_archives_nothing_unless_told_again(world:
     again = world.run(scale=2.0, again=True)
     assert (again.record.status, again.record.archived["archived"].status) == ("published", "archived")
     assert world.partition() == [200.0, 2269.0]
-    assert (len(world.ledger.rows), world.hidden()) == (2, [])
+    assert (len(world.ledger.entries), world.hidden()) == (2, [])
 
 
 def test_an_archive_that_fails_leaves_the_run_partial_and_its_resume_archives_it_once(world: World) -> None:
@@ -175,20 +138,19 @@ def test_an_archive_that_fails_leaves_the_run_partial_and_its_resume_archives_it
     assert reason.startswith(f"run {result.record.run_id} of archive published, and could not archive archived: LakeError: the lake history has no container gone")
     assert fix == f"fix it, then `basis resume archive {result.record.run_id}`, which archives what it has not"
     world.reachable = True
-    resumed = runs.resume(JOB, result.snapshot, SETTINGS, clock=clock, databases=lambda _: world.ledger, open_lake=world.open_lake)  # ty: ignore[invalid-argument-type] -- the ledger alone
+    resumed = runs.resume(JOB, result.snapshot, SETTINGS, clock=clock, databases=lambda _: world.ledger, open_lake=world.open_lake)
     assert (resumed.status, resumed.archived["archived"].status, world.partition()) == ("published", "archived", [100.0, 1134.5])
-    assert runs.resume(JOB, result.snapshot, SETTINGS, clock=clock, databases=lambda _: world.ledger, open_lake=world.open_lake).status == "published"  # ty: ignore[invalid-argument-type] -- the ledger alone
-    assert len(world.ledger.rows) == 1
+    assert runs.resume(JOB, result.snapshot, SETTINGS, clock=clock, databases=lambda _: world.ledger, open_lake=world.open_lake).status == "published"
+    assert len(world.ledger.entries) == 1
 
 
 def test_a_partition_renamed_in_by_an_attempt_that_died_before_its_commit_is_recorded_by_the_retry(world: World) -> None:
-    world.ledger.fail_commit = True
+    world.ledger.fails(Unavailable, on="commit", times=1)  # the connection dropped at the commit
     died = world.run()
-    assert (died.record.status, world.ledger.rows, world.partition()) == ("partial", [], [100.0, 1134.5])
-    world.ledger.fail_commit = False
+    assert (died.record.status, world.ledger.entries, world.partition()) == ("partial", [], [100.0, 1134.5])
     assert died.snapshot is not None
-    resumed = runs.resume(JOB, died.snapshot, SETTINGS, clock=clock, databases=lambda _: world.ledger, open_lake=world.open_lake)  # ty: ignore[invalid-argument-type] -- the ledger alone
-    assert (resumed.status, resumed.archived["archived"].rows, len(world.ledger.rows)) == ("published", 2, 1)
+    resumed = runs.resume(JOB, died.snapshot, SETTINGS, clock=clock, databases=lambda _: world.ledger, open_lake=world.open_lake)
+    assert (resumed.status, resumed.archived["archived"].rows, len(world.ledger.entries)) == ("published", 2, 1)
     assert world.hidden() == []
 
 
@@ -200,7 +162,7 @@ def test_a_partition_no_run_recorded_with_other_rows_is_refused_and_left_alone(w
     archived = result.record.archived["archived"]
     assert (result.record.status, archived.status) == ("partial", "failed")
     assert f"the partition {PARTITION} is there already, and the ledger has no run that archived it" in (archived.error or "")
-    assert (world.partition(), world.ledger.rows, world.hidden()) == ([100.0], [], [])
+    assert (world.partition(), world.ledger.entries, world.hidden()) == ([100.0], [], [])
 
 
 def test_a_container_that_is_not_there_is_named(world: World) -> None:
@@ -213,7 +175,7 @@ def test_an_archive_needs_its_run_s_interval_and_a_date_partition_one_day(world:
     assert world.run(interval=None).record.reasons == ["archived: an archive is its run's interval's partition of prices, and this run has none: give it one"]
     [week] = world.run(interval=Interval.parse("2026-11-02..2026-11-09")).record.reasons
     assert week == "archived: the interval 2026-11-02..2026-11-09 is not one UTC day, midnight to midnight, and the archive is partitioned by date: run it for one day, or declare partition='interval'"
-    assert world.ledger.rows == []
+    assert world.ledger.entries == []
 
 
 def test_an_interval_partition_names_both_ends() -> None:

@@ -3,9 +3,7 @@ poster and mailer, each send's span and the kind of each failure; and `deliver`,
 its ledger, so a resume never sends one twice and a rerun sends again only when told."""
 
 import json
-from collections.abc import Callable, Generator
-from contextlib import contextmanager
-from dataclasses import dataclass, field
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 import pytest
@@ -15,7 +13,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import Tracer
 
 from basis.core import fakes, messages, sending
-from basis.core.databases import LedgerEntry
 from basis.core.errors import Conflict, Denied, Failed, NotFound, Rejected, ServiceError, Timeout, Unavailable
 from basis.core.interval import Interval
 from basis.core.messages import Mail
@@ -110,41 +107,10 @@ def test_a_message_or_its_settings_that_cannot_be_sent_are_refused_with_the_fix(
         make()
 
 
-@dataclass
-class Ledger:
-    """A database whose ledger keeps what each transaction committed, keyed by run and output as a real one is."""
-
-    name: str = "warehouse"
-    rows: list[LedgerEntry] = field(default_factory=list)
-
-    @contextmanager
-    def writing(self) -> Generator[Ledger.Writer]:
-        writer = Ledger.Writer(self)
-        yield writer
-
-    @dataclass
-    class Writer:
-        ledger: Ledger
-        pending: list[LedgerEntry] = field(default_factory=list)
-
-        def overlapping(self, job: str, output: str, interval: Interval) -> list[str]:
-            ends = [(row, row.interval) for row in self.ledger.rows if row.job == job and row.output == output]
-            return sorted({row.run_id for row, found in ends if found is not None and found.start < interval.end and found.end > interval.start})
-
-        def record(self, entry: LedgerEntry) -> None:
-            if any((row.run_id, row.output) == (entry.run_id, entry.output) for row in self.ledger.rows):
-                detail = "the ledger has the run's output"
-                raise Conflict(detail, resource=self.ledger.name)
-            self.pending.append(entry)
-
-        def commit(self) -> None:
-            self.ledger.rows += self.pending
-
-
 MESSAGE = MessageRecord(destination="slack", to="desk", ledger="warehouse", text="3 accounts", sha256=messages.digest("3 accounts"))
 
 
-def delivered(ledger: Ledger, *, run_id: str = "R1", again: bool = False, send: Callable[[], None] | None = None) -> tuple[str, list[str]]:
+def delivered(ledger: fakes.Database, *, run_id: str = "R1", again: bool = False, send: Callable[[], None] | None = None) -> tuple[str, list[str]]:
     posted: list[str] = []
 
     def post() -> None:
@@ -153,28 +119,28 @@ def delivered(ledger: Ledger, *, run_id: str = "R1", again: bool = False, send: 
         posted.append(MESSAGE.text)
 
     delivery = sending.Delivery(run_id, "positions", DAY, "0.0.0", again, lambda: AT)
-    record = sending.deliver(delivery, "alert", MESSAGE, post, ledger)  # ty: ignore[invalid-argument-type] -- the ledger a deliver writes, and nothing else of a database
+    record = sending.deliver(delivery, "alert", MESSAGE, post, ledger)
     return record.status, posted
 
 
 def test_a_message_is_recorded_in_its_ledger_as_it_is_sent_and_a_resume_never_sends_it_twice() -> None:
-    ledger = Ledger()
+    ledger = fakes.Database("warehouse")
     assert delivered(ledger) == ("sent", ["3 accounts"])
-    [row] = ledger.rows
+    [row] = ledger.entries
     assert (row.run_id, row.output, row.table, row.counts.inserted, json.loads(row.detail or "")) == ("R1", "alert", "slack:desk", 1, {"sha256": MESSAGE.sha256})
     assert delivered(ledger) == ("sent", [])  # the run's resume: the ledger has it
 
 
 def test_a_run_for_an_interval_another_run_sent_the_message_for_sends_it_only_when_told_again() -> None:
-    ledger = Ledger()
+    ledger = fakes.Database("warehouse")
     delivered(ledger)
     assert delivered(ledger, run_id="R2") == ("skipped", [])
     assert delivered(ledger, run_id="R2", again=True) == ("sent", ["3 accounts"])
-    assert [row.run_id for row in ledger.rows] == ["R1", "R2"]
+    assert [row.run_id for row in ledger.entries] == ["R1", "R2"]
 
 
 def test_a_send_that_fails_records_nothing_so_the_next_attempt_sends_it() -> None:
-    ledger = Ledger()
+    ledger = fakes.Database("warehouse")
 
     def fail() -> None:
         detail = "desk's webhook answered 503"
@@ -182,7 +148,7 @@ def test_a_send_that_fails_records_nothing_so_the_next_attempt_sends_it() -> Non
 
     with pytest.raises(Unavailable):
         delivered(ledger, send=fail)
-    assert ledger.rows == []
+    assert ledger.entries == []
     assert delivered(ledger) == ("sent", ["3 accounts"])
 
 

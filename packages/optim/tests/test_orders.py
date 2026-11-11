@@ -9,9 +9,10 @@ from pathlib import Path
 
 import pyarrow.fs as pafs
 import pytest
-from fakes import LEDGER, ORDERS_SPEC, Basis, Clock, ReadsRecorded, Rows, Trading, loader, publishing_to, saved
+from fakes import LEDGER, ORDERS_SPEC, ORDERS_TABLE, Basis, Clock, ReadsRecorded, Rows, loader, publishing_to, saved, trading
 from pydantic import ValidationError
 
+from basis.core import fakes
 from basis.core.ddl import ledger
 from basis.core.destination import DestColumn, TableSpec
 from basis.core.errors import BasisError
@@ -36,17 +37,17 @@ def toy_run(tmp_path: Path, orders: Orders | None, *portfolios: str, again: bool
     return run_model(loader(source), Root.at(tmp_path / "snapshots"), TOY, tmp_path / "params.json", as_of_date=as_of_date, portfolio_ids=list(portfolios), orders=orders, again=again, clock=Clock())
 
 
-def written(trading: Trading) -> list[tuple[object, ...]]:
-    return [(order["run_id"], order["portfolio_id"], order["security_id"], order["side"], order["quantity"]) for order in trading.orders]
+def written(database: fakes.Database) -> list[tuple[object, ...]]:
+    return [(order["run_id"], order["portfolio_id"], order["security_id"], order["side"], order["quantity"]) for order in database.rows(ORDERS_TABLE)]
 
 
 def test_a_run_publishes_its_accepted_portfolios_orders_with_a_ledger_row(tmp_path: Path) -> None:
-    trading = Trading()
+    books = trading()
 
-    ran = toy_run(tmp_path, publishing_to(trading), "P1", "P2", unsolved=["P2"])
+    ran = toy_run(tmp_path, publishing_to(books), "P1", "P2", unsolved=["P2"])
 
-    assert written(trading) == [(ran.run_id, "P1", "A", "buy", 1000.0)]  # P2 was rejected
-    [entry] = trading.ledger
+    assert written(books) == [(ran.run_id, "P1", "A", "buy", 1000.0)]  # P2 was rejected
+    [entry] = books.entries
     assert (entry.run_id, entry.job, entry.output, entry.table, entry.interval, entry.rerun_safe, entry.counts.inserted) == (
         ran.run_id, "toys.basic", "orders", "trading.orders", Interval(datetime(2026, 10, 16, tzinfo=UTC), datetime(2026, 10, 17, tzinfo=UTC)), False, 1,
     )  # fmt: skip
@@ -58,59 +59,58 @@ def test_a_run_publishes_its_accepted_portfolios_orders_with_a_ledger_row(tmp_pa
 
 
 def test_a_publish_that_fails_partway_writes_nothing_and_resume_writes_each_order_once(tmp_path: Path) -> None:
-    trading = Trading(fail_on="P2")
-    orders = publishing_to(trading)
+    books = trading(fails=True)
+    orders = publishing_to(books)
 
     ran = toy_run(tmp_path, orders, "P1", "P2", "P3")
     assert (ran.ok, ran.committed) == (True, False)
-    assert (trading.orders, trading.ledger) == ([], [])
+    assert (books.rows(ORDERS_TABLE), books.entries) == ([], [])
     run = saved(Root.at(tmp_path / "snapshots"), ran.run_id)
     assert {name: record.status for name, record in run.info.publishes.items()} == {"trading": "failed"}
-    assert "CHECK constraint" in str(run.info.publishes["trading"].error)
+    assert "refused the statement for a constraint" in str(run.info.publishes["trading"].error)
 
-    trading.fail_on = None
     first = resume_run(run, orders, clock=Clock())
     again = resume_run(saved(Root.at(tmp_path / "snapshots"), ran.run_id), orders, clock=Clock())
 
     assert ([record.status for record in first.records.values()], first.earlier) == (["committed"], False)
     assert (again.records, again.earlier) == (first.records, True)
-    assert written(trading) == [(ran.run_id, portfolio, "A", "buy", 1000.0) for portfolio in ("P1", "P2", "P3")]
-    assert len(trading.ledger) == 1
+    assert written(books) == [(ran.run_id, portfolio, "A", "buy", 1000.0) for portfolio in ("P1", "P2", "P3")]
+    assert len(books.entries) == 1
     assert saved(Root.at(tmp_path / "snapshots"), ran.run_id).info.publishes == first.records
 
 
 def test_a_run_that_committed_before_its_record_was_saved_resumes_with_what_that_commit_counted(tmp_path: Path) -> None:
     """As when the process is stopped between the commit and saving the manifest: the ledger holds the run, and what
     the database counted when it committed it, which the resume reports and saves rather than counts of nothing."""
-    trading = Trading()
-    orders = publishing_to(trading)
+    books = trading()
+    orders = publishing_to(books)
     ran = toy_run(tmp_path, orders, "P1", "P2")
     stopped = saved(Root.at(tmp_path / "snapshots"), ran.run_id).save_publishes({})
 
     resumed = resume_run(stopped, orders, clock=Clock())
 
     assert resumed.earlier
-    assert resumed.records == {"trading": PublishRecord(status="committed", at=trading.ledger[0].published_at, counts={"orders": {"deleted": 0, "upserted": 0, "inserted_new": 0, "inserted": 2}})}
+    assert resumed.records == {"trading": PublishRecord(status="committed", at=books.entries[0].published_at, counts={"orders": {"deleted": 0, "upserted": 0, "inserted_new": 0, "inserted": 2}})}
     assert saved(Root.at(tmp_path / "snapshots"), ran.run_id).info.publishes == resumed.records
-    assert written(trading) == [(ran.run_id, portfolio, "A", "buy", 1000.0) for portfolio in ("P1", "P2")]
-    assert len(trading.ledger) == 1
+    assert written(books) == [(ran.run_id, portfolio, "A", "buy", 1000.0) for portfolio in ("P1", "P2")]
+    assert len(books.entries) == 1
 
 
 def test_a_run_publishes_the_orders_it_decided_without_reading_its_snapshot_back(tmp_path: Path) -> None:
-    trading, store = Trading(), ReadsRecorded()
+    books, store = trading(), ReadsRecorded()
     (tmp_path / "params.json").write_text("{}")
     root = Root(pafs.PyFileSystem(store), (tmp_path / "snapshots").as_posix(), "snapshots")
     source = Rows({HOLDINGS: frame(HOLDINGS, {"portfolio_id": "P1"}), SECURITIES: MARKET})
 
-    ran = run_model(loader(source), root, TOY, tmp_path / "params.json", as_of_date=AS_OF, portfolio_ids=["P1"], orders=publishing_to(trading), clock=Clock())
+    ran = run_model(loader(source), root, TOY, tmp_path / "params.json", as_of_date=AS_OF, portfolio_ids=["P1"], orders=publishing_to(books), clock=Clock())
 
-    assert written(trading) == [(ran.run_id, "P1", "A", "buy", 1000.0)]
+    assert written(books) == [(ran.run_id, "P1", "A", "buy", 1000.0)]
     assert store.read == []
 
 
 def test_a_second_run_of_a_model_for_a_date_is_refused_before_it_loads_unless_told_again(tmp_path: Path) -> None:
-    trading = Trading()
-    orders = publishing_to(trading)
+    books = trading()
+    orders = publishing_to(books)
     first = toy_run(tmp_path, orders, "P1")
 
     with pytest.raises(OrdersRefusedError, match=rf"runs {first.run_id} of toys.basic already published orders for 2026-10-16: pass --again to publish this run's too"):
@@ -118,19 +118,19 @@ def test_a_second_run_of_a_model_for_a_date_is_refused_before_it_loads_unless_to
     again = toy_run(tmp_path, orders, "P1", again=True)
     next_day = toy_run(tmp_path, orders, "P1", as_of=datetime(2026, 10, 17, tzinfo=UTC))
 
-    assert [order[0] for order in written(trading)] == [first.run_id, again.run_id, next_day.run_id]
+    assert [order[0] for order in written(books)] == [first.run_id, again.run_id, next_day.run_id]
     assert len(list((tmp_path / "snapshots" / "runs" / "optim" / "toys.basic").iterdir())) == 3, "the refused run saved nothing"
 
 
 def test_a_run_with_no_orders_publishes_nothing_so_its_retry_is_not_refused(tmp_path: Path) -> None:
-    trading = Trading()
-    orders = publishing_to(trading)
+    books = trading()
+    orders = publishing_to(books)
 
     rejected = toy_run(tmp_path, orders, "P1", unsolved=["P1"])
     retried = toy_run(tmp_path, orders, "P1")
 
-    assert (rejected.publishes, trading.ledger[0].run_id) == ({}, retried.run_id)
-    assert written(trading) == [(retried.run_id, "P1", "A", "buy", 1000.0)]
+    assert (rejected.publishes, books.entries[0].run_id) == ({}, retried.run_id)
+    assert written(books) == [(retried.run_id, "P1", "A", "buy", 1000.0)]
 
 
 @pytest.mark.parametrize(
@@ -146,7 +146,7 @@ def test_a_run_with_no_orders_publishes_nothing_so_its_retry_is_not_refused(tmp_
 )
 def test_an_orders_table_that_cannot_take_the_orders_stops_the_run_before_it_loads(tmp_path: Path, spec: TableSpec | None, reason: str) -> None:
     with pytest.raises(OrdersRefusedError, match=f"cannot publish its orders to trading.orders in database trading, so it stops before it loads: {reason}"):
-        toy_run(tmp_path, publishing_to(Trading(spec=spec)), "P1")
+        toy_run(tmp_path, publishing_to(trading(spec=spec)), "P1")
     assert not (tmp_path / "snapshots" / "runs").exists()
 
 
@@ -157,19 +157,19 @@ def test_a_run_that_does_not_publish_saves_its_orders_and_has_none_to_resume(tmp
     assert run.orders().to_dict("records") == [{"portfolio_id": "P1", "security_id": "A", "side": "buy", "quantity": 1000.0}]
     assert (run.info.publishing, run.info.publishes) == (None, {})
     with pytest.raises(BasisError, match=f"run {ran.run_id} was not asked to publish its orders"):
-        resume_run(run, publishing_to(Trading()))
+        resume_run(run, publishing_to(trading()))
 
 
 def test_a_resume_to_another_table_than_the_runs_is_refused(tmp_path: Path) -> None:
-    ran = toy_run(tmp_path, publishing_to(Trading(fail_on="P1")), "P1")
-    elsewhere = Orders(Table("trading", "trading.other_orders"), lambda _name: Trading(), "mssql", LEDGER, timeout_s=30)
+    ran = toy_run(tmp_path, publishing_to(trading(fails=True)), "P1")
+    elsewhere = Orders(Table("trading", "trading.other_orders"), lambda _name: trading(), "mssql", LEDGER, timeout_s=30)
 
     with pytest.raises(BasisError, match=r"publishes its orders to trading.orders in database trading, and the settings name trading.other_orders in trading"):
         resume_run(saved(Root.at(tmp_path / "snapshots"), ran.run_id), elsewhere)
 
 
 def test_a_run_saved_before_its_record_had_publishing_still_reads(tmp_path: Path) -> None:
-    ran = toy_run(tmp_path, publishing_to(Trading()), "P1")
+    ran = toy_run(tmp_path, publishing_to(trading()), "P1")
     run = saved(Root.at(tmp_path / "snapshots"), ran.run_id)
     older = json.loads(run.path.read_bytes())
     del older["publishing"], older["publishes"]
