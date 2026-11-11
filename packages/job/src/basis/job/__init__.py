@@ -9,6 +9,7 @@ declarations, imports nothing that reads or writes."""
 from typing import TYPE_CHECKING
 
 from basis.core.calendars import Calendar, calendar
+from basis.core.errors import missing
 from basis.core.interval import Interval
 from basis.core.jsontext import dumps as json_text
 from basis.core.messages import Mail
@@ -68,5 +69,9 @@ def __getattr__(name: str) -> object:
         from basis.job import api  # noqa: PLC0415 -- the run loop loads on first use, which job code never makes
 
         return getattr(api, name)
-    msg = f"module 'basis.job' has no attribute {name!r}"
-    raise AttributeError(msg)
+    return missing("basis.job", name, RENAMED)
+
+
+RENAMED: dict[str, str] = {}
+"""Each name a release renamed, by its old name, with its new one: refused with it for one release, then removed, as
+basis's compatibility promise says (`scripts/surface.py`)."""

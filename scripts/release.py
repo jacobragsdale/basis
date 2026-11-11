@@ -357,6 +357,27 @@ def _restore(before: Mapping[Path, bytes], lockfile: Path) -> None:
         lockfile.unlink(missing_ok=True)
 
 
+def write_surface(root: Path, version: str) -> int:
+    """Record the release's surface and what it stores, as `scripts/surface.py write VERSION` does, from the
+    workspace's code at its new version: what every later release is held to (`scripts/tests/test_surface.py`). A
+    workspace without the script records nothing."""
+    if not (root / "scripts" / "surface.py").is_file():
+        return 0
+    uv = shutil.which("uv")
+    if uv is None:
+        msg = "uv is not on the PATH, and the surface is recorded with it: install uv, as https://docs.astral.sh/uv/ says"
+        raise ReleaseError(msg)
+    return subprocess.run([uv, "run", "python", "scripts/surface.py", "write", version], cwd=root, env=shared.environment(), check=False).returncode
+
+
+def _recorded(root: Path, surface: Callable[[Path, str], int]) -> list[Problem]:
+    """That the release's surface is recorded, once its version is set."""
+    if surface(root, read(root).version) == 0:
+        return []
+    reason = f"{root / 'scripts' / 'surface.py'} could not record the release's surface, as it says above"
+    return [Problem(reason, "fix it, and run it again, as `uv run python scripts/surface.py write VERSION` does")]
+
+
 def uv_lock(root: Path) -> int:
     uv = shutil.which("uv")
     if uv is None:
@@ -545,7 +566,7 @@ def parse(argv: Sequence[str]) -> Command:
             return Feed(args.files, args.port)
 
 
-def main(argv: Sequence[str], *, root: Path = ROOT, lock: Callable[[Path], int] = uv_lock) -> int:
+def main(argv: Sequence[str], *, root: Path = ROOT, lock: Callable[[Path], int] = uv_lock, surface: Callable[[Path, str], int] = write_surface) -> int:
     command = parse(argv)
     try:
         match command:
@@ -556,7 +577,7 @@ def main(argv: Sequence[str], *, root: Path = ROOT, lock: Callable[[Path], int] 
                     published = ", ".join(member.name for member in workspace.published())
                     sys.stdout.write(f"basis {workspace.version}: {len(workspace.members)} members at one version; a release publishes {published}\n")
             case SetVersion(version):
-                found = set_version(root, version, lock=lock)
+                found = set_version(root, version, lock=lock) or _recorded(root, surface)
                 if not found:
                     sys.stdout.write(f"basis {read(root).version}: every member, each basis-core pin and uv.lock; commit them\n")
             case Packages():

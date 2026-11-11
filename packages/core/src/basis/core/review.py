@@ -17,7 +17,7 @@ from pathlib import Path
 from pydantic import Field, ValidationError
 
 from basis.core import clone, gates, tools
-from basis.core.model import Model
+from basis.core.model import Model, newer
 from basis.core.verbs import GROUP, fail
 
 
@@ -91,8 +91,15 @@ class MutationRecord(Model):
     """What mutmut said when it failed, which fails nothing."""
 
 
+FORMAT = 1
+"""The record's format, which a record keeps: a basis refuses one of a format it does not know (`snapshots.newer`)."""
+
+
 class Record(Model):
     """What `basis check --full` found on one commit."""
+
+    format: int = FORMAT
+    """The record's format (`FORMAT`); 1 for one from before basis recorded it."""
 
     commit: str
     folder: str
@@ -149,7 +156,7 @@ def review(repo: Path, ref: str) -> int:
     if not kept.is_file():
         return fail(f"commit {commit} has no `basis check --full` recorded in this clone", "push it, which runs the check, or run `uv run basis check --full` with every change committed")
     try:
-        record = Record.model_validate_json(kept.read_bytes())
+        record = read(kept)
     except ValidationError:
         reason = f"{kept} records commit {commit}'s basis check --full in a form this version of basis does not read, as another version wrote it"
         return fail(reason, "run `uv run basis check --full` again, with every change committed, which records it anew")
@@ -159,6 +166,13 @@ def review(repo: Path, ref: str) -> int:
     if not record.passed:
         return fail(f"commit {commit} failed basis check --full, as the summary says", "fix what it says, commit, and push again")
     return 0
+
+
+def read(kept: Path) -> Record:
+    """The record `kept` holds, refused with the upgrade where a newer basis wrote it."""
+    data = kept.read_bytes()
+    newer(data, FORMAT, str(kept))
+    return Record.model_validate_json(data)
 
 
 def markdown(record: Record) -> str:

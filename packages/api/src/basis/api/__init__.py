@@ -59,7 +59,7 @@ from basis.api.resources import Bind, Cache, Client, Clock, Ids, Outbox, Reader,
 from basis.api.service import Route, Service, delete, get, patch, post, put
 from basis.api.settings import Serve, Settings, SettingsError
 from basis.api.tables import Table
-from basis.core.errors import BadReply, Conflict, Denied, Failed, NotFound, Rejected, ServiceError, Timeout, Unavailable
+from basis.core.errors import BadReply, Conflict, Denied, Failed, NotFound, Rejected, ServiceError, Timeout, Unavailable, missing
 from basis.core.settings import Traces
 
 if TYPE_CHECKING:
@@ -143,5 +143,9 @@ def __getattr__(name: str) -> object:
         from basis.api.call import answer  # noqa: PLC0415 -- the app loads on first use
 
         return answer
-    msg = f"module 'basis.api' has no attribute {name!r}"
-    raise AttributeError(msg)
+    return missing("basis.api", name, RENAMED)
+
+
+RENAMED: dict[str, str] = {}
+"""Each name a release renamed, by its old name, with its new one: refused with it for one release, then removed, as
+basis's compatibility promise says (`scripts/surface.py`)."""

@@ -1,0 +1,76 @@
+{
+  "run_id": "01a1cd00-b051-7492-a6ca-856fc91b9685",
+  "job": "basis.job.example.job",
+  "module": "basis.job.example.job",
+  "version": "0.1.0",
+  "git_sha": null,
+  "started_at": "2026-11-11T23:45:36.850418Z",
+  "finished_at": "2026-11-11T23:45:36.947739Z",
+  "interval": "2026-11-05..2026-11-06",
+  "params_path": "/home/jacob/.cache/basis-agents/tmp/basis-11/v010/packages/job/src/basis/job/example/params/default.json",
+  "params_sha256": "9661c24066af0e561b0d66fcc74ae002401bc12cc305e9efa0cf6d9eba3fdca5",
+  "labels": {},
+  "data": "/home/jacob/.cache/basis-agents/tmp/basis-11/v010/packages/job/src/basis/job/example/tests/fixture",
+  "replay_of": null,
+  "trace_id": "7ec8f1f99d5f941a119d312aebd31fda",
+  "again": false,
+  "publish": false,
+  "status": "checked",
+  "inputs": {
+    "trades": {
+      "source": "data: /home/jacob/.cache/basis-agents/tmp/basis-11/v010/packages/job/src/basis/job/example/tests/fixture/trades.csv",
+      "rows": 5,
+      "read_ms": 27.2
+    },
+    "accounts": {
+      "source": "data: /home/jacob/.cache/basis-agents/tmp/basis-11/v010/packages/job/src/basis/job/example/tests/fixture/accounts.csv",
+      "rows": 3,
+      "read_ms": 4.4
+    }
+  },
+  "outputs": {
+    "positions": {
+      "database": "warehouse",
+      "table": "daily_positions",
+      "write": "ReplaceWhere",
+      "delete": {
+        "column": "trade_date",
+        "start": "2026-11-05T00:00:00Z",
+        "end": "2026-11-06T00:00:00Z",
+        "matching": false
+      },
+      "rows": {
+        "insert": 3
+      }
+    },
+    "activity": {
+      "database": "warehouse",
+      "table": "account_activity",
+      "write": "Upsert",
+      "delete": null,
+      "rows": {
+        "upsert": 2
+      }
+    }
+  },
+  "reasons": [],
+  "error": null,
+  "publishes": {},
+  "messages": {},
+  "sent": {},
+  "reports": {},
+  "written": {},
+  "documents": {},
+  "upserted": {},
+  "archives": {},
+  "archived": {},
+  "clocks": {},
+  "ids": {},
+  "params": "{\n  \"include_closed_accounts\": false\n}\n",
+  "datasets": {
+    "inputs/trades": "cb967573fc76a42034244b5d178a23bcfda381bed384a4b26cbbe5830ff27186",
+    "inputs/accounts": "1d48883bc923cd269089d8ecf6b217b4befe43215e392eff47f4719654e0abae",
+    "outputs/positions/insert": "51d758617fc3973d4fb92710cc7c7c4d6a7d47b8eebfa77c651f4369ee9aa623",
+    "outputs/activity/upsert": "b37263490637e7fd4b6f798ad1ccc07139ab1e8407b0700f46ec32ad6ff8fd30"
+  }
+}

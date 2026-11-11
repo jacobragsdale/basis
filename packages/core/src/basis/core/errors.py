@@ -22,9 +22,10 @@ function, and whether it is real or a fake, so a failure means one thing everywh
 Code that has something to say about a kind catches it, as a repository turns `NotFound` into None, and lets the others
 go: an API answers each as its problem (`basis.api.errors`), and a job's run fails, its reason naming the kind."""
 
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from http import HTTPStatus
+from typing import NoReturn
 
 
 class BasisError(Exception):
@@ -146,3 +147,19 @@ _ANSWERED: dict[int, type[ServiceError]] = {
 def answered(status: int) -> type[ServiceError]:
     """The kind of failure that another service's reply with `status`, which is not a 2xx, is."""
     return _ANSWERED.get(status, Failed)
+
+
+class RenamedError(BasisError):
+    """A name of basis's surface that a release renamed, used by its old name: refused, with its replacement, for one
+    release, before the old name goes (`scripts/surface.py`). Not an `AttributeError`, so `from basis.job import OLD`
+    says why, rather than that it cannot import the name."""
+
+
+def missing(module: str, name: str, renamed: Mapping[str, str]) -> NoReturn:
+    """A module's `__getattr__` past the names it has: a name in `renamed` is refused with what replaced it, and any
+    other is no attribute of the module's."""
+    if (replacement := renamed.get(name)) is not None:
+        reason = f"{module}.{name} is renamed {module}.{replacement}"
+        raise RenamedError(reason, f"use {replacement}")
+    msg = f"module {module!r} has no attribute {name!r}"
+    raise AttributeError(msg)

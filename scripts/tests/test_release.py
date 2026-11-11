@@ -376,3 +376,14 @@ def test_the_feed_serves_its_files_by_their_hash_and_sends_every_other_name_to_p
 def test_a_feed_of_no_distributions_is_refused(tmp_path: Path) -> None:
     with pytest.raises(ReleaseError, match="holds no wheel and no sdist: build them first"):
         FeedServer(tmp_path, port=0)
+
+
+def test_version_records_the_releases_surface_at_its_new_version_and_fails_where_it_cannot(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Every later release is held to it (`scripts/tests/test_surface.py`)."""
+    root = repo(tmp_path)
+    recorded: list[tuple[Path, str]] = []
+    assert main(["version", "minor"], root=root, lock=relock, surface=lambda folder, version: recorded.append((folder, version)) or 0) == 0
+    assert recorded == [(root, "0.4.0")]
+    capsys.readouterr()
+    assert main(["version", "minor"], root=root, lock=relock, surface=lambda _, __: 1) == 1
+    assert "could not record the release's surface" in capsys.readouterr().err

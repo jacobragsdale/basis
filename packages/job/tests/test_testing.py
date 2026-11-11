@@ -6,6 +6,7 @@ import pytest
 from builders import DAY, Price, make_job, params_file
 
 import basis.job as etl
+from basis.core.errors import RenamedError
 from basis.core.testing import ContractError
 from basis.job.job import Job
 from basis.job.params import Params
@@ -120,3 +121,11 @@ def test_binds_in_text_and_comments_and_a_casts_colons_are_no_binds(tmp_path: Pa
 SELECT CAST(x AS TIME) AS t, '10:30' AS at, '%(name)s' AS literal, y::text /* :ignored */
 FROM prices WHERE day >= :interval_start AND day < :interval_end"""
     check_queries(queried(tmp_path, sql))
+
+
+def test_a_name_a_release_renamed_is_refused_with_its_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(etl.RENAMED, "Report", "ExcelReport")
+    with pytest.raises(RenamedError, match=r"^basis.job.Report is renamed basis.job.ExcelReport: use ExcelReport$"):
+        etl.Report  # noqa: B018 -- the attribute's lookup is what is refused
+    with pytest.raises(AttributeError, match="has no attribute 'Nothing'"):
+        etl.Nothing  # noqa: B018 -- as above

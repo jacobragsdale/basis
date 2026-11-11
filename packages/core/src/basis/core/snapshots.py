@@ -25,7 +25,7 @@ from pydantic import AwareDatetime, Field
 
 from basis.core import frames
 from basis.core.interval import Interval
-from basis.core.model import Model
+from basis.core.model import Model, newer
 from basis.core.storage import DIGEST, Root, Store
 from basis.core.tables import Changes, Delete, Range
 
@@ -232,8 +232,16 @@ def new_run_id() -> str:
     return str(uuid.uuid7())
 
 
+FORMAT = 1
+"""The manifest's format, which a manifest records: a change that an older basis could not read raises it, and a
+basis refuses a manifest of a format it does not know, with the upgrade, rather than failing on a field it does not."""
+
+
 class Manifest(RunRecord):
     """A run's record as the store keeps it, with what a replay or a resume reads besides."""
+
+    format: int = FORMAT
+    """The manifest's format (`FORMAT`); 1 for one from before basis recorded it."""
 
     params: str
     """The params, as the run read them."""
@@ -307,8 +315,10 @@ def _manifest(record: RunRecord, params_json: str, datasets: Mapping[str, str]) 
 
 
 def _read(store: Store, path: Root) -> Snapshot:
+    data = path.read_bytes()
+    newer(data, FORMAT, f"the manifest {path.location}")
     try:
-        manifest = Manifest.model_validate_json(path.read_bytes())
+        manifest = Manifest.model_validate_json(data)
     except ValueError as error:
         error.add_note(f"while reading the manifest {path.location}")
         raise

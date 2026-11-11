@@ -1,0 +1,40 @@
+{
+  "commit": "0000000000000000000000000000000000000000",
+  "folder": "",
+  "checked_at": "2026-11-11T12:00:00Z",
+  "checked": true,
+  "passed": true,
+  "versions": {
+    "basis-core": "0.1.0",
+    "basis-job": "0.1.0",
+    "basis-api": "0.1.0",
+    "optim": "0.1.0"
+  },
+  "regress": {
+    "skipped": "no part of this repo saves runs",
+    "store": null,
+    "replayed": [],
+    "failures": []
+  },
+  "qa": {
+    "skipped": "the repo declares no QA tier",
+    "store": null,
+    "refused": [],
+    "runs": []
+  },
+  "contracts": {
+    "api": null
+  },
+  "contracts_skipped": null,
+  "mutation": {
+    "skipped": "the basis that checked this commit tested no mutants",
+    "base": null,
+    "functions": [],
+    "mutants": 0,
+    "killed": 0,
+    "survived": 0,
+    "shown": [],
+    "unsettled": {},
+    "failure": null
+  }
+}

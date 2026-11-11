@@ -40,8 +40,9 @@ To cut a release:
    uv run scripts/release.py version minor
    ```
 
-   It prints `basis 0.1.0: every member, each basis-core pin and uv.lock; commit them`. It also writes the example
-   API's `openapi.released.json`, the sample's copy as this release gives it, which the example's contract test
+   It prints `basis 0.1.0: every member, each basis-core pin and uv.lock; commit them`. It also records the
+   release's surface and a corpus of what it stores, in `docs/surface/0.1.0/` (`scripts/surface.py write`; see
+   [the compatibility promise](#the-compatibility-promise)), and writes the example API's `openapi.released.json`, the sample's copy as this release gives it, which the example's contract test
    compares each later sample with, and which the release workflow's `check --tag` checks names the tag. For another bump, pass
    `patch`, or a version such as `0.1.0`. Generated repos cap basis below the next 0.x minor version, so the script
    refuses a 1.x version, and changes nothing, until those templates change. It works out every file's new text
@@ -111,6 +112,25 @@ to publish are the release's, `gh release download v0.1.0 --repo jacobragsdale/b
 `sha256sum --check SHA256SUMS`. Public PyPI has an unrelated `basis-core` at 0.1.0, so a feed that proxies PyPI could
 serve it in place of basis's: once published, a repo made from the feed must lock `basis_core-0.1.0-py3-none-any.whl`
 with the hash `SHA256SUMS` gives it.
+
+## The compatibility promise
+
+Every repo imports `basis.job` or `basis.api`, runs the `basis` command and sets `BASIS_*` variables, and a run store,
+the ledgers and the check records outlive the code that wrote them. So what a release had stays:
+
+- **The surface** is each part's `__all__`, every verb and its options, every setting's variable, and the fields of a
+  run's manifest, of `basis check --full`'s record and of the ledger's row, as `uv run python scripts/surface.py`
+  prints it. `docs/surface/VERSION/surface.json` keeps each release's, and `scripts/tests/test_surface.py` fails when
+  any name a release had has left it. The ledger's columns never change, since its tables outlive every release.
+- **A rename** goes through one release in which the old name is refused with its replacement: a variable by its
+  part's `renamed`, a Python name by its package's `RENAMED`, which its `__getattr__` refuses as
+  `basis.job.Old is renamed basis.job.New: use New`. Only the release after removes it, and lists it in the test's
+  `RENAMED`.
+- **What a release stored** is read by every later one: `docs/surface/VERSION/` keeps a run store (the example job's
+  run on its fixture), a check record and the ledger's `CREATE TABLE` in each dialect, each written by that release's
+  own code; `packages/job/tests/test_corpus.py` replays the run, and `packages/core/tests/test_corpus.py` reads the
+  record and compares the ledger. A manifest and a check record carry their `format`; a format a basis does not know,
+  which a newer basis wrote, is refused with the upgrade, rather than failing on a field it does not read.
 
 ## What the dry run proves
 

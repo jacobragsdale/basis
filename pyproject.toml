@@ -84,6 +84,7 @@ ignore = [
 "packages/*/src/basis/*/templates/**" = ["INP001"]
 # A module the scripts import from their own folder, which Python puts first on sys.path; scripts/ is no package.
 "scripts/shared.py" = ["INP001"]
+"scripts/surface.py" = ["INP001"]  # run in the workspace, whose basis it reads, so no script header of its own
 # The eval's entry point, which puts its own folder first on sys.path, as the scripts' do; evals/ is no package.
 "evals/run.py" = ["INP001"]
 
