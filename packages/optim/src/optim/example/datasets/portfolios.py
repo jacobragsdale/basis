@@ -17,4 +17,4 @@ class Managed(Row):
     """The client's own rating floor, where it is stricter than the model's: buy only bonds rated this or better."""
 
 
-PORTFOLIOS = Dataset("portfolios", Managed, source="mssql", query=SQL / "portfolios.sql", key=("portfolio_id",))
+PORTFOLIOS = Dataset("portfolios", Managed, source="mssql", query=SQL / "portfolios.sql", key=("portfolio_id",), empty="fail")

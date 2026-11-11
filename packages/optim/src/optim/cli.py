@@ -227,6 +227,11 @@ def _run(args: RunArgs) -> int:
         return fail(
             "--again publishes beside another run's orders for the date, and the run names no portfolios, so it would order every one again", "name those that still need orders with --portfolios"
         )
+    if args.publish and args.data is not None:
+        return fail(
+            "--publish writes the run's orders to the orders table, and --data reads its datasets from files, such as a fixture's, whose orders no portfolio placed",
+            "publish a run on live data, or leave --publish out",
+        )
     environment = environments.load(args.env, Settings)
     if args.publish:
         environment.refuse_writes(f"basis run {args.model} --publish")

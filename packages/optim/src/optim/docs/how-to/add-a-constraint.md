@@ -122,7 +122,7 @@ takes a client's own turnover limit:
        """The most the portfolio may buy and sell together, as a fraction of its value."""
 
 
-   TURNOVER_LIMITS = Dataset("turnover_limits", TurnoverLimit, source="mssql", query=SQL / "turnover_limits.sql", key=("portfolio_id",))
+   TURNOVER_LIMITS = Dataset("turnover_limits", TurnoverLimit, source="mssql", query=SQL / "turnover_limits.sql", key=("portfolio_id",), empty="allow")
    ```
 
 2. Add the limit to `Portfolio` in `model.py`, and start it at the params' limit in `prep.portfolio`, as

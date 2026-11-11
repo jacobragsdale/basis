@@ -354,6 +354,20 @@ def test_again_without_publish_is_refused_before_anything_runs(basis: Basis, tmp
     assert not (tmp_path / "snapshots").exists()
 
 
+def test_a_run_that_reads_files_is_refused_a_publish_before_anything_runs(basis: Basis, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """`--data` reads the datasets from files, such as a fixture's, whose orders are no portfolio's."""
+    for name, value in TRADING.items() | {"BASIS_SNAPSHOT_ROOT": str(tmp_path / "snapshots")}.items():
+        monkeypatch.setenv(name, value)
+    data = fixture_files(tmp_path)
+
+    assert basis("run", "toys.basic", "--params", str(tmp_path / "params.json"), "--portfolios", "P1", "--data", str(data), "--publish") == 1
+    assert error_line(capsys) == (
+        "ERROR: --publish writes the run's orders to the orders table, and --data reads its datasets from files, such as a fixture's, whose orders no portfolio placed:"
+        " publish a run on live data, or leave --publish out"
+    )
+    assert not (tmp_path / "snapshots").exists()
+
+
 def test_again_without_portfolios_is_refused_before_anything_runs(basis: Basis, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", str(tmp_path / "snapshots"))
     data = fixture_files(tmp_path)

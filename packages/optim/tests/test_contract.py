@@ -28,8 +28,8 @@ class Position(Row):
     quantity: float
 
 
-SIGNALS = Dataset("signals", Signal, source="file", query="signals.csv", key=("security_id",))
-POSITIONS = Dataset("positions", Position, source="file", query="positions.csv", key=("portfolio_id", "security_id"))
+SIGNALS = Dataset("signals", Signal, source="file", query="signals.csv", key=("security_id",), empty="allow")
+POSITIONS = Dataset("positions", Position, source="file", query="positions.csv", key=("portfolio_id", "security_id"), empty="allow")
 
 
 class Solve(optim.Params):
@@ -82,7 +82,7 @@ def test_a_dataset_is_its_frame_on_an_instance_and_itself_on_the_class() -> None
 def test_two_datasets_with_one_name_are_refused() -> None:
     class Twice(optim.Datasets):
         one = SIGNALS
-        other = Dataset("signals", Signal, source="file", query="other.csv", key=("security_id",))
+        other = Dataset("signals", Signal, source="file", query="other.csv", key=("security_id",), empty="allow")
 
     with pytest.raises(TypeError, match=r"two datasets named \['signals'\]"):
         declared(Twice)

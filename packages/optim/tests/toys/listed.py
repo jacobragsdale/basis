@@ -16,7 +16,7 @@ class Params(optim.Params):
 
 
 class Data(optim.Datasets):
-    portfolios = optim.Dataset("portfolios", Listed, source="file", query=Path(__file__).with_name("listed.csv"), key=("portfolio_id",))
+    portfolios = optim.Dataset("portfolios", Listed, source="file", query=Path(__file__).with_name("listed.csv"), key=("portfolio_id",), empty="fail")
 
 
 def decide(portfolio: Data, market: Data, params: Params) -> optim.Decision:  # noqa: ARG001

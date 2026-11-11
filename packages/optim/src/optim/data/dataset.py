@@ -11,7 +11,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
-from typing import Protocol, Self, overload
+from typing import Literal, Protocol, Self, overload
 
 import pandas as pd
 
@@ -19,6 +19,8 @@ from basis.core.tables import IDENTIFIER
 from optim.data.frames import validate_columns
 from optim.schema import Row
 from optim.sources import Columns, SourceName
+
+type Empty = Literal["fail", "allow"]
 
 
 class _Frames(Protocol):
@@ -40,6 +42,10 @@ class Dataset:
     `file`."""
     key: tuple[str, ...]
     """Columns whose values no two rows share."""
+    empty: Empty
+    """What a load that returns no rows means, for the whole run: `"fail"`, a feed that has not landed, which stops
+    the run before it decides, or `"allow"`, a day with nothing in it, such as no controls on any portfolio. The two
+    look the same, so each dataset says which it may be, as a job's inputs do."""
     cache: timedelta | None = None
     """How long a cache entry stays fresh; None reads it live on every load. `basis warm` fills every cached dataset."""
     check: Callable[[pd.DataFrame], None] | None = None

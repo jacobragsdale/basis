@@ -19,4 +19,4 @@ class Mandate(Row):
     """The most of the portfolio's value in the sector after trading, as a fraction: 0.25 is 25%."""
 
 
-MANDATES = Dataset("mandates", Mandate, source="mssql", query=SQL / "mandates.sql", key=("portfolio_id", "mandate_id"))
+MANDATES = Dataset("mandates", Mandate, source="mssql", query=SQL / "mandates.sql", key=("portfolio_id", "mandate_id"), empty="allow")

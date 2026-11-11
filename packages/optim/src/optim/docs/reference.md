@@ -110,7 +110,7 @@ one `Data` must not share a `name`.
 ## `optim.Dataset`
 
 ```python
-Dataset(name, row, source, query, key, cache=None, check=None)
+Dataset(name, row, source, query, key, empty, cache=None, check=None)
 ```
 
 | Field | Type | Description |
@@ -120,6 +120,7 @@ Dataset(name, row, source, query, key, cache=None, check=None)
 | `source` | `str` | Where rows come from: a database, by the name its settings give, such as `"mssql"` for `BASIS_DATABASES__MSSQL__*`; or `"rest"` or `"file"`, which no database may be named. A database's name is lower-case letters, digits and underscores. |
 | `query` | `str \| Path` | A SQL file in the database's own dialect for a database, a URL path for `rest`, a Parquet or CSV file's path or URL for `file`. `{as_of_date}` in a file's path becomes the run's date. |
 | `key` | `tuple[str, ...]` | Columns whose values no two rows share; a duplicate fails the load. |
+| `empty` | `"fail"` or `"allow"` | What a load that returns no rows for the whole run means: `"fail"`, a feed that has not landed, stops the run before it decides; `"allow"`, a day with nothing in it, such as no controls on any portfolio. |
 | `cache` | `timedelta \| None` | How long a cache entry stays fresh; `None` reads the dataset live on every load. |
 | `check` | `Callable[[DataFrame], None] \| None` | Rules across rows, which raise `ValueError` on rows that disagree. |
 
@@ -356,7 +357,8 @@ none is. The ledger keeps a run's orders from being written twice:
 
 `--publish` stops the run before it loads, naming the fix, when no orders table is configured, when the table does not
 exist or cannot hold the orders' columns (`basis ddl` prints one that can), or when the date's orders are published
-already. `--again` without `--publish` is refused. A run without `--publish` where an orders table is configured writes
+already. `--again` without `--publish` is refused, and so is `--publish` with `--data`, whose files, such as a
+fixture's, are no portfolio's. A run without `--publish` where an orders table is configured writes
 none, and its last line says so, `orders: none written to TABLE, since the run was not given --publish`, so a
 scheduled run that leaves the option out is seen. The orders are written after the snapshot is saved, so a publish
 that fails keeps the run, and `basis resume` writes its orders.
@@ -366,7 +368,7 @@ that fails keeps the run, and `basis resume` writes its orders.
 | `--params` | required | The params JSON file. |
 | `--as-of` | the fixture's date with `--data`, or today in New York | The business date, `YYYY-MM-DD`. The fixture's date is `fixture.json`'s, where `--data`'s folder has one, as for `optim.run`. |
 | `--portfolios` | every portfolio the model lists, or with `--data`, every one in its holdings | Portfolio ids, or `@FILE` with one per line. |
-| `--data` | none | Reads each dataset that has a file in the directory, `NAME.parquet` or `NAME.csv`, instead of its source. |
+| `--data` | none | Reads each dataset that has a file in the directory, `NAME.parquet` or `NAME.csv`, instead of its source; not with `--publish`. |
 | `--label` | none | `KEY=VALUE`, recorded in the run's manifest; repeat for more. |
 | `--workers` | `BASIS_OPTIM__WORKERS`, or 1 | Worker processes. |
 | `--no-cache` | off | Reads every dataset live. |

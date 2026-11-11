@@ -6,6 +6,7 @@ import threading
 import time
 from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal  # what a driver returns for a DECIMAL column
 from pathlib import Path
@@ -15,7 +16,7 @@ import pytest
 
 from basis.core.databases import Bind
 from optim.data.dataset import Dataset
-from optim.data.loader import Loader, TaskGroup, load_data
+from optim.data.loader import EmptyDatasetError, Loader, TaskGroup, load_data
 from optim.datasets import HOLDINGS, SECURITIES, SQL
 from optim.schema import Row
 from optim.sources import Columns, Param
@@ -32,7 +33,7 @@ class Listed(Row):
     portfolio_id: str
 
 
-ITEMS = Dataset("items", Item, source="mssql", query=SQL / "holdings.sql", key=("item_id",))  # a real file: a database source reads it
+ITEMS = Dataset("items", Item, source="mssql", query=SQL / "holdings.sql", key=("item_id",), empty="allow")  # a real file: a database source reads it
 
 
 class Database:
@@ -165,7 +166,7 @@ def test_the_portfolios_a_model_lists_load_off_the_main_thread_where_a_stop_sign
         def read_only(self) -> nullcontext[Listing]:
             return nullcontext(self)
 
-    listing = Dataset("portfolios", Listed, source="mssql", query=SQL / "holdings.sql", key=("portfolio_id",))
+    listing = Dataset("portfolios", Listed, source="mssql", query=SQL / "holdings.sql", key=("portfolio_id",), empty="fail")
 
     _, _, portfolio_ids = load_data(Loader({"mssql": Listing()}), {"portfolios": listing}, date(2026, 10, 16), None)
 
@@ -186,3 +187,19 @@ def test_a_file_dataset_reads_parquet_or_csv_for_the_run_date_and_a_batch_reads_
         holdings = loader.load(dataset, as_of_date=date(2026, 10, 16), portfolios=("002",))
         assert holdings["portfolio_id"].tolist() == ["002"]
         assert holdings["quantity"].dtype == "float64"
+
+
+def test_a_dataset_that_returns_no_rows_fails_the_load_unless_it_allows_it(tmp_path: Path) -> None:
+    """An empty feed that has not landed and a day with nothing in it look the same, so each dataset says which it may
+    be: a model that decided on no signals would trade on none."""
+    (tmp_path / "items.csv").write_text("item_id\n")
+    frame(HOLDINGS, {"portfolio_id": "P1"}).to_csv(tmp_path / "holdings.csv", index=False)
+    loader = Loader({"file": FileSource()})
+    items = Dataset("items", Item, source="file", query=tmp_path / "items.csv", key=("item_id",), empty="fail")
+    datasets = {"holdings": HOLDINGS.file(tmp_path / "holdings.csv"), "items": items}
+
+    with pytest.raises(EmptyDatasetError, match=r"items returned no rows for 2026-10-16, which its dataset does not allow \(empty='fail'\): has the data landed\?"):
+        load_data(loader, datasets, date(2026, 10, 16), ["P1"])
+    frames, _, _ = load_data(loader, datasets | {"items": replace(items, empty="allow")}, date(2026, 10, 16), ["P1"])
+
+    assert frames["items"].empty

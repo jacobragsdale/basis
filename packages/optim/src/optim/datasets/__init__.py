@@ -56,8 +56,8 @@ class Security(Row):
     """The smallest holding a partial sale may leave, where the market sets one."""
 
 
-HOLDINGS = Dataset("holdings", Holding, source="mssql", query=SQL / "holdings.sql", key=("portfolio_id", "security_id"))
-SECURITIES = Dataset("securities", Security, source="oracle", query=SQL / "securities.sql", key=("security_id",), cache=timedelta(minutes=15))
+HOLDINGS = Dataset("holdings", Holding, source="mssql", query=SQL / "holdings.sql", key=("portfolio_id", "security_id"), empty="fail")
+SECURITIES = Dataset("securities", Security, source="oracle", query=SQL / "securities.sql", key=("security_id",), empty="fail", cache=timedelta(minutes=15))
 
 
 def unit_value(securities: pd.DataFrame) -> pd.Series:

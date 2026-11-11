@@ -20,6 +20,7 @@ from typing import Literal, Self
 
 import pandas as pd
 
+from basis.core.errors import BasisError
 from basis.core.logs import brief, ms_since, timed, to_json, utc_now
 from optim.contract import LISTING
 from optim.data.cache import Cache
@@ -31,6 +32,10 @@ from optim.sources.database import read_sql
 
 log = logging.getLogger(__name__)
 _stop: ContextVar[threading.Event | None] = ContextVar("_stop", default=None)  # set when a call in a `TaskGroup` fails
+
+
+class EmptyDatasetError(BasisError, ValueError):
+    """A dataset that returned no rows for the run, which its declaration does not allow (`empty="fail"`)."""
 
 
 class Skipped(Exception):  # noqa: N818 -- not an error: the call was not made
@@ -251,6 +256,13 @@ def load_data(loader: Loader, datasets: Mapping[str, Dataset], as_of_date: date,
         market = group.submit(loader.load_all, *whole, as_of_date=as_of_date)
         batches = [group.submit(_load_batch, loader, per_portfolio, batch, as_of_date) for batch in batched(portfolio_ids, BATCH, strict=False)]
     frames = listed | market.result() | {dataset.name: _concat(dataset, [batch.result()[dataset.name] for batch in batches]) for dataset in per_portfolio}
+    if empty := sorted(dataset.name for dataset in datasets.values() if dataset.empty == "fail" and frames[dataset.name].empty):
+        many = len(empty) > 1
+        msg = (
+            f"{', '.join(empty)} returned no rows for {as_of_date}, which {'their datasets do' if many else 'its dataset does'} not allow (empty='fail'): has the data landed?"
+            f" Run again once it has, or declare {'them' if many else 'it'} empty='allow' if a day may have none"
+        )
+        raise EmptyDatasetError(msg)
     return frames, reads.by_dataset(), list(portfolio_ids)
 
 

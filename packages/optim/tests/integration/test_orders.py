@@ -86,30 +86,23 @@ def test_a_run_publishes_its_orders_with_a_ledger_row_and_a_second_publish_write
 def test_a_publish_that_fails_partway_writes_nothing_and_resume_writes_each_order_once(
     basis: Basis, trading: Trading, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Through the command line, with --again, which the fix line carries."""
+    """The run from Python, told --again, since a run of the command line on files may not publish; the resumes
+    through the command line."""
     for name, value in trading.scratch.environ("trading").items():
         monkeypatch.setenv(name, value)
     monkeypatch.setenv("BASIS_OPTIM__ORDERS__DATABASE", "trading")
     monkeypatch.setenv("BASIS_OPTIM__ORDERS__TABLE", trading.orders)
     monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", str(tmp_path / "snapshots"))
-    (data := tmp_path / "data").mkdir()
-    HELD.to_parquet(data / "holdings.parquet")
-    MARKET.to_parquet(data / "securities.parquet")
-    (tmp_path / "params.json").write_text("{}")
     # the last portfolio's order fails, after the others are sent in the same batch
     trading.scratch.execute(f"ALTER TABLE {trading.orders} ADD CONSTRAINT ck_{trading.orders} CHECK (portfolio_id <> 'P3')")
-    run = ["run", "toys.basic", "--params", str(tmp_path / "params.json"), "--portfolios", *PORTFOLIOS, "--data", str(data), "--as-of", AS_OF.isoformat(), "--publish", "--again"]
 
-    assert basis(*run) == 1
-    [manifest] = (tmp_path / "snapshots" / "runs" / "optim" / "optim.toys.basic").iterdir()
-    run_id = manifest.stem
-    assert capsys.readouterr().err.splitlines()[-1] == (
-        f"ERROR: run {run_id} saved its orders and did not publish them: fix what the orders line above says, then `basis resume toys.basic {run_id} --again`"
-    )
+    ran = toy_run(tmp_path, trading.publishing(), again=True)
+    run_id = ran.run_id
+    assert not ran.committed
     assert (trading.written(), trading.ledgered()) == ([], [])
 
     trading.scratch.execute(f"ALTER TABLE {trading.orders} DROP CONSTRAINT ck_{trading.orders}")
-    assert basis("resume", "toys.basic", run_id, "--again") == 0
+    assert basis("resume", "toys.basic", run_id, "--again") == 0, capsys.readouterr().err
     assert basis("resume", "toys.basic", run_id) == 0
 
     assert trading.written() == [(run_id, portfolio, "A", "buy", 1000.0) for portfolio in PORTFOLIOS]

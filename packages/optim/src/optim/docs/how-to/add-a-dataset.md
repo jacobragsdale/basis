@@ -43,7 +43,7 @@ To add a dataset:
        """The issuer's internal credit score; higher is safer."""
 
 
-   ISSUER_SCORES = Dataset("issuer_scores", IssuerScore, source="oracle", query=SQL / "issuer_scores.sql", key=("issuer",), cache=timedelta(hours=12))
+   ISSUER_SCORES = Dataset("issuer_scores", IssuerScore, source="oracle", query=SQL / "issuer_scores.sql", key=("issuer",), empty="fail", cache=timedelta(hours=12))
    ```
 
    A field is a `float`, `int`, `str`, `bool`, `date` or `Literal[...]`, or any of them `| None` where a value may be
@@ -54,7 +54,8 @@ To add a dataset:
    dialect; `"rest"`, whose `query` is the API's path, such as `"/v1/expected-returns"`; or `"file"`, whose `query` is a
    file's path or URL, in which `{as_of_date}` is replaced by the business date, as in
    `"//share/signals/{as_of_date}.parquet"`. The `key` columns
-   must be unique. Leave out `cache` to read the dataset live on every run: one that changes during the day, or is read
+   must be unique. `empty` says what no rows for the whole run means: `"fail"`, a feed that has not landed, which
+   stops the run before it decides, or `"allow"`, a day that may have none, such as no controls on any portfolio. Leave out `cache` to read the dataset live on every run: one that changes during the day, or is read
    per portfolio, should not be cached. `check=` takes a function of the frame that raises `ValueError` for rules
    across rows, such as weights that must sum to 1.
 4. Write a database's SQL in `datasets/sql/`, as `issuer_scores.sql`, aliasing each column to its field name. Every

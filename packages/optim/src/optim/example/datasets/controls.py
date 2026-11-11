@@ -25,4 +25,4 @@ class Control(Row):
     """Why, as the source records it, such as `wash_sale` or `client_restriction`; reasons quote it."""
 
 
-CONTROLS = Dataset("controls", Control, source="mssql", query=SQL / "controls.sql", key=("portfolio_id", "control_id"))
+CONTROLS = Dataset("controls", Control, source="mssql", query=SQL / "controls.sql", key=("portfolio_id", "control_id"), empty="allow")

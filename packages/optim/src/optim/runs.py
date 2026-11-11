@@ -159,6 +159,9 @@ def run_model(
     though another run of the model published orders for the date. `data_dir` reads each dataset that has a file there
     instead of its source. Without `portfolio_ids`, the run decides every portfolio the model lists, or, for a model
     that lists none, every portfolio in a holdings file."""
+    if orders is not None and data_dir is not None:
+        msg = f"the run reads its datasets from files in {data_dir}, such as a fixture's, whose orders no portfolio placed, so it does not publish them: publish a run on live data"
+        raise OrdersRefusedError(msg)
     params, params_file_info = read_params(model, params_file)
     snapshot_root.make_dir()  # storage that cannot be written fails the run before it loads, not after it decides
     run_id = str(uuid.uuid7())
