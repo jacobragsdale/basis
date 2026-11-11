@@ -20,7 +20,7 @@ step's own commit keeps it true.
 | 9.4 Skills and docs for APIs | Done | `8cbb279` |
 | 9.5 SQL is opened before the environment | Done; the sqlglot report waits on the firm's queries, a **(work)** step in [its spike](docs/spikes/sql-columns.md) | `e4c6343` |
 | 9.6 A lighter command | Done for `basis --version`; a verb in a repo still loads its declared parts, and `basis.job`'s package imports pandas, so `basis hook` in a job repo pays it: left for 11.4, the command's tables | `f8996bb` |
-| 10.1 The eval | In progress: [`evals/`](evals/README.md) holds twelve tasks, the runner and the graders, each task validated; the trials and the first report are next | the commit "Step 10.1, part 1" |
+| 10.1 The eval | Harness built and validated: [`evals/`](evals/README.md) holds twelve tasks, the runner and the graders, and each task's untouched repo fails its grade and its reference passes. The trials are not run, by the maintainer's decision of 2026-11-11, so there is no first report | `22fa5b6`, `b65da94` |
 | 10.2 `v0.1.0` | Released: the tag `v0.1.0` is on `acd92ef`, since CI failed on the bump commit `b9d8c4f` over a stale test that `acd92ef` fixed | `acd92ef` |
 | 10.3 The pilot | Handed over: [docs/pilot.md](docs/pilot.md) is the commands to run at the firm and what to send back, one section per item below; the answers are the maintainer's, **(work)** | the commit "Step 10.3" |
 | 11.1 One interface for a job's outputs | Done: `basis.job.effects` (a `Kind` per output that is not a table, and the one loop `run` and `resume` share), `basis.job.replays`; a resume now stops at the first kind that fails, as a run does | the commit "Step 11.1" |
@@ -113,6 +113,7 @@ The maintainer decided these on 2026-11-09. Each changes [the design](docs/desig
 | Order submission and what an order-management system needs are real, and deferred | [Deferred](#deferred) |
 | A port is proven equivalent to its legacy system per system, by its owner; basis builds no comparison tool | [Deferred](#deferred) |
 | There is no deadline; the work goes in the order that makes the most sense | [The order](#the-order) |
+| No agent trials of basis (2026-11-11): the eval's harness is kept, built and validated, and not run | 10.1 |
 
 ## The order
 
@@ -530,6 +531,9 @@ passing the checks in `AGENTS.md` before it lands.
 
    From here a skill, an error message or a doc page changes when the eval shows the change helps (the roadmap's
    4.5). Done when `evals/` holds the tasks, the runner and a first report.
+
+   The maintainer decided on 2026-11-11 that basis is built and verified, not measured by agent trials: the harness
+   stays in `evals/`, built and validated, and the trials and the first report are not run.
 2. **10.2 `v0.1.0`.** The roadmap's 1.8, after phases 6 to 9 and lane B of 7, so the first contract basis-ui pins
    is the true one.
 3. **10.3 The pilot (work).** The roadmap's 2.8, with this review's list of what only the firm's environment can

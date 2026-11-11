@@ -698,7 +698,8 @@ review` names is how a reviewer sees which commit passed. The generated `azure-p
 --full`, so the day the firm builds CI, a branch policy on `main` that requires that pipeline turns the same checks into
 the gate.
 
-Loop time, from an edit to every check passing, is measured by the eval. If the commit hook passes a budget of a minute,
+Loop time, from an edit to every check passing, was to be measured by the eval, whose trials are not run (see
+[Evals](#evals)). If the commit hook passes a budget of a minute,
 its tests move to the push hook, and the commit hook runs only the tests a change touches.
 
 ## Evals
@@ -712,6 +713,11 @@ error message, skill or doc page helps agents or, as Cursor found of many of its
 The method follows Anthropic's: tasks from real failures, deterministic graders where possible, the result graded rather
 than the path, and repeated trials. A task no run ever passes is usually a broken task. Infrastructure alone moved
 Anthropic's scores by six points, so a difference under three points is not a finding until the setups match.
+
+The maintainer decided on 2026-11-11 that basis is built and verified, not measured by agent trials. The eval's harness
+is in `evals/`, built and validated (each task's untouched repo fails its grade, and its reference passes), and it is
+not run: there are no trials and no report of them, and a skill, an error message or a doc page changes on its own
+merits, as the checks and tests verify it.
 
 ## Versions
 
