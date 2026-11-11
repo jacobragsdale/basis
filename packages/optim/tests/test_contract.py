@@ -97,6 +97,8 @@ def test_a_decision_takes_series_and_metrics_and_refuses_a_quantity_that_is_not_
     assert (decision.buy, decision.sell, decision.metrics) == ({"A": 1000.0}, {}, {"income": 50.0})
     with pytest.raises(ValidationError):
         optim.Decision(sell={"A": np.nan})  # a solve that failed, read as if it had not
+    with pytest.raises(ValidationError, match=r"names \['A'\] more than once"):
+        optim.Decision(buy=pd.Series([1000.0, 500.0], index=["A", "A"]))  # as a dict, it kept the last and dropped the first
 
 
 def module(**exports: object) -> types.ModuleType:

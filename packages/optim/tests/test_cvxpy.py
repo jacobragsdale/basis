@@ -4,6 +4,7 @@ own account of why it stopped."""
 import cvxpy as cp
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
 from optim.cvxpy import SolveSettings, read, solve
 
@@ -112,3 +113,17 @@ def test_an_answer_within_the_solvers_tolerance_of_a_large_constraint_is_solved(
 
     assert decision.solved
     assert decision.buy == {"A": pytest.approx(1e9), "B": pytest.approx(1e9)}
+
+
+@pytest.mark.parametrize("option", ["mip_rel_gap", "mip_abs_gap", "time_limit", "RelGap", "AbsGap", "TimeLimit"])
+def test_options_cannot_loosen_what_counts_as_optimal(option: str) -> None:
+    """A gap set in `options` overrode `mip_gap`, so an answer half as good as the best possible read as optimal."""
+    with pytest.raises(ValidationError, match=rf"options \['{option}'\] set what time_limit_s and mip_gap set"):
+        SolveSettings.model_validate({"options": {option: 0.5}})
+
+
+def test_trades_for_one_security_twice_are_refused_rather_than_one_dropped() -> None:
+    problem, buy, sell = lots()
+
+    with pytest.raises(ValueError, match=r"securities names \['A'\] more than once"):
+        solve(problem, SolveSettings(), securities=["A", "A"], buy=1000 * buy, sell=sell)

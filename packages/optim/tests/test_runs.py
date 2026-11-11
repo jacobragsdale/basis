@@ -90,6 +90,20 @@ def test_hooks_that_edit_their_data_in_place_change_neither_acceptance_nor_the_s
     assert_frame_equal(saved(root, run.run_id).inputs({"holdings": HOLDINGS})["holdings"], HELD.iloc[:2])  # P1's rows, as loaded
 
 
+def test_a_portfolio_that_kills_its_worker_rejects_itself_alone(tmp_path: Path) -> None:
+    """P2's decision kills the process deciding it, each time, and with it every portfolio that process's pool had not
+    finished: those decide again, apart from it, until P2 is alone."""
+    portfolios = [f"P{i}" for i in range(1, 7)]
+    held = frame(HOLDINGS, *({"portfolio_id": portfolio} for portfolio in portfolios))
+    root = Root.at(tmp_path / "snapshots")
+
+    run = run_model(
+        loader(Rows({HOLDINGS: held, SECURITIES: MARKET})), root, models.load("toys.killer"), params(tmp_path, kill=["P2"]), as_of_date=AS_OF, portfolio_ids=portfolios, workers=2, clock=Clock()
+    )
+
+    assert {outcome.portfolio_id: outcome.reasons for outcome in run.outcomes} == {portfolio: ["error: its worker process died"] if portfolio == "P2" else [] for portfolio in portfolios}
+
+
 def test_a_replay_decides_as_the_run_did_from_its_snapshot_alone(tmp_path: Path) -> None:
     root, run_id = toy_run(tmp_path, unsolved=["P2"])
 

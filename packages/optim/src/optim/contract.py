@@ -111,7 +111,12 @@ class Decision(Model):
     @field_validator("buy", "sell", mode="before")
     @classmethod
     def _series(cls, value: object) -> object:
-        return value.to_dict() if isinstance(value, pd.Series) else value
+        if not isinstance(value, pd.Series):
+            return value
+        if repeated := sorted({str(security) for security in value.index[value.index.duplicated()]}):
+            msg = f"the quantities' index names {repeated[:5]} more than once: give one quantity per security, its whole trade on that side"
+            raise ValueError(msg)
+        return value.to_dict()
 
     @field_validator("metrics", mode="before")
     @classmethod

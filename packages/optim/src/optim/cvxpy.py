@@ -15,6 +15,7 @@ To read another solver's status exactly, add a reader to `_READERS`; any other s
 
 import logging
 import math
+from collections import Counter
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -25,7 +26,7 @@ import highspy
 import numpy as np
 from cvxpy.atoms.affine.add_expr import AddExpression
 from cvxpy.atoms.affine.unary_operators import NegExpression
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from optim.contract import Decision, Params, SolverStats, Stop
 
@@ -47,7 +48,20 @@ class SolveSettings(Params):
     """An integer answer within this relative gap of the best possible counts as optimal, and the solver stops there."""
     options: dict[str, float | int | bool | str] = Field(default_factory=dict)
     """Passed to the solver as its docs name them, such as HiGHS's `mip_feasibility_tolerance`. They override the
-    settings above and the core's defaults, such as COPT's one thread."""
+    core's defaults, such as COPT's one thread, but never the time limit or the gap, which decide what counts as
+    optimal: an option that sets either is refused."""
+
+    @field_validator("options")
+    @classmethod
+    def _not_owned(cls, options: dict[str, float | int | bool | str]) -> dict[str, float | int | bool | str]:
+        if owned := sorted(set(options) & _OWNED):
+            msg = f"options {owned} set what time_limit_s and mip_gap set, and a gap set there would count a poorer answer as optimal: set time_limit_s and mip_gap instead"
+            raise ValueError(msg)
+        return options
+
+
+_OWNED = frozenset({"time_limit", "mip_rel_gap", "mip_abs_gap", "TimeLimit", "RelGap", "AbsGap"})
+"""The solvers' own names for the time limit and the gap, which `SolveSettings`' fields set."""
 
 
 def solve(
@@ -61,7 +75,8 @@ def solve(
 ) -> Decision:
     """Solve `problem` with `settings`, then `read` it. `buy` and `sell` are quantities, in the holdings' units, one
     entry per security in `securities`; a model with one signed trade per security passes `cp.pos(trade)` and
-    `cp.neg(trade)`."""
+    `cp.neg(trade)`. Each security is named once: two entries for one would be one order, and one of them lost."""
+    _once(securities)
     options = {"time_limit": settings.time_limit_s, "mip_rel_gap": settings.mip_gap} if settings.solver == "HIGHS" else {"TimeLimit": settings.time_limit_s, "RelGap": settings.mip_gap, "Threads": 1}
     if problem.size_metrics.num_scalar_variables == 0:  # nothing to decide, as in a portfolio that may not trade: solvers refuse an empty model
         return Decision(objective=float(problem.objective.value), solver=SolverStats(solver=settings.solver, status="no variables", stop="optimal"))
@@ -78,6 +93,7 @@ def read(
 ) -> Decision:
     """A solved problem as a `Decision`: its trades, whether it solved, its objective, the solver's statistics, and the
     `metrics` evaluated at the solution. Without a solution, it has no trades."""
+    _once(securities)
     if (problems := _problems.get()) is not None:
         problems.append(problem)
     stats = problem.solver_stats
@@ -131,6 +147,13 @@ def _size(expression: cp.Expression) -> np.ndarray:
     if isinstance(expression, NegExpression):
         return _size(expression.args[0])
     return np.abs(np.asarray(expression.value, dtype=float))
+
+
+def _once(securities: Sequence[str]) -> None:
+    """Refuse a security named twice, whose trades a decision, one quantity per security, would drop one of."""
+    if repeated := sorted({security for security, count in Counter(securities).items() if count > 1}):
+        msg = f"securities names {repeated[:5]} more than once: give one entry per security, with its buy and sell, as the universe should hold one row per security"
+        raise ValueError(msg)
 
 
 def _quantities(expression: cp.Expression | None, securities: Sequence[str]) -> dict[str, float]:

@@ -34,14 +34,27 @@ def each_portfolio[S, R](work: Callable[[S, str], R], state: S, portfolio_ids: S
     # one worker, the common intraday case, works in this process: no pool start-up cost
     if workers <= 1:
         return [_settle(portfolio_id, partial(work, state, portfolio_id), failed) for portfolio_id in portfolio_ids]
-    results = _in_pool(work, state, portfolio_ids, workers, failed)
-    if lost := [i for i, result in enumerate(results) if result is None]:
-        log.warning("a worker process died, as when the kernel kills one that runs out of memory; working on its %d unfinished portfolios in a new pool", len(lost))
-        for i, result in zip(lost, _in_pool(work, state, [portfolio_ids[i] for i in lost], workers, failed), strict=True):
-            results[i] = result
-    if lost := [portfolio_ids[i] for i, result in enumerate(results) if result is None]:
-        log.error("a worker process died again, so %d portfolios have no result; give the run more memory or fewer BASIS_OPTIM__WORKERS", len(lost), extra={"examples": lost[:20]})
+    results = _apart(work, state, list(portfolio_ids), workers, failed)
+    if lost := [portfolio_id for portfolio_id, result in zip(portfolio_ids, results, strict=True) if result is None]:
+        log.error("a worker process died deciding each of %d portfolios alone; give the run more memory or fewer BASIS_OPTIM__WORKERS", len(lost), extra={"examples": lost[:20]})
     return [failed(portfolio_id, "error: its worker process died") if result is None else result for portfolio_id, result in zip(portfolio_ids, results, strict=True)]
+
+
+def _apart[S, R](work: Callable[[S, str], R], state: S, portfolio_ids: list[str], workers: int, failed: Callable[[str, str], R]) -> list[R | None]:
+    """Work in a new pool, and the portfolios a dying worker took with it again in new pools, apart from each other
+    until the one that kills its worker is alone, so it rejects no portfolio but itself: those a pool did not finish
+    decide again, and when it finished none, in halves. None for a portfolio whose worker died deciding it alone."""
+    results = _in_pool(work, state, portfolio_ids, min(workers, len(portfolio_ids)), failed)
+    lost = [i for i, result in enumerate(results) if result is None]
+    if not lost or len(portfolio_ids) == 1:
+        return results
+    log.warning("a worker process died, as when the kernel kills one that runs out of memory; working on its %d unfinished portfolios in new pools", len(lost))
+    again = [portfolio_ids[i] for i in lost]
+    groups = [again] if len(again) < len(portfolio_ids) else [again[: len(again) // 2], again[len(again) // 2 :]]
+    found = [result for group in groups for result in _apart(work, state, group, workers, failed)]
+    for i, result in zip(lost, found, strict=True):
+        results[i] = result
+    return results
 
 
 def _in_pool[S, R](work: Callable[[S, str], R], state: S, portfolio_ids: Sequence[str], workers: int, failed: Callable[[str, str], R]) -> list[R | None]:
