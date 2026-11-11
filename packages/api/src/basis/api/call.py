@@ -4,29 +4,37 @@ with `--real`, or on the fakes its service declares (`dev.py`) with `--fake`. On
 route's compute functions run in the process pool, which `BASIS_COMPUTE__WORKERS` sizes; other routes' are never
 called, so they start none.
 
-ROUTE is the route's name, its handler's. REQUEST is one JSON object, or `-` to read it from stdin, with any of:
+ROUTE is the route's name, its handler's. REQUEST is one JSON object, `-` to read it from stdin, or `@FILE` to read
+it from a file, with any of:
 
     {"path": {"security": "US912810TM64"}, "query": {"face": "100", "settle": "2026-11-06"},
-     "headers": {"authorization": "Bearer ..."}, "body": {...}}
+     "headers": {"authorization": "Bearer ..."}, "body": {...}, "user": {"sub": "jsmith"}}
 
 A path or query value is the text the URL carries; a number or `true`/`false` is sent as JSON writes it, and a list
-gives a query key once for each value. The body is sent as JSON. The route reads all of it as strictly as it reads
-any request. A response that succeeds prints its JSON on stdout. One that fails prints its problem on stdout too, and
-the one `ERROR` line on stderr, and exits 1. A response that is not JSON, of either kind, prints the one `ERROR` line
-alone, with its status and its content type."""
+gives a query key once for each value. The body is sent as JSON. `user` is the claims of a user to sign in as, on the
+fakes alone, with the development key, which `basis dev`'s app verifies; `--real` refuses it. A request as it was sent,
+as `basis check --full` writes each one Schemathesis finds, gives its `target`, the path and the query exactly as the
+URL carried them, percent-encoded, in place of `path` and `query`, and its body's bytes as `content`, its text, or
+`content_base64`, in place of `body`. The route reads all of it as strictly as it reads any request. A response
+that succeeds prints its JSON on stdout. One that fails prints its problem on stdout too, and the one `ERROR` line on
+stderr, and exits 1. A response that is not JSON, of either kind, prints the one `ERROR` line alone, with its status
+and its content type."""
 
+import base64
 import json
+import re
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
-from typing import Literal
-from urllib.parse import quote
+from typing import Literal, Self
+from urllib.parse import quote, urlsplit
 
 from fastapi.testclient import TestClient
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, model_validator
 
-from basis.api import dev, errors, strict
+from basis.api import dev, errors, strict, tokens
 from basis.api.app import build
 from basis.api.compute import ComputeFunction
 from basis.api.fakes import Compute, Fake, Faked
@@ -47,6 +55,33 @@ class Request(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
     body: JsonValue = None
     """The body, when the request gives one: `null` is a body too."""
+    target: str | None = None
+    """The path and the query exactly as the URL carried them, percent-encoded, in place of `path` and `query`."""
+    content: str | None = None
+    """The body's bytes, as text, in place of `body`: sent as they are, with the content type `headers` give."""
+    content_base64: str | None = None
+    """The body's bytes, in base64, in place of `body`, for bytes that are no text."""
+    user: dict[str, JsonValue] | None = None
+    """The claims of a user to sign in as, on the fakes alone: `{"sub": "jsmith"}`, and any others the service's user
+    needs."""
+
+    @model_validator(mode="after")
+    def _one_form(self) -> Self:
+        if self.target is not None and ({"path", "query"} & self.model_fields_set):
+            msg = 'a "target" carries the path and the query as sent, so give no "path" or "query" beside it'
+            raise ValueError(msg)
+        if len({"body", "content", "content_base64"} & self.model_fields_set) > 1:
+            msg = 'give the body once, as "body", "content" or "content_base64"'
+            raise ValueError(msg)
+        return self
+
+    def sent(self) -> bytes | None:
+        """The body's bytes, or None when the request gives none."""
+        if self.content_base64 is not None:
+            return base64.b64decode(self.content_base64, validate=True)
+        if self.content is not None:
+            return self.content.encode()
+        return json.dumps(self.body).encode() if "body" in self.model_fields_set else None
 
 
 @dataclass(frozen=True)
@@ -87,26 +122,61 @@ def _called(service: Service, name: str, request: str | Mapping[str, object], *,
         wrong = "; ".join(f"{'.'.join(map(str, entry['loc'])) or 'the request'}: {entry['msg']}" for entry in error.errors(include_url=False, include_input=False))
         msg = f'the request to {name} is not valid: {wrong}: give one JSON object of "path", "query", "headers" and "body", each where the route needs it'
         raise DeclarationError(msg) from None
+    if given.user is not None and resources != "fake":
+        fix = "basis call signs in as a user on the fakes alone, with the development key: give --fake, or a token of the environment's in its headers"
+        msg = f'the request to {name} gives "user": {fix}'
+        raise DeclarationError(msg)
     logged(service)
     reaches = any(isinstance(resource, DatabaseResource | HttpResource) for resource in service.resources)
     faked: dict[Faked, Fake] = dev.fakes(service) if resources == "fake" and (service.fakes is not None or reaches) else {}  # a service that reaches nothing needs no fakes
     for other in service.routes:  # another route's compute functions are never called here, so they start no process
         faked |= {ask.given: Compute() for ask in other.asks if isinstance(ask.given, ComputeFunction) and ask.given not in {found.given for found in route.asks}}
-    app = build(service, settings=dev.settings(service, settings) if resources == "fake" else settings, fakes=faked)
+    configured = dev.settings(service, settings) if resources == "fake" else settings
+    headers = given.headers | ({"content-type": "application/json"} if "body" in given.model_fields_set else {})
+    if given.user is not None:
+        headers |= {"authorization": f"Bearer {signed(service, configured, given.user)}"}
+    app = build(service, settings=configured, fakes=faked)
     with TestClient(app.asgi, raise_server_exceptions=False) as client:  # runs the lifespan, as `basis serve` does
-        response = client.request(
-            route.method,
-            _url(route, given),
-            params=[(key, _text(value)) for key, values in given.query.items() for value in (values if isinstance(values, list) else [values])],
-            headers=given.headers | ({"content-type": "application/json"} if "body" in given.model_fields_set else {}),
-            content=json.dumps(given.body).encode() if "body" in given.model_fields_set else None,
-        )
+        if given.target is not None:
+            response = client.request(route.method, _target(route, given.target), headers=headers, content=given.sent())
+        else:
+            response = client.request(
+                route.method,
+                _url(route, given),
+                params=[(key, _text(value)) for key, values in given.query.items() for value in (values if isinstance(values, list) else [values])],
+                headers=headers,
+                content=given.sent(),
+            )
     kind = response.headers.get("content-type")
     if response.content and not strict.is_json(kind):
         fix = "basis call gives JSON alone, so serve the API with basis dev, and request the route there"
         msg = f"{route.name} answered {response.status_code} with {kind or 'a body of no content type'}, not JSON: {fix}"
         raise DeclarationError(msg)
     return route, Called(response.status_code, response.json() if response.content else None)
+
+
+def signed(service: Service, settings: Settings | None, claims: Mapping[str, JsonValue]) -> str:
+    """A token for the user `claims` give, signed with the development key that `settings` verify with, valid for an
+    hour."""
+    identity = settings.identity if settings is not None else None
+    if service.user is None or identity is None:
+        msg = f'service {service.name} verifies no tokens, so no request to it signs in: drop "user"'
+        raise DeclarationError(msg)
+    subject = claims.get("sub")
+    if not isinstance(subject, str):
+        msg = f'the user to sign in to service {service.name} as gives no "sub": give its subject, as {{"sub": "jsmith"}}'
+        raise DeclarationError(msg)
+    now = datetime.now(UTC)
+    return tokens.sign(identity, subject, issued=now, expires=now + timedelta(hours=1), claims={key: value for key, value in claims.items() if key != "sub"})
+
+
+def _target(route: Route, target: str) -> str:
+    """`target`, once its path is one `route` answers."""
+    pattern = re.sub(r"\\\{[^}]+\\\}", "[^/]+", re.escape(route.path))
+    if not re.fullmatch(pattern, urlsplit(target).path):
+        msg = f"the request to {route.name} is sent to {target}, which is not {route.name}'s path {route.path}: give its target a path the route answers"
+        raise DeclarationError(msg)
+    return target
 
 
 def _url(route: Route, given: Request) -> str:

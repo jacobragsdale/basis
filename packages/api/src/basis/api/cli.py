@@ -47,6 +47,7 @@ from basis.api.settings import Settings, unreadable
 from basis.core import command, environments, hooks
 from basis.core.destination import Dialect
 from basis.core.environments import Environment
+from basis.core.errors import BasisError
 from basis.core.sync import Problem
 from basis.core.verbs import Part, Runs, Shared, Verb, fail
 
@@ -107,13 +108,20 @@ def part() -> Part:
         contract=_contract,
         smoke=_smoke,
         checks=_checks,
+        full_checks=_full_checks,
     )
 
 
 def _checks(repo: Path) -> list[Problem]:
-    from basis.api import fuzz, layers  # noqa: PLC0415 -- grimp, FastAPI and Schemathesis load when the check runs, not for every `basis --help`
+    from basis.api import fuzz, layers  # noqa: PLC0415 -- grimp and FastAPI load when the check runs, not for every `basis --help`
 
-    return [*layers.problems(repo), *fuzz.problems(repo)]
+    return [*layers.problems(repo), *fuzz.built(repo)]
+
+
+def _full_checks(repo: Path) -> list[Problem]:
+    from basis.api import fuzz  # noqa: PLC0415 -- FastAPI and Schemathesis load when the check runs
+
+    return fuzz.fuzzed(repo)
 
 
 def _smoke(repo: Path, env: str, commit: str | None) -> list[Problem]:
@@ -158,7 +166,9 @@ def _service_argument(parser: argparse.ArgumentParser) -> None:
 
 def _call_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("route", help="the route's name, its handler's, as accrued_interest")
-    parser.add_argument("request", nargs="?", default="{}", help='the request as JSON, {"path": {...}, "query": {...}, "headers": {...}, "body": ...}, or - to read it from stdin; by default {}')
+    parser.add_argument(
+        "request", nargs="?", default="{}", help='the request as JSON, {"path": {...}, "query": {...}, "headers": {...}, "body": ..., "user": {...}}, - for stdin, or @FILE; by default {}'
+    )
     resources = parser.add_mutually_exclusive_group(required=True)
     resources.add_argument("--fake", dest="resources", action="store_const", const="fake", help="run on the fakes the service declares, as basis dev does")
     resources.add_argument("--real", dest="resources", action="store_const", const="real", help="run on the real resources, as the settings configure them")
@@ -190,8 +200,16 @@ def _environment(given: str | None, service: Service, what: str) -> Environment[
 
 def _call_args(namespace: argparse.Namespace) -> CallArgs:
     resources: Literal["real", "fake"] = "fake" if namespace.resources == "fake" else "real"
-    request = str(namespace.request)
-    return CallArgs(str(namespace.route), sys.stdin.read() if request == "-" else request, resources, namespace.service, namespace.env)
+    request, route = str(namespace.request), str(namespace.route)
+    if request == "-":
+        request = sys.stdin.read()
+    elif request.startswith("@"):
+        try:
+            request = Path(request[1:]).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            msg = f"the request to {route} is the file {request[1:]}, which cannot be read ({' '.join(str(error).split())}): give the path of a request file, as basis check --full writes one, after @"
+            raise BasisError(msg) from None
+    return CallArgs(route, request, resources, namespace.service, namespace.env)
 
 
 def _serve(args: ServeArgs) -> int:

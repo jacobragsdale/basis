@@ -233,6 +233,36 @@ def test_call_on_its_fakes_takes_a_token_the_development_key_signs_for_it(repo: 
     assert basis(repo, "call", "record_settlement", json.dumps(settlement | {"headers": {"authorization": f"Bearer {token}"}}), "--fake", *EXAMPLE) == 0
 
 
+@pytest.mark.usefixtures("clean")
+def test_call_on_its_fakes_signs_in_as_the_user_it_is_given(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    """A request `basis check --full` found, signed in, carries the user's claims, not a token, which would expire."""
+    settlement = {"body": {"security_id": ISIN, "face": 100.0, "settle": "2026-11-06"}, "user": {"sub": "jsmith"}}
+    assert basis(repo, "call", "record_settlement", json.dumps(settlement), "--fake", *EXAMPLE) == 0
+    capsys.readouterr()
+    monkeypatch.setenv("BASIS_GIT_SHA", "abc123")  # some setting of dev's, so the environment loads
+    assert basis(repo, "call", "record_settlement", json.dumps(settlement), "--real", *EXAMPLE) == 1
+    fix = "basis call signs in as a user on the fakes alone, with the development key: give --fake, or a token of the environment's in its headers"
+    assert _called(capsys)[1] == f'ERROR: the request to record_settlement gives "user": {fix}'
+
+
+@pytest.mark.usefixtures("clean")
+def test_call_reads_its_request_from_a_file_as_it_was_sent(repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """The form `basis check --full` writes a request Schemathesis found in: its path and query exactly as the URL
+    carried them, and its body's bytes, which JSON may not hold."""
+    sent = tmp_path / "request.json"
+    sent.write_text(json.dumps({"target": f"/bonds/{ISIN}?as_of=x&as_of=y", "headers": {"content-type": "application/json"}, "content_base64": "wNLo7A=="}), encoding="utf-8")
+    assert basis(repo, "call", "bond", f"@{sent}", "--fake", *EXAMPLE) == 1
+    assert "422" in _called(capsys)[1]
+    sent.write_text(json.dumps({"target": "/conventions"}), encoding="utf-8")
+    assert basis(repo, "call", "bond", f"@{sent}", "--fake", *EXAMPLE) == 1
+    assert _called(capsys)[1] == "ERROR: the request to bond is sent to /conventions, which is not bond's path /bonds/{security}: give its target a path the route answers"
+    sent.write_text(json.dumps({"target": "/bonds/X", "path": {"security": "X"}}), encoding="utf-8")
+    assert basis(repo, "call", "bond", f"@{sent}", "--fake", *EXAMPLE) == 1
+    assert _called(capsys)[1].startswith('ERROR: the request to bond is not valid: the request: Value error, a "target" carries the path and the query as sent, so give no "path" or "query" beside it')
+    assert basis(repo, "call", "bond", f"@{tmp_path / 'nowhere.json'}", "--fake", *EXAMPLE) == 1
+    assert _called(capsys)[1].startswith(f"ERROR: the request to bond is the file {tmp_path / 'nowhere.json'}, which cannot be read")
+
+
 def test_call_chooses_its_resources_out_loud(repo: Path) -> None:
     assert basis(repo, "call", "bond", "{}", *EXAMPLE) == 2  # a command line that does not parse
 

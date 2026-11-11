@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from basis.core import clone, command, environments, full, hooks, review, sync
+from basis.core import check, clone, command, environments, full, hooks, review, sync
 from basis.core.errors import BasisError
 from basis.core.verbs import Difference, Part, Qa, QaPlan, QaRun, Regress, Regressed, Regressions, Runs, Shared
 
@@ -90,10 +90,38 @@ def lines(capsys: pytest.CaptureFixture[str]) -> list[str]:
     return [line for line in capsys.readouterr().err.splitlines() if not line.startswith("{")]  # after any log records
 
 
-def test_without_basis_mutate_mutation_testing_is_skipped(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(full.MUTATE, raising=False)
-    monkeypatch.setattr(full.mutation, "mutate", lambda _: pytest.fail("mutation testing ran without BASIS_MUTATE=1"))
-    assert full._mutation(repo).skipped == f"it is off for now; set {full.MUTATE}=1 to run it"  # noqa: SLF001 -- the one piece under test
+def test_mutation_testing_runs_by_default(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ran: list[Path] = []
+    monkeypatch.setattr(full.mutation, "mutate", lambda given: ran.append(given) or review.MutationRecord(skipped="the change touches no domain function"))
+    assert full._mutation(repo).skipped == "the change touches no domain function"  # noqa: SLF001 -- the one piece under test
+    assert ran == [repo]
+
+
+def test_a_parts_checks_for_full_run_after_basis_check_passes_and_fail_it(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """A check too slow for every commit, such as basis-api's Schemathesis requests, runs in `basis check --full`
+    alone, whose push hook it holds, and never in `basis check`, which the commit hook runs."""
+    asked: list[Path] = []
+
+    def deeper(given: Path) -> list[tuple[str, str]]:
+        asked.append(given)
+        return [("Schemathesis found GET /halves answers 500", "make the request again, and fix the route")]
+
+    assert checked(repo, Part(full_checks=lambda _: [])) == 0
+    assert "basis check --full: the alpha part's checks for --full found nothing" in lines(capsys)
+    part = Part(full_checks=deeper)
+    assert check.check(repo, [], run=passing, checks=check.checks_of({"alpha": part})) == 0
+    assert asked == []
+    capsys.readouterr()
+    assert checked(repo, part) == 1
+    assert asked == [repo]
+    assert "ERROR: Schemathesis found GET /halves answers 500: make the request again, and fix the route" in lines(capsys)
+    assert not record(repo).passed
+
+
+def test_a_parts_checks_for_full_wait_for_basis_check(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    part = Part(full_checks=lambda _: pytest.fail("ran on a repo basis check failed"))
+    assert checked(repo, part, run=failing) == 1
+    assert "SKIPPED: each part's checks for --full: basis check failed, as above" in lines(capsys)
 
 
 def test_without_a_run_store_or_a_qa_tier_each_piece_says_it_was_skipped_and_why(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -339,9 +367,8 @@ PYTEST = '\n[tool.pytest.ini_options]\naddopts = "-ra --import-mode=importlib -p
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="mutmut runs in WSL or on Linux only")
-def test_review_lists_a_mutant_of_a_domain_function_the_change_touches_that_survived(repo: Path, git: Git, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_review_lists_a_mutant_of_a_domain_function_the_change_touches_that_survived(repo: Path, git: Git, capsys: pytest.CaptureFixture[str]) -> None:
     """The change's mutants survive or die by the repo's own unit tests, which mutmut runs; a survivor fails nothing."""
-    monkeypatch.setenv(full.MUTATE, "1")
     with (repo / "pyproject.toml").open("a", encoding="utf-8") as file:
         file.write(PYTEST)
     for name, text in {"rates/__init__.py": "", "rates/domain.py": DOMAIN, "rates/tests/__init__.py": "", "rates/tests/test_domain.py": CLAMPED}.items():
@@ -361,8 +388,7 @@ def test_review_lists_a_mutant_of_a_domain_function_the_change_touches_that_surv
     assert "| `rates.domain.clamp` | `rates.domain.x_clamp__mutmut_1` | `if x < low: -> if x <= low:` |" in printed
 
 
-def test_without_a_domain_function_the_change_touches_mutation_testing_is_skipped(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(full.MUTATE, "1")
+def test_without_a_domain_function_the_change_touches_mutation_testing_is_skipped(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert checked(repo, Part()) == 0
     why = "the change touches no domain function" if sys.platform == "linux" else "mutmut runs in WSL or on Linux only, since it forks a process for each mutant: push from WSL to have it run"
     assert f"SKIPPED: mutation testing: {why}" in lines(capsys)
@@ -371,7 +397,6 @@ def test_without_a_domain_function_the_change_touches_mutation_testing_is_skippe
 
 
 def test_a_defect_in_mutation_testing_fails_nothing_and_is_recorded(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(full.MUTATE, "1")
 
     def broken(_repo: Path) -> review.MutationRecord:
         msg = "no mutants today"

@@ -80,7 +80,8 @@ holds the interface, and its docstring is the reference.
   `describe`, `resume`, `replay`, `regress` and `ddl`, which every part that runs things by name has, and
   `regressions`, for `check --full`), `qa` (the QA tier), `contract` (`check --full` and `review`, such as basis-api's breaking-change check of
   `openapi.json`), `checks` (`check`: the part's own checks of the repo's code, each problem one `ERROR` line, such as
-  basis-api's layers and its app on its fakes), and `renamed`, which refuses the
+  basis-api's layers and its app on its fakes), `full_checks` (`check --full`: those too slow for every commit, such as
+  basis-api's Schemathesis requests), and `renamed`, which refuses the
   variables an earlier version of the part read, before any verb runs, as `basis` refuses `ETL_*`.
 - A repo declares its parts in its `pyproject.toml`, as `[tool.basis] parts = ["job"]`, and basis never infers one
   from a folder. `basis` loads only those parts, and `basis --help` lists their verbs and each core verb one of them
@@ -131,7 +132,7 @@ holds the interface, and its docstring is the reference.
   lists where a change adds it, beside the tests it removes; and no socket in a unit test,
   which basis-core's pytest plugin (`basis.core.pytest_plugin`, `pytest11`'s `basis`) fails, and tells the check of.
   This workspace's own session leaves the plugin out (`-p no:basis`), since its tests serve and reach real servers.
-- `basis check --full` (`basis.core.full`), which the push hook and the pipeline run, adds `regress` from the process's
+- `basis check --full` (`basis.core.full`), which the push hook and the pipeline run, adds each part's `full_checks`, `regress` from the process's
   `BASIS_SNAPSHOT_ROOT` where it is reachable, the QA tier where the repo declares `[tool.basis.qa]` and the machine has
   its settings file, each part's `contract`, and mutation testing of the domain functions the change touches, in WSL
   and on Linux (`basis.core.mutation`); a piece that does not run prints one `SKIPPED:` line. An output

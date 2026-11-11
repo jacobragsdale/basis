@@ -76,7 +76,7 @@ def check(repo: Path, files: Sequence[AgentFiles], *, run: Runner, staged: bool 
                 f"pyproject.toml has [tool.{name}], and basis writes the repo's {name} settings in {file}, which would read beside it",
                 "delete the table, and give each exception the repo needs as [tool.basis] exceptions, with its reason",
             )
-    failures += sum(_part_checks(repo, checks))
+    failures += sum(part_checks(repo, checks))
     failures += sum(fail(*problem) for problem in gates.mocks(repo))
     failures += sum(fail(*problem) for problem in gates.suppressions(repo))
     floor, missing = gates.floor(repo), gates.installed()
@@ -112,12 +112,14 @@ def _floor_excepted(repo: Path) -> bool:
         return False
 
 
-def checks_of(parts: Mapping[str, Part]) -> list[tuple[str, Callable[[Path], Sequence[Problem]]]]:
-    """Each of `parts`' own checks, by the part's name."""
-    return [(name, part.checks) for name, part in parts.items() if part.checks is not None]
+def checks_of(parts: Mapping[str, Part], *, full: bool = False) -> list[tuple[str, Callable[[Path], Sequence[Problem]]]]:
+    """Each of `parts`' own checks, by the part's name: those `basis check` runs, or with `full` those
+    `basis check --full` adds."""
+    found = ((name, part.full_checks if full else part.checks) for name, part in parts.items())
+    return [(name, checks) for name, checks in found if checks is not None]
 
 
-def _part_checks(repo: Path, checks: Checks) -> list[int]:
+def part_checks(repo: Path, checks: Checks) -> list[int]:
     """Each part's checks' problems, each printed as its line, and one line for a part whose checks raised."""
     failed: list[int] = []
     for name, part_checks in checks:

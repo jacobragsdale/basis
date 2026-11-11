@@ -103,9 +103,11 @@ Rules to keep:
   its token with `basis.api.tokens.sign`.
 - The service names its fakes for `basis dev` and `basis call --fake` as `api.Service(..., fakes="module:function")`:
   a function of the repo's own that returns a fake for each database and other service, from synthetic data in it or
-  in the repo's fixtures. `basis check` builds the app on them, from its settings' defaults, and sends it the
-  requests Schemathesis makes from `openapi.json`, which its development dependencies hold: a 500, or an answer the
-  document does not list, fails the check with the `basis call` that makes that request again.
+  in the repo's fixtures. `basis check` builds the app on them, from its settings' defaults, and `basis check --full`
+  sends it the requests Schemathesis makes from `openapi.json`, which its development dependencies hold, signed in as
+  `api.Service(example_user={"sub": ..., ...})`, whose claims the service's user needs: a 500, or an answer the
+  document does not list, fails the check, naming a file of that request, which
+  `uv run basis call ROUTE @FILE --fake` makes again.
 - Test the domain on its own values, the handlers on fakes, each error a route declares among them, a resource's
   failure made with its fake's `fails`, as `pricing.fails("/prices/X", api.Unavailable)`; and the repository in the
   integration tier, `@pytest.mark.integration`, against a real database, which the coverage floor leaves out.
@@ -115,7 +117,7 @@ Commands, all through `basis`, whose `--help` lists every verb this repo has:
 ```sh
 uv run basis serve [SERVICE] --env dev   # serve the API until SIGTERM, which drains it first; a second signal stops it at once
 uv run basis dev [SERVICE]      # serve it on its fakes, on 127.0.0.1, until Ctrl+C
-uv run basis call ROUTE '{"path": {...}, "query": {...}, "body": ...}' --fake   # one route in-process, its response as JSON; --real --env dev for the real resources
+uv run basis call ROUTE '{"path": {...}, "query": {...}, "body": ..., "user": {"sub": ...}}' --fake   # one route in-process, its response as JSON; --real --env dev for the real resources
 uv run basis ddl [SERVICE] --dialect mssql   # the CREATE TABLE of each outbox, for whoever has the rights to run it
 uv run basis relay [SERVICE] --env dev   # make the calls the outboxes still hold; the scheduler runs it, and it fails when one ages out
 ```

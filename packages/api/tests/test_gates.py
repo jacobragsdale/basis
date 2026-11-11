@@ -17,7 +17,7 @@ import pytest
 
 from basis.api import example, fuzz
 from basis.api import service as services
-from basis.core import check, command
+from basis.core import check, command, mutation, review
 
 type Git = Callable[..., str]
 """conftest's `git` fixture."""
@@ -91,12 +91,14 @@ def basis(repo: Path, *argv: str) -> int:
     return command.run(argv, cwd=repo, installed=command.installed())
 
 
-def checked(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], *, real: bool = False) -> list[str]:
-    """`basis check` on the repo: its ERROR lines, which are none exactly when it passes."""
+def checked(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], *, real: bool = False, full: bool = False) -> list[str]:
+    """`basis check` on the repo, or with `full` `basis check --full`, which adds Schemathesis's requests, its
+    mutation testing left out: its ERROR lines, which are none exactly when it passes."""
     capsys.readouterr()
     forget()
     monkeypatch.setattr(check, "run_command", Steps(real=real))
-    code = basis(repo, "check")
+    monkeypatch.setattr(mutation, "mutate", lambda _: review.MutationRecord(skipped="the gates' tests leave it out"))
+    code = basis(repo, "check", *(["--full"] if full else []))
     found = [line for line in capsys.readouterr().err.splitlines() if line.startswith("ERROR")]
     assert (code == 0) == (not found), found
     return found
@@ -113,7 +115,7 @@ def test_the_example_passes_every_gate(repo: Path, monkeypatch: pytest.MonkeyPat
     """Its layers, its app on its fakes and Schemathesis's requests, its document and agent files, and its unit tests,
     which cover 90% of it or more, mock nothing, and open no socket."""
     monkeypatch.setattr(fuzz, "EXAMPLES", 50)
-    assert checked(repo, monkeypatch, capsys, real=True) == []
+    assert checked(repo, monkeypatch, capsys, real=True, full=True) == []
 
 
 def test_a_domain_module_that_imports_up_the_layers_fails(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -201,13 +203,15 @@ def test_an_app_that_does_not_build_on_its_fakes_fails(repo: Path, monkeypatch: 
     ]
 
 
-def test_a_route_that_answers_500_fails_with_the_request_that_shows_it(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    monkeypatch.setenv(fuzz.FUZZ, "1")
+def test_a_route_that_answers_500_fails_check_full_with_the_request_that_shows_it(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    monkeypatch.setattr(fuzz, "FAILURES", tmp_path / "found")
     edit(repo, "handlers.py", "    return domain.conventions()", "    return [domain.conventions()[3]]  # there are three")
-    [line] = checked(repo, monkeypatch, capsys)
+    assert checked(repo, monkeypatch, capsys) == []
+    [line] = checked(repo, monkeypatch, capsys, full=True)
+    written = tmp_path / "found" / "accruals-conventions.json"
     assert line == (
-        "ERROR: Schemathesis found GET /conventions answers a request its document allows as its document does not say, Server error (ST101); Undocumented status code (ST103)"
-        " to `uv run basis call conventions '{}' --fake`: make the request with that command, which answers as the route does, and fix the route,"
+        "ERROR: Schemathesis found GET /conventions answers a request its document allows as its document does not say, Server error (ST101); Undocumented status code (ST103),"
+        f" to the request in {written}: make it again with `uv run basis call conventions @{written} --fake`, which answers as the route does, and fix the route,"
         " or declare the error it answers with in its errors=[...]"
     )
 

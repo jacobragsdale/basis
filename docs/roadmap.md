@@ -444,10 +444,9 @@ Since 2026-11-08 the maintainer has the work go fast to the MVP, one agent commi
 These are left for it.
 
 - **Step 2.6, from its review.** Every finding is fixed: the last, on 2026-11-07, in b11ab5c, d000f6f, 94d3fe9, b7923d3 and the fuzz's commit.
-- **Schemathesis and mutmut are off by default.** `BASIS_FUZZ=1` turns Schemathesis on for `basis check`, and
-  `BASIS_MUTATE=1` turns mutation testing on for `basis check --full`. Their own tests were marked `heavy`, which the
-  default run left out, until the review's step 6.1 put them back in it. Turning them back on is the review's call
-  (its step 8.8), and it moves the fuzz into `check --full` and builds the app once.
+- **Schemathesis and mutmut, on.** They were off by default for the MVP, behind `BASIS_FUZZ` and `BASIS_MUTATE`;
+  the review's step 8.8 turned both on: the fuzz runs in `basis check --full`, signed in as the service's example
+  user, each failure a file `basis call` reads, and mutation testing reports there, in WSL and on Linux.
 - **Step 2.11, done.** `strict.py`'s decimal-string paths are removed: a body is parsed once, and a query reads no
   `Decimal`, which is refused when the route is declared. `basis docs` runs in a project with no `[tool.basis]`
   table and lists every installed part's pages (`command._docs_outside`, checked 2026-11-07).

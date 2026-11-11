@@ -63,7 +63,7 @@ same verbs (`check`, `dev`, `test`, `sync`, `doctor`, `docs`) through Vite+'s ow
 | Verb | What it does | In repos with |
 |---|---|---|
 | `basis check` | Lints, type checks, unit and contract tests, and the agent-files and drift checks, with no network and no Docker | Every part |
-| `basis check --full` | `check`, plus `regress` where the run store is reachable, the QA tier where QA settings exist, and a mutation report in WSL or Linux | Every part |
+| `basis check --full` | `check`, plus each part's slower checks (an API's Schemathesis requests), `regress` where the run store is reachable, the QA tier where QA settings exist, and a mutation report in WSL or Linux | Every part |
 | `basis review` | Writes a pull request's summary: what `regress` changed, the API contract's diff, the mutation report, the versions, and the commit that was checked | Every part |
 | `basis smoke --env ENV` | Checks a deployed environment: the API's contract and readiness, each route's read-only example, and a dry run of a job | An API or jobs |
 | `basis replay RUN`, `basis regress` | Rerun one saved run or recorded request with today's code; rerun recent ones and list what changed | Every part |
@@ -349,10 +349,15 @@ The contract tests check that the app builds on fakes, that every route declares
 matches the code and that a breaking change to it is flagged, that the API survives property-based requests generated
 from its own schema (Schemathesis, run on fakes), that the layers hold, and that the agent files match the installed
 version. `basis check` builds the app on the fakes its service declares, from its settings' defaults alone, never the
-environment, and on the development key where it verifies tokens; Schemathesis then sends it, in the same process
-through `from_asgi`, 50 requests its document allows and 50 it refuses for each operation, the same on every run, so
-none is flaky. A 500, a status, content type or body the document does not list, or a refused request it accepts
-fails the check, with the `basis call` that makes the request again. Schemathesis is each API repo's development
+environment, and on the development key where it verifies tokens. `basis check --full`, which the push hook runs,
+builds it once more and has Schemathesis send it, in the same process through `from_asgi`, 50 requests its document
+allows and 50 it refuses for each operation, the same on every run, so none is flaky, each signed in as the service's
+example user (`api.Service(example_user={...})`, `{"sub": "example-user"}` by default), so a signed-in handler's body
+runs. It takes longer than a commit should wait, so the commit hook leaves it to the push. A 500, a status, content
+type or body the document does not list, or a refused request it accepts fails the check, and the request is written,
+as it was sent, to a file in the system's temporary folder, which `basis call ROUTE @FILE --fake` makes again: its
+path and query as the URL carried them, its body's bytes and its user's claims, which a command line could not always
+hold. Schemathesis is each API repo's development
 dependency, never basis-api's, so no image holds it.
 
 ## Jobs: basis.job

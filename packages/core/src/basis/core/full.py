@@ -1,6 +1,6 @@
 """`basis check --full`, which the push hook runs: `basis check`, then `regress` where the run store is reachable, the QA
 tier where the repo declares one and this machine has its settings file (`basis.core.qa`), each part's contract
-diff, and mutation testing of the domain functions the change touches, in WSL and on Linux (`basis.core.mutation`).
+diff, each part's checks too slow for every commit (`Part.full_checks`), which run first, and mutation testing of the domain functions the change touches, in WSL and on Linux (`basis.core.mutation`).
 Each piece that does not run prints one `SKIPPED:` line that says why, and each that runs prints one line of what it
 found. `regress` seeing an output change fails nothing: the change may be meant, and `basis review` shows it to the
 reviewer; nor does a mutant that survives, or mutmut failing. A failure to regress, a QA tier that refuses or a QA run
@@ -14,7 +14,6 @@ its `ERROR` line, and the pieces after it still run and are recorded. `basis upg
 its relock is not yet a commit: the push runs it."""
 
 import logging
-import os
 import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -56,6 +55,13 @@ def full(  # noqa: PLR0913 -- the repo, its parts, and how the check reaches the
     checked = check.check(repo, files, run=run, checks=check.checks_of(parts)) == 0
     if commit is not None:  # what the commit hook checks of a staged file, of each file a commit made with --no-verify adds
         checked = not sum(fail(*problem) for problem in hygiene.pushing(repo, commit)) and checked
+    deeper, slow = check.checks_of(parts, full=True), 0
+    if checked:
+        slow = sum(check.part_checks(repo, deeper))
+        if deeper and not slow:
+            _said(f"the {', '.join(name for name, _ in deeper)} part's checks for --full found nothing")
+    elif deeper:
+        _skipped("each part's checks for --full", "basis check failed, as above")
     if checked:
         regressed = _regress(parts, folder, report)
         tier = _qa(repo, parts, commit=commit, folder=folder, report=report) if with_qa else _skip_qa(QA_LATER)
@@ -66,7 +72,7 @@ def full(  # noqa: PLR0913 -- the repo, its parts, and how the check reaches the
         regressed, tier, contracts, broken, unoffered = _skip_regress(why), _skip_qa(why), {}, 0, why
         _skipped("the contract diffs", why)
         mutated = _skip_mutation(why)
-    passed = checked and not regressed.failures and not tier.refused and not any(run.failure for run in tier.runs) and not broken
+    passed = checked and not slow and not regressed.failures and not tier.refused and not any(run.failure for run in tier.runs) and not broken
     if found is None or commit is None:
         _skipped("the record for basis review", "the repo is in no clone with a commit")
     elif not clean:
@@ -195,14 +201,7 @@ def _contracts(repo: Path, parts: Mapping[str, Part], report: Report) -> tuple[d
     return found, broken, None
 
 
-MUTATE = "BASIS_MUTATE"
-"""The variable that turns mutation testing on, `1`, for a run of `basis check --full`. It is off by default for now,
-while the MVP takes shape: it is slow, and its report waits for the later review (docs/roadmap.md, "Later")."""
-
-
 def _mutation(repo: Path) -> review.MutationRecord:
-    if os.environ.get(MUTATE) != "1":
-        return _skip_mutation(f"it is off for now; set {MUTATE}=1 to run it")
     try:
         found = mutation.mutate(repo)
     except Exception as error:

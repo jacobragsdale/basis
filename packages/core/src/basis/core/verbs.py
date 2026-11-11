@@ -269,6 +269,10 @@ class Part:
     """The part's own checks of the repo's code, which `basis check` runs on the repo beside its tests, such as
     basis-api's layers: each problem one `ERROR` line, its reason and its fix. A check the repo's code cannot pass
     raises nothing, and returns the problem; a `BasisError` it raises is one line too."""
+    full_checks: Callable[[Path], Sequence[Problem]] | None = None
+    """The part's checks of the repo's code that `basis check --full` alone runs, once `basis check` passes, as they
+    take longer than a commit should wait: such as basis-api's, Schemathesis's requests to the app on its fakes. Each
+    problem is one `ERROR` line, as `checks`' are, and any fails the check."""
     smoke: Callable[[Path, str, str | None], Sequence[Problem]] | None = None
     """The part's checks of a deployed environment, which `basis smoke --env ENV [--commit SHA]` runs after each deploy
     and from a desktop, given the repo, the environment's name and the commit it must serve, where `--commit` names

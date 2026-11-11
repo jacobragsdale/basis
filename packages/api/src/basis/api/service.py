@@ -69,6 +69,7 @@ from types import FunctionType
 from typing import Annotated, Literal, Protocol, TypeAliasType, assert_never, get_args, get_origin
 
 from fastapi import params
+from pydantic import JsonValue, ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.routing import Route as StarletteRoute
@@ -370,6 +371,11 @@ class Service:
     """`api.User`, or the service's subclass of it with the claims it needs, for a service whose requests' bearer
     tokens are verified, which the settings' `identity` configures: see `basis.api.identity`. None for a service
     that verifies no tokens, whose requests are all anonymous."""
+    example_user: Mapping[str, JsonValue] | None = None
+    """The claims of a user, as a token carries them, `{"sub": "jsmith", "desk": "rates"}`, whom `basis check --full`
+    signs in as, with the development key, when it sends the app on its fakes Schemathesis's requests, so a signed-in
+    handler's body runs; checked against `user` when the service is declared. None for `{"sub": "example-user"}`,
+    which a user with no claim but its subject takes."""
     fakes: str | None = None
     """Where its fakes for `basis dev` and `basis call --fake` are made: `module:function`, a function that takes
     nothing and returns a fake for each database and other service it declares, by resource, as `api.build` takes them.
@@ -412,6 +418,7 @@ class Service:
                     msg = f"{route.name} asks for {ask.given.name}, which service {self.name} does not declare: add it to the service's resources=[...]"
                     raise DeclarationError(msg)
         _check_user(self.name, self.user, routes)
+        _check_example_user(self.name, self.user, self.example_user)
         check_outboxes(self.name, [(route.name, route.deadline_s, route.writes) for route in routes if route.writes is not None])
         seen: dict[tuple[Method, str], Route] = {}
         for route in routes:
@@ -688,6 +695,21 @@ def _check_user(service: str, user: object, routes: Sequence[Route]) -> None:
                 given = f"its user is {user.__qualname__}" if user is not None else "it declares no user=..."
                 msg = f"{route.name} asks for {ask.given.__qualname__}, which service {service} does not give: {given}"
                 raise DeclarationError(msg)
+
+
+def _check_example_user(service: str, user: type[User] | None, example: Mapping[str, JsonValue] | None) -> None:
+    """That the service's example user is one its user reads, where it declares one."""
+    if example is None:
+        return
+    if user is None:
+        msg = f"service {service} declares example_user, and no user: declare user=..., the api.User its tokens name, or drop example_user"
+        raise DeclarationError(msg)
+    try:
+        user.model_validate(example)
+    except ValidationError as error:
+        wrong = "; ".join(f"{'.'.join(map(str, entry['loc']))}: {entry['msg']}" for entry in error.errors(include_url=False, include_input=False))
+        msg = f"service {service}'s example_user is not a {user.__qualname__}: {wrong}: give each claim it needs, by the claim's name"
+        raise DeclarationError(msg) from None
 
 
 def _check_names(service: str, routes: Sequence[Route]) -> None:
