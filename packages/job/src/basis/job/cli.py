@@ -56,6 +56,8 @@ class ReplayArgs:
     run_id: str
     params: Path | None
     env: str | None = None
+    repo_root: Path = Path()
+    """The repo's folder, whose `snapshots/` the replay is saved in."""
 
 
 @dataclass(frozen=True)
@@ -113,7 +115,9 @@ def part() -> Part:
             run=Shared("run a job, and with --publish write its changes to its databases", _run_from, _run_arguments),
             describe=Shared("print a job's params, inputs and outputs as JSON, or every job's name", lambda n: _describe(DescribeArgs(n.name))),
             resume=Shared("finish publishing a run that failed partway, from its snapshot", lambda n: _resume(ResumeArgs(n.name, n.run_id, n.again, n.env)), _resume_arguments),
-            replay=Shared("rerun a saved run's transform with today's code, and print how its outputs differ", lambda n: _replay(ReplayArgs(n.name, n.run_id, n.params, n.env)), _replay_arguments),
+            replay=Shared(
+                "rerun a saved run's transform with today's code, and print how its outputs differ", lambda n: _replay(ReplayArgs(n.name, n.run_id, n.params, n.env, n.repo_root)), _replay_arguments
+            ),
             regress=Shared("replay recent published runs with today's code, and list what changed", _regress_from, _regress_arguments),
             ddl=Shared("print CREATE TABLE statements for a job's tables, or for the ledger", lambda n: _ddl(DdlArgs(n.name, n.ledger, n.dialect)), _ddl_arguments),
             regressions=_regress_jobs,
@@ -225,8 +229,9 @@ def _replay(args: ReplayArgs) -> int:
     settings = environment.settings
     root = settings.snapshots()
     source, job = _saved(root, args.run_id, args.job)
+    local = Root.at(args.repo_root / "snapshots")  # the repo's own store, as etl.replay saves to: never the environment's, which may be prod's
     with deliberate(ValueError):  # a run of another job, or one that did not save what the job reads now
-        result, diffs = runs.replay(job, source, params=args.params, snapshot_root=root, tracing=settings.traces, environment=environment.name)
+        result, diffs = runs.replay(job, source, params=args.params, snapshot_root=local, tracing=settings.traces, environment=environment.name)
     _print({"run_id": result.record.run_id, "replay_of": args.run_id, "status": result.record.status, "reasons": result.record.reasons, "differences": [vars(entry) for entry in diffs]})
     if result.ok:
         return 0
@@ -252,6 +257,15 @@ def _regress_from(n: argparse.Namespace) -> int:
     found = regress_jobs(RegressArgs((n.name,) if n.name is not None else tuple(sorted(jobs.listed())), n.last, dict(n.label), n.snapshots, n.env))
     failed = sum(command.report(error) for error in found.failures)
     _print([{"job": entry.name, "run_id": entry.run_id, "reasons": list(entry.reasons), "differences": [dict(diff.detail) for diff in entry.differences]} for entry in found.replayed])
+    labels = dict(n.label)
+    if labels and found.unreplayed and not found.replayed:
+        given = ", ".join(f"{key}={value}" for key, value in sorted(labels.items()))
+        failed += fail(
+            f"no published run of {', '.join(found.unreplayed)} has the labels {given}, so regress replayed nothing",
+            "check them against a run's labels, as its manifest records them, or regress without --label",
+        )
+    for name in found.unreplayed if not labels else ():
+        sys.stderr.write(f"SKIPPED: regress: no published run of {name} to replay\n")
     if changed := [entry for entry in found.replayed if entry.changed]:
         failed += fail(f"{len(changed)} of the {len(found.replayed)} runs replayed differ, or would not write", "stdout lists how; fix the code, or say in the pull request why the change is meant")
     return 1 if failed else 0
@@ -267,6 +281,7 @@ def regress_jobs(args: RegressArgs) -> Regressions:
     root = Root.at(args.snapshots) if args.snapshots is not None else environments.load(args.env, Settings).settings.snapshots()
     replayed: list[Regressed] = []
     failures: list[Exception] = []
+    unreplayed: list[str] = []
     for name in args.jobs:
         try:
             job = jobs.load(name)
@@ -276,7 +291,9 @@ def regress_jobs(args: RegressArgs) -> Regressions:
             failures.append(error)
             continue
         replayed += [Regressed(job.name, entry.run_id, tuple(entry.reasons), tuple(difference(diff) for diff in entry.diffs)) for entry in entries]
-    return Regressions(tuple(replayed), tuple(failures))
+        if not entries:
+            unreplayed.append(job.name)
+    return Regressions(tuple(replayed), tuple(failures), tuple(unreplayed))
 
 
 def difference(found: OperationDiff) -> Difference:

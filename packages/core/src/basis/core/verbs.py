@@ -138,6 +138,8 @@ class Regressions:
 
     replayed: tuple[Regressed, ...] = ()
     failures: tuple[Exception, ...] = ()
+    unreplayed: tuple[str, ...] = ()
+    """Each name with no published run to replay, of those the labels asked for."""
 
 
 @dataclass(frozen=True)

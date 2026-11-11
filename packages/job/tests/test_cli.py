@@ -331,3 +331,28 @@ def test_basis_job_names_every_installed_parts_version(capsys: pytest.CaptureFix
     installed = {f"{entry.dist.name} {entry.dist.version}" for entry in entry_points(group=command.GROUP) if entry.dist is not None}
     assert (core, sorted(parts)) == (f"basis-core {version('basis-core')}", sorted(installed))
     assert f"basis-job {version('basis-core')}" in installed  # at basis-core's version, as every basis package is
+
+
+def test_regress_with_a_label_no_published_run_has_fails_and_says_so(repo: Path, snapshot_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    run_id = ran(repo, capsys)
+    source = snapshots.find(Root.at(snapshot_root), run_id)
+    source.save_record(RunRecord.model_validate(source.record().model_dump() | {"status": "published"}))
+    assert basis(repo, "regress", "basis.job.example.job", "--label", "purpose=prodution") == 1
+    assert only_error(capsys.readouterr().err) == (
+        "ERROR: no published run of basis.job.example.job has the labels purpose=prodution, so regress replayed nothing:"
+        " check them against a run's labels, as its manifest records them, or regress without --label"
+    )
+
+
+def test_regress_with_no_published_run_to_replay_says_it_skipped(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert basis(repo, "regress", "basis.job.example.job") == 0
+    assert "SKIPPED: regress: no published run of basis.job.example.job to replay\n" in capsys.readouterr().err
+
+
+def test_a_replay_is_saved_in_the_repos_own_store_never_the_environments(repo: Path, snapshot_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    run_id = ran(repo, capsys)
+    assert basis(repo, "replay", run_id) == 0
+    replayed = json.loads(capsys.readouterr().out)["run_id"]
+    assert snapshots.find(Root.at(repo / "snapshots"), replayed).record().replay_of == run_id
+    with pytest.raises(LookupError):
+        snapshots.find(Root.at(snapshot_root), replayed)

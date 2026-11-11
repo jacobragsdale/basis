@@ -1,8 +1,10 @@
 """How two runs' changes to a table differ, as `basis replay` and `basis regress` report it. With a key, rows are matched
 by it, and a matched row that differs in any column counts as changed, by column; without one, rows are compared as
 a multiset, so a row repeated once more is one added. Two nulls are equal, in a key and in a value alike, and two
-floats are equal when they agree to 15 significant digits, so a sum taken in another order is no change. A column
-added, removed or retyped between the runs is a change of its own, and the rest compare."""
+floats are equal when they agree within a relative tolerance of 1e-12 (or an absolute one of 1e-12, near zero), so a
+sum taken in another order is no change, where a cent on a billion is; without a key, floats are rounded to 12
+significant digits to be grouped. A column added, removed or retyped between the runs is a change of its own, and the
+rest compare."""
 
 from dataclasses import dataclass, field
 
@@ -64,9 +66,8 @@ def diff_frames(output: str, operation: str, before: pd.DataFrame | None, after:
     shared = [str(name) for name in before.columns if name in after.columns and name not in schema]
     if not shared:
         return OperationDiff(output, operation, added=len(after), removed=len(before), changed=0, schema=schema)
-    before, after = _rounded(before[shared]), _rounded(after[shared])
     if key is None or not set(key) <= set(shared):
-        return _multiset(output, operation, before[shared], after[shared], schema)
+        return _multiset(output, operation, _rounded(before[shared]), _rounded(after[shared]), schema)
     on = list(key)
     values = [name for name in shared if name not in key]
     merged = before[shared].merge(after[shared], on=on, how="outer", suffixes=("", _AFTER), indicator=_SIDE)
@@ -100,9 +101,14 @@ def _type(dtype: object) -> str:
     return str(dtype.pyarrow_dtype) if isinstance(dtype, pd.ArrowDtype) else str(dtype)
 
 
-SIGNIFICANT = 15
-"""The digits two floats must agree to, to be the same: a double holds 15 exactly, and a sum taken in another order
-differs only past them."""
+RELATIVE = 1e-12
+"""How far apart, relative to their size, two floats may be and be the same: a sum of many terms taken in another order
+differs by far less, and a cent on a billion by more."""
+ABSOLUTE = 1e-12
+"""How far apart two floats near zero may be and be the same, where a relative tolerance means nothing."""
+SIGNIFICANT = 12
+"""The digits floats are rounded to, to group rows that have no key: well inside what a double holds exactly, so two
+orders of a sum land on the same side of a rounding boundary far more often than not."""
 
 
 def _rounded(frame: pd.DataFrame) -> pd.DataFrame:
@@ -118,7 +124,10 @@ def _rounded(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _same(before: pd.Series, after: pd.Series) -> pd.Series:
-    """Whether each pair of values is equal, two nulls being equal."""
+    """Whether each pair of values is equal, two nulls being equal, and two floats within the tolerance."""
+    if before.dtype == FLOAT and after.dtype == FLOAT:
+        old, new = before.to_numpy(dtype="float64"), after.to_numpy(dtype="float64")
+        return pd.Series(np.isclose(old, new, rtol=RELATIVE, atol=ABSOLUTE, equal_nan=True), index=before.index)
     return ((before == after).fillna(value=False) | (before.isna() & after.isna())).astype(bool)
 
 

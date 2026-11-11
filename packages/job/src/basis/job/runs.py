@@ -68,7 +68,7 @@ from basis.core.storage import Root
 from basis.core.tables import Changes
 from basis.job import handles
 from basis.job.changes import Planned, plan
-from basis.job.diff import OperationDiff, diff
+from basis.job.diff import OperationDiff, diff, diff_frames
 from basis.job.handles import Kept
 from basis.job.inputs import Clock, Fetch, Mongo
 from basis.job.job import Job, JobError, repo_root
@@ -805,11 +805,30 @@ def _replayed(job: Job, source: Snapshot, opened: core_runs.Replay[Params], *, s
     made = _transform(job, opened.params, tables, interval, kept)
     planned, reasons = made.planned, made.reasons
     record = record.with_outputs(planned, record.inputs).with_made(kept).with_messages(made.messages).with_reports(made.reports)
+    record = record.with_documents(made.documents).with_archives(made.archives)
     result = _finish(record.done("failed" if reasons else "checked", reasons=reasons, finished_at=clock()), snapshot_root, opened.params_text, tables, planned, reports=made.frames)
+    return result, _differences(job, source, original, made, result)
+
+
+def _differences(job: Job, source: Snapshot, original: RunRecord, made: _Transformed, result: Result) -> list[OperationDiff]:
+    """How a replay's outputs differ from its run's: each table's changes, the rows of each workbook, upsert and
+    archive, and each message's text."""
     before = source.changes()
     targets = targets_of(job)
-    diffs = [found for name in sorted(set(before) | set(planned)) if name in targets for found in diff(name, targets[name], before.get(name), result.changes(name))]
-    return result, diffs
+    diffs = [found for name in sorted(set(before) | set(result.planned)) if name in targets for found in diff(name, targets[name], before.get(name), result.changes(name))]
+    saved = {*original.reports, *original.documents, *original.archives}  # each saved as its rows, as resume reads them
+    for name in sorted(saved | set(made.frames)):
+        old = source.dataset(f"outputs/{name}/insert") if name in saved else None
+        new = made.frames.get(name)
+        if not (found := diff_frames(name, "rows", old, new, None)).same:
+            diffs.append(found)
+    for name in sorted(set(original.messages) | set(made.messages)):
+        old_message, new_message = original.messages.get(name), made.messages.get(name)
+        if old_message is None or new_message is None:
+            diffs.append(OperationDiff(name, "message", added=int(old_message is None), removed=int(new_message is None), changed=0))
+        elif (old_message.sha256, old_message.subject) != (new_message.sha256, new_message.subject):
+            diffs.append(OperationDiff(name, "message", added=0, removed=0, changed=1))
+    return diffs
 
 
 def resume(  # noqa: PLR0913 -- resume's, by keyword

@@ -381,7 +381,7 @@ def _shared(repo: Repo) -> list[Verb]:
     for name, spec in SHARED.items():
         sides = {part: (runs, side) for part, runs in _running(repo).items() if (side := _sides(runs).get(name)) is not None}
         if sides:
-            sharing = _Sharing(name, spec, sides)
+            sharing = _Sharing(name, spec, sides, repo.root)
             found.append(_Dispatched(name, sharing.help(), _no_arguments, partial(_dispatched, sharing.dispatch), sharing.dispatch))
     return found
 
@@ -408,6 +408,8 @@ class _Sharing:
     spec: Spec
     sides: Mapping[str, tuple[Runs, Shared]]
     """Each part that has the verb, by name, with what it runs and its side of the verb."""
+    root: Path
+    """The repo's folder, which every handler finds as `repo_root`, as a part's own verbs' do."""
 
     @cached_property
     def names(self) -> dict[str, Mapping[str, str]]:
@@ -451,6 +453,7 @@ class _Sharing:
         """`part`'s parser for the verb: core's NAME and RUN_ID, and the part's own arguments."""
         runs, side = self.sides[part]
         parser = _Parser(prog=f"basis {self.verb}", description=side.help)
+        parser.set_defaults(repo_root=self.root)
         metavar, path = (runs.noun.upper(), ", or its module path") if len(self.sides) == 1 else ("NAME", "")
         parser.add_argument("name", metavar=metavar, nargs=None if self.spec.required else "?", help=self.spec.name.format(noun=runs.noun, path=path))
         if self.spec.run_id:

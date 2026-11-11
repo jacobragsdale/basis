@@ -49,14 +49,15 @@ def runs(prefix: str, *names: str, noun: str = "job", option: str = "--interval"
 
     def says(verb: str) -> Callable[[argparse.Namespace], int]:
         def handle(n: argparse.Namespace) -> int:
-            given = {key: value for key, value in vars(n).items() if value is not None}
+            assert isinstance(n.repo_root, Path), "a shared verb's handler finds the repo's folder, as a part's own verbs' do"
+            given = {key: value for key, value in vars(n).items() if value is not None and key != "repo_root"}
             sys.stdout.write(f"{prefix} {verb} {' '.join(f'{key}={value}' for key, value in given.items())}\n")
             return 0
 
         return handle
 
     def regresses(n: argparse.Namespace) -> int:
-        sys.stdout.write(json.dumps({key: value for key, value in vars(n).items() if value is not None}) + "\n")
+        sys.stdout.write(json.dumps({key: value for key, value in vars(n).items() if value is not None and key != "repo_root"}) + "\n")
         return 0
 
     def options(parser: argparse.ArgumentParser) -> None:

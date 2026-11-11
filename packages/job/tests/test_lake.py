@@ -217,3 +217,12 @@ def test_a_lake_is_built_from_its_settings_and_never_azure_s_default_chain() -> 
     assert type(lake.filesystem(sas)).__name__ == "AzureFileSystem"
     with pytest.raises(SettingsError, match="the lake other is not configured"):
         lake.lake("other", GivenSettings())
+
+
+def test_a_replay_whose_archive_differs_says_so(world: World) -> None:
+    published = world.run()
+    assert published.snapshot is not None
+    doubled = world.root / "doubled.json"
+    doubled.write_text('{"scale": 2.0}', encoding="utf-8")
+    _, diffs = runs.replay(JOB, published.snapshot, params=doubled)
+    assert [(entry.output, entry.operation, entry.added, entry.removed) for entry in diffs] == [("archived", "rows", 2, 2)]

@@ -165,3 +165,12 @@ def test_the_qa_tier_runs_a_job_s_messages_through_fakes_so_it_sends_nothing(tmp
     [ran] = planned.run()
     assert ran.failure is None, ran.failure
     assert sorted(row.output for row in ledger.entries) == ["alert", "report"]  # recorded in QA's ledger, and sent to fakes
+
+
+def test_a_replay_whose_message_differs_says_so(world: World) -> None:
+    published = world.run()
+    assert published.snapshot is not None
+    quiet = world.root / "quiet.json"
+    quiet.write_text('{"quiet": true}', encoding="utf-8")
+    _, diffs = runs.replay(JOB, published.snapshot, params=quiet)
+    assert [(entry.output, entry.operation, entry.removed) for entry in diffs] == [("alert", "message", 1)]
