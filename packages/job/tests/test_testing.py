@@ -10,7 +10,7 @@ from basis.core.testing import ContractError
 from basis.job.job import Job
 from basis.job.params import Params
 from basis.job.rows import SchemaError
-from basis.job.testing import check_fixture, check_imports, frame, inputs
+from basis.job.testing import check_fixture, check_imports, check_queries, frame, inputs
 
 
 @pytest.mark.parametrize("statement", ["import pyarrow.fs", "from pyarrow import fs", "from pyarrow.fs import LocalFileSystem", "import pyarrow as pa"])
@@ -85,3 +85,38 @@ def test_a_fixture_holds_a_file_for_each_sheet_rather_than_reading_its_folder(tm
     (tmp_path / "fixture.json").write_text('{"interval": null}', encoding="utf-8")
     with pytest.raises(ContractError, match=r"has no file for \['prices'\]: add NAME\.csv or NAME\.parquet for each"):
         check_fixture(sheeted, tmp_path, params_file(tmp_path), tmp_path / "snapshots")
+
+
+def queried(tmp_path: Path, sql: str | None, *, name: str = "price.sql") -> Job:
+    """A job whose one input is a query of `name`, a file holding `sql`, or none where `sql` is None."""
+    if sql is not None:
+        (tmp_path / name).write_text(sql, encoding="utf-8")
+
+    class Queried(etl.Inputs):
+        prices = etl.Query(Price, database="source", sql=str(tmp_path / "price.sql"), empty="allow")
+
+    job = make_job(write=etl.Append())
+    return Job(job.name, job.module, job.params, Queried, job.outputs, job.transform, None, job.directory)
+
+
+def test_a_query_whose_file_is_missing_fails_the_contract_tests_naming_it(tmp_path: Path) -> None:
+    job = queried(tmp_path, "SELECT 1", name="prices.sql")
+    with pytest.raises(ContractError, match=r"prices reads .*price\.sql, which does not exist"):
+        check_queries(job)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    ["SELECT * FROM prices WHERE day >= :interval_start AND day < :interval_end AND desk = :desk", "SELECT * FROM prices WHERE day >= %(interval_start)s AND desk = %(desk)s"],
+    ids=["oracle", "mssql"],
+)
+def test_a_query_that_binds_anything_but_the_interval_fails_the_contract_tests(tmp_path: Path, sql: str) -> None:
+    with pytest.raises(ContractError, match=r"prices binds desk: a query binds only interval_start and interval_end"):
+        check_queries(queried(tmp_path, sql))
+
+
+def test_binds_in_text_and_comments_and_a_casts_colons_are_no_binds(tmp_path: Path) -> None:
+    sql = """-- filters on :desk later
+SELECT CAST(x AS TIME) AS t, '10:30' AS at, '%(name)s' AS literal, y::text /* :ignored */
+FROM prices WHERE day >= :interval_start AND day < :interval_end"""
+    check_queries(queried(tmp_path, sql))

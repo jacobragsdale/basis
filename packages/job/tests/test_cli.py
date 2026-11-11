@@ -444,3 +444,16 @@ def test_runs_lists_the_stores_recent_runs_newest_first_with_their_trace(repo: P
     assert all(len(entry["trace_id"]) == 32 for entry in listed)
     assert basis(repo, "runs", "basis.job.example.job", "--last", "1") == 0
     assert [entry["run_id"] for entry in json.loads(capsys.readouterr().out)] == [second]
+
+
+@pytest.mark.parametrize("env", [None, "dev"], ids=["on-its-fixture", "in-an-environment"])
+def test_a_run_whose_query_file_is_missing_fails_before_it_reads_its_settings(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, env: str | None) -> None:
+    monkeypatch.setattr(job.Inputs.trades, "sql", "sql/trade.sql")
+    monkeypatch.delenv("BASIS_ENV")
+    if env is None:
+        assert basis(repo, *RUN[:-2]) == 1
+    else:
+        assert basis(repo, *RUN, "--env", env, "--publish") == 1  # dev has no settings file here, which it never reads
+    line = only_error(capsys.readouterr().err)
+    assert "trades reads " in line
+    assert line.endswith("trade.sql, which does not exist: name the file in sql=, relative to " + str(EXAMPLE))

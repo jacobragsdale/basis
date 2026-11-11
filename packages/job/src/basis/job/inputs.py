@@ -15,6 +15,7 @@ its record, and a replay of the run is given the same values again, in the same 
 function of what the run saved."""
 
 import inspect
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -112,6 +113,33 @@ class Query(Dataset):
     @override
     def describe(self) -> str:
         return f"{self.database}: {self.sql}"
+
+    def problems(self) -> list[str]:
+        """What is wrong with the query's file, which a run opens before it reads its settings: that it does not exist,
+        or that it binds a name but the interval's, which a replay with other params could not read the same."""
+        if not self.path.is_file():
+            return [f"{self.name} reads {self.path}, which does not exist: name the file in sql=, relative to {self.base}"]
+        if extra := sorted(binds(self.text()) - INTERVAL_BINDS):
+            return [f"{self.name} binds {', '.join(extra)}: a query binds only interval_start and interval_end; filter on a param in the transform"]
+        return []
+
+
+INTERVAL_BINDS = frozenset({"interval_start", "interval_end"})
+"""The names a query may bind: the run's interval's ends, as `Interval.binds` gives them."""
+_UNBOUND = re.compile(r"--[^\n]*|/\*.*?\*/|'(?:[^']|'')*'|\"[^\"]*\"", re.DOTALL)
+"""What holds no bind: a comment, a string literal, and a quoted identifier."""
+_BIND = re.compile(r"(?<![:\w]):([A-Za-z_]\w*)|%\(([A-Za-z_]\w*)\)s")
+
+
+def binds(sql: str) -> set[str]:
+    """Each name `sql` binds, as Oracle's `:name` or SQL Server's `%(name)s`, outside its comments and literals; a
+    cast's `::` is none."""
+    return {oracle or mssql for oracle, mssql in _BIND.findall(_UNBOUND.sub(" ", sql))}
+
+
+def sql_problems(inputs: type[Inputs]) -> list[str]:
+    """What is wrong with each query's file `inputs` declares, as `Query.problems` finds it."""
+    return [problem for dataset in inputs.declared().values() if isinstance(dataset, Query) for problem in dataset.problems()]
 
 
 class Fetch(Dataset):

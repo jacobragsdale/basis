@@ -545,14 +545,16 @@ NVARCHAR(MAX) NULL` on SQL Server, or `ADD (detail CLOB)` on Oracle.
 `basis.job.testing` holds:
 
 - `ContractTests`: a test class to subclass with `job = job`. It checks that `params/default.json` validates, that
-  the job runs on `tests/fixture` with every check passing, and that `job.py` cannot reach I/O through its imports.
+  the job runs on `tests/fixture` with every check passing, that `job.py` cannot reach I/O through its imports, and
+  that each query's SQL file exists and binds only `interval_start` and `interval_end`, which a run checks too, before
+  it reads its settings.
   Set `params` or `fixture` on the subclass for other paths, relative to the job's folder.
 - `frame(row, *rows)`: a frame of `row` from partial rows of Python values, conformed as a load conforms it; a column a
   row leaves out is null, and a `float` column takes an `int` too.
 - `inputs(Inputs, *, interval=None, now=None, **frames)`: an `Inputs` instance; a dataset not given has no rows. Each
   clock reads `now`, which an `Inputs` with a clock needs, and each ids counts up from
   `00000000-0000-7000-8000-000000000001`.
-- `check_params`, `check_fixture`, `check_imports`: the contract tests' checks, as functions. Whether the agent files match the installed version is `basis check`'s to say.
+- `check_params`, `check_fixture`, `check_imports`, `check_queries`: the contract tests' checks, as functions. Whether the agent files match the installed version is `basis check`'s to say.
 
 A fixture is a folder with one `NAME.csv` or `NAME.parquet` per dataset, a fetch's among them, and a `fixture.json` that
 gives its interval, as `{"interval": "2026-11-05..2026-11-06"}`, or `{"interval": null}`, and, for a job with a clock,

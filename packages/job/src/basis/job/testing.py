@@ -32,7 +32,7 @@ from basis.core.storage import Root
 from basis.core.testing import ContractError
 from basis.job import api, handles, runs
 from basis.job import job as jobs
-from basis.job.inputs import Excel, Fetch, Inputs, Mongo, Query
+from basis.job.inputs import Excel, Fetch, Inputs, Mongo, Query, sql_problems
 from basis.job.rows import Row, conform
 
 FORBIDDEN = (
@@ -46,7 +46,7 @@ _LAZY = [("basis.job", "basis.job.api")]
 
 class ContractTests:
     """The contract tests of one job: its default params validate; its transform runs on its fixture and every check
-    passes; and its code cannot reach a database, a file or the network through its imports. `params` and `fixture`
+    passes; its code cannot reach a database, a file or the network through its imports; and each query's file exists and binds only the interval. `params` and `fixture`
     are relative to the job's folder."""
 
     job: ModuleType
@@ -66,6 +66,9 @@ class ContractTests:
     def test_its_code_cannot_reach_io_through_its_imports(self) -> None:
         check_imports(self._job)
 
+    def test_each_query_file_exists_and_binds_only_the_interval(self) -> None:
+        check_queries(self._job)
+
 
 def check_params(job: jobs.Job, params: Path) -> None:
     __tracebackhide__ = True
@@ -73,6 +76,15 @@ def check_params(job: jobs.Job, params: Path) -> None:
         msg = f"{job.name} has no default params: add {params}"
         raise ContractError(msg)
     runs.read_params(job, params)
+
+
+def check_queries(job: jobs.Job) -> None:
+    """Each query's SQL file exists, and binds only the interval's ends, which a fixture run, reading files, never
+    opens."""
+    __tracebackhide__ = True
+    if problems := sql_problems(job.inputs):
+        msg = f"{job.name}'s queries:\n" + "\n".join(f"  - {problem}" for problem in problems)
+        raise ContractError(msg)
 
 
 def check_fixture(job: jobs.Job, fixture: Path, params: Path, snapshot_root: Path) -> runs.Result:

@@ -251,6 +251,7 @@ def offline(env: str | None) -> bool:
 def _run(args: RunArgs) -> int:
     job = jobs.load(args.job)
     logs.include(job.module.partition(".")[0])
+    runs.open_sql(job)
     if args.data is not None and offline(args.env) and not args.publish and not loader.unfiled(job.inputs.declared(), args.data):
         return _run_on_files(job, args, args.data)
     environment = environments.load(args.env, Settings)

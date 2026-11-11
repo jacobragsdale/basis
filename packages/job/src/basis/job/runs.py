@@ -42,6 +42,7 @@ from basis.core import fakes, folders, frames, lake, logs, mongo, publish, sendi
 from basis.core import runs as core_runs
 from basis.core.databases import Database
 from basis.core.destination import TableSpec, check_table, check_values
+from basis.core.errors import BasisError
 from basis.core.interval import Interval
 from basis.core.logs import utc_now
 from basis.core.messages import Mail, SlackResource, digest
@@ -70,7 +71,7 @@ from basis.job import handles
 from basis.job.changes import Planned, plan
 from basis.job.diff import OperationDiff, diff, diff_frames
 from basis.job.handles import Kept
-from basis.job.inputs import Clock, Fetch, Mongo
+from basis.job.inputs import Clock, Fetch, Mongo, sql_problems
 from basis.job.job import Job, JobError, repo_root
 from basis.job.loader import MongoOpener, Reach, load
 from basis.job.outputs import Email, Slack, Target, report_value
@@ -135,6 +136,13 @@ def targets_of(job: Job) -> dict[str, Target]:
     return {name: table.target for name, table in job.outputs.declared().items()}
 
 
+def open_sql(job: Job) -> None:
+    """Refuse a job whose query files are missing or bind a name but the interval's, before anything reads settings
+    or data: a run on its fixture reads no query, and would pass without one."""
+    if problems := sql_problems(job.inputs):
+        raise BasisError("; ".join(problems))
+
+
 def run(  # noqa: PLR0913 -- what the run reads and where it saves, by keyword
     job: Job,
     settings: Settings,
@@ -155,6 +163,7 @@ def run(  # noqa: PLR0913 -- what the run reads and where it saves, by keyword
     configure. `faked` names the fakes of a test's own, by the name of what each fakes: a fetch's service, or a clock or
     ids of the job's `Inputs`. The run is one trace, on `provider` where a test gives one, in `environment`,
     the one the settings are of, where there is one."""
+    open_sql(job)
     params, params_text = read_params(job, request.params)
     given = _checked(job, faked or {})
     run_id = snapshots.new_run_id()

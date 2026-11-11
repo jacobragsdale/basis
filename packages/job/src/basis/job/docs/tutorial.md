@@ -40,12 +40,12 @@ It runs the lint, format and type checks, which print nothing when they pass, an
 end with this, with your own time:
 
 ```text
-9 passed in 0.27s
+12 passed in 0.27s
 ```
 
-Notice that three of those tests are the job's contract tests, in `jobs/prices/tests/test_contract.py`: its default
-params validate, it runs on its fixture with every check passing, and its code cannot reach a database through its
-imports. You wrote none of them.
+Notice that four of those tests are the job's contract tests, in `jobs/prices/tests/test_contract.py`: its default
+params validate, it runs on its fixture with every check passing, its code cannot reach a database through its
+imports, and each of its SQL files exists and binds only the interval. You wrote none of them.
 
 ## Run the job on its fixture
 
