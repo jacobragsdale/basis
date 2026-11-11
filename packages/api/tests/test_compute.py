@@ -292,9 +292,11 @@ def _until(done: Callable[[], bool]) -> None:
 
 
 def test_a_call_past_its_routes_deadline_is_a_504_and_shutdown_kills_it(workloads: ModuleType, tmp_path: Path, logged: Callable[[], list[dict[str, object]]]) -> None:
-    """The call would write its file after 2s of CPU; the app stops long before, and the file never appears."""
+    """The call would write its file after 2s of CPU; the app stops long before, and the file never appears. Two
+    processes, so the overdue call holds one and the pool does not start new ones at its deadline: shutdown alone
+    stops it."""
     marker = tmp_path / "finished"
-    with TestClient(_pooled(workloads, deadline_s=0.3).asgi) as client:
+    with TestClient(_pooled(workloads, workers=2, deadline_s=0.3).asgi) as client:
         response = client.get("/mark", params={"path": str(marker), "seconds": "2"})
     assert (response.status_code, response.json()["detail"]) == (HTTPStatus.GATEWAY_TIMEOUT, "compute mark did not answer within what was left of route marked's deadline of 0.3s")
     time.sleep(3)
@@ -314,7 +316,7 @@ def test_a_pool_whose_idle_process_died_starts_again_for_the_next_call(workloads
     """A process killed between calls breaks the pool before the next is made, which `submit` refuses at once."""
     with TestClient(_pooled(workloads).asgi) as client:
         first = client.get("/pid").json()["pid"]
-        os.kill(first, signal.SIGKILL)
+        os.kill(first, getattr(signal, "SIGKILL", signal.SIGTERM))  # Windows has no SIGKILL; its SIGTERM ends the process at once
         time.sleep(1)  # for the pool to see it
         again = client.get("/pid")
     assert again.status_code == HTTPStatus.OK

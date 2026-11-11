@@ -19,6 +19,7 @@ pytest_plugins = ("pytester",)
 def in_dev(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Commands act in dev, from the process's environment, as a pod's do: the user has no file of settings."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "config"))  # where Windows keeps the same folder
     monkeypatch.setenv("BASIS_ENV", "dev")
 
 

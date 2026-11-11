@@ -179,6 +179,7 @@ def test_mutmut_says_which_mutants_survived_and_leaves_the_repo_as_it_was(repo: 
     assert git(repo, "status", "--porcelain", "--untracked-files=all") == ""
 
 
+@linux
 def test_what_each_exit_code_means_is_mutmut_s_own() -> None:
     from mutmut.stats import status_by_exit_code  # noqa: PLC0415 -- mutmut is this workspace's development dependency, never basis-core's
 

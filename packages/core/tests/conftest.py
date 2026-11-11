@@ -30,6 +30,11 @@ def git() -> Git:
         pytest.skip("git is not installed")
 
     def run(folder: Path, *argv: str) -> str:
-        return subprocess.run([found, *argv], cwd=folder, check=True, capture_output=True, text=True).stdout
+        printed = subprocess.run([found, *argv], cwd=folder, check=True, capture_output=True, text=True).stdout
+        if argv[:1] == ("add",):  # what the commit hook does, which a test's commit skips: Git for Windows stages no executable bit
+            staged = subprocess.run([found, "ls-files", "--", ".githooks/pre-commit", ".githooks/pre-push"], cwd=folder, check=True, capture_output=True, text=True).stdout.split()
+            if staged:
+                subprocess.run([found, "update-index", "--chmod=+x", "--", *staged], cwd=folder, check=True, capture_output=True)
+        return printed
 
     return run

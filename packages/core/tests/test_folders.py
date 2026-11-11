@@ -1,6 +1,7 @@
 """Shared folders: a path inside one never leaves it, a sheet reads as text for its row to type, and a workbook is
 written whole, through a temporary file renamed into place, so a reader never sees half of one."""
 
+import sys
 import zipfile
 from collections.abc import Callable
 from datetime import UTC, date, datetime
@@ -92,8 +93,9 @@ def test_a_sheet_the_workbook_lacks_is_refused_naming_it(shared: Folder) -> None
 
 
 def test_a_folder_is_named_by_the_settings_and_is_absolute() -> None:
-    settings = GivenSettings.model_validate({"folders": {"pm": {"path": "/mnt/pm"}}})
-    assert folder("pm", settings).root == Path("/mnt/pm")
+    share = r"\\server\pm" if sys.platform == "win32" else "/mnt/pm"  # absolute on the machine the test runs on
+    settings = GivenSettings.model_validate({"folders": {"pm": {"path": share}}})
+    assert folder("pm", settings).root == Path(share)
     with pytest.raises(SettingsError, match=r"the folder risk is not configured.*set BASIS_FOLDERS__RISK__PATH"):
         folder("risk", settings)
     with pytest.raises(ValidationError, match="a folder's path is absolute on this machine"):

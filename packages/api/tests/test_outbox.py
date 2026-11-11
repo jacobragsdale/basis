@@ -699,6 +699,7 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, logging_restored: None
     for name in [name for name in os.environ if name.startswith("BASIS_")]:
         monkeypatch.delenv(name)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "config"))  # where Windows keeps the same folder
     monkeypatch.setenv("BASIS_ENV", "dev")
     monkeypatch.setenv("BASIS_GIT_SHA", "abc123")  # some setting of dev's, so a verb reaches the service's own checks
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "prices-api"\nversion = "0.1.0"\n\n[tool.basis]\nparts = ["api"]\n', encoding="utf-8")

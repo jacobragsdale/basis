@@ -1,4 +1,5 @@
 import os
+import sys
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import timedelta
@@ -22,6 +23,9 @@ type Git = Callable[..., str]
 
 FEED = "https://pkgs.example.com/firm/_packaging/python/pypi/simple/"
 TOOLS = {"uv": ("/home/dev/.local/bin/uv", "uv 0.13.7 (abc 2026-10-01)"), "git": ("/usr/bin/git", "git version 2.47.3")}
+
+
+POSIX = pytest.mark.skipif(sys.platform == "win32", reason="it stands in for a Linux or WSL desktop, whose paths Windows' Path writes otherwise")
 
 
 @pytest.fixture(autouse=True)
@@ -85,6 +89,7 @@ def test_a_desktop_set_up_for_basis_passes_every_check(repo: Path, tmp_path: Pat
     ]
 
 
+@POSIX
 def test_a_broken_desktop_gets_one_line_and_its_fix_for_each_problem(repo: Path, tmp_path: Path, git: Git, capsys: pytest.CaptureFixture[str]) -> None:
     git(repo, "config", "core.hooksPath", "/dev/null")
     old = {"uv": ("/usr/bin/uv", "uv 0.9.2"), "git": TOOLS["git"]}
@@ -146,6 +151,7 @@ def test_on_windows_the_users_uv_toml_is_in_appdata(tmp_path: Path, capsys: pyte
     assert f"ok: the feed: {FEED}, the default index in {tmp_path / 'AppData/uv/uv.toml'}" in passed
 
 
+@POSIX
 def test_in_wsl_a_repo_on_a_windows_drive_is_a_problem() -> None:
     found = doctor.Desktop({}, "WSL", lambda _: None, lambda _: None, Path("/home/dev"))
     [entry] = doctor._where(Path("/mnt/c/Users/dev/repos/pricing"), found)  # noqa: SLF001 -- a path this machine has no folder at

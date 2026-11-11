@@ -676,7 +676,7 @@ def _at(error: BaseException, directory: Path) -> str:
     if not ours:
         return ""
     frame = ours[-1]
-    return f", at {Path(frame.filename).resolve().relative_to(repo_root(directory))}:{frame.lineno} in {frame.name}"
+    return f", at {Path(frame.filename).resolve().relative_to(repo_root(directory)).as_posix()}:{frame.lineno} in {frame.name}"
 
 
 @dataclass(frozen=True)

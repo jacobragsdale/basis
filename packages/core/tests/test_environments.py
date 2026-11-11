@@ -1,6 +1,7 @@
 """Which environment a command acts in, where its settings come from, and when it may write."""
 
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ def no_basis_variables(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     for name in [name for name in os.environ if name.startswith("BASIS_")]:
         monkeypatch.delenv(name)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "config"))  # where Windows keeps the same folder
     return tmp_path / "config" / "basis"
 
 
@@ -90,13 +92,14 @@ def test_prod_writes_only_where_the_process_sets_the_flag(monkeypatch: pytest.Mo
 
 def test_a_file_that_names_another_environment_as_one_copied_from_it_does_is_refused() -> None:
     path = user_file("dev", "BASIS_ENV=prod\nBASIS_SNAPSHOT_ROOT=//files/runs-prod\n")
-    with pytest.raises(EnvError, match=rf"^{path} says BASIS_ENV=prod, as a copy of prod's settings would: give dev its own settings, with BASIS_ENV=dev$"):
+    with pytest.raises(EnvError, match=rf"^{re.escape(str(path))} says BASIS_ENV=prod, as a copy of prod's settings would: give dev its own settings, with BASIS_ENV=dev$"):
         load("dev", Settings, windows=False)
 
 
 def test_a_file_that_does_not_say_which_environment_it_is_is_refused() -> None:
     path = user_file("dev", "BASIS_SNAPSHOT_ROOT=runs\n")
-    with pytest.raises(EnvError, match=rf"^{path} does not say which environment it is: add the line BASIS_ENV=dev to it, so a copy of another environment's settings is never taken for dev's$"):
+    said = f"{path} does not say which environment it is: add the line BASIS_ENV=dev to it, so a copy of another environment's settings is never taken for dev's"
+    with pytest.raises(EnvError, match=f"^{re.escape(said)}$"):
         load("dev", Settings, windows=False)
 
 

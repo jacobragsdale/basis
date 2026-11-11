@@ -1,6 +1,7 @@
 """Tracing as every part has it: a provider of each run's or app's own, configured by basis's settings alone, spans that
 go only where the settings say, an OTLP export that fails nothing, and a run's one trace."""
 
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -19,6 +20,9 @@ from basis.core import traces
 from basis.core.settings import Traces
 
 type Records = list[dict[str, object]]
+
+
+SLOW_REFUSAL = pytest.mark.skipif(sys.platform == "win32", reason="Windows retries a refused connection to a local port for about two seconds, so it reads as a timeout")
 
 
 @dataclass
@@ -142,6 +146,7 @@ def test_an_export_that_is_not_accepted_fails_nothing_and_is_logged_once(receive
     assert warned == [f"could not export spans to {receiver.endpoint} (status {statuses[0]}): they are dropped, and this is logged once for each kind of failure"]
 
 
+@SLOW_REFUSAL
 def test_an_endpoint_nothing_serves_fails_nothing(caplog: pytest.LogCaptureFixture) -> None:
     assert _export("http://127.0.0.1:9/v1/traces", timeout_s=0.2) == SpanExportResult.FAILURE
     assert [record.getMessage() for record in caplog.records if record.name == "basis.core.traces"] == [
@@ -180,6 +185,7 @@ def _export_with(exporter: traces.Otlp) -> SpanExportResult:
     return exporter.export(spans.get_finished_spans())
 
 
+@SLOW_REFUSAL
 def test_an_agent_that_is_not_running_costs_a_run_no_wait_at_its_exit() -> None:
     """A refused connection is no Agent at the endpoint, which a wait does not bring up: an export fails at once, and
     every later one of the process's, where waiting and posting again held a run's exit for seconds."""

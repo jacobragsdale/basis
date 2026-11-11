@@ -1,3 +1,4 @@
+import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -112,6 +113,7 @@ def test_the_files_an_upgrade_changed_are_named_from_the_repos_folder_as_git_nam
     git(tmp_path, "commit", "--quiet", "--no-verify", "--message", "First commit")
     assert upgrade.changed_files(repo) == []
     git(repo, "mv", "old.txt", "new name é.txt")
-    (repo / 'quote"d.txt').write_text("c\n", encoding="utf-8")
+    quoted = 'quote"d.txt' if sys.platform != "win32" else "naïve.txt"  # each a name git quotes; Windows allows no `"` in one
+    (repo / quoted).write_text("c\n", encoding="utf-8")
     (tmp_path / "elsewhere.txt").write_text("changed\n", encoding="utf-8")
-    assert sorted(upgrade.changed_files(repo) or []) == ["new name é.txt", 'quote"d.txt']
+    assert sorted(upgrade.changed_files(repo) or []) == sorted(["new name é.txt", quoted])

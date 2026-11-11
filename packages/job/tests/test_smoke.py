@@ -16,6 +16,7 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (config / "basis").mkdir(parents=True)
     (config / "basis" / "qa.env").write_text("BASIS_ENV=qa\n", encoding="utf-8")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
+    monkeypatch.setenv("APPDATA", str(config))  # where Windows keeps the same folder
     for name in [name for name in __import__("os").environ if name.startswith("BASIS_")]:
         monkeypatch.delenv(name)
     folder = tmp_path / "repo"

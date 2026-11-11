@@ -5,6 +5,7 @@ import inspect
 import ipaddress
 import json
 import ssl
+import sys
 import threading
 from collections.abc import Awaitable, Callable, Generator, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -39,6 +40,9 @@ from basis.core.databases.failures import failure
 from basis.core.settings import SettingsError
 
 type Records = Callable[[], list[dict[str, object]]]  # the `logged` fixture's
+
+
+SLOW_REFUSAL = pytest.mark.skipif(sys.platform == "win32", reason="Windows retries a refused connection to a local port for about two seconds, so it reads as a timeout")
 
 
 class Price(BaseModel):
@@ -732,6 +736,7 @@ def test_a_record_logged_in_a_call_carries_the_requests_trace_and_the_calls_span
     assert (warned["trace_id"], warned["span_id"], called.context.trace_id) == (trace_id, f"{called.context.span_id:016x}", int(trace_id, 16))
 
 
+@SLOW_REFUSAL
 def test_a_service_that_cannot_be_reached_is_unavailable_a_503() -> None:
     with TestClient(_app(http={"pricing": {"url": "http://127.0.0.1:9"}}).asgi) as client:  # the discard port, which nothing serves here
         response = client.get(f"/quotes/{SECURITY}")
@@ -818,6 +823,7 @@ def test_another_services_certificate_is_checked_against_the_declared_ca_bundle_
     assert (undeclared.status_code, undeclared.json()["detail"]) == (HTTPStatus.SERVICE_UNAVAILABLE, f"pricing could not be reached for GET /prices/{SECURITY}: ConnectError")
 
 
+@SLOW_REFUSAL
 def test_calls_go_through_the_declared_proxy_alone(monkeypatch: pytest.MonkeyPatch) -> None:
     with _serving() as port:
         monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{port}")  # read by nothing basis decides

@@ -433,12 +433,12 @@ def _machine(home: Path, *, declared: str | None = "desktop = true\n", environ: 
     [
         (_machine, None),
         (lambda home: _machine(home, declared="# desktop = true\ndesktop = true\nowner = 'jsmith'\n"), None),
-        (lambda home: _machine(home, declared=None), "{home}/basis/desktop.toml does not exist"),
-        (lambda home: _machine(home, declared="desktop = false\n"), "{home}/basis/desktop.toml does not say `desktop = true`"),
-        (lambda home: _machine(home, declared='desktop = "yes"\n'), "{home}/basis/desktop.toml does not say `desktop = true`"),
-        (lambda home: _machine(home, declared="desktop: true\n"), "{home}/basis/desktop.toml cannot be read as TOML (TOMLDecodeError)"),
+        (lambda home: _machine(home, declared=None), "{declaration} does not exist"),
+        (lambda home: _machine(home, declared="desktop = false\n"), "{declaration} does not say `desktop = true`"),
+        (lambda home: _machine(home, declared='desktop = "yes"\n'), "{declaration} does not say `desktop = true`"),
+        (lambda home: _machine(home, declared="desktop: true\n"), "{declaration} cannot be read as TOML (TOMLDecodeError)"),
         (lambda home: _machine(home, environ={"KUBERNETES_SERVICE_HOST": "10.0.0.1"}), "it runs in a Kubernetes pod, as KUBERNETES_SERVICE_HOST says"),
-        (lambda home: _machine(home, container=True), "it runs in a container, as {home}/.dockerenv says"),
+        (lambda home: _machine(home, container=True), "it runs in a container, as {dockerenv} says"),
         (lambda _: Machine({}, None, ()), "its user has no configuration folder, in which a desktop is declared"),
     ],
     ids=["declared", "declared-with-more", "undeclared", "declared-false", "declared-not-a-boolean", "not-toml", "a-kubernetes-pod", "a-container", "no-configuration-folder"],
@@ -452,7 +452,7 @@ def test_the_development_key_is_refused_but_on_a_declared_desktop(tmp_path: Path
         refuse_development(identity, machine(tmp_path))
     assert str(raised.value).startswith(
         "BASIS_IDENTITY__KEYS__KIND is development, whose key anyone can sign tokens with, so only a developer's desktop may verify with it, and this machine is not one: "
-        + refusal.format(home=tmp_path)
+        + refusal.format(declaration=tmp_path / "basis" / "desktop.toml", dockerenv=tmp_path / ".dockerenv")  # each as the platform writes a path
     )
     assert "anywhere else, verify with the sign-in system's keys, setting BASIS_IDENTITY__KEYS__KIND to jwks or public_key" in str(raised.value)
 
@@ -501,7 +501,8 @@ def test_settings_given_in_a_test_take_the_development_key_anywhere() -> None:
 
 def test_a_desktop_is_declared_in_the_users_own_configuration_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    found = Machine.here()  # on Linux, as basis's own tests run; on Windows the folder is %APPDATA%
+    monkeypatch.setenv("APPDATA", str(tmp_path))  # where Windows keeps the same folder
+    found = Machine.here()
     assert found.declaration == tmp_path / "basis" / "desktop.toml"
     assert found.containers == (Path("/.dockerenv"), Path("/run/.containerenv"))
 

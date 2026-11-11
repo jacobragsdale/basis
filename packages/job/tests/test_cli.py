@@ -25,6 +25,7 @@ def snapshot_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     for name in [name for name in os.environ if name.startswith("BASIS_")]:
         monkeypatch.delenv(name)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "config"))  # where Windows keeps the same folder
     monkeypatch.setenv("BASIS_ENV", "dev")
     monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", str(tmp_path / "snapshots"))
     return tmp_path / "snapshots"

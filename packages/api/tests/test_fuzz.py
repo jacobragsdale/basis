@@ -5,6 +5,7 @@ the smallest request that shows it, as it was sent, which `basis call` makes aga
 
 import json
 import re
+import shlex
 import sys
 from datetime import date
 from http import HTTPStatus
@@ -87,7 +88,8 @@ def test_a_route_that_answers_500_is_found_with_the_request_that_shows_it_in_a_f
     written = tmp_path / "halving-divides.json"
     found = "Schemathesis found GET /divides answers a request its document allows as its document does not say, Server error (ST101); Undocumented status code (ST103)"
     assert reason == f"{found}, to the request in {written}"
-    assert fix == f"make it again with `uv run basis call divides @{written} --fake`, which answers as the route does, and fix the route, or declare the error it answers with in its errors=[...]"
+    again = f"uv run basis call divides {shlex.quote(f'@{written}')} --fake"  # quoted where the path needs it, as Windows' does
+    assert fix == f"make it again with `{again}`, which answers as the route does, and fix the route, or declare the error it answers with in its errors=[...]"
     request = json.loads(written.read_text(encoding="utf-8"))
     assert re.fullmatch(r"/divides\?count=\d+", request["target"]), request
     assert call.answer(service, "divides", written.read_text(encoding="utf-8")).status == HTTPStatus.INTERNAL_SERVER_ERROR

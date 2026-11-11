@@ -19,7 +19,7 @@ UV = """#!/bin/sh
 printf '%s\\n' "$*" >> "$UV_LOG"
 case "$*" in
     *"ruff format"*) for file in "$@"; do case "$file" in *.py) sed -i 's/[[:space:]]*$//' "$file"; printf '# formatted\\n' >> "$file" ;; esac; done ;;
-    *"basis check"*) printf '%s %s\\n' "$PWD" "$(git rev-parse --verify --quiet HEAD || echo none)" >> "$UV_LOG.checks"; exit "${CHECK:-0}" ;;
+    *"basis check"*) printf '%s %s\\n' "$(pwd -W 2>/dev/null || pwd)" "$(git rev-parse --verify --quiet HEAD || echo none)" >> "$UV_LOG.checks"; exit "${CHECK:-0}" ;;
 esac
 """
 
@@ -163,9 +163,9 @@ def test_a_failing_basis_check_stops_the_commit(hooked: Path, git: Git, monkeypa
 
 
 def test_a_python_file_changed_since_it_was_staged_stops_the_commit_before_ruff_touches_it(hooked: Path, tmp_path: Path, git: Git) -> None:
-    (hooked / "prices.py").write_text("x = 1\n", encoding="utf-8")
+    (hooked / "prices.py").write_text("x = 1\n", encoding="utf-8", newline="")  # LF, as .gitattributes keeps it, on Windows too
     git(hooked, "add", "--all")
-    (hooked / "prices.py").write_text("x = 2\n", encoding="utf-8")
+    (hooked / "prices.py").write_text("x = 2\n", encoding="utf-8", newline="")
     found = committed(hooked)
     assert found.returncode == 1
     assert found.stderr.splitlines() == [
@@ -220,7 +220,7 @@ def test_the_push_hook_checks_head_in_a_worktree_of_its_own_when_the_tree_has_ch
     assert folder.name.startswith(f".{pushing.name}.push.")
     assert commit == git(pushing, "rev-parse", "HEAD").strip()
     assert uv_ran(tmp_path) == [f"run --frozen --quiet basis check --full --settings-from {pushing}/"]  # its untracked files, such as .env.qa, are there
-    assert worktrees(pushing, git) == [f"worktree {pushing}"]
+    assert worktrees(pushing, git) == [f"worktree {pushing.as_posix()}"]
 
 
 def test_the_push_hook_checks_each_pushed_commit_once_and_skips_a_deletion(pushing: Path, tmp_path: Path, git: Git) -> None:
@@ -230,7 +230,7 @@ def test_the_push_hook_checks_each_pushed_commit_once_and_skips_a_deletion(pushi
     assert found[0][0] == pushing
     assert pushed(pushing, ":older", ":copy").returncode == 0
     assert len(checks(tmp_path)) == 2
-    assert worktrees(pushing, git) == [f"worktree {pushing}"]
+    assert worktrees(pushing, git) == [f"worktree {pushing.as_posix()}"]
 
 
 @pytest.mark.parametrize("ref", ["main", "older"])
@@ -240,7 +240,7 @@ def test_a_failing_check_stops_the_push_and_leaves_no_worktree(pushing: Path, tm
     assert found.returncode == 1
     assert "ERROR: a commit being pushed fails basis check --full, as above: fix it, commit, and push again" in found.stderr.splitlines()  # before git's own line
     assert git(tmp_path / "remote.git", "rev-list", "--all") == ""
-    assert worktrees(pushing, git) == [f"worktree {pushing}"]
+    assert worktrees(pushing, git) == [f"worktree {pushing.as_posix()}"]
 
 
 def test_the_push_hook_of_a_repo_in_a_folder_of_its_clone_checks_that_folder_of_the_worktree(tmp_path: Path, git: Git, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -258,7 +258,7 @@ def test_the_push_hook_of_a_repo_in_a_folder_of_its_clone_checks_that_folder_of_
     [(folder, _)] = checks(tmp_path)
     assert folder.relative_to(folder.parents[1]) == Path("services/prices")
     assert folder.parents[1].name.startswith(".clone.push.")
-    assert worktrees(top, git) == [f"worktree {top}"]
+    assert worktrees(top, git) == [f"worktree {top.as_posix()}"]
 
 
 def test_whitespace_in_a_python_file_the_formatter_fixes_does_not_stop_the_commit(hooked: Path, git: Git) -> None:

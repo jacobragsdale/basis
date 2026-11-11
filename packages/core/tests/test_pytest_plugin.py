@@ -4,6 +4,8 @@ code under test does with the error, an integration test may open one, and the s
 plugin as a repo's pytest does; this workspace's own session leaves it out."""
 
 import json
+import socket
+import sys
 
 import pytest
 
@@ -64,7 +66,7 @@ def test_an_event_loop_a_socket_pair_and_unix_sockets_are_no_network(session: py
         "@pytest.mark.skipif(sys.platform == 'win32', reason='no Unix sockets')\n"
         "def test_unix(tmp_path: Path) -> None:\n    with socket.socket(socket.AF_UNIX) as server:\n        server.bind(str(tmp_path / 's'))\n"
     )
-    session.runpytest().assert_outcomes(passed=3)
+    session.runpytest().assert_outcomes(passed=3) if sys.platform != "win32" else session.runpytest().assert_outcomes(passed=2, skipped=1)
 
 
 def test_a_test_client_calls_its_app_in_the_process(session: pytest.Pytester) -> None:
@@ -138,14 +140,15 @@ def test_windows_event_loop_connects_and_sends_through_its_proactor_and_is_block
     monkeypatch.setitem(__import__("sys").modules, "asyncio.windows_events", windows_events)
     before = dict(vars(windows_events.IocpProactor))
     session.makepyfile(
-        "import socket\n\nfrom asyncio.windows_events import IocpProactor\n\nDGRAM = (socket.AF_INET, socket.SOCK_DGRAM)\n\n\n"
+        "import socket\n\nimport pytest\nfrom asyncio.windows_events import IocpProactor\n\nDGRAM = (socket.AF_INET, socket.SOCK_DGRAM)\n\n\n"
         f"def test_connects() -> None:\n    with socket.socket() as sock:\n        IocpProactor().connect(sock, {UNROUTABLE})\n\n\n"
         f"def test_sends() -> None:\n    with socket.socket(*DGRAM) as sock:\n        IocpProactor().sendto(sock, b'x', addr={UNROUTABLE})\n\n\n"
+        "@pytest.mark.skipif(not hasattr(socket, 'AF_UNIX'), reason='no Unix sockets')\n"
         "def test_sends_on_a_unix_socket() -> None:\n    with socket.socket(socket.AF_UNIX) as sock:\n        assert IocpProactor().sendto(sock, b'x', addr='there') == 'sent'\n\n\n"
         "def test_sends_where_it_connected() -> None:\n    with socket.socket(*DGRAM) as sock:\n        assert IocpProactor().sendto(sock, b'x') == 'sent'\n"
     )
     result = session.runpytest()
-    result.assert_outcomes(failed=2, passed=2)
+    result.assert_outcomes(failed=2, passed=2) if hasattr(socket, "AF_UNIX") else result.assert_outcomes(failed=2, passed=1, skipped=1)
     result.stdout.fnmatch_lines(["*SocketBlockedError: a unit test opened a socket, connect 192.0.2.1:9*", "*SocketBlockedError: a unit test opened a socket, sendto 192.0.2.1:9*"])
     assert dict(vars(windows_events.IocpProactor)) == before  # put back as it was
 

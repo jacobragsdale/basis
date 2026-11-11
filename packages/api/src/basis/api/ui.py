@@ -42,6 +42,10 @@ REVALIDATE = "no-cache"
 ENCODINGS = (("br", ".br"), ("gzip", ".gz"))
 """Each compressed copy a build writes beside a file, in the order a request that accepts both is given them."""
 
+_TYPES = mimetypes.MimeTypes()
+"""Python's own table of media types, never the machine's: `mimetypes.guess_type` reads Windows' registry, which names
+a `.js` file as another type on each machine."""
+
 
 class Folder(StaticFiles):
     """The UI's folder, `folder`, relative to the folder the app runs in, beside the API's routes, which match
@@ -88,7 +92,7 @@ class Folder(StaticFiles):
             if name in accepted and copy.is_file():
                 served, encoding = copy, name
                 break
-        media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        media_type = _TYPES.guess_type(path.name)[0] or "application/octet-stream"
         response = FileResponse(served, status_code=status_code, stat_result=stat_result if encoding is None else served.stat(), media_type=media_type)
         if encoding is not None:
             response.headers["content-encoding"] = encoding

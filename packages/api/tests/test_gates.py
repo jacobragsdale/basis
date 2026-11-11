@@ -6,6 +6,7 @@ the rules pytest holds, coverage and sockets, and as given for the rest."""
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -211,7 +212,7 @@ def test_a_route_that_answers_500_fails_check_full_with_the_request_that_shows_i
     written = tmp_path / "found" / "accruals-conventions.json"
     assert line == (
         "ERROR: Schemathesis found GET /conventions answers a request its document allows as its document does not say, Server error (ST101); Undocumented status code (ST103),"
-        f" to the request in {written}: make it again with `uv run basis call conventions @{written} --fake`, which answers as the route does, and fix the route,"
+        f" to the request in {written}: make it again with `uv run basis call conventions {shlex.quote(f'@{written}')} --fake`, which answers as the route does, and fix the route,"
         " or declare the error it answers with in its errors=[...]"
     )
 

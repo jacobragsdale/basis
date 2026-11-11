@@ -184,7 +184,7 @@ def test_a_module_no_test_imports_counts_against_the_floor_whatever_package_it_i
         argv = [sys.executable, "-m", "pytest", "-q", "-p", "no:randomly", "-p", "no:basis", "--rootdir", str(tmp_path), *measured.argv()[1:], "tests"]
         subprocess.run(argv, cwd=tmp_path, env=environment | {"PYTHONPATH": str(tmp_path)}, capture_output=True, check=False)
         report = json.loads(measured.report.read_text(encoding="utf-8"))
-    files = set(report["files"])
+    files = {Path(name).as_posix() for name in report["files"]}  # coverage names them as the platform writes a path
     assert "src/app/core.py" in files
     assert "jobs/prices/main.py" not in files
     assert report["totals"]["percent_covered"] < 100

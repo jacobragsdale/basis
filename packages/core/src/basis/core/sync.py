@@ -274,7 +274,8 @@ def write(repo: Path, parts: Sequence[AgentFiles], *, adopt: bool = False) -> Sy
     found = plan(repo, parts)
     done = Synced(repo, unwritable=dict(found.unreadable), refusals=found.refusals)
     for path, text in found.files.items():
-        if not _holds(repo, path, text):
+        recased = _recase(path)
+        if recased or not _holds(repo, path, text):
             _put(repo, path, text)
             done.changed.append(path)
     for path, text in found.unclaimed.items():
@@ -464,6 +465,18 @@ def _unclaimed(repo: Path, paths: list[Path]) -> list[Problem]:
             "run `uv run basis sync --adopt`, which saves each beside itself as NAME.before-basis, for you to compare and delete, and writes basis's",
         )
     ]
+
+
+def _recase(path: Path) -> bool:
+    """Rename the file a case-insensitive filesystem, as Windows' is, holds under another case of `path`'s name, so
+    that it, and git, name it as basis writes it; whether one was."""
+    if not path.exists():
+        return False
+    other = next((child for child in path.parent.iterdir() if child.name != path.name and child.name.casefold() == path.name.casefold() and child.samefile(path)), None)
+    if other is None:
+        return False
+    other.rename(path)  # a no-op where both names are links to the one file, as on a case-sensitive filesystem
+    return other.name not in {child.name for child in path.parent.iterdir()}
 
 
 def _put(repo: Path, path: Path, text: str) -> None:

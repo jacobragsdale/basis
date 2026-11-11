@@ -23,7 +23,7 @@ def test_what_a_repo_writes_around_the_block_is_kept_as_written(tmp_path: Path) 
     sync.write(tmp_path)
     agents = tmp_path / "AGENTS.md"
     written = f"# Agent guide\n\nNotes before.\n\n{agents.read_text().removeprefix('# Agent guide').lstrip()}\n## This repo\n\nNotes after, below a blank line.\n"
-    agents.write_text(written)
+    agents.write_text(written, encoding="utf-8", newline="")  # LF, as basis writes it, on Windows too
 
     assert sync.stale(tmp_path) == []
     assert sync.write(tmp_path) == []

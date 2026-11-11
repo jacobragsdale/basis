@@ -52,6 +52,7 @@ def repo(tmp_path: Path, scratch: Scratch, monkeypatch: pytest.MonkeyPatch) -> P
     """A repo that declares a QA tier whose marker is in the scratch database's name, the user's qa.env, and a source
     table of two prices."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "config"))  # where Windows keeps the same folder
     suffix = scratch.suffix
     for table in (f"prices_{suffix}", f"other_{suffix}", f"source_{suffix}"):
         scratch.execute(ddl.create_table(Target(Price, "warehouse", table, etl.Append(), ("day", "security_id")), "mssql"))

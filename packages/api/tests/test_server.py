@@ -19,6 +19,8 @@ from pathlib import Path
 import httpx2
 import pytest
 
+POSIX_SIGNALS = pytest.mark.skipif(sys.platform == "win32", reason="it signals the server as a pod's kubelet does, which Windows cannot: serving drains on SIGTERM on Linux alone")
+
 SERVICE = """
 import sys
 import time
@@ -39,6 +41,7 @@ class Server:
     port: int
 
 
+@POSIX_SIGNALS
 def test_sigterm_drains_then_lets_the_request_in_flight_finish() -> None:
     with _serving(slow_s=2, drain_s=1) as server, ThreadPoolExecutor(1) as pool:
         in_flight = pool.submit(httpx2.get, f"{server.base}/slow", timeout=15)
@@ -61,6 +64,7 @@ def test_sigterm_drains_then_lets_the_request_in_flight_finish() -> None:
     assert not any("traceback" in record for record in records)
 
 
+@POSIX_SIGNALS
 def test_a_second_signal_stops_at_once() -> None:
     with _serving(slow_s=8, drain_s=10) as server, ThreadPoolExecutor(1) as pool:
         in_flight = pool.submit(httpx2.get, f"{server.base}/slow", timeout=15)
@@ -78,6 +82,7 @@ def test_a_second_signal_stops_at_once() -> None:
     assert "slow stopped" not in _messages(records)  # a forced stop skips the lifespan's shutdown
 
 
+@POSIX_SIGNALS
 def test_dev_serves_on_the_services_fakes_on_this_machine_alone_until_ctrl_c(tmp_path: Path) -> None:
     """Ctrl+C reaches every process of the command, the compute pool's too, and stops it cleanly, without a traceback."""
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "accruals"\nversion = "0.1.0"\n\n[tool.basis]\nparts = ["api"]\n', encoding="utf-8")

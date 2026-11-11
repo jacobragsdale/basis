@@ -285,7 +285,7 @@ def _where(error: BaseException) -> str | None:
     if not ours:
         return None
     frame, path, base = ours[-1]
-    return f"{path.relative_to(base)}:{frame.lineno} in {frame.name}"
+    return f"{path.relative_to(base).as_posix()}:{frame.lineno} in {frame.name}"  # with / on Windows too, as every log reads it
 
 
 @cache

@@ -21,6 +21,7 @@ def clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_a_run_in_an_environment_reads_the_user_s_file_for_it_and_sets_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "config"))  # where Windows keeps the same folder
     (tmp_path / "config" / "basis").mkdir(parents=True)
     (tmp_path / "config" / "basis" / "dev.env").write_text("BASIS_ENV=dev\nBASIS_LOG_LEVEL=WARNING\nBASIS_GIT_SHA=abc123\nOTHER_TOOL=1\n", encoding="utf-8")
     result = etl.run(job, params="params/default.json", data="tests/fixture", env="dev", snapshot_root=tmp_path / "snapshots")
@@ -31,6 +32,7 @@ def test_a_run_in_an_environment_reads_the_user_s_file_for_it_and_sets_nothing(t
 
 def test_a_run_in_an_environment_nothing_configures_is_refused_with_the_fix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "config"))  # where Windows keeps the same folder
     with pytest.raises(EnvError, match=r"there is no .*qa\.env, and the process's environment sets no BASIS_ settings"):
         etl.run(job, params="params/default.json", data="tests/fixture", env="qa", snapshot_root=tmp_path / "snapshots")
 
@@ -112,6 +114,7 @@ def test_a_run_on_a_fixture_whose_clock_has_no_time_is_refused(tmp_path: Path) -
 def test_a_replay_from_python_exports_its_spans_where_the_settings_say(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     first = etl.run(job, params="params/default.json", data="tests/fixture", env=None, snapshot_root=tmp_path)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "config"))  # where Windows keeps the same folder
     (tmp_path / "config" / "basis").mkdir(parents=True)
     (tmp_path / "config" / "basis" / "dev.env").write_text("BASIS_ENV=dev\nBASIS_TRACES__EXPORTER=console\n", encoding="utf-8")
     capsys.readouterr()

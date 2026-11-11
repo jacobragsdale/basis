@@ -496,13 +496,13 @@ def _portfolios(given: Sequence[str] | None) -> tuple[str, ...] | None:
 
 
 def _write(table: pd.DataFrame, out: Path | None) -> None:
-    """A table as CSV on stdout, or to `out` as Parquet or CSV by its suffix."""
+    """A table as CSV on stdout, or to `out` as Parquet or CSV by its suffix; CSV's lines end in LF on Windows too."""
     if out is None:
-        sys.stdout.write(table.to_csv(index=False))
+        sys.stdout.write(table.to_csv(index=False, lineterminator="\n"))
     elif out.suffix == ".parquet":
         table.to_parquet(out, index=False)
     else:
-        table.to_csv(out, index=False)
+        table.to_csv(out, index=False, lineterminator="\n")
 
 
 def _report(ran: Run, model: str, *, again: bool = False) -> int:

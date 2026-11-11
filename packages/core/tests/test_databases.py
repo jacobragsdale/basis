@@ -1,4 +1,5 @@
 import logging
+import re
 import socket
 import time
 from collections.abc import Callable, Generator
@@ -92,7 +93,7 @@ def test_a_rollback_that_fails_leaves_the_error_that_ended_the_transaction(caplo
 def test_oracle_in_thick_mode_loads_its_client_libraries_from_the_folder_given(tmp_path: Path) -> None:
     settings = OracleSettings.model_validate(ORACLE | {"mode": "thick", "client_lib_dir": tmp_path})
 
-    with pytest.raises(oracledb.DatabaseError, match=f"DPI-1047: Cannot locate .*{tmp_path}"):  # an empty folder: no client there
+    with pytest.raises(oracledb.DatabaseError, match=f"DPI-1047: Cannot locate .*{re.escape(str(tmp_path))}"):  # an empty folder: no client there
         connect(settings, database="warehouse", user=settings.user, password=settings.password.get_secret_value())
 
 

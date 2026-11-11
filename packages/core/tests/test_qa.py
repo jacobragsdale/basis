@@ -1,3 +1,4 @@
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -225,6 +226,7 @@ def planned(*problems: tuple[str, str]) -> tuple[list[Qa], Part]:
 def user_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """The user's own basis folder, which holds their qa.env: an empty one of the test's."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "config"))  # where Windows keeps the same folder
     return tmp_path / "config" / "basis"
 
 
@@ -306,8 +308,9 @@ def test_a_repo_with_no_declaration_or_no_part_with_qa_runs_skips_the_tier(tmp_p
 
 
 def test_a_folder_whose_path_lacks_the_marker_is_refused_since_a_qa_run_writes_there(declared: qa.Declared) -> None:
-    found = GivenSettings.model_validate({"snapshot_root": "runs-qa", "databases": {"warehouse": mssql()}, "folders": {"pm": {"path": "/mnt/pm"}, "pm_qa": {"path": "/mnt/pm-qa"}}})
-    assert problems(found, declared) == ["BASIS_FOLDERS__PM__PATH in .env.qa is /mnt/pm, which does not contain the QA marker 'qa', and a QA run writes its workbooks there"]
+    share = r"\\server\pm" if sys.platform == "win32" else "/mnt/pm"  # absolute on the machine the test runs on
+    found = GivenSettings.model_validate({"snapshot_root": "runs-qa", "databases": {"warehouse": mssql()}, "folders": {"pm": {"path": share}, "pm_qa": {"path": f"{share}-qa"}}})
+    assert problems(found, declared) == [f"BASIS_FOLDERS__PM__PATH in .env.qa is {share}, which does not contain the QA marker 'qa', and a QA run writes its workbooks there"]
 
 
 def test_a_lake_whose_account_and_container_lack_the_marker_is_refused_since_a_qa_run_archives_there(declared: qa.Declared) -> None:

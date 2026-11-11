@@ -417,7 +417,8 @@ def test_a_path_a_part_retires_and_another_makes_is_made_and_never_removed(tmp_p
 def test_a_file_the_filesystem_holds_under_another_case_is_the_one_a_part_makes(tmp_path: Path) -> None:
     write(tmp_path, [FILES, made(path="OpenAPI.json")])
     old = tmp_path / "OpenAPI.json"
-    os.link(old, tmp_path / "openapi.json")  # one file under both names, as a case-insensitive filesystem holds it
+    if not (tmp_path / "openapi.json").exists():  # Windows' filesystem holds it under both names already
+        os.link(old, tmp_path / "openapi.json")  # one file under both names, as a case-insensitive filesystem holds it
     assert old not in stale(tmp_path, [FILES, made()])
     write(tmp_path, [FILES, made()])
     assert (tmp_path / "openapi.json").read_text(encoding="utf-8") == DOCUMENT

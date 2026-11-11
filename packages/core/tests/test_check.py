@@ -261,4 +261,4 @@ def test_a_command_basis_runs_never_sees_the_callers_coverage_variables(tmp_path
     monkeypatch.setenv("BASIS_KEPT", "yes")
     shown = "import os; print(sorted(name for name in os.environ if name.startswith(('COVERAGE_', 'BASIS_KEPT'))))"
     assert run_command([sys.executable, "-c", shown], tmp_path) == 0
-    assert capfd.readouterr().out == "['BASIS_KEPT']\n"
+    assert capfd.readouterr().out.splitlines() == ["['BASIS_KEPT']"]  # as the child prints a line, CRLF on Windows

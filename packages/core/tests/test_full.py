@@ -25,6 +25,7 @@ def no_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     for name in [name for name in os.environ if name.startswith("BASIS_")]:
         monkeypatch.delenv(name)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "config"))  # where Windows keeps the same folder
 
 
 def qa_env(text: str) -> None:

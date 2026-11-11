@@ -34,6 +34,7 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """An API repo, whose verbs act in dev, from the process's environment, as a pod's do: the user has no file of
     settings."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "config"))  # where Windows keeps the same folder
     monkeypatch.setenv("BASIS_ENV", "dev")
     (tmp_path / "pyproject.toml").write_text(PYPROJECT, encoding="utf-8")
     return tmp_path
@@ -217,6 +218,7 @@ def test_in_prod_a_verb_with_write_logins_is_refused_unless_the_deployment_allow
 def test_call_on_its_fakes_reaches_nothing_and_needs_no_environment(repo: Path, monkeypatch: pytest.MonkeyPatch, clean: None) -> None:
     del clean
     monkeypatch.setenv("XDG_CONFIG_HOME", str(repo / "config"))
+    monkeypatch.setenv("APPDATA", str(repo / "config"))  # where Windows keeps the same folder
     assert basis(repo, "call", "bond", json.dumps({"path": {"security": ISIN}}), "--fake", *EXAMPLE) == 0
 
 
