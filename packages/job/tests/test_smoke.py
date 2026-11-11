@@ -14,7 +14,7 @@ from basis.job import runs, smoke
 def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     config = tmp_path / "config"
     (config / "basis").mkdir(parents=True)
-    (config / "basis" / "qa.env").write_text("", encoding="utf-8")
+    (config / "basis" / "qa.env").write_text("BASIS_ENV=qa\n", encoding="utf-8")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
     for name in [name for name in __import__("os").environ if name.startswith("BASIS_")]:
         monkeypatch.delenv(name)

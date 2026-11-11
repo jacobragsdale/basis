@@ -90,7 +90,7 @@ def test_a_run_that_names_no_environment_is_refused_with_the_fix(repo: Path, cap
 def test_a_run_reads_the_user_s_file_for_the_environment_it_names(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("BASIS_ENV")
     (tmp_path / "config" / "basis").mkdir(parents=True)
-    (tmp_path / "config" / "basis" / "qa.env").write_text(f"BASIS_SNAPSHOT_ROOT={tmp_path / 'qa-runs'}\n", encoding="utf-8")
+    (tmp_path / "config" / "basis" / "qa.env").write_text(f"BASIS_ENV=qa\nBASIS_SNAPSHOT_ROOT={tmp_path / 'qa-runs'}\n", encoding="utf-8")
     assert basis(repo, *RUN, "--env", "qa") == 0
     assert len(list((tmp_path / "qa-runs").rglob("*.json"))) == 1  # the run's manifest, in qa's store, not the process's
     assert not (tmp_path / "snapshots").exists()
@@ -356,3 +356,27 @@ def test_a_replay_is_saved_in_the_repos_own_store_never_the_environments(repo: P
     assert snapshots.find(Root.at(repo / "snapshots"), replayed).record().replay_of == run_id
     with pytest.raises(LookupError):
         snapshots.find(Root.at(snapshot_root), replayed)
+
+
+def test_a_runs_stderr_holds_none_of_the_secrets_its_settings_hold(repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    connection = "Server=127.0.0.1,9;UID=etl;PWD=Pa55;tail-of-it;Database=warehouse"  # a password with ; in it, unbraced
+    settings = {
+        "BASIS_ENV": "dev",
+        "BASIS_SNAPSHOT_ROOT": str(tmp_path / "runs"),
+        **{
+            f"BASIS_DATABASES__{name}__{key}": value
+            for name in ("SOURCE", "WAREHOUSE")
+            for key, value in {"KIND": "mssql", "CONNECTION_STRING": connection, "ISOLATION": "read_committed", "TIMEOUT_S": "5", "MAX_ROWS": "10"}.items()
+        },
+        "BASIS_DATABASES__WAREHOUSE__WRITE__CONNECTION_STRING": connection,
+        "BASIS_DATABASES__WAREHOUSE__WRITE__LEDGER": "etl.publishes",
+        "BASIS_HTTP__PRICING__URL": "https://user:pa55word@pricing.firm/v1",
+        "BASIS_HTTP__PRICING__PROXY": "http://proxyuser:proxypa55@proxy.firm:8080",
+    }
+    (tmp_path / "config" / "basis").mkdir(parents=True)
+    (tmp_path / "config" / "basis" / "dev.env").write_text("".join(f"{name}={value}\n" for name, value in settings.items()), encoding="utf-8")
+    assert basis(repo, *RUN, "--env", "dev", "--publish") == 1
+    err = capsys.readouterr().err
+    assert err.splitlines()[-1].startswith("ERROR: ")
+    for secret in ("Pa55", "tail-of-it", "pa55word", "proxypa55"):
+        assert secret not in err, secret

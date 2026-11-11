@@ -22,7 +22,7 @@ def clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_a_run_in_an_environment_reads_the_user_s_file_for_it_and_sets_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     (tmp_path / "config" / "basis").mkdir(parents=True)
-    (tmp_path / "config" / "basis" / "dev.env").write_text("BASIS_LOG_LEVEL=WARNING\nBASIS_GIT_SHA=abc123\nOTHER_TOOL=1\n", encoding="utf-8")
+    (tmp_path / "config" / "basis" / "dev.env").write_text("BASIS_ENV=dev\nBASIS_LOG_LEVEL=WARNING\nBASIS_GIT_SHA=abc123\nOTHER_TOOL=1\n", encoding="utf-8")
     result = etl.run(job, params="params/default.json", data="tests/fixture", env="dev", snapshot_root=tmp_path / "snapshots")
     assert result.record.status == "checked"
     assert "BASIS_LOG_LEVEL" not in os.environ
@@ -113,7 +113,7 @@ def test_a_replay_from_python_exports_its_spans_where_the_settings_say(tmp_path:
     first = etl.run(job, params="params/default.json", data="tests/fixture", env=None, snapshot_root=tmp_path)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     (tmp_path / "config" / "basis").mkdir(parents=True)
-    (tmp_path / "config" / "basis" / "dev.env").write_text("BASIS_TRACES__EXPORTER=console\n", encoding="utf-8")
+    (tmp_path / "config" / "basis" / "dev.env").write_text("BASIS_ENV=dev\nBASIS_TRACES__EXPORTER=console\n", encoding="utf-8")
     capsys.readouterr()
     etl.replay(job, first.record.run_id, env="dev", snapshot_root=tmp_path)
     assert '"name": "replay"' in capsys.readouterr().err

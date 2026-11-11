@@ -74,7 +74,7 @@ from basis.core.destination import DestColumn, TableSpec, Unit, binding
 from basis.core.errors import Conflict, Denied, Failed, Rejected, ServiceError, Timeout, Unavailable
 from basis.core.interval import Interval
 from basis.core.logs import ms_since
-from basis.core.settings import MssqlSettings, publish_refusal, unpublishable
+from basis.core.settings import MssqlSettings, SettingsError, publish_refusal, unpublishable
 from basis.core.tables import Changes, Delete, Kind, Target
 
 log = logging.getLogger(__name__)
@@ -91,6 +91,12 @@ def connect_to(database: str, connection_string: str, timeout_s: int, *, autocom
     boundary = Boundary(database, _DRIVER, kind_of)
     try:
         raw = boundary.call(mssql_python.connect, connection_string, timeout=min(LOGIN_TIMEOUT_S, timeout_s), autocommit=autocommit)
+    except mssql_python.ConnectionStringParseError:  # whose message quotes the string, a password's tail among it
+        msg = (
+            f"the connection string of database {database} does not parse: a value holding ; {{ or }}, as a password may, goes in braces, as PWD={{...}},"
+            f" with each }} in it doubled: correct BASIS_DATABASES__{database.upper()}__CONNECTION_STRING"
+        )
+        raise SettingsError(msg) from None
     except ServiceError as error:
         error.add_note(f"while connecting to SQL Server {target_of(connection_string)}")
         raise

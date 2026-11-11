@@ -150,7 +150,7 @@ def test_the_sweep_command_finds_a_run_by_its_id_in_the_environment_it_names(tmp
     snapshot = toy_run(tmp_path, "toys.basic")
     variants(tmp_path, a={"buy": "A"})
     (folder := tmp_path / "config" / "basis").mkdir(parents=True)
-    (folder / "qa.env").write_text(f"BASIS_SNAPSHOT_ROOT={tmp_path / 'snapshots'}\n")
+    (folder / "qa.env").write_text(f"BASIS_ENV=qa\nBASIS_SNAPSHOT_ROOT={tmp_path / 'snapshots'}\n")
     monkeypatch.delenv("BASIS_ENV")
 
     assert basis("sweep", snapshot.info.run_id, str(tmp_path / "variants"), "--env", "qa", "--out", str(tmp_path / "sweep.csv")) == 0
@@ -159,7 +159,7 @@ def test_the_sweep_command_finds_a_run_by_its_id_in_the_environment_it_names(tmp
 
 def test_the_warm_command_reads_the_cache_from_the_environment_it_names(tmp_path: Path, basis: Basis, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     (folder := tmp_path / "config" / "basis").mkdir(parents=True)
-    (folder / "qa.env").write_text(f"BASIS_SNAPSHOT_ROOT={tmp_path / 'snapshots'}\n")
+    (folder / "qa.env").write_text(f"BASIS_ENV=qa\nBASIS_SNAPSHOT_ROOT={tmp_path / 'snapshots'}\n")
     monkeypatch.setenv("BASIS_OPTIM__CACHE_ROOT", str(tmp_path / "cache"))  # the process's, which qa's file does not read
     monkeypatch.delenv("BASIS_ENV")
 

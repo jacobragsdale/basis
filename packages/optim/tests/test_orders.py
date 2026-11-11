@@ -322,7 +322,7 @@ def test_ddl_reads_the_orders_table_from_the_environment_it_names(basis: Basis, 
     for name, value in TRADING.items():
         monkeypatch.setenv(name, value)
     (folder := tmp_path / "config" / "basis").mkdir(parents=True)
-    (folder / "prod.env").write_text("".join(f"{name}={value}\n" for name, value in (TRADING | {"BASIS_OPTIM__ORDERS__TABLE": "books.orders"}).items()))
+    (folder / "prod.env").write_text("".join(f"{name}={value}\n" for name, value in (TRADING | {"BASIS_ENV": "prod", "BASIS_OPTIM__ORDERS__TABLE": "books.orders"}).items()))
     monkeypatch.delenv("BASIS_ENV")
 
     assert basis("ddl", "ghost", "--dialect", "mssql", "--env", "prod") == 0

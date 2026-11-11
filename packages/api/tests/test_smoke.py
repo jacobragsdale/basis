@@ -36,7 +36,7 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (folder / "openapi.json").write_text(json.dumps({"x-basis": MARKER, **DOCUMENT}), encoding="utf-8")
     config = tmp_path / "config"
     (config / "basis").mkdir(parents=True)
-    (config / "basis" / "qa.env").write_text("BASIS_SMOKE__URL=https://qa.example.com/api\n", encoding="utf-8")
+    (config / "basis" / "qa.env").write_text("BASIS_ENV=qa\nBASIS_SMOKE__URL=https://qa.example.com/api\n", encoding="utf-8")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
     for name in [name for name in __import__("os").environ if name.startswith("BASIS_")]:
         monkeypatch.delenv(name)
@@ -84,7 +84,7 @@ def test_an_example_whose_answer_its_response_does_not_hold_fails(repo: Path) ->
 
 
 def test_an_environment_that_names_no_url_says_how_to_name_it(repo: Path, tmp_path: Path) -> None:
-    (tmp_path / "config" / "basis" / "qa.env").write_text("", encoding="utf-8")
+    (tmp_path / "config" / "basis" / "qa.env").write_text("BASIS_ENV=qa\n", encoding="utf-8")
     [(reason, fix)] = smoke.smoke(repo, "qa", service=SERVICE, transport=deployed())
     assert reason == "basis smoke has nowhere to reach service quotes in qa"
     assert fix.startswith("set BASIS_SMOKE__URL in qa's settings")

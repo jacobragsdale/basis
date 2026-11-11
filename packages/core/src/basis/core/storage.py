@@ -18,6 +18,7 @@ import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 
 from basis.core import frames
+from basis.core.secrets import redacted
 
 DIGEST = re.compile(r"[0-9a-f]{64}")
 """A dataset's name in the store: its content's SHA-256, in lower-case hex."""
@@ -27,7 +28,7 @@ DIGEST = re.compile(r"[0-9a-f]{64}")
 class Root:
     fs: pafs.FileSystem
     path: str  # the root inside `fs`, `/`-separated, without a trailing `/`
-    location: str  # as configured, for messages
+    location: str  # as configured, for messages, each secret it holds as ***
 
     @classmethod
     def at(cls, location: str | Path) -> Root:
@@ -36,7 +37,7 @@ class Root:
             fs, path = pafs.FileSystem.from_uri(str(location))
         else:  # pyarrow takes absolute paths only, with `/` on Windows too
             fs, path = pafs.LocalFileSystem(), Path(location).resolve().as_posix()
-        return cls(fs, path.rstrip("/"), str(location))
+        return cls(fs, path.rstrip("/"), redacted(str(location)))  # what messages show: never its credentials
 
     def __truediv__(self, name: str) -> Root:
         return Root(self.fs, f"{self.path}/{name}", f"{self.location.rstrip('/')}/{name}")

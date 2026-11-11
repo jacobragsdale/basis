@@ -14,7 +14,8 @@ from typing import Annotated, Literal, Self, TypeAliasType, Union, get_args, get
 
 from pydantic import BaseModel, Field, FilePath, HttpUrl, SecretStr, model_validator
 from pydantic.fields import FieldInfo
-from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+from pydantic_settings import BaseSettings, DotEnvSettingsSource, PydanticBaseSettingsSource, SettingsConfigDict
+from pydantic_settings.sources.utils import parse_env_vars
 
 from basis.core.errors import BasisError
 from basis.core.model import Model
@@ -299,8 +300,8 @@ class Settings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        if _FILE_ALONE.get():
-            return (dotenv_settings,)
+        if _FILE_ALONE.get() and isinstance(dotenv_settings, DotEnvSettingsSource):
+            return (_Verbatim(settings_cls, env_file=dotenv_settings.env_file, env_file_encoding="utf-8-sig"),)
         return super().settings_customise_sources(settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings)
 
     def snapshots(self) -> Root:
@@ -357,8 +358,34 @@ def read(path: Path) -> FileSettings:
     return read_file(FileSettings, path)
 
 
+def read_values(path: Path) -> dict[str, str]:
+    """The `NAME=VALUE` lines of the settings file at `path`, each value as written: a line starting `#` is a comment,
+    a value in matching quotes is what they hold, and nothing else is read into a value, no `${NAME}` expanded from the
+    process, no `\\n` made a newline, as a Windows path holds it, and no ` #` cut off as a comment."""
+    found: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
+        text = line.strip()
+        if not text or text.startswith("#") or "=" not in text:
+            continue
+        name, _, value = text.removeprefix("export ").partition("=")
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:  # noqa: PLR2004 -- a quote at each end
+            value = value[1:-1]
+        found[name.strip()] = value
+    return found
+
+
+class _Verbatim(DotEnvSettingsSource):
+    """The settings file's values as `read_values` reads them, where pydantic's reader would expand and unescape them."""
+
+    @override
+    def _read_env_file(self, file_path: Path) -> Mapping[str, str | None]:
+        return parse_env_vars(dict(read_values(file_path)), self.case_sensitive, self.env_ignore_empty, self.env_parse_none_str)
+
+
 def read_file[S: Settings](kind: type[S], path: Path) -> S:
-    """`kind`'s settings, a part's own subclass among them, from the file at `path` alone."""
+    """`kind`'s settings, a part's own subclass among them, from the file at `path` alone, each value as written
+    (`read_values`)."""
     token = _FILE_ALONE.set(True)
     try:
         return kind(_env_file=path)

@@ -54,7 +54,7 @@ def test_the_user_s_folder_is_appdata_s_on_windows_and_xdg_s_or_the_home_s_elsew
 
 
 def test_a_desktop_reads_the_user_s_file_for_the_environment_alone(monkeypatch: pytest.MonkeyPatch) -> None:
-    path = user_file("qa", "BASIS_SNAPSHOT_ROOT=//files/runs-qa\nBASIS_PROD_WRITES=1\nOTHER_TOOL=1\n")
+    path = user_file("qa", "BASIS_ENV=qa\nBASIS_SNAPSHOT_ROOT=//files/runs-qa\nBASIS_PROD_WRITES=1\nOTHER_TOOL=1\n")
     monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", "//files/runs-prod")  # set for another environment, which never mixes in
     found = load("qa", Settings, windows=False)
     assert (found.name, found.source, found.settings.snapshot_root, found.writes) == ("qa", path, "//files/runs-qa", True)
@@ -76,7 +76,7 @@ def test_an_environment_nothing_configures_is_refused_naming_the_user_s_file(no_
 
 @pytest.mark.parametrize(("env", "flag", "writes"), [("dev", None, True), ("qa", None, True), ("prod", None, False), ("prod", "1", True), ("prod", "true", False)])
 def test_prod_writes_only_where_the_process_sets_the_flag(monkeypatch: pytest.MonkeyPatch, env: str, flag: str | None, writes: bool) -> None:  # noqa: FBT001 -- a parametrized case
-    user_file(env, "BASIS_SNAPSHOT_ROOT=runs\nBASIS_PROD_WRITES=1\n")  # a user's file cannot set it
+    user_file(env, f"BASIS_ENV={env}\nBASIS_SNAPSHOT_ROOT=runs\nBASIS_PROD_WRITES=1\n")  # a user's file cannot set it
     if flag is not None:
         monkeypatch.setenv(environments.PROD_WRITES, flag)
     found = load(env, Settings, windows=False)
@@ -86,3 +86,28 @@ def test_prod_writes_only_where_the_process_sets_the_flag(monkeypatch: pytest.Mo
     else:
         with pytest.raises(EnvError, match=r"^basis run positions --publish would write to prod, which basis refuses unless the process sets BASIS_PROD_WRITES=1"):
             found.refuse_writes("basis run positions --publish")
+
+
+def test_a_file_that_names_another_environment_as_one_copied_from_it_does_is_refused() -> None:
+    path = user_file("dev", "BASIS_ENV=prod\nBASIS_SNAPSHOT_ROOT=//files/runs-prod\n")
+    with pytest.raises(EnvError, match=rf"^{path} says BASIS_ENV=prod, as a copy of prod's settings would: give dev its own settings, with BASIS_ENV=dev$"):
+        load("dev", Settings, windows=False)
+
+
+def test_a_file_that_does_not_say_which_environment_it_is_is_refused() -> None:
+    path = user_file("dev", "BASIS_SNAPSHOT_ROOT=runs\n")
+    with pytest.raises(EnvError, match=rf"^{path} does not say which environment it is: add the line BASIS_ENV=dev to it, so a copy of another environment's settings is never taken for dev's$"):
+        load("dev", Settings, windows=False)
+
+
+def test_the_process_s_settings_with_no_basis_env_are_never_taken_for_an_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", "//files/runs-prod")  # whatever the shell holds
+    with pytest.raises(EnvError, match=r"the process's BASIS_ settings do not say which environment they are: set BASIS_ENV=dev with them, as a deployment does, or write .*dev\.env"):
+        load("dev", Settings, windows=False)
+
+
+def test_a_file_is_read_as_written_with_no_expansion_escape_or_comment_in_a_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SHELL_ROOT", "/from/the/shell")
+    user_file("dev", 'BASIS_ENV=dev\n# a comment line\nBASIS_SNAPSHOT_ROOT="C:\\runs\\new"\nBASIS_GIT_SHA=${SHELL_ROOT} #a note\n')
+    found = load("dev", Settings, windows=False).settings
+    assert (found.snapshot_root, found.git_sha) == ("C:\\runs\\new", "${SHELL_ROOT} #a note")

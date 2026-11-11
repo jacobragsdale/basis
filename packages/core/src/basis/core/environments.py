@@ -6,8 +6,10 @@ nobody named. Its settings come from one place:
   `%APPDATA%\\basis\\qa.env` on Windows, and `$XDG_CONFIG_HOME/basis/qa.env`, or `~/.config/basis/qa.env`, in WSL and
   on Linux. It holds the environment's hosts, paths and secrets, as `BASIS_*` lines, every repo the user works in
   shares it, and it is read alone, never with the process's environment, so a variable set for another environment
-  never mixes in;
-- in a pod, which has no such file, the process's environment, which its deployment sets, `BASIS_ENV` among it.
+  never mixes in. It says which environment it is, `BASIS_ENV=qa`, so a copy of another's is refused, and each value
+  is read as written (`basis.core.settings.read_values`);
+- in a pod, which has no such file, the process's environment, which its deployment sets, `BASIS_ENV` among it,
+  which must name the environment, so a shell's leftover `BASIS_*` variables are never taken for one.
 
 Prod is read-only unless the process's environment sets `BASIS_PROD_WRITES=1`: without it, a run whose plan publishes
 or writes anything is refused at the start (`Environment.refuse_writes`). A deployment sets it, and a user's file
@@ -108,10 +110,20 @@ def load[S: Settings](given: str | None, kind: type[S], *, windows: bool | None 
     if path.is_file():
         if ignored := _settings_variables(environ, kind):
             log.warning("reading %s alone, and not the process's %s", path, ", ".join(ignored), extra={"settings": str(path), "ignored": ignored})
+        declared = settings.read_values(path).get(VARIABLE)
+        if declared is None:
+            msg = f"{path} does not say which environment it is: add the line {VARIABLE}={env} to it, so a copy of another environment's settings is never taken for {env}'s"
+            raise EnvError(msg)
+        if declared != env:
+            msg = f"{path} says {VARIABLE}={declared}, as a copy of {declared}'s settings would: give {env} its own settings, with {VARIABLE}={env}"
+            raise EnvError(msg)
         return Environment(env, settings.read_file(kind, path), path, writes)
     settings.refuse_renamed(environ)
     if not _settings_variables(environ, kind):
         msg = f"there is no {path}, and the process's environment sets no BASIS_ settings, so nothing configures {env}: write {path}, with the names the repo's .env.example lists"
+        raise EnvError(msg)
+    if environ.get(VARIABLE) != env:  # a shell's leftovers, which a deployment's settings never are: it names its environment
+        msg = f"the process's BASIS_ settings do not say which environment they are: set {VARIABLE}={env} with them, as a deployment does, or write {path}"
         raise EnvError(msg)
     return Environment(env, kind(), None, writes)
 

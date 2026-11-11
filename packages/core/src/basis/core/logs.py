@@ -43,6 +43,7 @@ from typing import Literal, override
 from opentelemetry import trace
 from opentelemetry.trace import SpanContext
 from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic_core import PydanticSerializationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from basis.core import telemetry
@@ -210,7 +211,27 @@ def describe(error: BaseException) -> dict[str, object]:
 
 
 def to_json(value: object) -> str:
-    return _JSON.dump_json(value, fallback=_fallback).decode()
+    """`value` as one line of JSON; a value pydantic's serializer cannot hold, as pandas' missing time `NaT` or bytes
+    that are not UTF-8, as its text instead, so the record is never lost for a traceback of the logging's own."""
+    try:
+        return _JSON.dump_json(value, fallback=_fallback).decode()
+    except ValueError, TypeError, UnicodeDecodeError, PydanticSerializationError:
+        return _JSON.dump_json(_plain(value), fallback=_fallback).decode()
+
+
+def _plain(value: object) -> object:
+    """`value` with what JSON has a type for kept, and every other value its text: bytes as how many."""
+    match value:
+        case dict():
+            return {str(key): _plain(item) for key, item in value.items()}
+        case list() | tuple() | set() | frozenset():
+            return [_plain(item) for item in value]
+        case None | bool() | int() | float() | str():
+            return value
+        case bytes() | bytearray():
+            return f"<{len(value)} bytes>"
+        case _:
+            return str(value)
 
 
 _JSON = TypeAdapter(object, config=ConfigDict(ser_json_inf_nan="null"))  # NaN is not JSON: it logs as null

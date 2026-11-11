@@ -38,6 +38,7 @@ from pydantic_core import to_json
 from basis.core import deadlines
 from basis.core.errors import BadReply, Failed, ServiceError, Timeout, Unavailable, answered
 from basis.core.resources import Body, ClockResource, HttpMethod, HttpResource, IdsResource, Query, QueryValue
+from basis.core.secrets import redacted
 from basis.core.settings import HttpService
 
 log = logging.getLogger(__name__)
@@ -84,7 +85,8 @@ def client(name: str, service: HttpService) -> httpx2.AsyncClient:
     the operating system's trusted CAs, through the declared proxy or none, and nothing read from the environment."""
     verify: ssl.SSLContext | bool = ssl.create_default_context(cafile=service.ca_bundle) if service.ca_bundle is not None else True
     proxy = str(service.proxy) if service.proxy is not None else None
-    log.debug("calls %s at %s", name, service.url, extra={"resource": name, "ca_bundle": str(service.ca_bundle) if service.ca_bundle else None, "proxy": proxy})
+    shown_proxy = redacted(proxy) if proxy is not None else None
+    log.debug("calls %s at %s", name, redacted(str(service.url)), extra={"resource": name, "ca_bundle": str(service.ca_bundle) if service.ca_bundle else None, "proxy": shown_proxy})
     return httpx2.AsyncClient(base_url=str(service.url), verify=verify, proxy=proxy, trust_env=False)
 
 
@@ -172,7 +174,8 @@ class HttpClient:
                 if response.is_success:
                     return response
                 status = response.status_code
-                log.warning("%s answered %s to %s %s", resource.name, status, method, path, extra={"resource": resource.name, "reply": status, "body": response.text[:2000]})
+                # never the body, which a service may echo a token or a request's secret in: its size says enough to compare
+                log.warning("%s answered %s to %s %s", resource.name, status, method, path, extra={"resource": resource.name, "reply": status, "body_bytes": len(response.content)})
                 failure = answered(status)(f"{resource.name} answered {status} to {method} {path}", resource=resource.name, status=status)
             if (wait_s := _retry_in(method, failure, response, resent=resent, ends_at=ends_at, waits=waits)) is None:
                 raise failure
