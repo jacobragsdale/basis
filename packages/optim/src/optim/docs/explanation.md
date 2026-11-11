@@ -219,9 +219,10 @@ sells a holding whole when a sale comes within half an increment of it, so an od
 A solver that reports optimal has solved the problem it was given, within its tolerances. That is not permission to
 trade: a time limit may have left a poor answer, rounding may have moved a trade, and a formulation can count cash
 differently from the books. So after rounding, the core rebuilds the portfolio from the holdings and prices alone and
-rejects a decision that was not solved, trades a security that is not loaded, has a quantity that is not positive,
-sells more than it holds, leaves cash below zero, or that rounding moved. One tolerance applies, in weights of the
-portfolio's value, $1 per $1mm.
+rejects a decision that was not solved, trades a security that is not loaded or trades cash itself, has a quantity
+that is not positive, sells more than it holds, by any amount, leaves cash below zero, or that rounding moved. One
+tolerance applies to cash and to rounding, a millionth of the portfolio's value, $1 per $1mm, and never more than $1,
+so it does not grow with the portfolio: at $2bn a millionth is $2,000, enough to sell 600 more than a holding of 5,000.
 
 The last check replaces checking each constraint again. The solver proved the decision meets every constraint of the
 model's problem before rounding; if rounding changed nothing material, it still does. A model that decides whole

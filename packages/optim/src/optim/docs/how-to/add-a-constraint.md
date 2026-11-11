@@ -193,6 +193,7 @@ To confirm it worked, run `uv run pytest`, then run the model on its fixture, wi
 "Constraints" in the model's `README.md`, and a new dataset under "Data".
 
 A constraint needs no second check after the solve. `optim.cvxpy` checks the solver's answer against every constraint
-at the values it returned, rejecting one that breaks any as `not solved: violated`, before the core rounds it, and the core rejects a decision that rounding moves by more than a millionth of the portfolio's value,
-so what the solver proved still holds. A portfolio whose constraints cannot all be met is rejected as `not solved:
+at the values it returned, rejecting one that breaks any as `not solved: violated`, before the core rounds it, and the
+core rejects a decision that rounding moves by more than a millionth of the portfolio's value, or $1, whichever is
+less, so what the solver proved still holds. A portfolio whose constraints cannot all be met is rejected as `not solved:
 infeasible`. For the objective, see [how to change the objective](change-the-objective.md).

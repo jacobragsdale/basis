@@ -36,15 +36,17 @@ LIMIT = SolverStats(solver="HIGHS", status="user_limit", stop="limit", gap=0.05)
     ("decision", "reason"),
     [
         (optim.Decision(buy={"A": 990_000.0}), None),  # $990k of A from $1mm cash
-        (optim.Decision(buy={"A": 1_000_001.0}), None),  # $1 short is within $1.05, the one tolerance in weights of value
+        (optim.Decision(buy={"A": 1_000_001.0}), None),  # $1 short is within the tolerance: a millionth of the value, at most $1
         (optim.Decision(buy={"A": 1_000_002.0}), "leaves cash of -2.00"),
         (optim.Decision(sell={"B": 100_503.0}), "more than its holding of 100,500.00"),  # $1.50 over
+        (optim.Decision(sell={"B": 100_501.0}), "more than its holding of 100,500.00"),  # $0.50 over: a sale over the holding is short
         (optim.Decision(sell={"A": 1000.0}), "more than its holding of 0.00"),
         (optim.Decision(buy={"X": 1000.0}), "trades securities that are not loaded: ['X']"),
         (optim.Decision(buy={"A": -1000.0}), "buys quantities that are not positive: ['A']"),
+        (optim.Decision(sell={"USD": 500_000.0}, buy={"A": 1_400_000.0}), "trades cash as a security: ['USD']"),  # a sale of cash is no proceeds
         (optim.Decision(buy={"A": 1000.0}, solved=False, solver=LIMIT), "not solved: limit"),  # its trades are fine; its solve is not
     ],
-    ids=["fine", "cash-within-tolerance", "cash", "oversold", "sells-what-it-lacks", "unknown", "negative", "not-solved"],
+    ids=["fine", "cash-within-tolerance", "cash", "oversold", "oversold-by-little", "sells-what-it-lacks", "unknown", "negative", "trades-cash", "not-solved"],
 )
 def test_review_rejects_what_could_not_trade(decision: optim.Decision, reason: str | None) -> None:
     reasons, _ = review(decision, decision, HOLDINGS_, SECURITIES_)
@@ -53,6 +55,22 @@ def test_review_rejects_what_could_not_trade(decision: optim.Decision, reason: s
         assert reasons == []
     else:
         assert any(reason in found for found in reasons), reasons
+
+
+BIG = frame(HOLDINGS, {"quantity": 2_000_000_000.0}, {"security_id": "B", "quantity": 5000.0})  # $2bn of cash
+
+
+@pytest.mark.parametrize(
+    ("decision", "reason"),
+    [(optim.Decision(sell={"B": 5600.0}), "sells 5,600.00 of B, more than its holding of 5,000.00"), (optim.Decision(buy={"A": 2_000_000_010.0}), "leaves cash of -10.00")],
+    ids=["oversold", "cash"],
+)
+def test_the_tolerance_does_not_grow_with_the_portfolio(decision: optim.Decision, reason: str) -> None:
+    """A millionth of $2bn is $2,000: a tolerance that grew with the portfolio let a sale of 600 more than the holding
+    through, and an overdraft."""
+    reasons, _ = review(decision, decision, BIG, SECURITIES_)
+
+    assert any(reason in found for found in reasons), reasons
 
 
 def test_review_rebuilds_the_portfolio_after_the_trades_from_the_holdings_and_prices_alone() -> None:

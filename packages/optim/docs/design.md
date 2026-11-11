@@ -172,8 +172,9 @@ Every run, in Airflow or on a laptop, takes the same steps:
 8. Write the snapshot.
 9. With `--publish`, write the accepted portfolios' orders, with the run id, to the orders table, with a ledger row.
 
-Acceptance rejects a decision unless every trade is in a known security, every quantity is positive, no sale exceeds
-the holding, and cash after the trades is not negative. One tolerance applies, in weights of the portfolio's value. The
+Acceptance rejects a decision unless every trade is in a known security that is not cash, every quantity is positive,
+no sale exceeds the holding, by any amount, and cash after the trades is not negative. One tolerance applies to cash
+and rounding, a millionth of the portfolio's value and never more than $1, so it does not grow with the portfolio. The
 model's `check` then adds its own reasons, because the core cannot see the constraints a model builds in cvxpy. A
 solver's status alone never makes a result acceptable. A rejected portfolio writes no orders, its decision and reasons
 stay in the snapshot, and the run exits non-zero; the exit code is 0 only when every portfolio was accepted.

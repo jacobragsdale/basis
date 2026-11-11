@@ -100,6 +100,7 @@ To find out why a portfolio was rejected:
 | `sells 100,503.00 of B, more than its holding of 100,500.00` | A sale larger than the holding. |
 | `leaves cash of -2.00: it spends more than it has` | Buys that cost more than the cash and the sales provide. |
 | `trades securities that are not loaded: ['X']` | A trade in a security the run's securities do not hold. |
+| `trades cash as a security: ['USD']: ...` | A trade in cash itself, which moves with the other trades: leave cash out of the universe the model trades. |
 | `buys quantities that are not positive: ['A']` | A quantity of zero or less. |
 | `it has no holdings: is its id right?` | The holdings hold nothing for the portfolio, as for a misspelled id. |
 | `not one of the portfolios the model lists on 2026-10-16` | The portfolio was given by id, and the model's `portfolios` dataset does not list it on the business date. |

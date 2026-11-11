@@ -130,8 +130,9 @@ is income less cost. `optim.cvxpy` only solves a problem (`solve`) or reads one 
 ## What the core accepts
 
 The core rounds each decision to its securities' trading increments, then rejects it unless every trade is in a known
-security, every quantity is positive, no sale exceeds its holding, cash after trading is not negative, the decision
-was solved, and rounding moved no trade by more than the tolerance, a millionth of the portfolio's value. The solver
+security that is not cash, every quantity is positive, no sale exceeds its holding, cash after trading is not
+negative, the decision was solved, and rounding moved no trade by more than the tolerance, a millionth of the
+portfolio's value and at most $1. The solver
 proved the decision meets every constraint, within its tolerance, before rounding; the last check proves rounding
 changed nothing material, so no constraint is written a second time to check it after rounding. A model that trades
 whole increments always passes it. `check` stays, optional, for anything a desk wants beyond the problem.

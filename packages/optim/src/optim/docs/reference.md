@@ -220,12 +220,14 @@ rounded decision, with these reasons, in this order, when:
 | `it has no holdings: is its id right?` | The portfolio has no rows in `holdings`. |
 | `not solved: STOP` | `solved` is false. |
 | `trades securities that are not loaded: [...]` | A trade's security is not in `securities`. |
+| `trades cash as a security: [...]: ...` | A trade's security is cash, whose `asset_class` is `cash`: cash moves with the other trades. |
 | `buys quantities that are not positive: [...]`, `sells ...` | A quantity is zero or negative. |
-| `sells Q of S, more than its holding of H` | A sale exceeds the holding by more than the tolerance. |
+| `sells Q of S, more than its holding of H` | A sale exceeds the holding, by any amount. |
 | `rounding moved its SIDE of S from X to Y: decide whole increments` | Rounding changed a trade's value by more than the tolerance. |
 | `leaves cash of C: it spends more than it has` | Cash holdings plus sales less buys, at unit values, is below minus the tolerance. |
 
-The tolerance is 1e-6 of the portfolio's value, its holdings at unit values: $1 per $1mm. The rounding check is why no
+The tolerance is 1e-6 of the portfolio's value, its holdings at unit values, $1 per $1mm, and never more than $1, in
+the portfolio's currency, however large the portfolio. The rounding check is why no
 constraint needs checking again after rounding: a model that decides whole increments passes it, and the solver proved
 the unrounded decision meets its constraints. The model's `check` adds its reasons after the core's. A portfolio can
 also be rejected before it is decided: `not one of the portfolios the model lists on DATE`, a hook's error, or
