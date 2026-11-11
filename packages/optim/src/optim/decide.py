@@ -64,7 +64,7 @@ def decide_all(model: LoadedModel, params: Params, data: Datasets, portfolio_ids
     its order decide too, since what those reserve is what the later ones see."""
     logs.include(model.module.partition(".")[0])
     with logs.timed(log, "prepared the market"):
-        market = model.prepare_market(data, params) if model.prepare_market else data
+        market = market_of(model, data, params)
     state = State(model.module, params, data, market)
     with logs.timed(log, "decided portfolios", portfolios=len(portfolio_ids), workers=workers) as fields:
         if model.reserve is None:
@@ -75,6 +75,18 @@ def decide_all(model: LoadedModel, params: Params, data: Datasets, portfolio_ids
         rejected = [outcome.portfolio_id for outcome in decided.outcomes if not outcome.accepted]
         fields.update(rejected=len(rejected), rejected_examples=rejected[:20], in_turn=decided.order is not None)
     return decided
+
+
+def market_of(model: LoadedModel, data: Datasets, params: Params) -> object:
+    """What every portfolio shares: `prepare_market`'s result, or the data itself without it, made from a copy of the
+    data, so a hook that edits a frame in place changes neither what acceptance reads nor what the snapshot saves."""
+    copied = copy_of(data)
+    return model.prepare_market(copied, params) if model.prepare_market else copied
+
+
+def copy_of(data: Datasets) -> Datasets:
+    """`data` with each frame a shallow copy, which pandas' copy-on-write keeps apart from the original's values."""
+    return type(data)({name: frame.copy(deep=False) for name, frame in data.frames.items()}, as_of_date=data.as_of_date, portfolio_id=data.portfolio_id)
 
 
 def in_turn(model: LoadedModel, state: State, portfolio_ids: Sequence[str], *, workers: int, only: Sequence[str] | None) -> Decided:
@@ -136,7 +148,7 @@ class State:
     def portfolio(self, portfolio_id: str) -> Datasets:
         """The portfolio's slice of the data: its rows of each per-portfolio dataset, and every other dataset whole. Each
         frame is a shallow copy, so a model that adds a column to one changes no other portfolio's."""
-        frames = {name: frame.copy(deep=False) for name, frame in self.data.frames.items()}
+        frames = copy_of(self.data).frames
         for name, rows in self._rows.items():
             frames[name] = frames[name].take(np.asarray(rows.get(portfolio_id, ()), dtype=np.intp)).reset_index(drop=True)
         return type(self.data)(frames, as_of_date=self.data.as_of_date, portfolio_id=portfolio_id)

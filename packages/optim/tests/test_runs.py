@@ -80,6 +80,16 @@ def test_a_portfolio_that_fails_or_is_rejected_leaves_the_others_decided(tmp_pat
     ]
 
 
+def test_hooks_that_edit_their_data_in_place_change_neither_acceptance_nor_the_snapshot(tmp_path: Path) -> None:
+    """`toys.meddling` doubles every holding in `prepare_market` and zeroes the market's in `decide`, then sells twice
+    P1's holding of A: acceptance and the snapshot read the run's own frames, as loaded."""
+    root = Root.at(tmp_path / "snapshots")
+    run = run_model(loader(Rows({HOLDINGS: HELD, SECURITIES: MARKET})), root, models.load("toys.meddling"), params(tmp_path), as_of_date=AS_OF, portfolio_ids=["P1"], clock=Clock())
+
+    assert run.outcomes[0].reasons == ["sells 10,000.00 of A, more than its holding of 5,000.00"]
+    assert_frame_equal(saved(root, run.run_id).inputs({"holdings": HOLDINGS})["holdings"], HELD.iloc[:2])  # P1's rows, as loaded
+
+
 def test_a_replay_decides_as_the_run_did_from_its_snapshot_alone(tmp_path: Path) -> None:
     root, run_id = toy_run(tmp_path, unsolved=["P2"])
 

@@ -15,7 +15,7 @@ import optim
 import optim.cvxpy
 from basis.core.storage import Root
 from optim.contract import LISTING, Decision, Params, declared
-from optim.decide import Outcome, State, decide_all, finish, prepare_one, turn_of
+from optim.decide import Outcome, State, decide_all, finish, market_of, prepare_one, turn_of
 from optim.models import HOOKS, LoadedModel
 from optim.runs import Snapshot, read_params, read_snapshot
 from optim.snapshots import Saved, runs_of
@@ -118,7 +118,7 @@ def trial(snapshot: Snapshot, portfolio_id: str, params: Params | None = None) -
     """Decide one portfolio of a saved run, with the run's params or others, in this process, as a run would: for a
     model that reserves, after the portfolios before it in the model's order."""
     model, values = snapshot.model, params or snapshot.params
-    market = model.prepare_market(snapshot.data, values) if model.prepare_market else snapshot.data
+    market = market_of(model, snapshot.data, values)
     state = State(model.module, values, snapshot.data, market)
     if model.reserve is not None:
         market, prepared = turn_of(model, state, snapshot.info.portfolios, portfolio_id)
