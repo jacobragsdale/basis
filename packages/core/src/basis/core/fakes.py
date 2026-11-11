@@ -238,10 +238,17 @@ class Email:
     def __init__(self) -> None:
         self.sent: list[EmailMessage] = []
         self.logins: list[str] = []
+        self.refused: set[str] = set()
+        """Recipients the relay refuses, as one that has no such user does: it sends to the rest, and says which."""
+        self.delay_s = 0.0
+        """How long the relay takes to accept a message, in real time, as a slow one does."""
         self._failing = Failures[str]("a fake email relay", EMAIL_KINDS)
 
     def fails(self, kind: type[ServiceError], *, times: int | None = None) -> None:
         self._failing.set("send", kind, times)
+
+    def refuses(self, *recipients: str) -> None:
+        self.refused |= set(recipients)
 
     def connect(self, relay: object, timeout_s: float) -> _Session:
         del relay, timeout_s  # a fake relay is reached in the process, at once
@@ -263,8 +270,14 @@ class _Session:
         if (taken := self._relay._failing.take("send")) is not None:  # noqa: SLF001 -- the session is its relay's
             failure = _SMTP_FAILURES[taken[1]]()
             raise failure
+        if self._relay.delay_s:
+            threading.Event().wait(self._relay.delay_s)  # real time, as a slow relay takes
+        recipients = [address.strip() for address in str(msg["To"]).split(",")]
+        refused = {address: (550, b"5.1.1 no such user") for address in recipients if address in self._relay.refused}
+        if len(refused) == len(recipients):
+            raise smtplib.SMTPRecipientsRefused(refused)
         self._relay.sent.append(msg)
-        return {}
+        return refused
 
     def quit(self) -> object:
         return None
@@ -282,6 +295,8 @@ class Mongo:
 
     def __init__(self) -> None:
         self.collections: dict[str, list[dict[str, object]]] = {}
+        self.unique: dict[str, list[tuple[str, ...]]] = {}
+        """Each collection's unique indexes, by their fields, beside `_id`'s, which every collection has."""
         self._failing = Failures[str]("a fake Mongo database", MONGO_KINDS)
 
     def fails(self, kind: type[ServiceError], *, times: int | None = None, on: Literal["find", "upsert", "any"] = "any") -> None:
@@ -307,6 +322,10 @@ class Mongo:
                 modified += 1
         return Upserted(matched, modified, upserted)
 
+    def unique_keys(self, collection: str) -> list[tuple[str, ...]]:
+        self._fail("find")
+        return [("_id",), *self.unique.get(collection, [])]
+
     def _fail(self, operation: str) -> None:
         if (taken := self._failing.take(operation, "any")) is not None:
             failure = taken[1]("a fake Mongo database fails", resource="mongo")
@@ -321,18 +340,37 @@ _COMPARE: dict[str, Callable[[Any, Any], bool]] = {
     "$lt": lambda found, wanted: found is not None and found < wanted,
     "$lte": lambda found, wanted: found is not None and found <= wanted,
     "$in": lambda found, wanted: found in wanted,
+    "$nin": lambda found, wanted: found not in wanted,
 }
 
 
 def _matches(document: Mapping[str, object], query: Mapping[str, object]) -> bool:
+    """Whether `document` matches `query`, as Mongo's does for a job's filters: a field by a dotted path into nested
+    documents, an array field by any of its elements, the comparison operators, and `$and`, `$or` and `$nor`."""
     for name, wanted in query.items():
-        found = document.get(name)
-        if isinstance(wanted, Mapping) and wanted and all(str(operator).startswith("$") for operator in wanted):
-            if not all(_COMPARE[str(operator)](found, value) for operator, value in wanted.items()):
+        if name in {"$and", "$or", "$nor"}:
+            clauses = [_matches(document, {str(field): value for field, value in clause.items()}) for clause in wanted if isinstance(clause, Mapping)] if isinstance(wanted, list) else []
+            if not {"$and": all, "$or": any, "$nor": lambda found: not any(found)}[name](clauses):
                 return False
-        elif found != wanted:
+            continue
+        found = _at(document, name)
+        candidates = [found, *found] if isinstance(found, list) else [found]
+        if isinstance(wanted, Mapping) and wanted and all(str(operator).startswith("$") for operator in wanted):
+            for operator, value in wanted.items():
+                each = all if operator in {"$ne", "$nin"} else any  # a negation holds of every element of an array
+                if not each(_COMPARE[str(operator)](candidate, value) for candidate in candidates):
+                    return False
+        elif wanted not in candidates:
             return False
     return True
+
+
+def _at(document: Mapping[str, object], path: str) -> object:
+    """The value at a dotted path of nested documents, or None where there is none."""
+    found: object = document
+    for part in path.split("."):
+        found = found.get(part) if isinstance(found, Mapping) else None
+    return found
 
 
 type Fake = Http | Clock | Ids | Slack | Email | Mongo

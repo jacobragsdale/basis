@@ -1,6 +1,7 @@
 """Shared folders: a path inside one never leaves it, a sheet reads as text for its row to type, and a workbook is
 written whole, through a temporary file renamed into place, so a reader never sees half of one."""
 
+import zipfile
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -105,3 +106,23 @@ def test_a_folder_is_named_by_the_settings_and_is_absolute() -> None:
 )
 def test_a_cell_reads_as_the_text_a_csv_would_hold(value: object, text: str | None) -> None:
     assert cell_text(value) == text
+
+
+def test_text_that_looks_like_a_formula_or_a_link_is_written_as_text(shared: Folder) -> None:
+    """A workbook a portfolio manager opens must not run a formula a source's text holds."""
+    frame = pd.DataFrame({"note": arrow(['=HYPERLINK("https://example.com","x")', "https://example.com/a", "+1-2"], pa.string())})
+    shared.write_workbook("notes.xlsx", {"Notes": frame})
+    with zipfile.ZipFile(shared.root / "notes.xlsx") as workbook:
+        sheet = workbook.read("xl/worksheets/sheet1.xml").decode()
+        names = workbook.namelist()
+    assert "<f>" not in sheet  # no cell holds a formula
+    assert "<hyperlinks>" not in sheet
+    assert not any(name.startswith("xl/worksheets/_rels/") for name in names)
+    assert shared.read_sheet("notes.xlsx", "Notes")["note"].tolist() == ['=HYPERLINK("https://example.com","x")', "https://example.com/a", "+1-2"]
+
+
+def test_text_longer_than_a_cell_holds_is_refused_rather_than_cut(shared: Folder) -> None:
+    frame = pd.DataFrame({"note": arrow(["x" * 32_768], pa.string())})
+    with pytest.raises(FolderError, match=r"notes.xlsx: Notes's note holds text of 32768 characters, and an Excel cell holds 32767: shorten it in the transform"):
+        shared.write_workbook("notes.xlsx", {"Notes": frame})
+    assert not (shared.root / "notes.xlsx").exists()

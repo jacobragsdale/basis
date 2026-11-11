@@ -9,9 +9,11 @@ from typing import Annotated
 
 import pytest
 from integration.scratch import Scratch, configured, missing, mssql
+from opentelemetry import trace
 
 import basis.job as etl
-from basis.core.settings import GivenSettings
+from basis.core import fakes, mongo
+from basis.core.settings import GivenSettings, MongoSettings
 from basis.core.storage import Root
 from basis.job import ddl, runs
 from basis.job.job import Job
@@ -54,6 +56,7 @@ def test_a_job_reads_mongo_publishes_json_to_sql_server_and_upserts_back_once(sc
             {"cusip": "912810TN4", "coupon": 0.0425, "updated": datetime(2026, 11, 5, 10, tzinfo=UTC), "terms": None},
         ]
     )
+    client[database]["mirror"].create_index("cusip", unique=True)  # which an upsert's key needs
 
     class Inputs(etl.Inputs):
         bonds = etl.Mongo(Bond, mongo="reference", collection="bonds", filter={"updated": {"$gte": "{start}", "$lt": "{end}"}}, empty="fail")
@@ -86,5 +89,44 @@ def test_a_job_reads_mongo_publishes_json_to_sql_server_and_upserts_back_once(sc
         assert (counts.matched, counts.modified, counts.upserted) == (2, 0, 0)
         assert len(scratch.rows(f"SELECT cusip FROM {table}")) == 2
     finally:
+        client.drop_database(database)
+        client.close()
+
+
+QUERIES = [
+    ({"terms.frequency": 2}, ["b1"]),
+    ({"tags": "callable"}, ["b1"]),
+    ({"tags": {"$in": ["green", "callable"]}}, ["b1", "b2"]),
+    ({"tags": {"$ne": "callable"}}, ["b2", "b3"]),
+    ({"$or": [{"cusip": "OLD"}, {"terms.frequency": 2}]}, ["b1", "b3"]),
+    ({"$and": [{"coupon": {"$gte": 0.04}}, {"tags": "green"}]}, ["b2"]),
+    ({"terms.frequency": {"$gt": 1}}, ["b1", "b2"]),
+]
+BONDS: list[dict[str, object]] = [
+    {"_id": "b1", "cusip": "912810TM6", "coupon": 0.045, "terms": {"frequency": 2}, "tags": ["callable", "long"]},
+    {"_id": "b2", "cusip": "912810TN4", "coupon": 0.0425, "terms": {"frequency": 4}, "tags": ["green"]},
+    {"_id": "b3", "cusip": "OLD", "coupon": 0.01},
+]
+
+
+def test_real_mongo_and_its_fake_match_the_same_documents_and_name_the_same_unique_keys(mongo_uri: str) -> None:
+    from pymongo import MongoClient  # noqa: PLC0415 -- as above
+
+    database = f"basis_it_{uuid.uuid4().hex[:8]}"
+    client: MongoClient[dict[str, object]] = MongoClient(mongo_uri)
+    client[database]["bonds"].insert_many([dict(bond) for bond in BONDS])
+    client[database]["bonds"].create_index("cusip", unique=True)
+    fake = fakes.Mongo()
+    fake.collections["bonds"] = [dict(bond) for bond in BONDS]
+    fake.unique["bonds"] = [("cusip",)]
+    real = mongo.MongoStore("reference", MongoSettings.model_validate({"uri": mongo_uri, "database": database, "timeout_s": 30, "max_documents": 100}), trace.NoOpTracer())
+    try:
+        for query, found in QUERIES:
+            assert sorted(str(document["_id"]) for document in real.find("bonds", query, limit=10)) == found, query
+            assert sorted(str(document["_id"]) for document in fake.find("bonds", query, limit=10)) == found, query
+        assert sorted(real.unique_keys("bonds")) == sorted(fake.unique_keys("bonds")) == [("_id",), ("cusip",)]
+        assert real.unique_keys("not_made_yet") == []
+    finally:
+        real.close()
         client.drop_database(database)
         client.close()

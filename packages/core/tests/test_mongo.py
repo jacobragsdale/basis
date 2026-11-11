@@ -114,3 +114,26 @@ def test_json_text_is_an_object_or_an_array_of_what_a_json_column_holds() -> Non
         "not JSON (Expecting value: line 1 column 1 (char 0))",
         "not JSON (NaN is no JSON number)",
     ]
+
+
+@pytest.mark.parametrize(
+    ("query", "found"),
+    [
+        ({"terms.frequency": 2}, ["b1"]),
+        ({"tags": "callable"}, ["b1"]),
+        ({"tags": {"$in": ["green", "callable"]}}, ["b1", "b2"]),
+        ({"tags": {"$ne": "callable"}}, ["b2", "b3"]),
+        ({"$or": [{"cusip": "OLD"}, {"terms.frequency": 2}]}, ["b1", "b3"]),
+        ({"$and": [{"coupon": {"$gte": 0.04}}, {"tags": "green"}]}, ["b2"]),
+        ({"terms.frequency": {"$gt": 1}}, ["b1", "b2"]),
+    ],
+    ids=["dotted-path", "array-member", "array-in", "array-ne", "or", "and", "dotted-compare"],
+)
+def test_the_fake_matches_what_a_jobs_filters_ask_of_mongo(query: dict[str, object], found: list[str]) -> None:
+    store = fakes.Mongo()
+    store.collections["bonds"] = [
+        {"_id": "b1", "cusip": "912810TM6", "coupon": 0.045, "terms": {"frequency": 2}, "tags": ["callable", "long"]},
+        {"_id": "b2", "cusip": "912810TN4", "coupon": 0.0425, "terms": {"frequency": 4}, "tags": ["green"]},
+        {"_id": "b3", "cusip": "OLD", "coupon": 0.01},
+    ]
+    assert [document["_id"] for document in store.find("bonds", query, limit=10)] == found

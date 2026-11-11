@@ -1,9 +1,10 @@
+import dataclasses
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from builders import make_job
+from builders import Price, make_job
 
 import basis.job as etl
 from basis.core.databases import open_database
@@ -115,3 +116,20 @@ def test_params_the_job_does_not_accept_are_a_refused_run_that_names_each_value(
     (repo / "params.json").write_text('{"scale": "big"}', encoding="utf-8")
     [problem] = problems(context(repo, DECLARED))
     assert problem.startswith("[tool.basis.qa.job] prices's params, params.json, are not valid: scale: Input should be a valid integer")
+
+
+def test_a_job_that_upserts_into_a_mongo_collection_writes_does_not_list_is_refused(repo: Path) -> None:
+    class Outputs(etl.Outputs):
+        prices = etl.Table(Price, database="warehouse", table="prices", write=etl.Upsert(), key=("day", "security_id"))
+        mirror = etl.MongoUpsert(Price, mongo="reference", collection="mirror", key=("day", "security_id"))
+
+    def transform(inputs: etl.Inputs, params: etl.Params) -> Outputs:
+        del params
+        return Outputs(prices=inputs.prices, mirror=inputs.prices)  # ty: ignore[unresolved-attribute] -- PRICES's inputs, which hold prices
+
+    mirroring = dataclasses.replace(PRICES, outputs=Outputs, transform=transform)
+    assert problems(context(repo, DECLARED), {"prices": mirroring}) == [
+        "prices upserts mirror into mirror in Mongo's reference, which [tool.basis.qa] writes does not list, so the QA tier will not run it"
+    ]
+    allowed = {"warehouse": frozenset({"prices", "etl.publishes"}), "reference": frozenset({"mirror"})}
+    assert problems(context(repo, DECLARED, writes=allowed), {"prices": mirroring}) == []

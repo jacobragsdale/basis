@@ -314,3 +314,15 @@ def test_a_lake_whose_account_and_container_lack_the_marker_is_refused_since_a_q
     lakes = {"history": {"account": "lakeprod", "container": "archive", "auth": "cli"}, "risk": {"account": "lakeprod", "container": "archive-qa", "auth": "cli"}}
     found = GivenSettings.model_validate({"snapshot_root": "runs-qa", "databases": {"warehouse": mssql()}, "lakes": lakes})
     assert problems(found, declared) == ["BASIS_LAKES__HISTORY__ACCOUNT and __CONTAINER in .env.qa are lakeprod/archive, which lacks the QA marker 'qa', and a QA run archives there"]
+
+
+def test_a_mongo_database_whose_host_and_name_lack_the_marker_is_refused_since_a_qa_run_reads_and_upserts_there(declared: qa.Declared) -> None:
+    mongo = {
+        "reference": {"uri": "mongodb://mongo.prod:27017", "database": "reference", "timeout_s": 5, "max_documents": 10},
+        "reference_qa": {"uri": "mongodb://mongo.prod:27017", "database": "reference_qa", "timeout_s": 5, "max_documents": 10},
+        "hosted": {"uri": "mongodb://user:secret@mongo-qa.firm:27017/?tls=true", "database": "reference", "timeout_s": 5, "max_documents": 10},
+    }
+    found = GivenSettings.model_validate({"snapshot_root": "runs-qa", "databases": {"warehouse": mssql()}, "mongo": mongo})
+    assert problems(found, declared) == [
+        "BASIS_MONGO__REFERENCE__URI and __DATABASE in .env.qa name host mongo.prod and database reference, and neither contains the QA marker 'qa', and a QA run reads and upserts there"
+    ]

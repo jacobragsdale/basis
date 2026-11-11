@@ -112,6 +112,10 @@ def _planned(qa: Qa, name: str, declared: Declared, load: Callable[[str], jobs.J
         if not qa.may_write(target.database, target.table):
             reason = f"{name} writes {output} to {target.table} in {target.database}, which [tool.basis.qa] writes does not list, so the QA tier will not run it"
             problems.append((reason, f"add {target.table} to writes.{target.database} if it is QA's table"))
+    for output, upsert in job.outputs.declared_upserts().items():
+        if not qa.may_write(upsert.mongo, upsert.collection):
+            reason = f"{name} upserts {output} into {upsert.collection} in Mongo's {upsert.mongo}, which [tool.basis.qa] writes does not list, so the QA tier will not run it"
+            problems.append((reason, f"add {upsert.collection} to writes.{upsert.mongo} if it is QA's collection"))
     request = runs.Request(params, interval, labels=dict(LABEL), publish=True, again=declared.again, git_sha=qa.commit)
     return (_Planned(job, request) if not problems else None), problems
 

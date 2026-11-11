@@ -67,6 +67,7 @@ def reference() -> fakes.Mongo:
         {"_id": "b2", "cusip": "912810TN4", "coupon": 0.0425, "updated": datetime(2026, 11, 5, 10, tzinfo=UTC), "terms": None},
         {"_id": "b3", "cusip": "OLD", "coupon": 0.01, "updated": datetime(2026, 11, 4, tzinfo=UTC)},  # outside the interval
     ]
+    store.unique["summaries"] = [("cusip",)]
     return store
 
 
@@ -141,3 +142,29 @@ def test_a_json_column_is_sql_server_s_json_type_and_never_a_key() -> None:
     assert check_table(plain, as_text) == []
     untyped = TableSpec("mssql", "summaries", {**spec.columns, "cusip": DestColumn("cusip", "JSON", None, None, None, nullable=False, generated=False, defaulted=False)})
     assert check_table(target, untyped) == ["cusip: a JSON column holds JSON text, objects and arrays: declare the row's column Annotated[str, etl.Json()]"]
+
+
+def test_an_upsert_into_a_collection_with_no_unique_index_on_its_key_is_refused_before_it_reads(tmp_path: Path, reference: fakes.Mongo) -> None:
+    reference.unique.clear()
+    result = run(tmp_path, reference)
+    assert (result.record.status, result.record.inputs) == ("failed", {})
+    assert result.record.reasons == [
+        "summaries: summaries has no unique index on cusip, so two runs at once could each insert a document for one key: create one, as db.summaries.createIndex({cusip: 1}, {unique: true})"
+    ]
+
+
+def test_a_field_the_collection_names_in_another_case_is_refused_and_fields_names_it(tmp_path: Path, reference: fakes.Mongo) -> None:
+    reference.collections["summaries"] = [{"Cusip": "912810TM6", "coupon_bp": 1.0, "terms": None}]
+    refused = run(tmp_path, reference)
+    assert refused.record.reasons == ["summaries: summaries names its field Cusip, and the upsert's cusip would be a second field beside it: name it so, as fields={'cusip': 'Cusip'}"]
+
+    class Named(etl.Outputs):
+        summaries = etl.MongoUpsert(Summary, mongo="reference", collection="summaries", key=("cusip",), fields={"cusip": "Cusip"})
+
+    reference.unique["summaries"] = [("Cusip",)]
+    named = dataclasses.replace(JOB, outputs=Named, transform=lambda inputs, params: Named(summaries=transform(inputs, params).summaries))
+    request = runs.Request(params_file(tmp_path), DAY, publish=True)
+    result = runs.run(named, GivenSettings(), request, snapshot_root=Root.at(tmp_path / "snapshots"), clock=clock, faked={"reference": reference})
+    assert result.record.status == "published", result.record
+    assert sorted(str(document["Cusip"]) for document in reference.collections["summaries"]) == ["912810TM6", "912810TN4"]
+    assert all("cusip" not in document for document in reference.collections["summaries"])

@@ -14,6 +14,7 @@ import json
 import logging
 import smtplib
 import ssl
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -66,7 +67,7 @@ class SlackPoster:
         attributes = {"basis.resource": name, "basis.sha256": digest(text)}
         with self._tracer.start_as_current_span(f"{name} post", kind=SpanKind.CLIENT, attributes=attributes) as span:
             try:
-                response = self._client.post(self._webhook, json={"text": text}, timeout=limit.seconds)
+                response = within(limit, lambda: self._client.post(self._webhook, json={"text": text}, timeout=limit.seconds), abort=self._client.close)
             except httpx2.TimeoutException as error:
                 raise limit.exceeded() from error
             except _UNREACHABLE as error:
@@ -127,14 +128,21 @@ class SmtpMailer:
         message.set_content(mail.text)
         attributes = {"basis.resource": name, "basis.sha256": digest(mail.text), "server.address": relay.host, "server.port": relay.port}
         with self._tracer.start_as_current_span(f"{name} send", kind=SpanKind.CLIENT, attributes=attributes):
-            try:
+            opened: list[Connection] = []
+
+            def deliver() -> dict[str, object]:
                 session = self._connect(relay, limit.seconds)
+                opened.append(session)
                 try:
                     if relay.user is not None and relay.password is not None:
                         session.login(relay.user, relay.password.get_secret_value())
-                    session.send_message(message)
+                    refused = session.send_message(message)
                 finally:
                     _quit(session)
+                return dict(refused) if isinstance(refused, dict) else {}
+
+            try:
+                refused = within(limit, deliver, abort=lambda: [_close(session) for session in opened])
             except TimeoutError as error:
                 raise limit.exceeded() from error
             except smtplib.SMTPException as error:
@@ -142,6 +150,43 @@ class SmtpMailer:
             except OSError as error:  # a relay that refuses or drops the connection, or cannot be resolved
                 msg = f"{name}'s relay {relay.host}:{relay.port} could not be reached: {type(error).__name__}"
                 raise Unavailable(msg, resource=name, reason=str(error)) from error
+            if refused:  # the relay took the message for some recipients and refused the rest, which it did not send to
+                msg = f"{name}'s relay refused {len(refused)} of its {len(relay.to)} recipients, {', '.join(sorted(refused))}, and sent the message to the rest"
+                raise Rejected(msg, resource=name, reason=str(refused))
+
+
+def within[T](limit: deadlines.Limit, work: Callable[[], T], *, abort: Callable[[], object]) -> T:
+    """`work`'s result, within what `limit` leaves in all, whatever its socket timeouts allow each read or write: run
+    in a thread of its own, and on the deadline `abort`ed, as closing its connection does, and refused as exceeded. A
+    send cut off so may have gone, as any send past its deadline may."""
+    done: list[T] = []
+    failed: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            done.append(work())
+        except BaseException as error:  # noqa: BLE001 -- raised again in the caller's thread
+            failed.append(error)
+
+    worker = threading.Thread(target=run, name="basis-send", daemon=True)
+    worker.start()
+    worker.join(limit.seconds)
+    if worker.is_alive():
+        abort()
+        raise limit.exceeded()
+    if failed:
+        raise failed[0]
+    return done[0]
+
+
+def _close(session: Connection) -> None:
+    """Close a session's socket from another thread, so the read it waits in ends."""
+    sock = getattr(session, "sock", None)
+    if sock is not None:
+        try:
+            sock.close()
+        except OSError:
+            log.debug("the relay's socket did not close cleanly")
 
 
 def _quit(session: Connection) -> None:

@@ -3,14 +3,17 @@ poster and mailer, each send's span and the kind of each failure; and `deliver`,
 its ledger, so a resume never sends one twice and a rerun sends again only when told."""
 
 import json
+import threading
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+import httpx2
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from opentelemetry.trace import Tracer
+from opentelemetry.trace import NoOpTracer, Tracer
 
 from basis.core import fakes, messages, sending
 from basis.core.errors import Conflict, Denied, Failed, NotFound, Rejected, ServiceError, Timeout, Unavailable
@@ -156,3 +159,18 @@ def test_the_kinds_each_fake_fails_with_are_the_resources() -> None:
     assert (Timeout, Unavailable, NotFound, Rejected, Denied, Failed) == fakes.SLACK_KINDS
     with pytest.raises(TypeError, match="a fake Slack channel fails with one of"):
         fakes.Slack().fails(Conflict)
+
+
+def test_a_slack_post_slower_than_its_deadline_is_given_up_on_within_it_in_all() -> None:
+    """A webhook that answers slowly, within each read's timeout but past the post's deadline, as a trickle would."""
+
+    def slow(request: httpx2.Request) -> httpx2.Response:
+        del request
+        threading.Event().wait(3)
+        return httpx2.Response(200)
+
+    poster = sending.SlackPoster(messages.slack("desk", deadline_s=0.5), httpx2.Client(transport=httpx2.MockTransport(slow)), "https://hooks.slack.invalid/x", NoOpTracer())
+    start = time.monotonic()
+    with pytest.raises(Timeout, match=r"desk did not answer within its deadline of 0\.5s"):
+        poster.post("3 accounts")
+    assert time.monotonic() - start < 2

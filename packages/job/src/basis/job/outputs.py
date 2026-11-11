@@ -347,11 +347,13 @@ class ExcelReport:
 class MongoUpsert:
     """Documents the job upserts into a Mongo collection, as `BASIS_MONGO__MONGO__*` configures the database: its value
     is a frame of `row`, each row a document of its columns, matched by `key`'s, whose fields it sets, inserting it
-    where none matches, so a rerun changes nothing that is already so. Only `basis run --publish` upserts, once every
-    database has committed; Mongo has no transaction and no ledger here (`basis.core.mongo`). A repo that writes Mongo
-    takes `basis-core[mongo]`."""
+    where none matches, so a rerun changes nothing that is already so. `fields` names each column's field where the
+    collection names it otherwise, as `{"accountid": "accountId"}`, since a column's name is lower case. Only `basis run
+    --publish` upserts, once every database has committed; Mongo has no transaction and no ledger here
+    (`basis.core.mongo`), so a run that publishes first checks that no field it writes is named otherwise there, and
+    that the collection has a unique index on the key. A repo that writes Mongo takes `basis-core[mongo]`."""
 
-    def __init__(self, row: type[Row], *, mongo: str, collection: str, key: tuple[str, ...]) -> None:
+    def __init__(self, row: type[Row], *, mongo: str, collection: str, key: tuple[str, ...], fields: Mapping[str, str] | None = None) -> None:
         if not IDENTIFIER.match(mongo):
             msg = f"mongo {mongo!r}: a Mongo database's name is lower-case letters, digits and underscores, as in BASIS_MONGO__{mongo.upper()}__URI"
             raise ValueError(msg)
@@ -366,11 +368,20 @@ class MongoUpsert:
         if bad := [column.name for column in row.columns if column.name in key and (column.nullable or column.json)]:
             msg = f"{collection}: an upsert's key columns may be neither null nor JSON, but {bad} are"
             raise ValueError(msg)
+        if unknown := sorted(set(fields or {}) - set(names)):
+            msg = f"{collection}: fields names each column's field where the collection names it otherwise, by the row's column, and the row has no {', '.join(unknown)}"
+            raise ValueError(msg)
         self.row = row
         self.mongo = mongo
         self.collection = collection
         self.key = key
+        self.fields: dict[str, str] = dict(fields or {})
+        """Each column's field in the collection, where it is not the column's own name, as `{"accountid": "accountId"}`."""
         self._name: str | None = None
+
+    def field(self, column: str) -> str:
+        """`column`'s field in the collection."""
+        return self.fields.get(column, column)
 
     @property
     def name(self) -> str:

@@ -37,7 +37,9 @@ from typing import Literal
 import pyarrow as pa
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
+from opentelemetry.trace import SpanKind
 
+from basis.core import traces
 from basis.core.databases import Counts, Database, LedgerEntry
 from basis.core.errors import BasisError, Conflict
 from basis.core.interval import Interval
@@ -149,7 +151,7 @@ def archive(archiving: Archiving, output: str, rows: pa.Table, store: Lake, data
         try:
             with _reaching(store, f"write {store.where(temporary)}"):
                 files = _write(store, f"{temporary}/{path}", rows)
-                files, settle = _settled(store, final, files, rows.num_rows, again=archiving.again)
+                files, settle = _settled(store, final, files, again=archiving.again)
             detail = {"path": store.where(final), "rows": rows.num_rows, "files": [file.model_dump() for file in files]}
             entry = LedgerEntry(
                 archiving.run_id, archiving.job, output, f"lake:{store.name}:{table}", archiving.interval, rerun_safe=False,
@@ -163,10 +165,19 @@ def archive(archiving: Archiving, output: str, rows: pa.Table, store: Lake, data
             if settle != "keep":
                 with _reaching(store, f"rename the partition into {store.where(final)}"):
                     _move(store, f"{temporary}/{path}", final, aside=f"{old}/{path}" if settle == "replace" else None)
-            writer.commit()
+            try:
+                writer.commit()
+            except BaseException:
+                if settle == "replace":  # the ledger keeps the run that archived the old partition: put that one back
+                    with _reaching(store, f"put the old partition back at {store.where(final)}"):
+                        _move(store, final, f"{temporary}/{path}", aside=None)
+                        _move(store, f"{old}/{path}", final, aside=None)
+                raise
+            _delete(store, old)  # the old partition, once the ledger records the one replacing it
         finally:
-            for leftover in (temporary, old):
-                _delete(store, leftover)
+            _delete(store, temporary)
+            if store.fs.get_file_info(f"{old}/{path}").type == pafs.FileType.NotFound:
+                _delete(store, old)
     log.info("archived %s to %s", output, store.where(final), extra={"output": output, "rows": rows.num_rows, "files": len(files)})
     return ArchivedRecord(status="archived", at=archiving.clock(), path=store.where(final), rows=rows.num_rows, files=files)
 
@@ -226,17 +237,17 @@ type Settle = Literal["move", "replace", "keep"]
 aside, when told `again`; or left where it is, the one an earlier attempt renamed in."""
 
 
-def _settled(store: Lake, final: str, files: list[ArchivedFile], rows: int, *, again: bool) -> tuple[list[ArchivedFile], Settle]:
+def _settled(store: Lake, final: str, files: list[ArchivedFile], *, again: bool) -> tuple[list[ArchivedFile], Settle]:
     """What the archive's ledger row records, and how the partition goes into place: as `Settle` says, the files in
-    place already recorded where an earlier attempt renamed them in and died before its commit, and they hold the
-    rows written; and a refusal where they do not, unless told `again`."""
+    place already recorded where an earlier attempt renamed them in and died before its commit, and they are the
+    files written, by name, hash and rows; and a refusal where they are not, unless told `again`."""
     if store.fs.get_file_info(final).type == pafs.FileType.NotFound:
         return files, "move"
     if again:
         return files, "replace"
     there = _read_back(store, final)
-    if sum(file.rows for file in there) == rows:
-        log.info("the partition %s is in place already, with the rows written, and the ledger lacks it: recording it", store.where(final))
+    if there == files:  # the same files, byte for byte, as Parquet writes the same rows the same way
+        log.info("the partition %s is in place already, with the files written, and the ledger lacks it: recording it", store.where(final))
         return there, "keep"
     msg = f"the partition {store.where(final)} is there already, and the ledger has no run that archived it: move it aside if it is no run's, or pass --again to replace it"
     raise LakeError(msg)
@@ -249,7 +260,12 @@ def _move(store: Lake, source: str, final: str, aside: str | None) -> None:
             store.fs.create_dir(aside.rsplit("/", 1)[0], recursive=True)
             store.fs.move(final, aside)
         store.fs.create_dir(final.rsplit("/", 1)[0], recursive=True)
-        store.fs.move(source, final)
+        try:
+            store.fs.move(source, final)
+        except BaseException:
+            if aside is not None:  # the old partition goes back where it was, which the ledger still says holds the date
+                store.fs.move(aside, final)
+            raise
     except NotImplementedError as error:  # pyarrow refuses a rename on an account without the hierarchical namespace
         msg = f"the lake {store.name}'s account {store.account} has no hierarchical namespace, which the archive needs so that a rename is atomic: archive to an ADLS Gen2 account with it on"
         raise LakeError(msg) from error
@@ -275,9 +291,12 @@ _QUERY = re.compile(r"(https?://[^\s?]*)\?\S*")
 @contextmanager
 def _reaching(store: Lake, what: str) -> Generator[None]:
     """Make an error of the lake's an error that names it, never carrying its URLs' queries, nor chaining pyarrow's
-    error, whose text would: a log of the traceback would print a SAS token."""
+    error, whose text would: a log of the traceback would print a SAS token. Each is a span of its own, on the tracer
+    of the run that makes it; pyarrow's filesystems take no timeout, so it has none."""
+    attributes = {"basis.resource": store.name, "basis.lake.call": what.split(" ", 1)[0]}
     try:
-        yield
+        with traces.tracer().start_as_current_span(f"{store.name} {what.split(' ', 1)[0]}", kind=SpanKind.CLIENT, attributes=attributes):
+            yield
     except LakeError:
         raise
     except (OSError, pa.ArrowException) as error:

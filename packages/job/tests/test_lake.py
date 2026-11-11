@@ -57,6 +57,62 @@ def transform(inputs: Inputs, params: Params) -> Outputs:
 JOB = Job("archive", "tests.archive", Params, Inputs, Outputs, transform, None, Path(__file__).parent)
 
 
+class RenameFails(pafs.FileSystemHandler):
+    """`fs`, whose renames of a run's written partition into place fail, as a lake that drops the connection between
+    the two renames of a replacement does; every other call is `fs`'s."""
+
+    def __init__(self, fs: pafs.FileSystem) -> None:
+        self.fs = fs
+
+    def get_type_name(self) -> str:
+        return "rename-fails"
+
+    def normalize_path(self, path: str) -> str:
+        return path
+
+    def get_file_info(self, paths: list[str]) -> list[pafs.FileInfo]:
+        return self.fs.get_file_info(paths)
+
+    def get_file_info_selector(self, selector: pafs.FileSelector) -> list[pafs.FileInfo]:
+        return self.fs.get_file_info(selector)
+
+    def create_dir(self, path: str, recursive: bool) -> None:  # noqa: FBT001 -- pyarrow's signature
+        self.fs.create_dir(path, recursive=recursive)
+
+    def delete_dir(self, path: str) -> None:
+        self.fs.delete_dir(path)
+
+    def delete_dir_contents(self, path: str, missing_dir_ok: bool = False) -> None:  # noqa: FBT001, FBT002 -- pyarrow's signature
+        self.fs.delete_dir_contents(path, missing_dir_ok=missing_dir_ok)
+
+    def delete_root_dir_contents(self) -> None:
+        raise NotImplementedError
+
+    def delete_file(self, path: str) -> None:
+        self.fs.delete_file(path)
+
+    def move(self, src: str, dest: str) -> None:
+        if "/.tmp-" in src:
+            msg = f"the connection dropped renaming {src}"
+            raise OSError(msg)
+        self.fs.move(src, dest)
+
+    def copy_file(self, src: str, dest: str) -> None:
+        self.fs.copy_file(src, dest)
+
+    def open_input_stream(self, path: str) -> pa.NativeFile:
+        return self.fs.open_input_stream(path)
+
+    def open_input_file(self, path: str) -> pa.NativeFile:
+        return self.fs.open_input_file(path)
+
+    def open_output_stream(self, path: str, metadata: dict[str, str]) -> pa.NativeFile:
+        return self.fs.open_output_stream(path, metadata=metadata)
+
+    def open_append_stream(self, path: str, metadata: dict[str, str]) -> pa.NativeFile:
+        return self.fs.open_append_stream(path, metadata=metadata)
+
+
 @dataclass
 class World:
     """What a run of the job reaches: the warehouse's ledger and the lake, a folder holding the container `archive`."""
@@ -68,9 +124,13 @@ class World:
     def __post_init__(self) -> None:
         (self.root / "lake" / "archive").mkdir(parents=True)
 
+    renames: bool = True
+    """Whether the lake renames a written partition into place."""
+
     @property
     def store(self) -> lake.Lake:
-        return lake.Lake("history", "archive", pafs.SubTreeFileSystem(str(self.root / "lake"), pafs.LocalFileSystem()))
+        fs = pafs.SubTreeFileSystem(str(self.root / "lake"), pafs.LocalFileSystem())
+        return lake.Lake("history", "archive", fs if self.renames else pafs.PyFileSystem(RenameFails(fs)))
 
     def open_lake(self, name: str) -> lake.Lake:
         assert name == "history"
@@ -226,3 +286,21 @@ def test_a_replay_whose_archive_differs_says_so(world: World) -> None:
     doubled.write_text('{"scale": 2.0}', encoding="utf-8")
     _, diffs = runs.replay(JOB, published.snapshot, params=doubled)
     assert [(entry.output, entry.operation, entry.added, entry.removed) for entry in diffs] == [("archived", "rows", 2, 2)]
+
+
+def test_a_replacement_whose_rename_fails_puts_the_old_partition_back(world: World) -> None:
+    world.run()
+    world.renames = False
+    failed = world.run(again=True, scale=2.0)
+    assert failed.record.archived["archived"].status == "failed"
+    assert (world.partition(), len(world.ledger.entries), world.hidden()) == ([100.0, 1134.5], 1, [])
+
+
+def test_a_partition_in_place_with_the_rows_count_but_not_its_rows_is_refused(world: World) -> None:
+    stranger = world.root / "lake" / PARTITION
+    stranger.mkdir(parents=True)
+    pq.write_table(pa.Table.from_pandas(prices({"price": 1.0}, {"security_id": "S2", "price": 2.0}), preserve_index=False), stranger / "part-0.parquet")
+    archived = world.run().record.archived["archived"]
+    assert archived.status == "failed"
+    assert f"the partition {PARTITION} is there already, and the ledger has no run that archived it" in (archived.error or "")
+    assert (world.partition(), world.ledger.entries) == ([1.0, 2.0], [])

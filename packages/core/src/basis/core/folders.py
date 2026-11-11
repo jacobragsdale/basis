@@ -17,6 +17,7 @@ import math
 import os
 import uuid
 from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -24,7 +25,9 @@ from typing import BinaryIO
 
 import pandas as pd
 import pyarrow as pa
+from opentelemetry.trace import Span, SpanKind
 
+from basis.core import traces
 from basis.core.errors import BasisError
 from basis.core.settings import Settings, SettingsError, variable
 
@@ -66,7 +69,12 @@ class Folder:
         return self.root.joinpath(*parts)
 
     def read_sheet(self, relative: str, sheet: str) -> pd.DataFrame:
-        """The sheet `sheet` of the workbook at `relative`, its first row the columns' names, each cell as text."""
+        """The sheet `sheet` of the workbook at `relative`, its first row the columns' names, each cell as text: a
+        span of its own, on the tracer of the run that reads it."""
+        with _span(self.name, "read", relative):
+            return self._read_sheet(relative, sheet)
+
+    def _read_sheet(self, relative: str, sheet: str) -> pd.DataFrame:
         path = self.at(relative)
         if path.suffix.lower() not in EXCEL:
             msg = f"{relative} in {self.name} is no workbook: name one, {', '.join(EXCEL)}"
@@ -96,14 +104,29 @@ class Folder:
             msg = f"{relative}: a workbook has at least one sheet: give one"
             raise FolderError(msg)
         _engines("xlsxwriter")
+        for sheet, frame in sheets.items():
+            for name in frame.columns:
+                dtype = frame[name].dtype
+                if not pd.api.types.is_object_dtype(dtype) and not (isinstance(dtype, pd.ArrowDtype) and pa.types.is_string(dtype.pyarrow_dtype)):
+                    continue
+                if (longest := int(frame[name].dropna().astype(str).str.len().max() or 0)) > CELL_CHARACTERS:
+                    msg = f"{relative}: {sheet}'s {name} holds text of {longest} characters, and an Excel cell holds {CELL_CHARACTERS}: shorten it in the transform"
+                    raise FolderError(msg)
         content = io.BytesIO()
-        with pd.ExcelWriter(content, engine="xlsxwriter") as writer:
+        # every text is a cell's text: never a formula, as `=...` would be, nor a link, which Excel would run or follow
+        options = {"strings_to_formulas": False, "strings_to_urls": False, "strings_to_numbers": False}
+        with pd.ExcelWriter(content, engine="xlsxwriter", engine_kwargs={"options": options}) as writer:
             for sheet, frame in sheets.items():
                 plain(frame, zones or {}).to_excel(writer, sheet_name=sheet, index=False)
         return self.write_bytes(relative, content.getvalue())
 
     def write_bytes(self, relative: str, content: bytes) -> Written:
-        """Write `content` as the file at `relative`, through a temporary file beside it, then renamed into place."""
+        """Write `content` as the file at `relative`, through a temporary file beside it, then renamed into place: a
+        span of its own, on the tracer of the run that writes it."""
+        with _span(self.name, "write", relative):
+            return self._write_bytes(relative, content)
+
+    def _write_bytes(self, relative: str, content: bytes) -> Written:
         path = self.at(relative)
         if not self.root.is_dir():
             msg = f"the folder {self.name}, at {self.root}, is not there or not reachable from here: mount it, or correct {variable(('folders', self.name, 'path'))}"
@@ -118,6 +141,15 @@ class Folder:
             temporary.unlink(missing_ok=True)
             raise
         return Written(path, len(content), hashlib.sha256(content).hexdigest())
+
+
+def _span(folder: str, operation: str, relative: str) -> AbstractContextManager[Span]:
+    """The span of one read or write of a shared folder's file. A file system's call takes no timeout, so it has none."""
+    return traces.tracer().start_as_current_span(f"{folder} {operation}", kind=SpanKind.CLIENT, attributes={"basis.resource": folder, "basis.file": relative})
+
+
+CELL_CHARACTERS = 32_767
+"""The most characters an Excel cell holds, beyond which a writer cuts the text."""
 
 
 def _written(file: BinaryIO, content: bytes) -> None:

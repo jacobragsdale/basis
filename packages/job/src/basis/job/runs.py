@@ -223,7 +223,7 @@ def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
         specs, reasons = _check_destinations(targets, settings, databases, publishing=request.publish)
         reasons += _check_ledgers(job, settings, databases, publishing=request.publish)
         reasons += _check_messages(job, settings, this.faked, publishing=request.publish) + _check_reports(job, settings, this.open_folder, publishing=request.publish)
-        reasons += _check_upserts(job, settings, this.faked, publishing=request.publish) + _check_lakes(job, settings, this.open_lake, publishing=request.publish)
+        reasons += _check_upserts(job, settings, this.faked, this.open_mongo, publishing=request.publish) + _check_lakes(job, settings, this.open_lake, publishing=request.publish)
     except Exception as error:
         log.exception("could not check the destinations")
         return _summarized(_finish(record.done("failed", error=_headline(error), finished_at=clock()), snapshot_root, params_text, {}, {}))
@@ -490,7 +490,7 @@ def planned_upserts(job: Job, outputs: OutputsOf) -> tuple[dict[str, DocumentsRe
         if (repeated := int(frame.duplicated(subset=list(upsert.key)).sum())) > 0:
             reasons.append(f"{name}: {repeated} rows repeat a key of {list(upsert.key)}, so an upsert would set one document twice: make each key once")
             continue
-        records[name] = DocumentsRecord(mongo=upsert.mongo, collection=upsert.collection, key=upsert.key, rows=len(frame))
+        records[name] = DocumentsRecord(mongo=upsert.mongo, collection=upsert.collection, key=tuple(upsert.field(column) for column in upsert.key), rows=len(frame))
         frames_of[name] = frame
     return records, frames_of, reasons
 
@@ -504,7 +504,7 @@ def upsert_all(job: Job, documents: Mapping[str, DocumentsRecord], frames_of: Ma
         record = documents[name]
         try:
             store, _ = open_mongo(record.mongo)
-            counts = store.upsert(record.collection, record.key, mongo.documents_of(frames_of[name], declared[name].row.columns))
+            counts = store.upsert(record.collection, record.key, mongo.documents_of(frames_of[name], declared[name].row.columns, declared[name].fields))
         except Exception as error:
             log.exception("could not upsert %s", name, extra={"output": name})
             done[name] = UpsertRecord(status="failed", at=clock(), error=_headline(error))
@@ -514,16 +514,21 @@ def upsert_all(job: Job, documents: Mapping[str, DocumentsRecord], frames_of: Ma
     return done
 
 
-def _check_upserts(job: Job, settings: Settings, faked: Mapping[str, fakes.Fake], *, publishing: bool) -> list[str]:
+def _check_upserts(job: Job, settings: Settings, faked: Mapping[str, fakes.Fake], open_mongo: MongoOpener, *, publishing: bool) -> list[str]:
     """Every reason a run that publishes cannot upsert into a Mongo database the job declares: it is not configured,
-    and has no fake."""
+    and has no fake; or its collection names a field otherwise than the upsert does, or has no unique index on the key
+    (`mongo.refusals`)."""
     if not publishing:
         return []
-    return [
-        f"{name}: the Mongo database {upsert.mongo} is not configured, and the run upserts into it: set BASIS_MONGO__{upsert.mongo.upper()}__*, as .env.example shows"
-        for name, upsert in job.outputs.declared_upserts().items()
-        if upsert.mongo not in settings.mongo and upsert.mongo not in faked
-    ]
+    reasons: list[str] = []
+    for name, upsert in job.outputs.declared_upserts().items():
+        if upsert.mongo not in settings.mongo and upsert.mongo not in faked:
+            reasons.append(f"{name}: the Mongo database {upsert.mongo} is not configured, and the run upserts into it: set BASIS_MONGO__{upsert.mongo.upper()}__*, as .env.example shows")
+            continue
+        store, _ = open_mongo(upsert.mongo)
+        fields = [upsert.field(column.name) for column in upsert.row.columns]
+        reasons.extend(f"{name}: {reason}" for reason in mongo.refusals(store, upsert.collection, [upsert.field(column) for column in upsert.key], fields))
+    return reasons
 
 
 def planned_archives(job: Job, outputs: OutputsOf, interval: Interval | None) -> tuple[dict[str, ArchiveRecord], dict[str, pd.DataFrame], list[str]]:
