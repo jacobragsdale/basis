@@ -27,7 +27,7 @@ from basis.core.storage import Root
 from basis.core.sync import Problem
 from basis.core.tables import Column
 from basis.core.verbs import Difference, Part, Regress, Regressed, Regressions, Runs, Shared, Verb, fail
-from basis.job import api, ddl, docs, loader, new, qa, runs, sync
+from basis.job import api, ddl, docs, loader, new, qa, replays, runs, sync
 from basis.job import job as jobs
 from basis.job.diff import SAMPLE, OperationDiff
 
@@ -308,7 +308,7 @@ def _replay(args: ReplayArgs) -> int:
         settings, name, root = environment.settings, environment.name, environment.settings.snapshots()
     source, job = _saved(root, args.run_id, args.job)
     with deliberate(ValueError):  # a run of another job, or one that did not save what the job reads now
-        result, diffs = runs.replay(job, source, params=args.params, snapshot_root=local, tracing=settings.traces, environment=name)
+        result, diffs = replays.replay(job, source, params=args.params, snapshot_root=local, tracing=settings.traces, environment=name)
     differences = [{**vars(entry), "rows": entry.rows[: args.rows]} if args.rows else {key: value for key, value in vars(entry).items() if key != "rows"} for entry in diffs]
     _print({"run_id": result.record.run_id, "replay_of": args.run_id, "status": result.record.status, "reasons": result.record.reasons, "differences": differences})
     if result.ok:
@@ -372,7 +372,7 @@ def regress_jobs(args: RegressArgs) -> Regressions:
     for name in args.jobs:
         try:
             job = jobs.load(name)
-            entries = runs.regress(job, root, last=args.last, labels=args.labels, statuses=statuses)
+            entries = replays.regress(job, root, last=args.last, labels=args.labels, statuses=statuses)
         except Exception as error:  # noqa: BLE001 -- each job's failure is its own line, and the other jobs still replay
             error.add_note(f"while regressing {name}")
             failures.append(error)

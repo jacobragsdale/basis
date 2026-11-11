@@ -11,6 +11,7 @@ import pytest
 from builders import DAY, params_file
 
 import basis.job as etl
+from basis.core import fakes
 from basis.core.folders import Folder
 from basis.core.settings import GivenSettings
 from basis.core.storage import Root
@@ -121,3 +122,41 @@ def test_a_publishing_run_whose_folder_is_not_configured_is_refused_before_it_re
 def test_a_workbook_declared_wrong_is_refused_with_the_fix(make: Callable[[], object], says: str) -> None:
     with pytest.raises(ValueError, match=says):
         make()
+
+
+class Summary(etl.Row):
+    account: Annotated[str, etl.MaxLength(12)]
+    value: float
+
+
+class BothOutputs(etl.Outputs):
+    holdings = etl.ExcelReport(Holding, folder="pm", path="out/holdings-{start:%Y-%m-%d}.xlsx", sheet="Holdings")
+    summaries = etl.MongoUpsert(Summary, mongo="reference", collection="summaries", key=("account",))
+
+
+def both(inputs: Inputs, params: Params) -> BothOutputs:
+    del params  # the job has none that change what it writes
+    positions = inputs.positions
+    values = pd.DataFrame({"account": positions["account"], "value": positions["quantity"] * positions["price"]})
+    return BothOutputs(holdings=values, summaries=values)
+
+
+BOTH = Job("both", "tests.both", Params, Inputs, BothOutputs, both, None, Path(__file__).parent)
+
+
+def test_a_resume_stops_at_the_workbook_it_cannot_write_as_the_run_did_and_upserts_nothing_after_it(tmp_path: Path, shared: Folder) -> None:
+    reference = fakes.Mongo()
+    reference.unique["summaries"] = [("account",)]
+    blocked = shared.root / "out" / "holdings-2026-11-05.xlsx"
+    blocked.mkdir(parents=True)  # a folder where the workbook goes, so its rename into place fails
+    settings = GivenSettings.model_validate({"folders": {"pm": {"path": str(shared.root)}}})
+    request = runs.Request(params_file(tmp_path), DAY, publish=True)
+    result = runs.run(BOTH, settings, request, snapshot_root=Root.at(tmp_path / "snapshots"), clock=clock, faked={"reference": reference})
+    assert (result.record.status, result.record.written["holdings"].status, result.record.upserted) == ("partial", "failed", {})
+    assert result.snapshot is not None
+    resumed = runs.resume(BOTH, result.snapshot, settings, clock=clock, faked={"reference": reference})
+    assert (resumed.status, resumed.written["holdings"].status, resumed.upserted) == ("partial", "failed", {})
+    assert "summaries" not in reference.collections
+    blocked.rmdir()
+    finished = runs.resume(BOTH, result.snapshot, settings, clock=clock, faked={"reference": reference})
+    assert (finished.status, finished.written["holdings"].status, finished.upserted["summaries"].status) == ("published", "written", "upserted")

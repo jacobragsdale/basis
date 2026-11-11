@@ -23,7 +23,7 @@ from basis.core.errors import Unavailable
 from basis.core.interval import Interval
 from basis.core.settings import GivenSettings, LakeSettings, SettingsError
 from basis.core.storage import Root
-from basis.job import runs
+from basis.job import replays, runs
 from basis.job.job import Job
 
 WAREHOUSE = {
@@ -284,7 +284,7 @@ def test_a_replay_whose_archive_differs_says_so(world: World) -> None:
     assert published.snapshot is not None
     doubled = world.root / "doubled.json"
     doubled.write_text('{"scale": 2.0}', encoding="utf-8")
-    _, diffs = runs.replay(JOB, published.snapshot, params=doubled)
+    _, diffs = replays.replay(JOB, published.snapshot, params=doubled)
     assert [(entry.output, entry.operation, entry.added, entry.removed) for entry in diffs] == [("archived", "rows", 2, 2)]
 
 

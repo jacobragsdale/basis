@@ -20,7 +20,7 @@ dedupe against rows already there (the destination read as an input), a watermar
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Literal, Self, overload, override
+from typing import ClassVar, Literal, Self, overload, override
 
 import pandas as pd
 
@@ -100,23 +100,18 @@ class Target:
         return self.row.column(name)
 
 
-class Table[V: (pd.DataFrame, Changes)]:
-    """A declared output, named by its attribute on the job's `Outputs`. On an instance, its value is the frame the
-    transform returned, or for `Manual()`, the `Changes`."""
+class Named:
+    """An output named by its attribute on a job's `Outputs`: the one rule for naming each kind."""
 
-    @overload
-    def __init__(self: Table[Changes], row: type[Row], *, database: str, table: str, write: Manual, key: tuple[str, ...] | None = None) -> None: ...
-    @overload
-    def __init__(self: Table[pd.DataFrame], row: type[Row], *, database: str, table: str, write: FrameWrite, key: tuple[str, ...] | None = None) -> None: ...
-    def __init__(self, row: type[Row], *, database: str, table: str, write: Write, key: tuple[str, ...] | None = None) -> None:
-        self.target = Target(row, database, table, write, key)
-        self._name: str | None = None
-        _validate(self.target)
+    noun: ClassVar[str] = "an output"
+    """What it is, in the refusal of one that is not on an `Outputs`."""
+
+    _name: str | None = None
 
     @property
     def name(self) -> str:
         if self._name is None:
-            msg = "an output is named by its attribute on a job's Outputs class; this one is not on one"
+            msg = f"{self.noun} is named by its attribute on a job's Outputs class; this one is not on one"
             raise TypeError(msg)
         return self._name
 
@@ -128,6 +123,53 @@ class Table[V: (pd.DataFrame, Changes)]:
             msg = f"{owner.__qualname__}.{name} is already declared as {self._name!r}: declare each output once per name"
             raise TypeError(msg)
         self._name = name
+
+
+class Effect(Named):
+    """An output that is not a table: one a run makes only once every database has committed, as `basis.job.effects`
+    gives each kind. Its value is checked when the transform's `Outputs` is made."""
+
+    def checked(self, value: object) -> object:
+        """The value the transform gave it, refused where it is not of its kind."""
+        raise NotImplementedError
+
+    def describe(self) -> str:
+        raise NotImplementedError
+
+
+class FrameEffect(Effect):
+    """An effect whose value is a frame of its row."""
+
+    row: type[Row]
+
+    @override
+    def checked(self, value: object) -> pd.DataFrame:
+        if not isinstance(value, pd.DataFrame):
+            msg = f"{self.name} is written from a frame, so its value is a DataFrame, not a {type(value).__name__}"
+            raise TypeError(msg)
+        return value
+
+    @overload
+    def __get__(self, instance: None, owner: type) -> Self: ...
+    @overload
+    def __get__(self, instance: Outputs, owner: type) -> pd.DataFrame: ...
+    def __get__(self, instance: Outputs | None, owner: type) -> Self | pd.DataFrame:
+        if instance is None:
+            return self
+        return self.checked(instance.values[self.name])  # noqa: PD011 -- the outputs by name, no frame's values
+
+
+class Table[V: (pd.DataFrame, Changes)](Named):
+    """A declared output, named by its attribute on the job's `Outputs`. On an instance, its value is the frame the
+    transform returned, or for `Manual()`, the `Changes`."""
+
+    @overload
+    def __init__(self: Table[Changes], row: type[Row], *, database: str, table: str, write: Manual, key: tuple[str, ...] | None = None) -> None: ...
+    @overload
+    def __init__(self: Table[pd.DataFrame], row: type[Row], *, database: str, table: str, write: FrameWrite, key: tuple[str, ...] | None = None) -> None: ...
+    def __init__(self, row: type[Row], *, database: str, table: str, write: Write, key: tuple[str, ...] | None = None) -> None:
+        self.target = Target(row, database, table, write, key)
+        _validate(self.target)
 
     @overload
     def __get__(self, instance: None, owner: type) -> Self: ...
@@ -191,13 +233,14 @@ def _validate(target: Target) -> None:
             pass
 
 
-class Message[V: (str, Mail)]:
+class Message[V: (str, Mail)](Effect):
     """A message the job sends, named by its attribute on the job's `Outputs`: a Slack channel's (`Slack`) or an
     email (`Email`). The transform returns its text, or None for none this run; only `basis run --publish` sends it,
     once every database has committed, recording it in the ledger of the database `ledger` names, which the run's
     settings must let it publish to."""
 
     destination: Destination
+    noun = "a message"
 
     def __init__(self, resource: SlackResource | EmailResource, *, ledger: str) -> None:
         if not IDENTIFIER.match(ledger):
@@ -205,31 +248,16 @@ class Message[V: (str, Mail)]:
             raise ValueError(msg)
         self.resource = resource
         self.ledger = ledger
-        self._name: str | None = None
 
     @property
     def to(self) -> str:
         return self.resource.name
 
-    @property
-    def name(self) -> str:
-        if self._name is None:
-            msg = "a message is named by its attribute on a job's Outputs class; this one is not on one"
-            raise TypeError(msg)
-        return self._name
-
-    def __set_name__(self, owner: type, name: str) -> None:
-        if not IDENTIFIER.match(name):
-            msg = f"{owner.__qualname__}.{name}: an output's name is lower-case letters, digits and underscores"
-            raise TypeError(msg)
-        if self._name not in {None, name}:
-            msg = f"{owner.__qualname__}.{name} is already declared as {self._name!r}: declare each output once per name"
-            raise TypeError(msg)
-        self._name = name
-
+    @override
     def describe(self) -> str:
         return f"{self.destination}: {self.to}"
 
+    @override
     def checked(self, value: object) -> V | None:
         raise NotImplementedError
 
@@ -279,12 +307,14 @@ class Email(Message[Mail]):
         raise TypeError(msg)
 
 
-class ExcelReport:
+class ExcelReport(FrameEffect):
     """A workbook the job writes for people to a shared folder, as `BASIS_FOLDERS__FOLDER__PATH` gives it on each
     machine: its value is a frame of `row`, written as the sheet `sheet` of the workbook at `path` inside the folder,
     which may format the interval's ends, as `reports/{start:%Y-%m-%d}.xlsx`. Only `basis run --publish` writes it,
     once every database has committed, to a temporary file renamed into place, so a reader never sees half of it, and
     a rerun writes it again, whole. A repo that writes one takes `basis-core[excel]`."""
+
+    noun = "a report"
 
     def __init__(self, row: type[Row], *, folder: str, path: str, sheet: str) -> None:
         if not IDENTIFIER.match(folder):
@@ -300,23 +330,6 @@ class ExcelReport:
         self.folder = folder
         self.path = path
         self.sheet = sheet
-        self._name: str | None = None
-
-    @property
-    def name(self) -> str:
-        if self._name is None:
-            msg = "a report is named by its attribute on a job's Outputs class; this one is not on one"
-            raise TypeError(msg)
-        return self._name
-
-    def __set_name__(self, owner: type, name: str) -> None:
-        if not IDENTIFIER.match(name):
-            msg = f"{owner.__qualname__}.{name}: an output's name is lower-case letters, digits and underscores"
-            raise TypeError(msg)
-        if self._name not in {None, name}:
-            msg = f"{owner.__qualname__}.{name} is already declared as {self._name!r}: declare each output once per name"
-            raise TypeError(msg)
-        self._name = name
 
     def location(self, interval: Interval | None) -> str:
         """The workbook's path in its folder for a run, its interval's ends formatted in."""
@@ -327,24 +340,12 @@ class ExcelReport:
             raise ValueError(msg)
         return self.path.format(start=interval.start, end=interval.end)
 
+    @override
     def describe(self) -> str:
         return f"{self.folder}: {self.path} [{self.sheet}]"
 
-    @overload
-    def __get__(self, instance: None, owner: type) -> Self: ...
-    @overload
-    def __get__(self, instance: Outputs, owner: type) -> pd.DataFrame: ...
-    def __get__(self, instance: Outputs | None, owner: type) -> Self | pd.DataFrame:
-        if instance is None:
-            return self
-        value = instance.values[self.name]  # noqa: PD011 -- the outputs by name, no frame's values
-        if not isinstance(value, pd.DataFrame):
-            msg = f"{self.name} is a workbook, so its value is a DataFrame, not a {type(value).__name__}"
-            raise TypeError(msg)
-        return value
 
-
-class MongoUpsert:
+class MongoUpsert(FrameEffect):
     """Documents the job upserts into a Mongo collection, as `BASIS_MONGO__MONGO__*` configures the database: its value
     is a frame of `row`, each row a document of its columns, matched by `key`'s, whose fields it sets, inserting it
     where none matches, so a rerun changes nothing that is already so. `fields` names each column's field where the
@@ -352,6 +353,8 @@ class MongoUpsert:
     --publish` upserts, once every database has committed; Mongo has no transaction and no ledger here
     (`basis.core.mongo`), so a run that publishes first checks that no field it writes is named otherwise there, and
     that the collection has a unique index on the key. A repo that writes Mongo takes `basis-core[mongo]`."""
+
+    noun = "an upsert"
 
     def __init__(self, row: type[Row], *, mongo: str, collection: str, key: tuple[str, ...], fields: Mapping[str, str] | None = None) -> None:
         if not IDENTIFIER.match(mongo):
@@ -377,52 +380,29 @@ class MongoUpsert:
         self.key = key
         self.fields: dict[str, str] = dict(fields or {})
         """Each column's field in the collection, where it is not the column's own name, as `{"accountid": "accountId"}`."""
-        self._name: str | None = None
 
     def field(self, column: str) -> str:
         """`column`'s field in the collection."""
         return self.fields.get(column, column)
 
-    @property
-    def name(self) -> str:
-        if self._name is None:
-            msg = "an upsert is named by its attribute on a job's Outputs class; this one is not on one"
-            raise TypeError(msg)
-        return self._name
-
-    def __set_name__(self, owner: type, name: str) -> None:
-        if not IDENTIFIER.match(name):
-            msg = f"{owner.__qualname__}.{name}: an output's name is lower-case letters, digits and underscores"
-            raise TypeError(msg)
-        if self._name not in {None, name}:
-            msg = f"{owner.__qualname__}.{name} is already declared as {self._name!r}: declare each output once per name"
-            raise TypeError(msg)
-        self._name = name
-
+    @override
     def describe(self) -> str:
         return f"{self.mongo}: {self.collection}"
-
-    @overload
-    def __get__(self, instance: None, owner: type) -> Self: ...
-    @overload
-    def __get__(self, instance: Outputs, owner: type) -> pd.DataFrame: ...
-    def __get__(self, instance: Outputs | None, owner: type) -> Self | pd.DataFrame:
-        if instance is None:
-            return self
-        return report_value(instance, self.name)
 
 
 LAKE_TABLE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
 """A lake table's folder in its container: lower-case letters, digits and underscores, starting with a letter."""
 
 
-class Lake:
+class Lake(FrameEffect):
     """Rows the job archives to an Azure Data Lake container as Parquet, as `BASIS_LAKES__LAKE__*` configures it on
     each environment: its value is a frame of `row`, written as the run's interval's partition of the folder `table`,
     as `CONTAINER/trades/date=2026-11-07/`. `partition` says how partitions are named: `date`, for a job whose runs
     are each one UTC day, or `interval`, `start=20261101T000000Z/end=20261201T000000Z`, for any interval. Only `basis
     run --publish` archives, once every database has committed, recording it in `ledger`'s database as a publish is,
     so a run for an interval another run archived archives nothing, unless told `--again` (`basis.core.lake`)."""
+
+    noun = "an archive"
 
     def __init__(self, row: type[Row], *, lake: str, table: str, partition: Literal["date", "interval"], ledger: str) -> None:
         if not IDENTIFIER.match(lake):
@@ -442,35 +422,10 @@ class Lake:
         self.table = table
         self.partition: Literal["date", "interval"] = partition
         self.ledger = ledger
-        self._name: str | None = None
 
-    @property
-    def name(self) -> str:
-        if self._name is None:
-            msg = "an archive is named by its attribute on a job's Outputs class; this one is not on one"
-            raise TypeError(msg)
-        return self._name
-
-    def __set_name__(self, owner: type, name: str) -> None:
-        if not IDENTIFIER.match(name):
-            msg = f"{owner.__qualname__}.{name}: an output's name is lower-case letters, digits and underscores"
-            raise TypeError(msg)
-        if self._name not in {None, name}:
-            msg = f"{owner.__qualname__}.{name} is already declared as {self._name!r}: declare each output once per name"
-            raise TypeError(msg)
-        self._name = name
-
+    @override
     def describe(self) -> str:
         return f"{self.lake}: {self.table}/ by {self.partition}"
-
-    @overload
-    def __get__(self, instance: None, owner: type) -> Self: ...
-    @overload
-    def __get__(self, instance: Outputs, owner: type) -> pd.DataFrame: ...
-    def __get__(self, instance: Outputs | None, owner: type) -> Self | pd.DataFrame:
-        if instance is None:
-            return self
-        return report_value(instance, self.name)
 
 
 MAX_SHEET = 31
@@ -487,51 +442,52 @@ class Outputs:
     `Outputs(positions=frame, alert=None)`."""
 
     def __init__(self, **values: OutputValue) -> None:
-        declared, sent, reports, upserts, lakes = self.declared(), self.declared_messages(), self.declared_reports(), self.declared_upserts(), self.declared_lakes()
-        every = set(declared) | set(sent) | set(reports) | set(upserts) | set(lakes)
+        declared, effects = self.declared(), self.declared_of(Effect)
+        every = set(declared) | set(effects)
         if missing := sorted(every - set(values)):
             msg = f"{type(self).__qualname__} is missing outputs {missing}: give every output it declares, None for a message it does not send"
             raise TypeError(msg)
         if unknown := sorted(set(values) - every):
             msg = f"{type(self).__qualname__} declares no outputs named {unknown}; it declares {sorted(every)}"
             raise TypeError(msg)
-        for name in [*reports, *upserts, *lakes]:
-            if not isinstance(values[name], pd.DataFrame):
-                msg = f"{name} is written from a frame, so its value is a DataFrame, not a {type(values[name]).__name__}"
-                raise TypeError(msg)
+        for name, effect in effects.items():
+            effect.checked(values[name])
         for name, table in declared.items():
             expected = Changes if isinstance(table.target.write, Manual) else pd.DataFrame
             if not isinstance(values[name], expected):
                 msg = f"{name} is written with {type(table.target.write).__name__}(), so its value is a {expected.__name__}, not a {type(values[name]).__name__}"
                 raise TypeError(msg)
-        for name, message in sent.items():
-            message.checked(values[name])
         self.values: Mapping[str, OutputValue] = values
+
+    @classmethod
+    def declared_of[E: Named](cls, kind: type[E]) -> dict[str, E]:
+        """Each output of `kind` the job declares, by its name."""
+        return {name: value for klass in reversed(cls.__mro__) for name, value in vars(klass).items() if isinstance(value, kind)}
 
     @classmethod
     def declared(cls) -> dict[str, Table[pd.DataFrame] | Table[Changes]]:
         """Each table the job writes, by its output's name."""
-        return {name: value for klass in reversed(cls.__mro__) for name, value in vars(klass).items() if isinstance(value, Table)}
+        return cls.declared_of(Table)
 
     @classmethod
     def declared_reports(cls) -> dict[str, ExcelReport]:
         """Each workbook the job writes, by its output's name."""
-        return {name: value for klass in reversed(cls.__mro__) for name, value in vars(klass).items() if isinstance(value, ExcelReport)}
+        return cls.declared_of(ExcelReport)
 
     @classmethod
     def declared_upserts(cls) -> dict[str, MongoUpsert]:
         """Each Mongo collection the job upserts into, by its output's name."""
-        return {name: value for klass in reversed(cls.__mro__) for name, value in vars(klass).items() if isinstance(value, MongoUpsert)}
+        return cls.declared_of(MongoUpsert)
 
     @classmethod
     def declared_lakes(cls) -> dict[str, Lake]:
         """Each lake table the job archives to, by its output's name."""
-        return {name: value for klass in reversed(cls.__mro__) for name, value in vars(klass).items() if isinstance(value, Lake)}
+        return cls.declared_of(Lake)
 
     @classmethod
     def declared_messages(cls) -> dict[str, Slack | Email]:
         """Each message the job sends, by its output's name."""
-        return {name: value for klass in reversed(cls.__mro__) for name, value in vars(klass).items() if isinstance(value, Slack | Email)}
+        return {name: value for name, value in cls.declared_of(Message).items() if isinstance(value, Slack | Email)}
 
 
 def table_value(outputs: Outputs, name: str) -> pd.DataFrame | Changes:
@@ -539,14 +495,5 @@ def table_value(outputs: Outputs, name: str) -> pd.DataFrame | Changes:
     value = outputs.values[name]  # noqa: PD011 -- the outputs by name, no frame's values
     if not isinstance(value, pd.DataFrame | Changes):
         msg = f"{name} is a table, so its value is a DataFrame or Changes, not a {type(value).__name__}"
-        raise TypeError(msg)
-    return value
-
-
-def report_value(outputs: Outputs, name: str) -> pd.DataFrame:
-    """The frame the transform gave the workbook `name`."""
-    value = outputs.values[name]  # noqa: PD011 -- the outputs by name, no frame's values
-    if not isinstance(value, pd.DataFrame):
-        msg = f"{name} is written from a frame, so its value is a DataFrame, not a {type(value).__name__}"
         raise TypeError(msg)
     return value

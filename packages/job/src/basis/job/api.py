@@ -27,7 +27,7 @@ from basis.core.interval import Interval
 from basis.core.model import Model
 from basis.core.settings import GivenSettings, Settings
 from basis.core.storage import Root
-from basis.job import handles, runs
+from basis.job import handles, replays, runs
 from basis.job import job as jobs
 from basis.job.diff import OperationDiff
 
@@ -77,7 +77,7 @@ def replay(job: ModuleType, run_id: str, *, params: str | Path | None = None, en
     if configured.snapshot_root is not None:
         roots.append(Root.at(configured.snapshot_root))
     source = core_runs.find(roots, run_id, found.name)
-    result, diffs = runs.replay(found, source, params=found.directory / params if params is not None else None, snapshot_root=local, tracing=configured.traces, environment=environment)
+    result, diffs = replays.replay(found, source, params=found.directory / params if params is not None else None, snapshot_root=local, tracing=configured.traces, environment=environment)
     _report(result)
     for entry in diffs:
         log.info("differs", extra=vars(entry))

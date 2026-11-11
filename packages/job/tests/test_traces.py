@@ -28,7 +28,7 @@ from basis.core.errors import KINDS, BadReply, ServiceError, Unavailable
 from basis.core.logs import JsonFormatter
 from basis.core.settings import GivenSettings
 from basis.core.storage import Root
-from basis.job import runs
+from basis.job import replays, runs
 from basis.job.job import Job, JobError
 
 type Message = MutableMapping[str, Any]
@@ -202,7 +202,7 @@ def test_a_run_keeps_its_clocks_times_and_its_ids_and_a_replay_is_given_them_aga
     assert kept.clocks == {"clock": stamped.insert["stamped_at"].unique().tolist()}
     assert kept.ids == {"ids": [UUID(found) for found in stamped.insert["price_id"].tolist()]}
     replaying, spans = traced()
-    replayed, differences = runs.replay(stamping(sql), result.snapshot, provider=replaying)
+    replayed, differences = replays.replay(stamping(sql), result.snapshot, provider=replaying)
     assert (replayed.record.status, differences, replayed.record.clocks, replayed.record.ids) == ("checked", [], kept.clocks, kept.ids)
     [root] = [span for span in spans.get_finished_spans() if span.parent is None]
     assert (root.name, "venues GET" in {span.name for span in spans.get_finished_spans()}) == ("replay", False)  # a replay reaches no service
@@ -212,7 +212,7 @@ def test_a_replay_that_asks_for_more_than_its_run_kept_is_given_new_ones_and_say
     provider, _ = traced()
     result = run(tmp_path, stamping(sql), provider, venues=venues())
     assert result.snapshot is not None
-    replayed, differences = runs.replay(stamping(sql, more_ids=2), result.snapshot, provider=traced()[0])
+    replayed, differences = replays.replay(stamping(sql, more_ids=2), result.snapshot, provider=traced()[0])
     assert (replayed.record.status, differences) == ("checked", [])
     assert replayed.record.ids["ids"][:2] == result.record.ids["ids"]
     assert len(set(replayed.record.ids["ids"])) == 4
@@ -286,7 +286,7 @@ def test_a_replays_records_carry_its_own_fields_whatever_an_earlier_run_bound(tm
     assert result.snapshot is not None
     monkeypatch.setattr(logs, "_bound", {})  # the process's fields, which this test binds, as they were after it
     logs.bind(run_id="an-earlier-run", job="another-job", service="another-job")
-    replayed, _ = runs.replay(stamping(sql), result.snapshot, provider=traced()[0])
+    replayed, _ = replays.replay(stamping(sql), result.snapshot, provider=traced()[0])
     ours = [record for record in logged() if record.get("replay_of") == result.record.run_id]
     assert ours
     assert {(record["run_id"], record["job"], record["service"]) for record in ours} == {(replayed.record.run_id, "stamping", "stamping")}
@@ -295,7 +295,7 @@ def test_a_replays_records_carry_its_own_fields_whatever_an_earlier_run_bound(tm
 def test_a_run_that_follows_a_replay_in_the_same_process_logs_none_of_the_replays_fields(tmp_path: Path, sql: Path, logged: Records) -> None:
     first = run(tmp_path, stamping(sql), traced()[0], venues=venues())
     assert first.snapshot is not None
-    replayed, _ = runs.replay(stamping(sql), first.snapshot, provider=traced()[0])
+    replayed, _ = replays.replay(stamping(sql), first.snapshot, provider=traced()[0])
     after = run(tmp_path, stamping(sql), traced()[0], venues=venues())
     records = logged()
     assert {record.get("replay_of") for record in records if record.get("run_id") == replayed.record.run_id} == {first.record.run_id}

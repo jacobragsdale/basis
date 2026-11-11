@@ -12,7 +12,7 @@ import basis.job as etl
 from basis.core import frames, snapshots
 from basis.core.settings import GivenSettings
 from basis.core.storage import Root, digest
-from basis.job import runs
+from basis.job import replays, runs
 from basis.job.job import Job
 
 
@@ -75,7 +75,7 @@ def test_a_replay_with_other_params_reports_what_they_change(tmp_path: Path) -> 
     job = make_job(write=etl.Upsert())
     original = run_on_files(tmp_path, job, prices({}))
     assert original.snapshot is not None
-    replayed, diffs = runs.replay(job, original.snapshot, params=params_file(tmp_path / "data", '{"scale": 2}'))
+    replayed, diffs = replays.replay(job, original.snapshot, params=params_file(tmp_path / "data", '{"scale": 2}'))
     assert replayed.record.replay_of == original.record.run_id
     assert [(entry.operation, entry.changed, entry.columns) for entry in diffs] == [("upsert", 1, {"price": 1})]
     upsert = replayed.changes("prices")
@@ -91,7 +91,7 @@ def test_regress_replays_only_published_runs_and_lists_what_changed(tmp_path: Pa
     published.snapshot.save_record(snapshots.RunRecord.model_validate(published.record.model_dump() | {"status": "published"}))
     run_on_files(tmp_path, job, prices({}))  # checked, never published: regress leaves it out
 
-    found = runs.regress(make_job(write=etl.Upsert(), factor=2), Root.at(tmp_path / "snapshots"), last=10, labels={"purpose": "test"})
+    found = replays.regress(make_job(write=etl.Upsert(), factor=2), Root.at(tmp_path / "snapshots"), last=10, labels={"purpose": "test"})
     assert [(entry.run_id, [diff.columns for diff in entry.diffs]) for entry in found] == [(published.record.run_id, [{"price": 1}])]
 
 
@@ -173,7 +173,7 @@ def test_a_transform_that_changes_its_inputs_in_place_changes_neither_what_the_c
     assert checked.equals(given)
     assert first.inputs["prices"].equals(given)
     assert first.snapshot.manifest.datasets["inputs/prices"] == digest(frames.to_arrow(given))
-    replayed, differences = runs.replay(job, first.snapshot, snapshot_root=Root.at(tmp_path / "snapshots"))
+    replayed, differences = replays.replay(job, first.snapshot, snapshot_root=Root.at(tmp_path / "snapshots"))
     assert replayed.snapshot is not None
     assert (replayed.snapshot.manifest.datasets, differences) == (first.snapshot.manifest.datasets, [])
     assert seen[1].equals(given)
@@ -184,7 +184,7 @@ def test_a_replay_saved_beside_its_run_stores_only_the_outputs_that_changed(tmp_
     original = run_on_files(tmp_path, job, prices({}))
     assert original.snapshot is not None
     before = objects(tmp_path)
-    replayed, _ = runs.replay(job, original.snapshot, params=params_file(tmp_path / "data", '{"scale": 2}'), snapshot_root=Root.at(tmp_path / "snapshots"))
+    replayed, _ = replays.replay(job, original.snapshot, params=params_file(tmp_path / "data", '{"scale": 2}'), snapshot_root=Root.at(tmp_path / "snapshots"))
     assert replayed.snapshot is not None
     saved = replayed.snapshot.manifest.datasets
     assert saved["inputs/prices"] == original.snapshot.manifest.datasets["inputs/prices"]

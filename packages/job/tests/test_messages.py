@@ -16,7 +16,7 @@ from basis.core.errors import Unavailable
 from basis.core.settings import GivenSettings
 from basis.core.storage import Root
 from basis.core.verbs import Qa
-from basis.job import qa, runs
+from basis.job import qa, replays, runs
 from basis.job.job import Job
 
 WAREHOUSE = {
@@ -89,7 +89,7 @@ def test_a_run_without_publish_and_its_replay_send_nothing(world: World) -> None
     result = world.run(publish=False)
     assert (result.record.status, sorted(result.record.messages), result.record.sent) == ("checked", ["alert", "report"], {})
     assert result.snapshot is not None
-    replayed, _ = runs.replay(JOB, result.snapshot, snapshot_root=Root.at(world.root / "snapshots"), clock=clock)
+    replayed, _ = replays.replay(JOB, result.snapshot, snapshot_root=Root.at(world.root / "snapshots"), clock=clock)
     assert replayed.record.status == "checked"
     assert (world.desk.posted, world.risk.sent, world.ledger.entries) == ([], [], [])
 
@@ -172,5 +172,5 @@ def test_a_replay_whose_message_differs_says_so(world: World) -> None:
     assert published.snapshot is not None
     quiet = world.root / "quiet.json"
     quiet.write_text('{"quiet": true}', encoding="utf-8")
-    _, diffs = runs.replay(JOB, published.snapshot, params=quiet)
+    _, diffs = replays.replay(JOB, published.snapshot, params=quiet)
     assert [(entry.output, entry.operation, entry.removed) for entry in diffs] == [("alert", "message", 1)]

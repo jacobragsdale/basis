@@ -177,7 +177,7 @@ source_modules = [
     "basis.core.calendars", "basis.core.display", "basis.core.messages", "basis.core.jsontext",
 ]
 forbidden_modules = [
-    "basis.job.loader", "basis.job.runs", "basis.job.api", "basis.job.cli", "basis.job.new", "basis.job.sync", "basis.job.testing",
+    "basis.job.loader", "basis.job.runs", "basis.job.replays", "basis.job.effects", "basis.job.api", "basis.job.cli", "basis.job.new", "basis.job.sync", "basis.job.testing",
     "basis.job.qa",
     "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.storage",
     "basis.core.settings", "basis.core.new", "basis.core.sync", "basis.core.testing", "basis.core.command",

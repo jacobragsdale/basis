@@ -41,7 +41,9 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
 | core `databases/` | `base.py`, the reader and writer protocols and what the dialects share, a statement's span among it; `mssql.py` and `oracle.py`, each dialect's reads, table descriptions, writes and ledger, each statement a span. |
 | core `publish.py` | Writing each database in one transaction, in name order, with the rerun guard and ledger rows. |
 | core `snapshots.py`, `storage.py` | A run's manifest and its datasets; the run store, its objects named by `digest`, through `pyarrow.fs` with atomic writes. |
-| `runs.py` | `run`, `replay`, `resume` and `regress`, which `cli.py` and `api.py` share, each run, replay and resume one trace, and the fakes a test gives by name. |
+| `runs.py` | `run` and `resume`, which `cli.py` and `api.py` share, each one trace, and the fakes a test gives by name. |
+| `effects.py` | Each output that is not a table, as one `Kind` (check, plan, make, and what is pending in a record): workbooks, upserts, archives and messages, and `apply`, the one ordered loop `run` and `resume` share, which stops at the first kind that fails. |
+| `replays.py` | `replay` and `regress`: a saved run's transform again on what it read, and how its changes differ. |
 | `handles.py` | What a run gives a transform for each clock and ids: basis-core's, keeping every value for the run's record, and a replay's, which gives them again. |
 | core `traces.py` | Each run's own tracer provider, never the global one, the settings' exporter, `trace`, a run's one trace, and `tracer`, the current run's, which core's SQL statements are spans on. |
 | core `runs.py` | The halves of `replay`, `resume` and `regress` every part shares: finding and opening a saved run, finishing its publish, and choosing the runs to regress. |
@@ -100,6 +102,9 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
   `ddl._LEDGER`; add its driver to the import contract and to core's `testing.FORBIDDEN`, and its container to the
   integration tier and CI.
 - A write mode is a frozen dataclass in `outputs.py`, a case in `changes.build`, and a row in the reference's table.
+- An output that is not a table is a declaration in `outputs.py` that subclasses `Effect` (or `FrameEffect`, for one
+  written from a frame), a `Kind` in `effects.py` added to `KINDS` where it goes in the order, its plan's and its
+  outcome's records in core's `snapshots.RunRecord`, and its entry in `cli.describe`.
 - A verb is a `Verb` in `cli.part()` with its handler in `cli.py`; its Python twin, if any, is in `api.py`. A verb that
   every kind of part has, such as `replay`, is core's, in core's `command.py`, and reaches the job part through a
   field of its `Part`.
