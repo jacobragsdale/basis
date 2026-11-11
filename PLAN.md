@@ -19,13 +19,16 @@ step's own commit keeps it true.
 | 9.1, 9.2, 9.3 | Done, in one commit | `c853677` |
 | 9.4 Skills and docs for APIs | Done | `8cbb279` |
 | 9.5 SQL is opened before the environment | Done; the sqlglot report waits on the firm's queries, a **(work)** step in [its spike](docs/spikes/sql-columns.md) | `e4c6343` |
-| 9.6 A lighter command | Done for `basis --version`; a verb in a repo still loads its declared parts, and `basis.job`'s package imports pandas, so `basis hook` in a job repo pays it: left for 11.4, the command's tables | the commit "Step 9.6" |
+| 9.6 A lighter command | Done for `basis --version`; a verb in a repo still loads its declared parts, and `basis.job`'s package imports pandas, so `basis hook` in a job repo pays it: left for 11.4, the command's tables | `f8996bb` |
 | 10.1 to 10.3 | To do; 10.3 is **(work)** | |
 | 11.1 to 11.7 | To do | |
 | 12.1 to 12.9 | To do | |
 
-Phases 6 to 8 first reached GitHub's CI on 2026-11-11; what it found is fixed in commits of their own: `c504f54`
-(HiGHS 1.16's banner on stdout broke optim's JSON) and `73889f6` (core named optim).
+Phases 6 to 8 first reached GitHub's CI on 2026-11-11; what it found is fixed in commits of their own, named
+"CI: ...": `c504f54` (HiGHS 1.16's banner on stdout broke optim's JSON), `73889f6` (core named optim), and the
+Windows leg's first full run, 101 failures, in `2eb8b24`, `e122079` and the commit after it, each fixed from the log
+alone. A few Windows tests are skipped with their reason: a refused local connection, which Windows retries for two
+seconds, and serving's POSIX signals.
 
 The review read the source of all four packages (about 29,000 lines) and a sample of their tests, ran the unit tests
 and coverage, drove the `basis` command in generated job and API repos as an agent would, and probed the pure parts

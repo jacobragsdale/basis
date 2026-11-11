@@ -219,7 +219,7 @@ def test_the_push_hook_checks_head_in_a_worktree_of_its_own_when_the_tree_has_ch
     assert folder.parent == pushing.parent
     assert folder.name.startswith(f".{pushing.name}.push.")
     assert commit == git(pushing, "rev-parse", "HEAD").strip()
-    assert uv_ran(tmp_path) == [f"run --frozen --quiet basis check --full --settings-from {pushing}/"]  # its untracked files, such as .env.qa, are there
+    assert uv_ran(tmp_path) == [f"run --frozen --quiet basis check --full --settings-from {pushing.as_posix()}/"]  # its untracked files, such as .env.qa, are there
     assert worktrees(pushing, git) == [f"worktree {pushing.as_posix()}"]
 
 

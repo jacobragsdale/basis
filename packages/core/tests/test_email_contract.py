@@ -2,6 +2,7 @@
 `test_http_contract.py` is for another service: a message sent, a recipient refused while the rest are sent to, and a
 relay slower than the send's deadline, which the send gives up on in all, whatever each socket read allows."""
 
+import smtplib
 import socketserver
 import threading
 import time
@@ -131,3 +132,23 @@ def test_a_relay_slower_than_the_deadline_is_given_up_on_within_it(contract: Con
     with pytest.raises(Timeout, match=r"desk did not answer within its deadline of 0\.5s"):
         contract.send(deadline_s=0.5)
     assert time.monotonic() - start < 2
+
+
+class _TimedOut:
+    """A session whose socket's own timeout fires first, which smtplib reports as a disconnect, as on Windows."""
+
+    def send_message(self, _message: object) -> dict[str, object]:
+        msg = "Connection unexpectedly closed: timed out"
+        disconnected = smtplib.SMTPServerDisconnected(msg)
+        disconnected.__context__ = TimeoutError()  # as smtplib raises it, inside its handler of the socket's timeout
+        raise disconnected
+
+    def quit(self) -> None:
+        return None
+
+
+def test_a_socket_timeout_that_smtplib_reports_as_a_disconnect_is_the_deadline() -> None:
+    relay = EmailRelay(host="127.0.0.1", port=25, security="none", sender="basis@example.com", to=TO)
+    mailer = sending.SmtpMailer(messages.email("desk", deadline_s=5), relay, lambda _relay, _seconds: _TimedOut(), NoOpTracer())  # ty: ignore[invalid-argument-type] -- a session as far as a send reads one
+    with pytest.raises(Timeout, match=r"desk did not answer within its deadline"):
+        mailer.send(Mail(subject="prices", text="3 prices"))

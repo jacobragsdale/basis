@@ -146,6 +146,8 @@ class SmtpMailer:
             except TimeoutError as error:
                 raise limit.exceeded() from error
             except smtplib.SMTPException as error:
+                if isinstance(error, smtplib.SMTPServerDisconnected) and isinstance(error.__context__, TimeoutError):
+                    raise limit.exceeded() from error  # a socket's timeout, which smtplib reports as a disconnect: on Windows, it can fire first
                 raise _failure(name, error) from error
             except OSError as error:  # a relay that refuses or drops the connection, or cannot be resolved
                 msg = f"{name}'s relay {relay.host}:{relay.port} could not be reached: {type(error).__name__}"
