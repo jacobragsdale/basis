@@ -59,7 +59,8 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
 | core `full.py`, `qa.py`, `mutation.py`, `review.py`, `clone.py` | `basis check --full`: regress, the QA tier with its marker, allowlist and guarded databases, mutation testing of the domain functions a change touches, and the record of what it found, which `basis review` prints; and what basis reads of a repo's git clone. |
 | `smoke.py` | `basis smoke --env ENV`, basis-job's side: a dry run of each job `[tool.basis.job.smoke]` declares (`NAME = { params = PATH, days = N }`), on that environment's inputs for its last N days, unpublished, its snapshot in a temporary folder; a run its checks refuse is one `ERROR` line. |
 | `qa.py` | basis-job's QA runs: each job `[tool.basis.qa.job]` declares, checked against the allowlist, then published to QA. |
-| core `doctor.py`, `upgrade.py` | `basis doctor` and `basis upgrade`. |
+| core `doctor.py`, `upgrade.py`, `kinds.py` | `basis doctor` and `basis upgrade`; and each kind of resource but a database as one record, its settings, its fake, what doctor checks of it and what the QA tier refuses of it. |
+| core `ledgered.py` | An effect recorded in a database's ledger, such as a message or an archive: the one transaction a send and an archive share. |
 | `example/` | The example job, laid out as a job's folder, with its fixture and tests; `basis new job` copies it, leaving out its `ruff.toml`. |
 | `docs/` | The docs for job authors, which `basis docs` prints. |
 

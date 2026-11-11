@@ -159,6 +159,17 @@ class MongoStore:
         with pymongo.timeout(limit.seconds):
             yield
 
+    def ping(self) -> None:
+        """Whether the database answers, reading nothing: what `basis doctor` checks."""
+        with self._tracer.start_as_current_span(f"{self.name} ping", kind=SpanKind.CLIENT, attributes={"db.system": "mongodb"}):
+            try:
+                with self._within():
+                    self._database.command("ping")
+            except ServiceError:
+                raise
+            except Exception as error:
+                raise _failure(self.name, error) from error
+
     def close(self) -> None:
         self._client.close()
 

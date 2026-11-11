@@ -39,9 +39,9 @@ import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 from opentelemetry.trace import SpanKind
 
-from basis.core import traces
+from basis.core import ledgered, traces
 from basis.core.databases import Counts, Database, LedgerEntry
-from basis.core.errors import BasisError, Conflict
+from basis.core.errors import BasisError
 from basis.core.interval import Interval
 from basis.core.settings import LakeSettings, Settings, SettingsError, variable
 from basis.core.snapshots import ArchivedFile, ArchivedRecord
@@ -122,64 +122,64 @@ def partition(partitioning: Partitioning, interval: Interval) -> str:
     return f"date={day.isoformat()}"
 
 
-@dataclass(frozen=True)
-class Archiving:
-    """What a part's run says of the archive it writes."""
-
-    run_id: str
-    job: str
-    """The part's name for what it ran, as its ledger rows name it."""
-    interval: Interval
-    version: str
-    again: bool
-    clock: Callable[[], datetime]
+Archiving = ledgered.Run
+"""What a part's run says of the archive it writes: its interval is the partition's, so it has one."""
 
 
 def archive(archiving: Archiving, output: str, rows: pa.Table, store: Lake, database: Database, *, table: str, path: str) -> ArchivedRecord:  # noqa: PLR0913 -- the run, the output, where it goes, and its ledger
     """Archive `rows`, the run's output `output`, as the partition `path` of the lake's `table`, recording it in
-    `database`'s ledger, as the module's docstring says, and what became of it."""
+    `database`'s ledger (`basis.core.ledgered`), as the module's docstring says, and what became of it."""
+    if (interval := archiving.interval) is None:
+        msg = f"{output}: an archive is its run's interval's partition, and this run has none: give it one"
+        raise LakeError(msg)
     base = f"{store.container}/{table}"
     final = f"{base}/{path}"
     temporary, old = f"{base}/.tmp-{archiving.run_id}", f"{base}/.old-{archiving.run_id}"
     _container(store)
-    with database.writing() as writer:
-        writer.lock(archiving.job, output)
-        if not archiving.again and (runs := [run for run in writer.overlapping(archiving.job, output, archiving.interval) if run != archiving.run_id]):
-            reason = f"runs {', '.join(runs)} archived {output} for an interval that overlaps {archiving.interval}: pass --again to archive it again"
-            log.warning("not archiving %s: %s", output, reason, extra={"output": output})
-            return ArchivedRecord(status="skipped", at=archiving.clock(), path=store.where(final), reason=reason)
-        try:
-            with _reaching(store, f"write {store.where(temporary)}"):
-                files = _write(store, f"{temporary}/{path}", rows)
-                files, settle = _settled(store, final, files, again=archiving.again)
-            detail = {"path": store.where(final), "rows": rows.num_rows, "files": [file.model_dump() for file in files]}
-            entry = LedgerEntry(
-                archiving.run_id, archiving.job, output, f"lake:{store.name}:{table}", archiving.interval, rerun_safe=False,
-                counts=Counts(inserted=rows.num_rows), published_at=archiving.clock(), version=archiving.version, detail=json.dumps(detail),
-            )  # fmt: skip
-            try:
-                writer.record(entry)
-            except Conflict:
-                log.info("%s was archived by this run already", output, extra={"output": output})
-                return ArchivedRecord(status="archived", at=archiving.clock(), path=store.where(final), rows=rows.num_rows, reason="archived by this run already")
-            if settle != "keep":
-                with _reaching(store, f"rename the partition into {store.where(final)}"):
-                    _move(store, f"{temporary}/{path}", final, aside=f"{old}/{path}" if settle == "replace" else None)
-            try:
-                writer.commit()
-            except BaseException:
-                if settle == "replace":  # the ledger keeps the run that archived the old partition: put that one back
-                    with _reaching(store, f"put the old partition back at {store.where(final)}"):
-                        _move(store, final, f"{temporary}/{path}", aside=None)
-                        _move(store, f"{old}/{path}", final, aside=None)
-                raise
+    files: list[ArchivedFile] = []
+    settle: list[Settle] = []
+    began: list[bool] = []
+
+    def entry() -> LedgerEntry:
+        began.append(True)
+        with _reaching(store, f"write {store.where(temporary)}"):
+            written, settled = _settled(store, final, _write(store, f"{temporary}/{path}", rows), again=archiving.again)
+        files.extend(written)
+        settle.append(settled)
+        detail = {"path": store.where(final), "rows": rows.num_rows, "files": [file.model_dump() for file in files]}
+        return LedgerEntry(
+            archiving.run_id, archiving.job, output, f"lake:{store.name}:{table}", interval, rerun_safe=False,
+            counts=Counts(inserted=rows.num_rows), published_at=archiving.clock(), version=archiving.version, detail=json.dumps(detail),
+        )  # fmt: skip
+
+    def make() -> None:
+        if settle[0] != "keep":
+            with _reaching(store, f"rename the partition into {store.where(final)}"):
+                _move(store, f"{temporary}/{path}", final, aside=f"{old}/{path}" if settle[0] == "replace" else None)
+
+    def undo() -> None:
+        if settle[0] == "replace":  # the ledger keeps the run that archived the old partition: put that one back
+            with _reaching(store, f"put the old partition back at {store.where(final)}"):
+                _move(store, final, f"{temporary}/{path}", aside=None)
+                _move(store, f"{old}/{path}", final, aside=None)
+
+    try:
+        outcome = ledgered.ledgered(archiving, output, database, ledgered.Steps("archive", "archived", entry, make, undo))
+        if outcome[0] == "made":
             _delete(store, old)  # the old partition, once the ledger records the one replacing it
-        finally:
+    finally:
+        if began:  # it wrote under the hidden names
             _delete(store, temporary)
             if store.fs.get_file_info(f"{old}/{path}").type == pafs.FileType.NotFound:
                 _delete(store, old)
-    log.info("archived %s to %s", output, store.where(final), extra={"output": output, "rows": rows.num_rows, "files": len(files)})
-    return ArchivedRecord(status="archived", at=archiving.clock(), path=store.where(final), rows=rows.num_rows, files=files)
+    match outcome:
+        case "skipped", reason:
+            return ArchivedRecord(status="skipped", at=archiving.clock(), path=store.where(final), reason=reason)
+        case "already", _:
+            return ArchivedRecord(status="archived", at=archiving.clock(), path=store.where(final), rows=rows.num_rows, reason="archived by this run already")
+        case _:
+            log.info("archived %s to %s", output, store.where(final), extra={"output": output, "rows": rows.num_rows, "files": len(files)})
+            return ArchivedRecord(status="archived", at=archiving.clock(), path=store.where(final), rows=rows.num_rows, files=files)
 
 
 def check(store: Lake, *, rename: bool) -> str:

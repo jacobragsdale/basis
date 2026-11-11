@@ -35,16 +35,16 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import urlsplit
 
 import pandas as pd
 from pydantic import ConfigDict, Field, ValidationError
 
-from basis.core import environments, invalid
+from basis.core import environments, invalid, kinds
 from basis.core.databases import Counts, Database, LedgerEntry, Reader, Statements, Writer, open_database
 from basis.core.destination import TableSpec
 from basis.core.errors import BasisError
 from basis.core.interval import Interval
+from basis.core.kinds import carries
 from basis.core.model import Model
 from basis.core.settings import LEDGER, MssqlSettings, OracleSettings, Settings, locate, read
 from basis.core.storage import Root
@@ -123,10 +123,6 @@ def declared(pyproject: Path, parts: Mapping[str, Part]) -> Declared | None:
         msg = f"{pyproject}'s {_SECTION} stores has {', '.join(unmarked)}, whose name does not contain the marker {declaration.marker!r}: list only QA's stores, each named so"
         raise BasisError(msg)
     return Declared(pyproject, declaration, own)
-
-
-def carries(name: str, marker: str) -> bool:
-    return marker.lower() in name.lower()
 
 
 def keywords(connection_string: str) -> list[tuple[str, str]]:
@@ -227,38 +223,7 @@ def problems(settings: Settings, declared: Declared, *, source: Path) -> list[Pr
             variable = f"BASIS_DATABASES__{name.upper()}__WRITE__LEDGER"
             reason = f"{variable} {where} is {database.write.ledger}, which {_SECTION} writes does not list for {name}, and every publish writes it"
             found.append((reason, f"add it to writes.{name} if it is QA's ledger"))
-    for name, shared in sorted(settings.folders.items()):
-        if not carries(shared.path, marker):
-            reason = f"BASIS_FOLDERS__{name.upper()}__PATH {where} is {shared.path}, which does not contain the QA marker {marker!r}, and a QA run writes its workbooks there"
-            found.append((reason, "point it at QA's folder, whose path contains the marker"))
-    return found + _lakes(settings, marker, where) + _mongos(settings, marker, where)
-
-
-def _mongos(settings: Settings, marker: str, where: str) -> list[Problem]:
-    """Each Mongo database the settings name whose hosts and database name all lack the marker, where a QA run reads
-    and upserts; a URI's login is never named."""
-    found: list[Problem] = []
-    for name, mongo in sorted(settings.mongo.items()):
-        hosts = [part.rsplit("@", 1)[-1].split(":", 1)[0] for part in urlsplit(mongo.uri.get_secret_value()).netloc.split(",")]
-        if not any(carries(place, marker) for place in [*hosts, mongo.database]):
-            reason = (
-                f"BASIS_MONGO__{name.upper()}__URI and __DATABASE {where} name host {', '.join(hosts)} and database {mongo.database},"
-                f" and neither contains the QA marker {marker!r}, and a QA run reads and upserts there"
-            )
-            found.append((reason, "point it at QA's Mongo, whose host or database contains the marker"))
-    return found
-
-
-def _lakes(settings: Settings, marker: str, where: str) -> list[Problem]:
-    """Each lake the settings name whose account and container both lack the marker, where a QA run would archive."""
-    return [
-        (
-            f"BASIS_LAKES__{name.upper()}__ACCOUNT and __CONTAINER {where} are {lake.account}/{lake.container}, which lacks the QA marker {marker!r}, and a QA run archives there",
-            "point it at QA's lake, whose account or container contains the marker",
-        )
-        for name, lake in sorted(settings.lakes.items())
-        if not carries(f"{lake.account}/{lake.container}", marker)
-    ]
+    return found + kinds.qa_problems(settings, marker, where)
 
 
 def store(settings: Settings, folder: Path) -> Root | Problem:

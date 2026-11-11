@@ -1,12 +1,15 @@
+import http.server
 import os
+import socket
 import sys
+import threading
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import timedelta
 from functools import partial
 from importlib.metadata import EntryPoint
 from pathlib import Path
-from typing import cast
+from typing import cast, override
 
 import pyarrow.fs as pafs
 import pytest
@@ -344,3 +347,81 @@ def test_a_declared_part_that_does_not_import_is_one_line_doctor_names(tmp_path:
             "ERROR: the alpha part's package is installed, and its entry point basis_alpha_nowhere.cli:part does not import"
             " (ModuleNotFoundError: No module named 'basis_alpha_nowhere'): run `uv sync --all-packages`, which installs what it needs"
         )
+
+
+SLOW_REFUSAL = pytest.mark.skipif(sys.platform == "win32", reason="Windows retries a refused connection to a local port for about two seconds, so it reads as a timeout")
+
+
+@contextmanager
+def answering() -> Generator[tuple[int, list[tuple[str, str]]]]:
+    """A local HTTP server that answers 404 to everything, and the requests it was sent, as method and path."""
+    asked: list[tuple[str, str]] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def _answer(self) -> None:
+            asked.append((self.command, self.path))
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        do_GET = do_HEAD = do_POST = _answer  # noqa: N815 -- the names http.server calls
+
+        @override
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server.server_address[1], asked
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def closed_port() -> int:
+    with socket.socket() as bound:
+        bound.bind(("127.0.0.1", 0))
+        port = bound.getsockname()[1]
+        assert isinstance(port, int)
+        return port
+
+
+@SLOW_REFUSAL
+def test_doctor_with_an_environment_checks_each_service_channel_and_relay_answers_and_sends_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    feed(tmp_path)
+    closed = closed_port()
+    with answering() as (port, asked):
+        lines = [
+            f"BASIS_HTTP__PRICES__URL=http://127.0.0.1:{port}/v1/",
+            f"BASIS_HTTP__RATES__URL=http://127.0.0.1:{closed}/",
+            f"BASIS_SLACK__ALERTS__WEBHOOK=http://127.0.0.1:{port}/services/T0/B0/secret",
+            *(f"BASIS_EMAIL__DESK__{key}={value}" for key, value in (("HOST", "127.0.0.1"), ("PORT", closed), ("SECURITY", "none"), ("SENDER", "basis@example.com"), ("TO", '["desk@example.com"]'))),
+        ]
+        path = env_file(tmp_path, "dev", "\n".join(lines) + "\n")
+        assert doctor.doctor(None, {}, desktop(tmp_path), describe=command.one_line, env="dev", databases=Logins()) == 1
+    captured = capsys.readouterr()
+    assert f"ok: dev's service prices answers at http://127.0.0.1:{port}/v1/ (404)" in captured.out.splitlines()
+    assert "ok: dev's Slack channel alerts reaches 127.0.0.1, posting nothing" in captured.out.splitlines()
+    assert asked == [("GET", "/v1/"), ("HEAD", "/")]  # the webhook's own path is never sent to, so nothing is posted
+    assert [line.split(" (", 1)[0] for line in captured.err.splitlines()] == ["ERROR: dev's service rates does not answer", "ERROR: dev's email desk does not answer"]
+    assert captured.err.splitlines()[0].endswith(
+        f"rates could not be reached for GET http://127.0.0.1:{closed}/: ConnectError): check BASIS_HTTP__RATES__* in {path}, and that this machine may reach it"
+    )
+    assert captured.err.splitlines()[1].endswith(f"check BASIS_EMAIL__DESK__* in {path}, and that this machine may reach it")
+
+
+@SLOW_REFUSAL
+def test_doctor_with_an_environment_checks_each_mongo_database_answers_a_ping(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    feed(tmp_path)
+    closed = closed_port()
+    lines = [
+        f"BASIS_MONGO__REFERENCE__{key}={value}"
+        for key, value in (("URI", f"mongodb://127.0.0.1:{closed}/?directConnection=true"), ("DATABASE", "reference"), ("TIMEOUT_S", "0.5"), ("MAX_DOCUMENTS", "10"))
+    ]
+    path = env_file(tmp_path, "dev", "\n".join(lines) + "\n")
+    assert doctor.doctor(None, {}, desktop(tmp_path), describe=command.one_line, env="dev", databases=Logins()) == 1
+    [line] = capsys.readouterr().err.splitlines()
+    assert line.startswith("ERROR: dev's Mongo database reference does not answer (")
+    assert line.endswith(f"check BASIS_MONGO__REFERENCE__* in {path}, and that this machine may reach it")

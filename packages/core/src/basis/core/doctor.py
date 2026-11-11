@@ -4,7 +4,9 @@ them, as `basis check` does), the feed, and the settings. It runs in a repo or o
 desktop has alone. Each check passed prints one line on stdout, and each problem one `ERROR` line on stderr that ends
 with its fix. It reads no database and no network, unless it is given an environment: `basis doctor --env qa` also
 checks where that environment's settings come from (`basis.core.environments`), that each database's logins answer
-a query, the write login's too, and that each folder and its run store are reachable.
+a query, the write login's too, that each other resource it configures answers as its kind checks (`basis.core.kinds`:
+each folder, lake, service, Slack channel, email relay and Mongo database, sending and writing nothing), and that its
+run store is reachable.
 
 The feed is the default index of the user's `uv.toml`: the design has each developer name the firm's feed there as
 the default index, not an extra one, so a name the feed holds is never looked up on public PyPI. uv reads
@@ -27,7 +29,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from basis.core import calendars, environments, hooks, lake, qa, settings
+from basis.core import calendars, environments, hooks, kinds, lake, qa, settings
 from basis.core.databases import Database, open_database
 from basis.core.errors import BasisError, ServiceError
 from basis.core.settings import MssqlSettings, OracleSettings, Settings
@@ -278,7 +280,7 @@ def _environment_of(  # noqa: PLR0913 -- the environment, and how doctor reaches
     given: str, repo: Path | None, desktop: Desktop, describe: Describe, *, databases: Callable[[Settings, str], Database], lakes: Callable[[str, Settings], lake.Lake]
 ) -> list[Found]:
     """`basis doctor --env ENV`: where the environment's settings come from, whether each of its databases' logins
-    answers, whether each lake's container is reachable, and renames, where the environment may be written, and
+    answers, whether each other resource it configures is reachable, as its kind checks (`basis.core.kinds`), and
     whether its run store is reachable."""
     try:
         environment = environments.load(given, Settings, windows=desktop.system == "Windows", home=desktop.home)
@@ -296,23 +298,8 @@ def _environment_of(  # noqa: PLR0913 -- the environment, and how doctor reaches
         found.append(Found(f"prod {writes}", note=True))
     for name in sorted(configured.databases):
         found += _logins(env, name, configured, where, databases)
-    for name, shared in sorted(configured.folders.items()):
-        try:
-            reachable = Path(shared.path).is_dir()
-        except OSError:
-            reachable = False
-        fix = f"mount it, or correct BASIS_FOLDERS__{name.upper()}__PATH in {where}"
-        problem = (f"{env}'s folder {name}, at {shared.path}, is not there or not reachable from here", fix) if not reachable else None
-        found.append(Found(f"{env}'s folder {name}: {shared.path}", problem))
-    for name in sorted(configured.lakes):
-        what = f"{env}'s lake {name}"
-        try:
-            store = lakes(name, configured)
-            checked = lake.check(store, rename=environment.writes)
-        except BasisError as error:
-            found.append(Found(what, (f"{what} cannot be archived to ({' '.join(str(error).split())})", f"check BASIS_LAKES__{name.upper()}__* in {where}")))
-            continue
-        found.append(Found(f"{what}: {checked}"))
+    probe = kinds.Probe(env, where, environment.writes, configured, lakes)
+    found += [Found(what, problem) for kind in kinds.KINDS for what, problem in kind.doctor(configured, probe)]
     if configured.snapshot_root is None:
         found.append(Found(f"{env} names no run store, BASIS_SNAPSHOT_ROOT, so `basis run --env {env}` cannot save its runs", note=True))
     else:

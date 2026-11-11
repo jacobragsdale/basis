@@ -51,6 +51,18 @@ MAX_RESENDS = 3
 """The most times an `Unavailable` GET is made again, however long its deadline: a service that is down stays down
 for longer than a few backoffs, and more attempts only add to its load."""
 _UNREACHABLE = (httpx2.NetworkError, httpx2.RemoteProtocolError, httpx2.ProxyError)
+
+
+def transport_failure(resource: str, what: str, call: str | None, error: httpx2.RequestError) -> ServiceError:
+    """The kind of failure an HTTP client's error short of a reply is, other than its timeout, which is the deadline's:
+    `Unavailable` where the service could not be reached, and `Failed` for one such as a redirect loop, or a body that
+    does not decode. `what` names what was called, as `pricing` or `alerts's webhook`, and `call` the request, if
+    anything is to be said of it."""
+    if isinstance(error, _UNREACHABLE):
+        return Unavailable(f"{what} could not be reached{f' for {call}' if call is not None else ''}: {type(error).__name__}", resource=resource)
+    return Failed(f"{what} failed{f' {call}' if call is not None else ''}: {type(error).__name__}", resource=resource)
+
+
 """A transport's failures to reach the service: to connect, through the proxy too, or a connection reset or closed
 before the reply."""
 
@@ -206,12 +218,8 @@ class HttpClient:
             raise
         except httpx2.TimeoutException as error:  # one of the client's own timeouts, each the deadline
             raise limit.exceeded() from error
-        except _UNREACHABLE as error:
-            msg = f"{resource.name} could not be reached for {method} {path}: {type(error).__name__}"
-            raise Unavailable(msg, resource=resource.name) from error
-        except httpx2.RequestError as error:  # one such as a redirect loop, or a body that does not decode
-            msg = f"{resource.name} failed {method} {path}: {type(error).__name__}"
-            raise Failed(msg, resource=resource.name) from error
+        except httpx2.RequestError as error:
+            raise transport_failure(resource.name, resource.name, f"{method} {path}", error) from error
 
 
 def _retry_in(method: HttpMethod, failure: ServiceError, response: httpx2.Response | None, *, resent: int, ends_at: float, waits: Waits) -> float | None:  # noqa: PLR0913 -- what the attempt was, and its clock

@@ -16,25 +16,22 @@ import smtplib
 import ssl
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import datetime
 from email.message import EmailMessage
 from typing import Literal, Protocol
 
 import httpx2
 from opentelemetry.trace import SpanKind, Tracer
 
-from basis.core import deadlines, fakes
+from basis.core import deadlines, fakes, ledgered
 from basis.core.databases import Counts, Database, LedgerEntry
-from basis.core.errors import Conflict, Denied, Failed, Rejected, ServiceError, Unavailable, answered
-from basis.core.interval import Interval
+from basis.core.errors import Denied, Failed, Rejected, ServiceError, Unavailable, answered
 from basis.core.messages import EmailResource, Mail, SlackResource, checked_text, digest
+from basis.core.opened import transport_failure
 from basis.core.settings import EmailRelay, Settings, SettingsError, SlackChannel, variable
 from basis.core.snapshots import MessageRecord, SendRecord
 
 log = logging.getLogger(__name__)
 
-_UNREACHABLE = (httpx2.NetworkError, httpx2.RemoteProtocolError, httpx2.ProxyError)
 """A transport's failures to reach the webhook: to connect, through the proxy too, or a connection reset or closed."""
 _TEMPORARY = 400
 _PERMANENT = 500
@@ -70,12 +67,8 @@ class SlackPoster:
                 response = within(limit, lambda: self._client.post(self._webhook, json={"text": text}, timeout=limit.seconds), abort=self._client.close)
             except httpx2.TimeoutException as error:
                 raise limit.exceeded() from error
-            except _UNREACHABLE as error:
-                msg = f"{name}'s webhook could not be reached: {type(error).__name__}"
-                raise Unavailable(msg, resource=name) from error
             except httpx2.RequestError as error:
-                msg = f"{name}'s webhook failed: {type(error).__name__}"
-                raise Failed(msg, resource=name) from error
+                raise transport_failure(name, f"{name}'s webhook", None, error) from error
             span.set_attribute("http.response.status_code", response.status_code)
             if not response.is_success:
                 status = response.status_code
@@ -148,7 +141,7 @@ class SmtpMailer:
             except smtplib.SMTPException as error:
                 if isinstance(error, smtplib.SMTPServerDisconnected) and isinstance(error.__context__, TimeoutError):
                     raise limit.exceeded() from error  # a socket's timeout, which smtplib reports as a disconnect: on Windows, it can fire first
-                raise _failure(name, error) from error
+                raise smtp_failure(name, error) from error
             except OSError as error:  # a relay that refuses or drops the connection, or cannot be resolved
                 msg = f"{name}'s relay {relay.host}:{relay.port} could not be reached: {type(error).__name__}"
                 raise Unavailable(msg, resource=name, reason=str(error)) from error
@@ -198,7 +191,7 @@ def _quit(session: Connection) -> None:
         log.debug("the relay's session did not close cleanly")
 
 
-def _failure(name: str, error: smtplib.SMTPException) -> ServiceError:
+def smtp_failure(name: str, error: smtplib.SMTPException) -> ServiceError:
     """The kind of failure an SMTP error is."""
     reason = str(error)
     if isinstance(error, smtplib.SMTPAuthenticationError):
@@ -242,42 +235,26 @@ def mailer(resource: EmailResource, settings: Settings, tracer: Tracer, *, fake:
     return SmtpMailer(resource, relay, smtp, tracer)
 
 
-@dataclass(frozen=True)
-class Delivery:
-    """What a part's run says of the messages it delivers."""
-
-    run_id: str
-    job: str
-    """The part's name for what it ran, such as the job's, as its ledger rows name it."""
-    interval: Interval | None
-    version: str
-    again: bool
-    clock: Callable[[], datetime]
+Delivery = ledgered.Run
+"""What a part's run says of the messages it delivers."""
 
 
 type Outcome = Literal["sent", "skipped", "failed"]
 
 
 def deliver(delivery: Delivery, output: str, message: MessageRecord, send: Callable[[], None], database: Database) -> SendRecord:
-    """Send `message`, the run's output `output`, through `send`, recording it in `database`'s ledger, as the module's
-    docstring says, and what became of it."""
+    """Send `message`, the run's output `output`, through `send`, recording it in `database`'s ledger
+    (`basis.core.ledgered`), and what became of it."""
     destination = f"{message.destination}:{message.to}"
-    with database.writing() as writer:
-        writer.lock(delivery.job, output)
-        if delivery.interval is not None and not delivery.again and (runs := [run for run in writer.overlapping(delivery.job, output, delivery.interval) if run != delivery.run_id]):
-            reason = f"runs {', '.join(runs)} sent {output} for an interval that overlaps {delivery.interval}: pass --again to send it again"
-            log.warning("not sending %s: %s", output, reason, extra={"output": output})
+    entry = LedgerEntry(
+        delivery.run_id, delivery.job, output, destination, delivery.interval, rerun_safe=False, counts=Counts(inserted=1),
+        published_at=delivery.clock(), version=delivery.version, detail=json.dumps({"sha256": message.sha256}),
+    )  # fmt: skip
+    match ledgered.ledgered(delivery, output, database, ledgered.Steps("send", "sent", lambda: entry, send)):
+        case "skipped", reason:
             return SendRecord(status="skipped", at=delivery.clock(), reason=reason)
-        entry = LedgerEntry(
-            delivery.run_id, delivery.job, output, destination, delivery.interval, rerun_safe=False, counts=Counts(inserted=1),
-            published_at=delivery.clock(), version=delivery.version, detail=json.dumps({"sha256": message.sha256}),
-        )  # fmt: skip
-        try:
-            writer.record(entry)
-        except Conflict:
-            log.info("%s was sent by this run already", output, extra={"output": output})
+        case "already", _:
             return SendRecord(status="sent", at=delivery.clock(), reason="sent by this run already")
-        send()
-        writer.commit()
-    log.info("sent %s to %s", output, destination, extra={"output": output, "sha256": message.sha256})
-    return SendRecord(status="sent", at=delivery.clock())
+        case _:
+            log.info("sent %s to %s", output, destination, extra={"output": output, "sha256": message.sha256})
+            return SendRecord(status="sent", at=delivery.clock())

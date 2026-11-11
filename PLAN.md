@@ -21,10 +21,11 @@ step's own commit keeps it true.
 | 9.5 SQL is opened before the environment | Done; the sqlglot report waits on the firm's queries, a **(work)** step in [its spike](docs/spikes/sql-columns.md) | `e4c6343` |
 | 9.6 A lighter command | Done for `basis --version`; a verb in a repo still loads its declared parts, and `basis.job`'s package imports pandas, so `basis hook` in a job repo pays it: left for 11.4, the command's tables | `f8996bb` |
 | 10.1 The eval | In progress: [`evals/`](evals/README.md) holds twelve tasks, the runner and the graders, each task validated; the trials and the first report are next | the commit "Step 10.1, part 1" |
-| 10.2 `v0.1.0` | Cut from this commit, "basis 0.1.0", which the tag `v0.1.0` names once its CI passes | the commit "basis 0.1.0" |
+| 10.2 `v0.1.0` | Released: the tag `v0.1.0` is on `acd92ef`, since CI failed on the bump commit `b9d8c4f` over a stale test that `acd92ef` fixed | `acd92ef` |
 | 10.3 The pilot | To do; **(work)** | |
 | 11.1 One interface for a job's outputs | Done: `basis.job.effects` (a `Kind` per output that is not a table, and the one loop `run` and `resume` share), `basis.job.replays`; a resume now stops at the first kind that fails, as a run does | the commit "Step 11.1" |
-| 11.2 to 11.7 | To do | |
+| 11.2 One descriptor per kind of resource | Done: `basis.core.kinds` (each kind but a database: its settings, its fake, doctor's check, the QA tier's refusal), `basis.core.ledgered` (the one ledgered effect, which sending and the lake share), `opened.transport_failure`; `basis doctor --env` now checks HTTP services, Slack, email relays and Mongo | the commit "Step 11.2" |
+| 11.3 to 11.7 | To do | |
 | 12.1 to 12.9 | To do | |
 
 Phases 6 to 8 first reached GitHub's CI on 2026-11-11; what it found is fixed in commits of their own, named
@@ -660,6 +661,7 @@ Each has a recommendation, and none blocks a phase before the step named.
 | Is basis itself held to a coverage floor? | 85%, in CI | 6.1 |
 | Where does a grid's row model, with its `api.format`, live? (taken in 9.4) | In `handlers.py`, beside its handler; a repository that reads it with `fetch_table` takes the model as an argument, so no layer changes | 9.4 |
 | Where in its order does a resume stop when a kind of output fails? (taken in 11.1) | Where a run does: workbooks, upserts, archives, then messages, each kind only once every kind before it was made whole | 11.1 |
+| How does `basis doctor` check a Slack channel and an email relay without sending anything? (taken in 11.2) | A HEAD of the webhook's host, never its path; the relay's greeting and login, then QUIT. Parts keep their own declarations and openers, and a database stays doctor's and the QA tier's own, with its two logins | 11.2 |
 
 ## Considered, and not recommended
 
