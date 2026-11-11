@@ -133,6 +133,9 @@ uv run basis ddl [SERVICE] --dialect mssql   # the CREATE TABLE of each outbox, 
 uv run basis relay [SERVICE] --env dev   # make the calls the outboxes still hold; the scheduler runs it, and it fails when one ages out
 ```
 
+`uv run basis docs api/tutorial`, `api/how-to` and `api/reference` are the API's docs for the installed version. The
+skills in `.agents/skills/api-*` cover adding a route end to end and finding out why a request failed.
+
 `serve`, `call --real` and `relay` act in the environment `--env` names, `dev`, `qa` or `prod`, or `BASIS_ENV`, with
 your own settings for it, `~/.config/basis/ENV.env` (`%APPDATA%\basis\ENV.env` on Windows), or in a pod its
 deployment's. In prod they refuse to start with a write login unless the deployment sets `BASIS_PROD_WRITES=1`.

@@ -40,7 +40,7 @@ from typing import Literal
 from pydantic import ValidationError
 from pydantic_settings import SettingsError as SourceError
 
-from basis.api import sync
+from basis.api import docs, sync
 from basis.api.resources import DatabaseResource
 from basis.api.service import GROUP, Service, load
 from basis.api.settings import Settings, unreadable
@@ -100,6 +100,7 @@ def part() -> Part:
             Verb("release-document", RELEASE_DOCUMENT, _version_argument, lambda n: _release_document(Path(n.repo_root), str(n.version))),
         ),
         files=sync.agent_files,
+        docs=docs.FOLDER,
         runs=Runs(
             noun="service",
             names=_services,

@@ -5,7 +5,10 @@ give is one the real parser takes.
 A command line in a code block, or an inline one that starts `uv run basis`, is one an agent copies, and must parse
 whole, unless it is a synopsis, holding `[`, `|`, `(` or `...`; any other names a verb the repo's parts give, and only
 options that verb takes. A path a whole line names, such as `--params jobs/JOB/params/default.json`, is made in a
-scratch folder first, since the parser checks a file exists, not what it holds."""
+scratch folder first, since the parser checks a file exists, not what it holds.
+
+A skill's `SKILL.md` names itself as its folder does, and gives a description of at most `DESCRIBED` characters,
+which is as much as the Agent Skills format has an agent read: what it reads to choose the skill."""
 
 import contextlib
 import re
@@ -23,6 +26,9 @@ _LINE = re.compile(r"^(?:uv run )?basis ")
 _SYNOPSIS = ("[", "|", "(", "...")
 _SHELL = frozenset({"|", "||", "&&", ";", "&"})
 _REDIRECT = re.compile(r"^[0-9]*[<>]")
+_FRONT = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
+DESCRIBED = 1024
+"""The most characters of a skill's description an agent reads, as the Agent Skills format caps it."""
 
 
 def names(text: str, alias: str) -> list[str]:
@@ -62,6 +68,22 @@ def problems(files: Iterable[Path], *, modules: Mapping[str, ModuleType], repo: 
         for line, whole in commands(text):
             if (refused := _refused(line, repo, scratch=scratch, whole=whole)) is not None:
                 found.append(f"{path}: `{line}`: {refused}")
+        if path.name == "SKILL.md":
+            found += [f"{path}: {said}" for said in _skill(text, path.parent.name)]
+    return found
+
+
+def _skill(text: str, folder: str) -> list[str]:
+    """What an agent would not read whole of a skill's front matter."""
+    front = _FRONT.match(text)
+    fields = dict(line.partition(": ")[::2] for line in front.group(1).splitlines()) if front is not None else {}
+    found: list[str] = []
+    if (name := fields.get("name", "").strip()) != folder:
+        found.append(f"its name is {name or 'missing'}, not its folder's, {folder}")
+    if not (description := fields.get("description", "").strip()):
+        found.append("it has no description")
+    elif len(description) > DESCRIBED:
+        found.append(f"its description is {len(description)} characters, over the {DESCRIBED} an agent reads")
     return found
 
 

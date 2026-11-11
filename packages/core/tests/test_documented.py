@@ -56,3 +56,29 @@ uv run basis review --commit HEAD | head
 `basis check --full [--settings-from DIR] [--no-qa]`, and `basis --help`.
 """
     assert documented.problems([written(tmp_path, text)], modules={"tables": tables}, repo=repo, scratch=tmp_path, tables=("publishes",)) == []
+
+
+def skill(tmp_path: Path, folder: str, front: str) -> Path:
+    path = tmp_path / folder / "SKILL.md"
+    path.parent.mkdir()
+    path.write_text(f"---\n{front}\n---\n\n# A skill\n", encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize(
+    ("folder", "front", "said"),
+    [
+        ("api-x", "name: api-y\ndescription: Does a thing.", "its name is api-y, not its folder's, api-x"),
+        ("api-x", "name: api-x", "it has no description"),
+        ("api-x", f"name: api-x\ndescription: {'word ' * 210}", "its description is 1049 characters, over the 1024 an agent reads"),
+    ],
+    ids=["a name not its folder's", "no description", "a description too long"],
+)
+def test_a_skill_whose_front_matter_an_agent_would_not_read_whole_fails(tmp_path: Path, repo: command.Repo, folder: str, front: str, said: str) -> None:
+    page = skill(tmp_path, folder, front)
+    assert documented.problems([page], modules={}, repo=repo, scratch=tmp_path) == [f"{page}: {said}"]
+
+
+def test_a_skill_with_its_folders_name_and_a_short_description_passes(tmp_path: Path, repo: command.Repo) -> None:
+    page = skill(tmp_path, "api-x", "name: api-x\ndescription: Does a thing. Use when the user asks for it.")
+    assert documented.problems([page], modules={}, repo=repo, scratch=tmp_path) == []

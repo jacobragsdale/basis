@@ -16,15 +16,16 @@ step's own commit keeps it true.
 | 7.1 to 7.13 | Done | `5c3c2e2`, `0da9fef`, `7792046`, `affbe96`, `d09e284`, `6e59dff`, `6fd6830`, `704f5ec`, `1b74ab1`, `49fb3eb`, `3fa732e`, `7bb60a3`/`29a9f2b`/`dc6ce0d`, `89cd05d` |
 | 7.14 | Done, in nine commits | `3594ded` to `700bd7e` |
 | 8.1 to 8.10 | Done | `b67e7bc`, `c4dbc9e`, `4937c8e`, `18e55d0`, `626087a`, `d4adf0a`, `1de8200`, `4d28bd4`, `e832eb5` (8.9), `9086a5b` (8.10) |
-| 9.1, 9.2, 9.3 | Done, in one commit, "Steps 9.1, 9.2 and 9.3" | that commit |
-| 9.4 Skills and docs for APIs | To do | |
+| 9.1, 9.2, 9.3 | Done, in one commit | `c853677` |
+| 9.4 Skills and docs for APIs | Done | the commit "Step 9.4" |
 | 9.5 SQL is opened before the environment | To do | |
 | 9.6 A lighter command | To do | |
 | 10.1 to 10.3 | To do; 10.3 is **(work)** | |
 | 11.1 to 11.7 | To do | |
 | 12.1 to 12.9 | To do | |
 
-Phases 6 to 8 first reached GitHub's CI on 2026-11-11; what it found is fixed in commits of their own, named "CI: ...".
+Phases 6 to 8 first reached GitHub's CI on 2026-11-11; what it found is fixed in commits of their own: `c504f54`
+(HiGHS 1.16's banner on stdout broke optim's JSON) and `73889f6` (core named optim).
 
 The review read the source of all four packages (about 29,000 lines) and a sample of their tests, ran the unit tests
 and coverage, drove the `basis` command in generated job and API repos as an agent would, and probed the pure parts
@@ -651,6 +652,7 @@ Each has a recommendation, and none blocks a phase before the step named.
 | How does a query filter a zoned datetime: binds in the column's zone, or documentation alone? | Binds in the zone | 7.3 |
 | Server-sent events or WebSockets for live updates? | Server-sent events, with basis-ui's agreement | 12.1 |
 | Is basis itself held to a coverage floor? | 85%, in CI | 6.1 |
+| Where does a grid's row model, with its `api.format`, live? (taken in 9.4) | In `handlers.py`, beside its handler; a repository that reads it with `fetch_table` takes the model as an argument, so no layer changes | 9.4 |
 
 ## Considered, and not recommended
 

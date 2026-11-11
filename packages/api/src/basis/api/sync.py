@@ -1,4 +1,5 @@
-"""What an API repo carries from the installed basis-api: its block in `AGENTS.md`, its line of the Dockerfile, the
+"""What an API repo carries from the installed basis-api: its block in `AGENTS.md`, the `api-*` skills in
+`.agents/skills/` and `.claude/skills/`, its line of the Dockerfile, the
 command that serves the API from the repo's image, and its `openapi.json`, which basis-api makes from the repo's
 service. `basis sync` writes them with basis's own files, and `basis check` checks them, so a route that changes
 without its document fails the commit hook until `basis sync` writes it again."""
@@ -8,6 +9,7 @@ from pathlib import Path
 
 from basis.api.service import load
 from basis.api.version import VERSION
+from basis.core import sync as core_sync
 from basis.core.errors import BasisError
 from basis.core.sync import AgentFiles, SyncError
 from basis.core.tools import Tools
@@ -25,7 +27,7 @@ log = logging.getLogger(__name__)
 
 def agent_files() -> AgentFiles:
     block = (_PACKAGE / "templates" / "agents.md").read_text(encoding="utf-8").replace("{version}", VERSION)
-    return AgentFiles("basis-api", block, {}, image=IMAGE, made={DOCUMENT: document}, tools=TOOLS)
+    return AgentFiles("basis-api", block, core_sync.skills(_PACKAGE / "skills"), image=IMAGE, made={DOCUMENT: document}, tools=TOOLS)
 
 
 TOOLS = Tools(testpaths=("tests", "*/tests"))
