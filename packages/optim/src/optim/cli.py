@@ -43,7 +43,7 @@ from basis.core.errors import BasisError, deliberate
 from basis.core.publish import refused_overlap
 from basis.core.snapshots import PublishRecord
 from basis.core.storage import Root
-from basis.core.verbs import Part, Runs, Shared, Verb, fail
+from basis.core.verbs import Difference, Part, Regress, Regressed, Regressions, Runs, Shared, Verb, fail
 from optim import models, new, research, snapshots, sync
 from optim.context import open_context, open_orders, orders_settings
 from optim.contract import LISTING, declared
@@ -89,6 +89,7 @@ class DdlArgs:
     model: str | None
     ledger: str | None
     dialect: Dialect
+    env: str | None = None
 
 
 @dataclass(frozen=True)
@@ -109,6 +110,7 @@ class SweepArgs:
     variants: Path
     out: Path | None
     workers: int
+    env: str | None = None
 
 
 @dataclass(frozen=True)
@@ -127,6 +129,7 @@ class RegressArgs:
 class WarmArgs:
     models: tuple[str, ...]
     as_of: date | None
+    env: str | None = None
 
 
 @dataclass(frozen=True)
@@ -158,6 +161,7 @@ def part() -> Part:
             replay=Shared("decide a saved run again with today's code, and other params if given; reads only the run", _optim(_replay_from), _replay_arguments),
             regress=Shared("replay a model's recent runs with today's code, and list every trade that changed", _optim(_regress_from), _regress_arguments),
             ddl=Shared("print the CREATE TABLE for the orders table the settings name, or for the ledger", _ddl_from, _ddl_arguments),
+            regressions=_regressions,
         ),
         renamed=refuse_renamed,
     )
@@ -283,10 +287,11 @@ def _resume(args: ResumeArgs) -> int:
 def _ddl_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--ledger", metavar="TABLE", help="print the ledger's CREATE TABLE instead, for TABLE, as BASIS_DATABASES__NAME__WRITE__LEDGER names it")
     parser.add_argument("--dialect", choices=["mssql", "oracle"], required=True)
+    command.environment_argument(parser)
 
 
 def _ddl_from(n: argparse.Namespace) -> int:
-    return _ddl(DdlArgs(n.name, n.ledger, "mssql" if n.dialect == "mssql" else "oracle"))
+    return _ddl(DdlArgs(n.name, n.ledger, "mssql" if n.dialect == "mssql" else "oracle", n.env))
 
 
 def _ddl(args: DdlArgs) -> int:
@@ -301,7 +306,7 @@ def _ddl(args: DdlArgs) -> int:
     listed = models.installed()
     if args.model not in listed and args.model not in listed.values():
         return fail(f"no model {args.model!r} is an entry point in {models.GROUP}", f"give one of {sorted(listed)}, or its module path")
-    configured = orders_settings(Settings())
+    configured = orders_settings(environments.load(args.env, Settings).settings)
     sys.stdout.write(create_table(Table(configured.database, configured.table), args.dialect))
     return 0
 
@@ -329,6 +334,7 @@ def _sweep_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("run", metavar="RUN", help="a run's id under BASIS_SNAPSHOT_ROOT, or the path or URL of its manifest")
     parser.add_argument("variants", metavar="VARIANTS", type=command.existing_folder, help="a folder of params JSON files, one per variant")
     _tabled(parser)
+    command.environment_argument(parser)
 
 
 def _tabled(parser: argparse.ArgumentParser) -> None:
@@ -338,14 +344,14 @@ def _tabled(parser: argparse.ArgumentParser) -> None:
 
 
 def _sweep_from(n: argparse.Namespace) -> int:
-    return _sweep(SweepArgs(n.run, n.variants, n.out, n.workers))
+    return _sweep(SweepArgs(n.run, n.variants, n.out, n.workers, n.env))
 
 
 def _sweep(args: SweepArgs) -> int:
-    """Reads a run alone, and writes only the table."""
+    """Reads a run alone, and writes only the table: a run by its id, from the store of the environment `--env` names."""
     if not (variants := sorted(args.variants.glob("*.json"))):
         return fail(f"{args.variants} has no params files (*.json) to sweep", "add one per variant, such as a copy of the model's params/default.json with a value changed")
-    _write(research.sweep(read_snapshot(_snapshot(args.run, None, Settings())), variants, workers=args.workers), args.out)
+    _write(research.sweep(read_snapshot(_snapshot(args.run, None, lambda: environments.load(args.env, Settings).settings)), variants, workers=args.workers), args.out)
     return 0
 
 
@@ -382,6 +388,33 @@ def _regress(args: RegressArgs) -> int:
     return 0
 
 
+def _regressions(args: Regress) -> Regressions:
+    """What `basis check --full` replays: each model's recent runs, as `basis regress` replays them, from the store
+    `args` names or the environment's, each change a `Difference`. A model that fails to load or replay is a failure of
+    its own, and the rest still replay."""
+    store = Root.at(args.snapshots) if args.snapshots is not None else environments.load(None, Settings).settings.snapshots()
+    replayed: list[Regressed] = []
+    failures: list[Exception] = []
+    for name in [args.name] if args.name is not None else sorted(models.installed()):
+        try:
+            runs = research.replayed(_model(name), store, last=args.last, labels=args.labels)
+        except Exception as error:  # noqa: BLE001 -- each model's failure is its own line, and the other models still replay
+            error.add_note(f"while regressing {name}")
+            failures.append(error)
+            continue
+        replayed += [Regressed(name, run_id, (), tuple(_difference(row) for row in rows)) for run_id, rows in runs]
+    return Regressions(tuple(replayed), tuple(failures))
+
+
+def _difference(row: Mapping[str, object]) -> Difference:
+    """One row of `regress`'s table as `basis review` lists it: a trade that changed, or a portfolio's status."""
+    detail = {key: value for key, value in row.items() if key in research.CHANGES}
+    if "security_id" not in row:
+        return Difference("decisions", f"{row['portfolio_id']}: {row['status_before']} is now {row['status_after']}", detail)
+    before, after = (f"{value:,.2f}" if isinstance(value, float) else "nothing" for value in (row.get("before"), row.get("after")))
+    return Difference("orders", f"{row['portfolio_id']}: {row['side']} {row['security_id']} {before} is now {after}", detail)
+
+
 def _describe_from(n: argparse.Namespace) -> int:
     sys.stdout.write(json.dumps(research.describe(_model(n.name)), indent=2) + "\n")
     return 0
@@ -390,14 +423,15 @@ def _describe_from(n: argparse.Namespace) -> int:
 def _warm_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("models", metavar="MODEL", nargs="+", help="the models' names, or module paths")
     parser.add_argument("--as-of", type=date.fromisoformat, help="the business date (default: today in New York)")
+    command.environment_argument(parser)
 
 
 def _warm_from(n: argparse.Namespace) -> int:
-    return _warm(WarmArgs(tuple(n.models), n.as_of))
+    return _warm(WarmArgs(tuple(n.models), n.as_of, n.env))
 
 
 def _warm(args: WarmArgs) -> int:
-    settings = Settings()
+    settings = environments.load(args.env, Settings).settings
     if settings.optim.cache_root is None:
         return fail("warm fills the cache, and no cache is configured", "set BASIS_OPTIM__CACHE_ROOT, as .env.example shows")
     read_whole = (dataset for name in args.models for attribute, dataset in declared(_model(name).data).items() if attribute == LISTING or not dataset.per_portfolio)
@@ -431,11 +465,16 @@ def _model(name: str) -> models.LoadedModel:
         return models.load(name)
 
 
-def _snapshot(run: str, model: str | None, settings: Settings) -> Saved:
-    """A run by the path or URL of its manifest, or by its id under the `BASIS_SNAPSHOT_ROOT` of `settings`: a run of
-    `model`, where it is given."""
-    with deliberate(LookupError):  # no such run, or a manifest that is not optim's
-        saved = snapshots.read(Root.at(run)) if "/" in run or "\\" in run else snapshots.find([settings.snapshots()], run)
+def _snapshot(run: str, model: str | None, settings: Settings | Callable[[], Settings]) -> Saved:
+    """A run by the path or URL of its manifest, or by its id under the `BASIS_SNAPSHOT_ROOT` of `settings`, read only
+    then where it is a function that reads them: a run of `model`, where it is given."""
+    if "/" in run or "\\" in run:
+        with deliberate(LookupError):  # a manifest that is not optim's
+            saved = snapshots.read(Root.at(run))
+    else:
+        store = (settings if isinstance(settings, Settings) else settings()).snapshots()
+        with deliberate(LookupError):  # no such run
+            saved = snapshots.find([store], run)
     if model is not None and model != saved.info.model.name and models.installed().get(model, model) not in {saved.info.model.name, saved.info.model.module}:
         msg = f"run {saved.info.run_id} is a run of {saved.info.model.name}, not {model}: give {saved.info.model.name}, or leave the model out"
         raise BasisError(msg)

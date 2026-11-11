@@ -317,7 +317,21 @@ def test_ddl_refuses_a_model_the_environment_does_not_list(basis: Basis, monkeyp
 
 
 @pytest.mark.usefixtures("listed")
-def test_ddl_without_an_orders_table_names_the_settings_to_set(basis: Basis, capsys: pytest.CaptureFixture[str]) -> None:
+def test_ddl_reads_the_orders_table_from_the_environment_it_names(basis: Basis, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """prod's file names prod's table, and the process's environment, dev's, another."""
+    for name, value in TRADING.items():
+        monkeypatch.setenv(name, value)
+    (folder := tmp_path / "config" / "basis").mkdir(parents=True)
+    (folder / "prod.env").write_text("".join(f"{name}={value}\n" for name, value in (TRADING | {"BASIS_OPTIM__ORDERS__TABLE": "books.orders"}).items()))
+    monkeypatch.delenv("BASIS_ENV")
+
+    assert basis("ddl", "ghost", "--dialect", "mssql", "--env", "prod") == 0
+    assert capsys.readouterr().out.startswith("CREATE TABLE books.orders (")
+
+
+@pytest.mark.usefixtures("listed")
+def test_ddl_without_an_orders_table_names_the_settings_to_set(basis: Basis, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", "snapshots")
     assert basis("ddl", "ghost", "--dialect", "mssql") == 1
     assert error_line(capsys).startswith("ERROR: no orders table is configured, which publishing and `basis ddl MODEL` need: set BASIS_OPTIM__ORDERS__DATABASE")
 

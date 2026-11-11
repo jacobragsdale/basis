@@ -59,9 +59,16 @@ def regress(model: LoadedModel, snapshots: Root | str | Path, *, last: int = 20,
     the code you have now and each run's own params, and list every change: a portfolio whose acceptance changed, and
     every trade whose rounded quantity did, with `limit` true where either decision stopped at a time limit, which may stop elsewhere on
     another machine. `labels` keeps only the runs labelled so, such as `purpose=production`."""
-    rows: list[dict[str, object]] = []
+    rows = [row for _, changes in replayed(model, snapshots, last=last, labels=labels, workers=workers) for row in changes]
+    return pd.DataFrame(rows, columns=CHANGES)
+
+
+def replayed(model: LoadedModel, snapshots: Root | str | Path, *, last: int = 20, labels: dict[str, str] | None = None, workers: int = 1) -> list[tuple[str, list[dict[str, object]]]]:
+    """Each run `regress` replays, by its id, with its rows of `regress`'s table: none where nothing changed."""
+    found: list[tuple[str, list[dict[str, object]]]] = []
     store = snapshots if isinstance(snapshots, Root) else Root.at(snapshots)
     for run in _recent(model, store, last=last, labels=labels or {}):
+        rows: list[dict[str, object]] = []
         saved, before = read_snapshot(run), run.results()
         status = dict(zip(before["decisions"]["portfolio_id"], before["decisions"]["status"], strict=True))
         stops = dict(zip(before["decisions"]["portfolio_id"], before["decisions"]["stop"], strict=True))
@@ -75,7 +82,8 @@ def regress(model: LoadedModel, snapshots: Root | str | Path, *, last: int = 20,
             common["limit"] = stops[outcome.portfolio_id] == "limit" or (solver is not None and solver.stop == "limit")
             changed = _changed_trades(trades.get(outcome.portfolio_id, {}), outcome.decision)
             rows += [common | change for change in changed] if changed else [common] if was != now else []
-    return pd.DataFrame(rows, columns=CHANGES)
+        found.append((saved.info.run_id, rows))
+    return found
 
 
 def _recent(model: LoadedModel, snapshots: Root, *, last: int, labels: dict[str, str]) -> list[Saved]:
