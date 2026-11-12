@@ -6,3 +6,7 @@ extend = "../../../../../../pyproject.toml"
 known-first-party = ["basis.api.example"]
 known-third-party = ["basis"]
 split-on-trailing-comma = false
+
+[lint]
+# A generated repo's ruff selects PLR0913, which the workspace's ignores, and the example is copied into one.
+extend-select = ["PLR0913"]

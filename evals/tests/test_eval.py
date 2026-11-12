@@ -116,7 +116,8 @@ def test_errors_and_failed_tests_are_read_from_output() -> None:
 
 def test_a_trials_environment_leaves_out_this_session() -> None:
     found = repo.environment(Path("/scratch"), {"PATH": "/bin", "VIRTUAL_ENV": "/v", "CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "s", "GIT_DIR": "/g", "HOME": "/h"})
-    assert found == {"PATH": "/bin", "HOME": "/h", "TMPDIR": "/scratch"}
+    assert Path(found.pop("TMPDIR")) == Path("/scratch")  # as a path: Windows writes it with its own separator
+    assert found == {"PATH": "/bin", "HOME": "/h"}
 
 
 def _transcript() -> list[str]:
