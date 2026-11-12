@@ -101,3 +101,37 @@ def test_an_archive_to_a_flat_account_is_refused_at_the_rename_and_leaves_nothin
     assert "sig=" not in caplog.text
     assert "sig=" not in (archived.error or "")
     assert scratch.rows(f"SELECT run_id FROM {scratch.ledger()}") == []
+
+
+def test_a_copy_streams_a_sql_server_tables_rows_to_the_lake_and_reads_them_back_before_the_refused_rename(
+    container: tuple[str, pafs.FileSystem, str], scratch: Scratch, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Step 12.6: a copy's batches, written by pyarrow's Parquet writer to Azure's filesystem as they stream from the
+    driver, and read back with every row, before the rename a flat account refuses."""
+    name, _, emulator = container
+    table = f"trades_{scratch.suffix}"
+    scratch.execute(f"CREATE TABLE {table} (trade_id varchar(12) NOT NULL, price float NOT NULL)")
+    scratch.execute(f"INSERT INTO {table} SELECT TOP 2500 CONCAT('T', ROW_NUMBER() OVER (ORDER BY (SELECT NULL))), 1.5 FROM sys.all_columns a CROSS JOIN sys.all_columns b")
+    monkeypatch.setattr(lake, "FILE_ROWS", 1000)  # three files
+    sql = tmp_path / "trades.sql"
+    sql.write_text(f"SELECT trade_id, price FROM {table}", encoding="utf-8")
+
+    class Outputs(etl.Outputs):
+        trades = etl.LakeCopy(etl.Query(Trade, database="markets", sql=str(sql), empty="fail"), lake="history", table="trades", partition="date", ledger="warehouse")
+
+    def transform(inputs: etl.Inputs, params: etl.Params) -> Outputs:
+        del inputs, params
+        return Outputs()
+
+    job = Job("trades", "tests.trades", etl.Params, etl.Inputs, Outputs, transform, None, Path(__file__).parent)
+    history = {"account": ACCOUNT, "container": name, "auth": "key", "secret": KEY, "emulator": emulator}
+    settings = GivenSettings.model_validate({"databases": {"warehouse": scratch.settings, "markets": scratch.settings | {"isolation": "read_committed"}}, "lakes": {"history": history}})
+    (tmp_path / "params.json").write_text("{}", encoding="utf-8")
+    request = runs.Request(tmp_path / "params.json", etl.Interval.parse("2026-11-05..2026-11-06"), publish=True)
+    try:
+        result = runs.run(job, settings, request, snapshot_root=Root.at(tmp_path / "snapshots"))
+    finally:
+        scratch.drop(table)
+    copied = result.record.copied["trades"]
+    assert (result.record.status, copied.status) == ("partial", "failed"), result.record
+    assert "has no hierarchical namespace" in (copied.error or "")  # past the write and its read-back of 2,500 rows, which would have failed first

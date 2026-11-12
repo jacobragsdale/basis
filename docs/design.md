@@ -555,6 +555,17 @@ read back with the row count written. The job's database ledger records the arch
 interval, the path, the row count and the files' hashes, so a retry never archives twice, and `resume` and `--again`
 work as they do on a table. Deleting the archived rows from the source database is a later step, and an explicit one.
 
+**Tables that do not fit in memory.** Every dataset a job reads is one pandas frame, held to the database's
+`MAX_ROWS`, and that stands. A table too large for it, which a job archives to the lake, is a copy:
+`etl.LakeCopy(etl.Query(...), lake=, table=, partition=, ledger=)` on the job's `Outputs`, decided on 2026-11-11 for
+step 12.6 of [the plan](../PLAN.md) and open to the maintainer's review. Its query's rows stream from the driver in
+Arrow batches of 10,000, each conformed to the query's row as every frame a run reads is, and written to Parquet as
+it comes, at most a million rows to a file, so a run holds one batch, not the table; the partition is written,
+read back, recorded and renamed into place as an archive's is. A copy has no transform, and the run's snapshot saves
+none of its rows, so a replay copies nothing and a resume streams it again from the query, which may read rows that
+changed since. It is a kind of output after archives, made only by `--publish`, and it is not held to `MAX_ROWS`.
+Streaming a frame through a transform in batches waits until a job needs it.
+
 **Environments.** Every command that touches the firm's systems needs `--env dev|qa|prod`, or `BASIS_ENV`, and has no
 default, so no command reaches an environment nobody named. Each user keeps one file per environment, `basis/ENV.env` in
 their own configuration folder, beside `desktop.toml`, holding its hosts, paths and secrets, and every repo they work in

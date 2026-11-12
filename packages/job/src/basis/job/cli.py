@@ -30,6 +30,7 @@ from basis.core.verbs import Difference, Part, Regress, Regressed, Regressions, 
 from basis.job import api, backfill, ddl, docs, loader, new, qa, replays, runs, sync
 from basis.job import job as jobs
 from basis.job.diff import SAMPLE, OperationDiff
+from basis.job.outputs import LakeCopy
 
 log = logging.getLogger(__name__)
 
@@ -465,6 +466,10 @@ def describe(job: jobs.Job) -> dict[str, object]:
         "lakes": {
             name: {"lake": lake.lake, "table": lake.table, "partition": lake.partition, "ledger": lake.ledger, "columns": _columns(lake.row.columns)}
             for name, lake in job.outputs.declared_lakes().items()
+        },
+        "copies": {
+            name: {"source": copy.query.describe(), "lake": copy.lake, "table": copy.table, "partition": copy.partition, "ledger": copy.ledger, "columns": _columns(copy.row.columns)}
+            for name, copy in job.outputs.declared_of(LakeCopy).items()
         },
         "check": job.check is not None,
     }

@@ -37,7 +37,8 @@ step's own commit keeps it true.
 | 12.3 Files from a folder | Done: `etl.File(..., folder=, delimiter=, encoding=)`, its file name a pattern whose every match is read in name order; `basis.core.paths`, the pure rule a folder's path keeps. No real share verified it: [the pilot](docs/pilot.md#6-a-csv-dropped-on-a-share-123), **(work)** | the commit "Step 12.3" |
 | 12.4 Backfill | Done: `basis backfill JOB --from DAY --to DAY` (`basis.job.backfill`), one run per business day in order, stopping at the first failure; run again, it skips each done day and resumes a partial one, from the run store alone | the commit "Step 12.4" |
 | 12.5 Expectations of an output | Done: `Table(..., expect=)`, with `etl.RowCount` (a band around the median of the job's last published runs, from the run store), `etl.NullRate` and `etl.Total` (against an input's column), each a reason before any write (`basis.job.expectations`) | the commit "Step 12.5" |
-| 12.6, 12.7, 12.9 | To do | |
+| 12.6 Tables that do not fit in memory | Done: `etl.LakeCopy(etl.Query(...), lake=...)`, a kind of output after archives that streams a query's Arrow batches (`Reader.batches`, each dialect's and the fake's) to Parquet files (`lake.Streamed`), each batch conformed to the row, with no frame of the table and no transform | the commit "Step 12.6" |
+| 12.7, 12.9 | To do | |
 
 Phases 6 to 8 first reached GitHub's CI on 2026-11-11; what it found is fixed in commits of their own, named
 "CI: ...": `c504f54` (HiGHS 1.16's banner on stdout broke optim's JSON), `73889f6` (core named optim), and the
@@ -681,7 +682,7 @@ Each has a recommendation, and none blocks a phase before the step named.
 | What does a stream send, and when does it end? (taken in 12.1) | The whole model when it changes, no event ids; a heartbeat after 15 s; its end, with the reason, at the token's expiry, after 300 s, or at a drain. Identity is checked once, at connect | 12.1 |
 | Is basis itself held to a coverage floor? | 85%, in CI | 6.1 |
 | Where does a grid's row model, with its `api.format`, live? (taken in 9.4) | In `handlers.py`, beside its handler; a repository that reads it with `fetch_table` takes the model as an argument, so no layer changes | 9.4 |
-| Where in its order does a resume stop when a kind of output fails? (taken in 11.1) | Where a run does: workbooks, upserts, archives, then messages, each kind only once every kind before it was made whole | 11.1 |
+| Where in its order does a resume stop when a kind of output fails? (taken in 11.1) | Where a run does: workbooks, upserts, archives, copies (12.6), then messages, each kind only once every kind before it was made whole | 11.1 |
 | How does `basis doctor` check a Slack channel and an email relay without sending anything? (taken in 11.2) | A HEAD of the webhook's host, never its path; the relay's greeting and login, then QUIT. Parts keep their own declarations and openers, and a database stays doctor's and the QA tier's own, with its two logins | 11.2 |
 | Does `basis upgrade` rewrite a repo's uses of a renamed name? (left open in 11.6) | Not yet: no release has renamed anything, so there is no codemod to run. The first rename adds one to `basis upgrade`, beside the `RENAMED` entry that refuses the old name for that release | 11.6 |
 

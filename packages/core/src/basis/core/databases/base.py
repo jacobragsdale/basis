@@ -79,6 +79,11 @@ class Reader(Protocol):
         where it names it."""
         ...
 
+    def batches(self, sql: str, interval: Interval | None, *, what: str) -> Iterator[pa.RecordBatch]:
+        """The rows a query returns, as Arrow batches of at most `FETCH_ROWS`, each as the driver gives it, read as
+        they are consumed, with no limit on the rows: a copy's, which holds one batch at a time."""
+        ...
+
     def describe(self, table: str) -> TableSpec | None:
         """The table as the database describes it, or None if it does not exist."""
         ...

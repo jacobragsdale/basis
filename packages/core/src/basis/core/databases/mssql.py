@@ -366,6 +366,19 @@ class MssqlReader:
             traced.set_attribute("db.response.returned_rows", rows)
             return frames.from_arrow(frames.floats(pa.Table.from_batches(batches, schema=reader.schema), what=what))
 
+    def batches(self, sql: str, interval: Interval | None, *, what: str) -> Iterator[pa.RecordBatch]:
+        binds = binds_named(sql, MSSQL, interval, what=what)
+        with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql) as traced:
+            if binds:
+                cursor.execute(sql, binds)
+            else:
+                cursor.execute(sql)
+            rows = 0
+            for batch in cursor.arrow_reader(batch_size=FETCH_ROWS):
+                rows += batch.num_rows
+                yield batch
+            traced.set_attribute("db.response.returned_rows", rows)
+
     def describe(self, table: str) -> TableSpec | None:
         with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, _DESCRIBE):
             cursor.execute(_DESCRIBE, {"table": table})

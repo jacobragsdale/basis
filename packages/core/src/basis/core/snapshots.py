@@ -148,6 +148,18 @@ class ArchiveRecord(Model):
     rows: int
 
 
+class CopyRecord(Model):
+    """A query's rows a run planned to copy to a lake, streamed with no frame: the query, where, and the ledger."""
+
+    database: str
+    sql: str
+    """The query's file, as the job declares it."""
+    lake: str
+    table: str
+    partition: str
+    ledger: str
+
+
 class ArchivedFile(Model):
     """One Parquet file of an archived partition: its name, its SHA-256 and its rows, as read back."""
 
@@ -218,6 +230,10 @@ class RunRecord(Model):
     """Each lake archive the run planned, by its output's name: only `--publish` archives."""
     archived: dict[str, ArchivedRecord] = Field(default_factory=dict)
     """What became of each archive, by its output's name."""
+    copies: dict[str, CopyRecord] = Field(default_factory=dict)
+    """Each copy of a query's rows to a lake the run planned, by its output's name: only `--publish` copies."""
+    copied: dict[str, ArchivedRecord] = Field(default_factory=dict)
+    """What became of each copy, as an archive's."""
     clocks: dict[str, list[AwareDatetime]] = Field(default_factory=dict)
     """Each time each clock the run declares gave, by its name, in order, which a replay of the run is given again."""
     ids: dict[str, list[UUID]] = Field(default_factory=dict)

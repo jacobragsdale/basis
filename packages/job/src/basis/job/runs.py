@@ -58,7 +58,7 @@ from basis.job.handles import Kept
 from basis.job.inputs import Clock, Fetch, Mongo, sql_problems
 from basis.job.job import Job, JobError, repo_root
 from basis.job.loader import MongoOpener, Reach, load
-from basis.job.outputs import Lake, Message, Target
+from basis.job.outputs import Lake, LakeCopy, Message, Target
 from basis.job.params import Params
 from basis.job.version import VERSION
 
@@ -121,7 +121,8 @@ def targets_of(job: Job) -> dict[str, Target]:
 def open_sql(job: Job) -> None:
     """Refuse a job whose query files are missing or bind a name but the interval's, before anything reads settings
     or data: a run on its fixture reads no query, and would pass without one."""
-    if problems := sql_problems(job.inputs):
+    copied = [problem for copy in job.outputs.declared_of(LakeCopy).values() for problem in copy.query.problems()]
+    if problems := [*sql_problems(job.inputs), *copied]:
         raise BasisError("; ".join(problems))
 
 

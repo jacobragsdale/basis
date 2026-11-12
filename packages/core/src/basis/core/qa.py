@@ -29,13 +29,14 @@ writing, a table `writes` does not list, and refuse statements of a part's own t
 which tables those write cannot be told. A connection string's login can still reach another database by a
 three-part name in a query, which no check of its settings can see: give QA's logins access to QA alone."""
 
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated
 
 import pandas as pd
+import pyarrow as pa
 from pydantic import ConfigDict, Field, ValidationError
 
 from basis.core import environments, invalid, kinds
@@ -333,6 +334,9 @@ class _GuardedWriter:
 
     def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pd.DataFrame:
         return self.writer.fetch(sql, interval, what=what)
+
+    def batches(self, sql: str, interval: Interval | None, *, what: str) -> Iterator[pa.RecordBatch]:
+        return self.writer.batches(sql, interval, what=what)
 
     def describe(self, table: str) -> TableSpec | None:
         return self.writer.describe(table)

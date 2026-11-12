@@ -286,6 +286,19 @@ recorded if it holds the rows the run would write, and refused otherwise. The ac
 namespace on, which makes the rename atomic: a flat account's rename is refused, and nothing is archived. basis never
 creates the container.
 
+### `etl.LakeCopy(query, *, lake, table, partition, ledger)`
+
+A query's rows, copied to the lake as `etl.Lake` archives a frame, for a table too large for a run's memory: `query`
+is an `etl.Query`, declared in the copy, as `etl.LakeCopy(etl.Query(Trade, database="markets",
+sql="sql/trades.sql", empty="fail"), lake="history", table="trades", partition="date", ledger="warehouse")`. The
+transform gives a copy no value, and the run reads nothing for it until it copies: only `basis run --publish` copies,
+after the archives and before the messages, streaming the query's rows from the driver in batches of 10,000, each
+conformed to the row and written to Parquet as it comes, at most a million rows to a file, so the run holds one batch
+at a time, and the database's `MAX_ROWS` does not apply. The partition is then read back, recorded in the ledger and
+renamed into place, as an archive's is, and `--again` and a rerun's `skipped` work as they do there. A query that
+returns no rows fails the copy where `empty="fail"`. The run's snapshot saves none of its rows, so a replay copies
+nothing, and `basis resume` streams it again from the query, which reads the rows as they are then.
+
 ### `etl.Changes(delete=None, upsert=None, insert_new=None, insert=None)`
 
 What a `Manual()` table's transform returns. `delete` is an `etl.Delete(within=None, matching=None)`: rows in

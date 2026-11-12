@@ -13,7 +13,7 @@ waits as its `waits` do, which take no time, so a GET made again until its deadl
 import json
 import smtplib
 import threading
-from collections.abc import Awaitable, Callable, Generator, Hashable, Mapping, MutableMapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Hashable, Iterator, Mapping, MutableMapping, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
@@ -26,7 +26,8 @@ import httpx2
 import pandas as pd
 import pyarrow as pa
 
-from basis.core.databases.base import LEDGER_COLUMNS, Bind, Counts, LedgerEntry, Statements, check_count, for_writing, naive_in_zone, rows_of
+from basis.core import frames
+from basis.core.databases.base import FETCH_ROWS, LEDGER_COLUMNS, Bind, Counts, LedgerEntry, Statements, check_count, for_writing, naive_in_zone, rows_of
 from basis.core.databases.failures import failure
 from basis.core.ddl import ORACLE_VARCHAR_LIMIT
 from basis.core.destination import DestColumn, Dialect, TableSpec, Unit
@@ -416,6 +417,8 @@ class Database:
         self.entries: list[LedgerEntry] = []
         """The ledger, as committed."""
         self.answers: dict[str, pd.DataFrame | Callable[[Mapping[str, Bind]], pd.DataFrame]] = {}
+        self.batch_rows = FETCH_ROWS
+        """The most rows of each batch a copy streams, as a driver's fetch gives them: a test makes it small."""
         """What each query returns, by its SQL: its rows, or a function of what it binds that gives them."""
         self._failing = Failures[Operation]("a fake database", DATABASE_KINDS)
         self._lock = threading.Lock()
@@ -493,6 +496,11 @@ class _DatabaseReader:
     def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pd.DataFrame:
         self.database.fail("fetch")
         return self.database.answer(sql, interval.binds() if interval is not None else {}, what=f"{what}'s query")
+
+    def batches(self, sql: str, interval: Interval | None, *, what: str) -> Iterator[pa.RecordBatch]:
+        self.database.fail("fetch")
+        answer = self.database.answer(sql, interval.binds() if interval is not None else {}, what=f"{what}'s query")
+        yield from frames.to_arrow(answer).to_batches(max_chunksize=self.database.batch_rows)
 
     def describe(self, table: str) -> TableSpec | None:
         self.database.fail("describe")

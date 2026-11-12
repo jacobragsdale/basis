@@ -28,6 +28,7 @@ from basis.core import messages
 from basis.core.interval import Interval
 from basis.core.messages import Destination, EmailResource, Mail, SlackResource
 from basis.core.tables import IDENTIFIER, Changes, Column
+from basis.job.inputs import Query
 from basis.job.rows import Row
 
 TABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,127}(\.[A-Za-z_][A-Za-z0-9_$]{0,127})?$")
@@ -128,6 +129,9 @@ class Named:
 class Effect(Named):
     """An output that is not a table: one a run makes only once every database has committed, as `basis.job.effects`
     gives each kind. Its value is checked when the transform's `Outputs` is made."""
+
+    given: ClassVar[bool] = True
+    """Whether the transform gives it a value; a copy, which basis makes from its query alone, has none."""
 
     def checked(self, value: object) -> object:
         """The value the transform gave it, refused where it is not of its kind."""
@@ -502,6 +506,45 @@ class Lake(FrameEffect):
         return f"{self.lake}: {self.table}/ by {self.partition}"
 
 
+class LakeCopy(Effect):
+    """A query's rows, copied to an Azure Data Lake container as Parquet with no frame and no transform, for a table
+    too large for a run's memory: the database's rows stream in batches from its driver, each conformed to the query's
+    row and written as it comes, as the run's interval's partition of the folder `table`, as `etl.Lake` writes one,
+    recorded in `ledger`'s database. Only `basis run --publish` copies, once every database has committed, and a
+    resume streams it again from the query. The transform gives it no value, and the run's snapshot saves none of its
+    rows, so a replay copies nothing."""
+
+    noun = "a copy"
+    given = False
+
+    def __init__(self, query: Query, *, lake: str, table: str, partition: Literal["date", "interval"], ledger: str) -> None:
+        if not isinstance(query, Query):
+            msg = "a copy is of an etl.Query, as etl.LakeCopy(etl.Query(Trade, database='markets', sql='sql/trades.sql', empty='fail'), ...)"
+            raise TypeError(msg)
+        archive = Lake(query.row, lake=lake, table=table, partition=partition, ledger=ledger)  # the same rules as an archive's
+        self.query = query
+        self.row = query.row
+        self.lake = archive.lake
+        self.table = archive.table
+        self.partition: Literal["date", "interval"] = archive.partition
+        self.ledger = archive.ledger
+
+    @override
+    def __set_name__(self, owner: type, name: str) -> None:
+        super().__set_name__(owner, name)
+        self.query.__set_name__(owner, name)  # its query is named as the output is, in what it says of its file
+
+    @override
+    def checked(self, value: object) -> None:
+        if value is not None:
+            msg = f"{self.name} is a copy, which basis makes from its query, so the transform gives it nothing"
+            raise TypeError(msg)
+
+    @override
+    def describe(self) -> str:
+        return f"{self.query.database}: {self.query.sql} to {self.lake}: {self.table}/ by {self.partition}"
+
+
 MAX_SHEET = 31
 """The longest sheet name Excel takes."""
 
@@ -516,7 +559,7 @@ class Outputs:
     `Outputs(positions=frame, alert=None)`."""
 
     def __init__(self, **values: OutputValue) -> None:
-        declared, effects = self.declared(), self.declared_of(Effect)
+        declared, effects = self.declared(), {name: effect for name, effect in self.declared_of(Effect).items() if effect.given}
         every = set(declared) | set(effects)
         if missing := sorted(every - set(values)):
             msg = f"{type(self).__qualname__} is missing outputs {missing}: give every output it declares, None for a message it does not send"

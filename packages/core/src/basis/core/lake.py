@@ -28,7 +28,7 @@ import json
 import logging
 import re
 import uuid
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
@@ -126,7 +126,7 @@ Archiving = ledgered.Run
 """What a part's run says of the archive it writes: its interval is the partition's, so it has one."""
 
 
-def archive(archiving: Archiving, output: str, rows: pa.Table, store: Lake, database: Database, *, table: str, path: str) -> ArchivedRecord:
+def archive(archiving: Archiving, output: str, rows: pa.Table | Streamed, store: Lake, database: Database, *, table: str, path: str) -> ArchivedRecord:
     """Archive `rows`, the run's output `output`, as the partition `path` of the lake's `table`, recording it in
     `database`'s ledger (`basis.core.ledgered`), as the module's docstring says, and what became of it."""
     if (interval := archiving.interval) is None:
@@ -146,10 +146,11 @@ def archive(archiving: Archiving, output: str, rows: pa.Table, store: Lake, data
             written, settled = _settled(store, final, _write(store, f"{temporary}/{path}", rows), again=archiving.again)
         files.extend(written)
         settle.append(settled)
-        detail = {"path": store.where(final), "rows": rows.num_rows, "files": [file.model_dump() for file in files]}
+        counted = sum(file.rows for file in files)
+        detail = {"path": store.where(final), "rows": counted, "files": [file.model_dump() for file in files]}
         return LedgerEntry(
             archiving.run_id, archiving.job, output, f"lake:{store.name}:{table}", interval, rerun_safe=False,
-            counts=Counts(inserted=rows.num_rows), published_at=archiving.clock(), version=archiving.version, detail=json.dumps(detail),
+            counts=Counts(inserted=counted), published_at=archiving.clock(), version=archiving.version, detail=json.dumps(detail),
         )  # fmt: skip
 
     def make() -> None:
@@ -176,10 +177,12 @@ def archive(archiving: Archiving, output: str, rows: pa.Table, store: Lake, data
         case "skipped", reason:
             return ArchivedRecord(status="skipped", at=archiving.clock(), path=store.where(final), reason=reason)
         case "already", _:
-            return ArchivedRecord(status="archived", at=archiving.clock(), path=store.where(final), rows=rows.num_rows, reason="archived by this run already")
+            known = rows.num_rows if isinstance(rows, pa.Table) else 0  # a stream is not read again to count it: the ledger has its rows
+            return ArchivedRecord(status="archived", at=archiving.clock(), path=store.where(final), rows=known, reason="archived by this run already")
         case _:
-            log.info("archived %s to %s", output, store.where(final), extra={"output": output, "rows": rows.num_rows, "files": len(files)})
-            return ArchivedRecord(status="archived", at=archiving.clock(), path=store.where(final), rows=rows.num_rows, files=files)
+            counted = sum(file.rows for file in files)
+            log.info("archived %s to %s", output, store.where(final), extra={"output": output, "rows": counted, "files": len(files)})
+            return ArchivedRecord(status="archived", at=archiving.clock(), path=store.where(final), rows=counted, files=files)
 
 
 def check(store: Lake, *, rename: bool) -> str:
@@ -207,18 +210,57 @@ def _container(store: Lake) -> None:
         raise LakeError(msg)
 
 
-def _write(store: Lake, directory: str, rows: pa.Table) -> list[ArchivedFile]:
-    """Write `rows` as the files of the partition `directory`, at most `FILE_ROWS` to a file, and read each back."""
+def _write(store: Lake, directory: str, rows: pa.Table | Streamed) -> list[ArchivedFile]:
+    """Write `rows` as the files of the partition `directory`, at most `FILE_ROWS` to a file, and read each back: a
+    table, sliced, or a stream of batches, each written as it comes, so no more than one is held at once."""
     store.fs.delete_dir_contents(directory, missing_dir_ok=True)  # a leftover of an earlier attempt of this run
     store.fs.create_dir(directory, recursive=True)
-    count = max(1, -(-rows.num_rows // FILE_ROWS))
-    for index in range(count):
-        pq.write_table(rows.slice(index * FILE_ROWS, FILE_ROWS), f"{directory}/part-{index}.parquet", filesystem=store.fs)
+    if isinstance(rows, pa.Table):
+        written = rows.num_rows
+        count = max(1, -(-rows.num_rows // FILE_ROWS))
+        for index in range(count):
+            pq.write_table(rows.slice(index * FILE_ROWS, FILE_ROWS), f"{directory}/part-{index}.parquet", filesystem=store.fs)
+    else:
+        written = _stream(store, directory, rows)
     files = _read_back(store, directory)
-    if (found := sum(file.rows for file in files)) != rows.num_rows:
-        msg = f"the archive at {store.where(directory)} reads back {found} rows, and {rows.num_rows} were written: run it again, and report it if it does the same"
+    if (found := sum(file.rows for file in files)) != written:
+        msg = f"the archive at {store.where(directory)} reads back {found} rows, and {written} were written: run it again, and report it if it does the same"
         raise LakeError(msg)
     return files
+
+
+@dataclass(frozen=True)
+class Streamed:
+    """Rows that arrive as batches, as a copy streams them from a database, of one schema, which an empty stream
+    still writes one file of."""
+
+    schema: pa.Schema
+    batches: Iterable[pa.RecordBatch]
+
+
+def _stream(store: Lake, directory: str, rows: Streamed) -> int:
+    """Write the stream's batches as files of at most `FILE_ROWS` rows each, a new file once one is full: the rows."""
+    index, in_file, total = 0, 0, 0
+    writer: pq.ParquetWriter | None = None
+    try:
+        for batch in rows.batches:
+            offset = 0
+            while offset < batch.num_rows:
+                if writer is None:
+                    writer = pq.ParquetWriter(f"{directory}/part-{index}.parquet", rows.schema, filesystem=store.fs)
+                taken = batch.slice(offset, FILE_ROWS - in_file)
+                writer.write_batch(taken)
+                count = int(taken.num_rows)
+                offset, in_file, total = offset + count, in_file + count, total + count
+                if in_file == FILE_ROWS:
+                    writer.close()
+                    writer, in_file, index = None, 0, index + 1
+        if writer is None and total == 0:
+            pq.write_table(rows.schema.empty_table(), f"{directory}/part-0.parquet", filesystem=store.fs)
+    finally:
+        if writer is not None:
+            writer.close()
+    return total
 
 
 def _read_back(store: Lake, directory: str) -> list[ArchivedFile]:

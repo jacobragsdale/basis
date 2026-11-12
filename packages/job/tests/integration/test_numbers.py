@@ -12,11 +12,13 @@ from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
 import pytest
 from integration.scratch import Scratch, run
 
 import basis.job as etl
-from basis.core.databases import open_database
+from basis.core import frames
+from basis.core.databases import mssql, open_database, oracle
 from basis.core.frames import NumberError
 from basis.core.settings import GivenSettings
 from basis.job.job import Job
@@ -179,3 +181,21 @@ def test_a_fraction_an_integer_column_would_drop_is_refused_in_sql_server(priced
     else:
         assert result.record.status == "published", result.record
         assert scratch.rows(f"SELECT whole FROM {table}") == [(3,)]
+
+
+def test_a_copys_batches_stream_the_rows_a_fetch_reads_in_batches_of_fetch_rows(numbers: tuple[Scratch, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    """A copy (step 12.6) streams a query's rows batch by batch; each dialect's batches hold what its fetch reads."""
+    scratch, table = numbers
+    for module in (mssql, oracle):
+        monkeypatch.setattr(module, "FETCH_ROWS", 400)  # 1,500 rows in four batches
+    scratch.execute(f"CREATE TABLE {table} (id {'int' if scratch.dialect == 'mssql' else 'NUMBER(10)'} NOT NULL, d {'decimal(18,2)' if scratch.dialect == 'mssql' else 'NUMBER(18,2)'})")
+    insert(scratch, table, ["id", "d"], [(index, value) for index, value in enumerate(SAMPLE[:1500])])
+    sql = f"SELECT id, d FROM {table} ORDER BY id"
+    with open_database(GivenSettings(databases={"source": scratch.settings | {"isolation": "read_committed", "max_rows": 10_000}}), "source").reading() as reader:
+        fetched = reader.fetch(sql, None, what="the numbers")
+        batches = list(reader.batches(sql, None, what="the numbers"))
+    assert sum(batch.num_rows for batch in batches) == 1500
+    assert len(batches) >= 4
+    assert all(batch.num_rows <= 400 for batch in batches)
+    streamed = frames.from_arrow(frames.floats(pa.Table.from_batches(batches), what="the numbers"))
+    assert streamed.equals(fetched)

@@ -1,20 +1,21 @@
 """What a run makes of each output that is not a table, once every database has committed: a workbook, an upsert, an
-archive or a message. Each kind is one `Kind`, which checks that a run that publishes can make it, plans it from what
+archive, a copy or a message. Each kind is one `Kind`, which checks that a run that publishes can make it, plans it from what
 the transform gave, and makes what it planned, and `KINDS` holds them in the order a run makes them. `apply` is the
 one loop that `run` and `resume` share: each kind in that order, each output of it in name order, and a kind only
 once every kind before it was made whole, so a failure stops the kinds after it, and a resume goes on from there.
 
 A run's record keeps each kind's plan and what became of it under the record's own names for it (`reports` and
-`written`, `documents` and `upserted`, `archives` and `archived`, `messages` and `sent`), which this module reads and
+`written`, `documents` and `upserted`, `archives` and `archived`, `copies` and `copied`, `messages` and `sent`), which this module reads and
 writes through each kind's `planned` and `done`."""
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, ClassVar, override
 
 import pandas as pd
+import pyarrow as pa
 from opentelemetry.trace import Tracer
 
 from basis.core import fakes, folders, frames, lake, mongo, sending
@@ -23,9 +24,10 @@ from basis.core.interval import Interval
 from basis.core.messages import Mail, SlackResource, digest
 from basis.core.model import Model
 from basis.core.settings import Settings, SettingsError, publish_refusal, variable
-from basis.core.snapshots import ArchivedRecord, ArchiveRecord, DocumentsRecord, MessageRecord, ReportRecord, RunRecord, SendRecord, UpsertRecord, WrittenRecord
+from basis.core.snapshots import ArchivedRecord, ArchiveRecord, CopyRecord, DocumentsRecord, MessageRecord, ReportRecord, RunRecord, SendRecord, UpsertRecord, WrittenRecord
+from basis.job.inputs import Query
 from basis.job.loader import MongoOpener
-from basis.job.outputs import Effect, ExcelReport, Lake, Message, MongoUpsert, Outputs, Slack
+from basis.job.outputs import Effect, ExcelReport, Lake, LakeCopy, Message, MongoUpsert, Outputs, Slack
 from basis.job.rows import SchemaError, conform
 from basis.job.version import VERSION
 
@@ -244,6 +246,73 @@ class Archives(Kind[Lake, ArchiveRecord, ArchivedRecord]):
         return done
 
 
+class Copies(Kind[LakeCopy, CopyRecord, ArchivedRecord]):
+    declaration = LakeCopy
+    planned, done, failure, finishes = "copies", "copied", "copy", "copies"
+    rows = False
+
+    @override
+    def check(self, name: str, declared: LakeCopy, reach: Reach) -> list[str]:
+        """The query's database and the lake are configured, and the ledger's database can be published to."""
+        reasons: list[str] = []
+        if declared.query.database not in reach.settings.databases:
+            reasons.append(f"{name}: database {declared.query.database!r}, which it copies from, is not configured: set BASIS_DATABASES__{declared.query.database.upper()}__*")
+        try:
+            reach.open_lake(declared.lake)
+        except SettingsError as error:
+            reasons.append(f"{name}: {error}")
+        return reasons + _ledger_refusal(name, declared.ledger, reach.settings)
+
+    @override
+    def plan(self, name: str, declared: LakeCopy, value: object, interval: Interval | None) -> tuple[CopyRecord, None] | str:
+        """A copy is its run's interval's partition, so a run without one copies nothing."""
+        del value  # a copy has none
+        if interval is None:
+            return f"{name}: a copy is its run's interval's partition of {declared.table}, and this run has none: give it one"
+        try:
+            path = lake.partition(declared.partition, interval)
+        except lake.LakeError as error:
+            return f"{name}: {error}"
+        query = declared.query
+        return CopyRecord(database=query.database, sql=query.sql, lake=declared.lake, table=declared.table, partition=path, ledger=declared.ledger), None
+
+    @override
+    def make(self, planned: Mapping[str, CopyRecord], declared: Mapping[str, LakeCopy], rows: Rows, reach: Reach) -> dict[str, ArchivedRecord]:
+        """Each streamed from its query to the lake, recorded in its ledger's database."""
+        del rows  # a copy's rows are its query's, streamed, never a frame the run kept
+        done: dict[str, ArchivedRecord] = {}
+        for name in sorted(planned):
+            record, query = planned[name], declared[name].query
+            try:
+                if reach.interval is None:  # a defect: a copy is planned only for a run with an interval
+                    msg = "a copy is its run's interval's partition, and this run has none"
+                    raise ValueError(msg)  # noqa: TRY301 -- recorded as the copy's failure, as any other is
+                archiving = lake.Archiving(reach.run_id, reach.job, reach.interval, VERSION, reach.again, reach.clock)
+                bound = reach.interval.in_zone(query.zone) if query.zone is not None else reach.interval
+                with reach.databases(record.database).reading() as reader:
+                    streamed = lake.Streamed(frames.to_arrow(frames.empty(query.row.columns)).schema, _conformed(reader.batches(query.text(), bound, what=name), query, name))
+                    done[name] = lake.archive(archiving, name, streamed, reach.open_lake(record.lake), reach.databases(record.ledger), table=record.table, path=record.partition)
+            except Exception as error:
+                log.exception("could not copy %s", name, extra={"output": name})
+                done[name] = ArchivedRecord(status="failed", at=reach.clock(), error=_headline(error))
+        return done
+
+
+def _conformed(batches: Iterator[pa.RecordBatch], query: Query, name: str) -> Iterator[pa.RecordBatch]:
+    """Each batch conformed to the query's row, as every frame a run reads is, one batch at a time; none fails a query
+    whose dataset does not allow it."""
+    what = f"{name}'s query ({query.sql})"
+    rows = 0
+    for batch in batches:
+        table = frames.floats(pa.Table.from_batches([batch]), what=what)
+        conformed = frames.to_arrow(conform(frames.from_arrow(table), query.row, what=what, naive="in_zone"))
+        rows += conformed.num_rows
+        yield from conformed.to_batches()
+    if rows == 0 and query.empty == "fail":
+        msg = f"{name}'s query {query.sql} returned no rows, which its dataset does not allow (empty='fail'): has the data landed?"
+        raise ValueError(msg)
+
+
 class Messages(Kind[Message[str] | Message[Mail], MessageRecord, SendRecord]):
     declaration = Message
     planned, done, failure, finishes = "messages", "sent", "send", "sends"
@@ -299,7 +368,7 @@ def _sender(declared: Message[str] | Message[Mail], message: MessageRecord, reac
     return lambda: mailer.send(mail)
 
 
-KINDS: tuple[Kind[Any, Any, Any], ...] = (Reports(), Upserts(), Archives(), Messages())
+KINDS: tuple[Kind[Any, Any, Any], ...] = (Reports(), Upserts(), Archives(), Copies(), Messages())
 """Every kind, in the order a run makes them: files and documents first, and each message last, once everything it
 may report on is made."""
 
@@ -329,7 +398,8 @@ def plan(outputs: Outputs, interval: Interval | None) -> Planned:
     planned = Planned()
     for kind in KINDS:
         for name, declared in kind.declared(type(outputs)).items():
-            if (value := outputs.values[name]) is None:  # noqa: PD011 -- the outputs by name, no frame's values
+            value = outputs.values.get(name)  # noqa: PD011 -- the outputs by name, no frame's values
+            if value is None and declared.given:
                 continue  # a message the transform gave None
             match kind.plan(name, declared, value, interval):
                 case str(reason):

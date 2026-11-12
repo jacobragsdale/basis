@@ -315,6 +315,16 @@ class OracleReader:
                 raise frames.NumberError(msg)
         return frames.from_arrow(frames.floats(table, what=what))
 
+    def batches(self, sql: str, interval: Interval | None, *, what: str) -> Iterator[pa.RecordBatch]:
+        binds = binds_named(sql, ORACLE, interval, what=what)
+        with statement(self.database, _KIND, sql) as traced:
+            rows = 0
+            for batch in self.connection.fetch_df_batches(sql, binds or None, size=FETCH_ROWS):
+                for found in pa.table(batch).to_batches():
+                    rows += found.num_rows
+                    yield found
+            traced.set_attribute("db.response.returned_rows", rows)
+
     def describe(self, table: str) -> TableSpec | None:
         owner, _, name = table.upper().rpartition(".")
         with closing(self.connection.cursor()) as cursor:
