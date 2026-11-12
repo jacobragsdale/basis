@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from basis.core import settings
+from basis.core import settings, vault
 from basis.core.errors import BasisError
 from basis.core.settings import Settings
 
@@ -117,7 +117,7 @@ def load[S: Settings](given: str | None, kind: type[S], *, windows: bool | None 
         if declared != env:
             msg = f"{path} says {VARIABLE}={declared}, as a copy of {declared}'s settings would: give {env} its own settings, with {VARIABLE}={env}"
             raise EnvError(msg)
-        return Environment(env, settings.read_file(kind, path), path, writes)
+        return Environment(env, vault.resolved(settings.read_file(kind, path)), path, writes)
     settings.refuse_renamed(environ)
     if not _settings_variables(environ, kind):
         msg = f"there is no {path}, and the process's environment sets no BASIS_ settings, so nothing configures {env}: write {path}, with the names the repo's .env.example lists"
@@ -125,7 +125,7 @@ def load[S: Settings](given: str | None, kind: type[S], *, windows: bool | None 
     if environ.get(VARIABLE) != env:  # a shell's leftovers, which a deployment's settings never are: it names its environment
         msg = f"the process's BASIS_ settings do not say which environment they are: set {VARIABLE}={env} with them, as a deployment does, or write {path}"
         raise EnvError(msg)
-    return Environment(env, kind(), None, writes)
+    return Environment(env, vault.resolved(kind()), None, writes)
 
 
 def _settings_variables(environ: Mapping[str, str], kind: type[Settings]) -> list[str]:

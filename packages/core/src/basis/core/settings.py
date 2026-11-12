@@ -320,6 +320,21 @@ def unpublishable(name: str, database: MssqlSettings | OracleSettings) -> tuple[
     return "has no write settings", f"set {', '.join(variable(('databases', name, 'write', part)) for part in logins)} and {ledger}"
 
 
+class VaultSettings(Model):
+    """The Azure Key Vault an environment's secrets may come from (`basis.core.vault`): a secret setting whose value
+    is `keyvault:NAME` is the vault's secret NAME, fetched as the settings load, signed in to Entra ID as `via` says,
+    as the lake is: the pod's workload identity, or the user `az login` signed in."""
+
+    url: HttpUrl
+    """The vault's URL, as `https://NAME.vault.azure.net/`."""
+    via: Literal["workload_identity", "cli"]
+    ca_bundle: FilePath | None = None
+    """A PEM file of the certificate authorities the vault's and Entra ID's certificates chain to, as the firm's proxy
+    re-signs them."""
+    proxy: HttpUrl | None = None
+    """The proxy the vault and Entra ID are reached through. Without it, they are reached direct."""
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix=PREFIX,
@@ -355,6 +370,8 @@ class Settings(BaseSettings):
     a desktop or a test needs no Agent."""
     git_sha: str | None = None
     """The repo's commit, which basis's Dockerfile sets in the image as `BASIS_GIT_SHA`: the version spans carry."""
+    vault: VaultSettings | None = None
+    """The Key Vault a secret setting may name as `keyvault:NAME`, which loading the environment's settings fetches."""
 
     @classmethod
     @override

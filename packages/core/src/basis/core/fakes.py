@@ -661,3 +661,55 @@ def _instant(value: object) -> datetime | None:
 def _equal(found: object, wanted: object) -> bool:
     """Whether two values match as SQL's `=` does: a null matches nothing."""
     return found is not None and wanted is not None and found == wanted
+
+
+FORBIDDEN = "\x00forbidden"
+"""A fake vault's secret its caller may not get, which it answers 403, as Key Vault does without the permission."""
+
+
+class Vault:
+    """An Azure Key Vault in memory, which answers Get Secret as Key Vault's REST API documents it: 401 with a Bearer
+    challenge to a request without the token it takes, 400 BadParameter without an `api-version`, 404 SecretNotFound for
+    a name it lacks, 403 Forbidden for one it may not give (`FORBIDDEN`), and otherwise 200 with the secret's `value`,
+    `id` and `attributes`. It also answers Entra ID's token endpoint, `/TENANT/oauth2/v2.0/token`, with `vault-token`,
+    and keeps each secret asked for and each token given; `accepts` is the token it takes, another to refuse the login."""
+
+    def __init__(self, url: str, secrets: Mapping[str, str], *, accepts: str = "vault-token") -> None:
+        self.url = url.rstrip("/")
+        self.secrets = dict(secrets)
+        self.accepts = accepts
+        self.asked: list[str] = []
+        self.tokens: list[str] = []
+
+    def transport(self) -> httpx2.MockTransport:
+        return httpx2.MockTransport(self._answer)
+
+    def _answer(self, request: httpx2.Request) -> httpx2.Response:
+        if request.url.path.endswith("/oauth2/v2.0/token"):
+            self.tokens.append("vault-token")
+            return httpx2.Response(HTTPStatus.OK, json={"access_token": "vault-token", "token_type": "Bearer", "expires_in": 3599})
+        if request.headers.get("authorization") != f"Bearer {self.accepts}":
+            challenge = 'Bearer authorization="https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000", resource="https://vault.azure.net"'
+            return httpx2.Response(
+                HTTPStatus.UNAUTHORIZED, headers={"WWW-Authenticate": challenge}, json={"error": {"code": "Unauthorized", "message": "AKV10000: Request is missing a Bearer or PoP token."}}
+            )
+        if "api-version" not in request.url.params:
+            return httpx2.Response(HTTPStatus.BAD_REQUEST, json={"error": {"code": "BadParameter", "message": "The request URI contains an invalid parameter: api-version"}})
+        name = request.url.path.removeprefix("/secrets/").split("/")[0]
+        self.asked.append(name)
+        if (value := self.secrets.get(name)) is None:
+            return httpx2.Response(HTTPStatus.NOT_FOUND, json={"error": {"code": "SecretNotFound", "message": f"A secret with (name/id) {name} was not found in this key vault."}})
+        if value == FORBIDDEN:
+            return httpx2.Response(
+                HTTPStatus.FORBIDDEN,
+                json={"error": {"code": "Forbidden", "message": "The user, group or application does not have secrets get permission on key vault.", "innererror": {"code": "AccessDenied"}}},
+            )
+        version = "0" * 32
+        return httpx2.Response(
+            HTTPStatus.OK,
+            json={
+                "value": value,
+                "id": f"{self.url}/secrets/{name}/{version}",
+                "attributes": {"enabled": True, "created": 1762000000, "updated": 1762000000, "recoveryLevel": "Recoverable+Purgeable"},
+            },
+        )

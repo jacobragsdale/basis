@@ -542,6 +542,7 @@ berth's 40 characters do, keeps a database's secret parts in one secret that way
 | `BASIS_TRACES__EXPORTER` | `otlp`, to post each run's spans to `BASIS_TRACES__ENDPOINT`, or `console`, to write them to stderr. Without it, spans go nowhere. |
 | `BASIS_TRACES__ENDPOINT` | For `otlp`: the full URL spans are posted to, path and all, such as `http://$(HOST_IP):4318/v1/traces`, the Datadog Agent on the pod's node. |
 | `BASIS_TRACES__TIMEOUT_S` | Seconds each export may take, its retries included (default 5). An export that fails is logged and fails nothing. |
+| `BASIS_VAULT__URL`, `__VIA` | The Azure Key Vault, `https://NAME.vault.azure.net/`, that a secret setting may name as `keyvault:SECRET`, as `BASIS_DATABASES__WAREHOUSE__CONNECTION_STRING=keyvault:warehouse-read`, and how this machine signs in to it: `workload_identity`, in a pod, or `cli`, after `az login`. Each named secret is fetched once as the settings load; one the vault lacks or refuses is the command's `ERROR` line. `__CA_BUNDLE` and `__PROXY` as for a service. |
 | `BASIS_ENV` | The environment a command acts in where `--env` does not name one: `dev`, `qa` or `prod`. Never read from a file. |
 | `BASIS_PROD_WRITES` | `1` lets a prod run publish. Never read from a file. |
 | `BASIS_LOG_LEVEL` | `DEBUG`, `INFO` (default), `WARNING` or `ERROR`. |

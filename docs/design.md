@@ -583,6 +583,16 @@ shares it. A pod gets its settings from its deployment. A repo's `.env.example` 
 Database logins stay as the settings have them: a SQL Server connection string, which may carry a password or Kerberos,
 and Oracle's user and password. Most people use passwords, and some Kerberos.
 
+A secret setting may instead name a secret of the environment's Azure Key Vault, as
+`BASIS_DATABASES__WAREHOUSE__CONNECTION_STRING=keyvault:warehouse-read`, with the vault as `BASIS_VAULT__URL` and how
+it is signed in to as `BASIS_VAULT__VIA`, the pod's workload identity or the user `az login` signed in, as the lake is,
+decided on 2026-11-11 for step 12.9 of [the plan](../PLAN.md), the roadmap's "Later", and open to the maintainer's
+review. The settings fetch each named secret once as they load, through Key Vault's REST API with no Azure SDK, so a
+missing or refused secret is one `ERROR` line naming its variable before anything starts, and the value is a
+`SecretStr` like any other. Nothing else changes: a value that does not start `keyvault:` is the setting itself, and a
+deployment may still set its secrets as berth's do. No real vault has verified it, only a fake that answers as the REST
+API's reference documents.
+
 Prod is read-only unless the deployment sets one flag: without it, a run whose plan publishes or writes anything is
 refused at the start, with one `ERROR` line. That stops accidents, not malice, since anyone can set a flag; the real
 control is a read-only prod login for desktops, and the docs say so. Desktops write in dev and QA. `basis doctor --env

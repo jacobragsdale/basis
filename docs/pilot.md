@@ -264,3 +264,23 @@ uv run basis run JOB --env dev --interval yesterday   # on Citrix, against the U
 
 **Send back:** the run's last line and the manifest's `inputs` record for the file, the encoding and delimiter the
 firm's feeds use, and whether a feed writes its file in place, so a run could read half of it, or renames it in.
+
+## 7. Azure Key Vault and the supply chain (12.9)
+
+Step 12.9 lets a secret setting name a Key Vault secret, `keyvault:NAME`, fetched as the settings load, and gives new
+repos a seven-day dependency cooldown and `uv audit` in `basis check --full`. No real vault verified the first: a fake
+that answers as the REST API's reference documents stood in. With a scratch secret in the team's dev vault:
+
+```sh
+# in dev.env: BASIS_VAULT__URL=https://VAULT.vault.azure.net/  BASIS_VAULT__VIA=cli
+#             BASIS_DATABASES__WAREHOUSE__CONNECTION_STRING=keyvault:SECRET
+az login
+uv run basis doctor --env dev          # loads the settings, so it fetches the secret, then checks the login
+```
+
+Then in a pod, with `BASIS_VAULT__VIA=workload_identity` in its deployment. In the pilot repo, run `uv lock` and
+`uv audit` against the firm's feed.
+
+**Send back:** `basis doctor`'s lines, the `ERROR` line of a run with a name the vault lacks, whether the firm's feed
+gives each file's upload time (without it, `exclude-newer` cannot hold a package back), and whether this machine
+reaches `https://api.osv.dev/`, which `uv audit` asks, or what the firm uses in its place.

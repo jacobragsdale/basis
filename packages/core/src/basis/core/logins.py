@@ -99,13 +99,21 @@ class Headers(httpx2.Auth):
 
 class Source(Protocol):
     """Where a login's tokens come from: a request to an identity provider, whose reply `read` takes, or, where
-    `request` gives None, `run`."""
+    `request` gives None, `run`, which may wait, as a command does."""
 
     def request(self) -> httpx2.Request | None: ...
 
     def read(self, reply: httpx2.Response, now: float) -> Token: ...
 
-    async def run(self, now: float) -> Token: ...
+    def run(self, now: float) -> Token: ...
+
+
+def fetched(source: Source, client: httpx2.Client, *, clock: Callable[[], float] = time.monotonic) -> Token:
+    """A token from `source`, through `client`, outside any call's flow: as settings fetch a vault's secrets."""
+    asked = source.request()
+    if asked is None:
+        return source.run(clock())
+    return source.read(client.send(asked), clock())
 
 
 class Tokens(httpx2.Auth):
@@ -128,7 +136,7 @@ class Tokens(httpx2.Auth):
                 if kept is None or fresh:
                     asked = self._source.request()
                     if asked is None:
-                        kept = await self._source.run(self._clock())
+                        kept = await asyncio.to_thread(self._source.run, self._clock())
                     else:
                         reply = yield asked
                         await reply.aread()
@@ -180,7 +188,7 @@ class ClientCredentials:
         names = ", ".join(variable(("http", self._name, "login", field)) for field in ("client_id", "client_secret"))
         return _token(self._name, reply, now, fix=f"correct {names}, or ask the identity provider's owners to grant the client")
 
-    async def run(self, now: float) -> Token:
+    def run(self, now: float) -> Token:
         raise NotImplementedError(now)  # every token of this source is a request's
 
 
@@ -209,7 +217,7 @@ class WorkloadIdentity:
         fix = f"grant the pod's identity {self._scope}, or correct {variable(('http', self._name, 'login', 'scope'))}"
         return _token(self._name, reply, now, fix=fix)
 
-    async def run(self, now: float) -> Token:
+    def run(self, now: float) -> Token:
         raise NotImplementedError(now)  # every token of this source is a request's
 
 
@@ -227,14 +235,14 @@ class AzureCli:
     def read(self, reply: httpx2.Response, now: float) -> Token:
         raise NotImplementedError((reply, now))  # every token of this source is the CLI's
 
-    async def run(self, now: float) -> Token:
+    def run(self, now: float) -> Token:
         found = shutil.which("az")
         az = self._az or ([found] if found is not None else None)
         if az is None:
             msg = f"{self._name} signs in as the user az login signed in, and the Azure CLI, az, is not on the PATH: install it and run `az login`"
             raise Denied(msg, resource=self._name)
         command = [*az, "account", "get-access-token", "--scope", self._scope, "--output", "json"]
-        done = await asyncio.to_thread(subprocess.run, command, capture_output=True, text=True, check=False)
+        done = subprocess.run(command, capture_output=True, text=True, check=False)
         if done.returncode != 0:
             said = done.stderr.strip().splitlines()[-1:] or ["no reason"]
             msg = f"{self._name}'s login through az was refused ({said[0]}): run `az login`, or ask the service's owners to grant you {self._scope}"
