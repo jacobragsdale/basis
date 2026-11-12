@@ -60,8 +60,8 @@ def test_a_workbook_is_written_whole_and_leaves_no_temporary_file(shared: Folder
 
 def test_a_write_that_fails_leaves_what_was_there_and_no_temporary_file(shared: Folder) -> None:
     (shared.root / "positions.xlsx").mkdir()  # a folder where the workbook goes, so the rename into place fails
-    with pytest.raises(OSError, match=r"positions\.xlsx"):
-        shared.write_bytes("positions.xlsx", b"workbook")
+    with pytest.raises(FolderError, match=r"^positions\.xlsx cannot be written into pm, at .*: close it .*, and run again$"):
+        shared.write_bytes("positions.xlsx", b"workbook")  # one ERROR line with its fix, not a raw OSError
     assert (shared.root / "positions.xlsx").is_dir()
     assert not [path for path in shared.root.iterdir() if path.name.endswith(TEMPORARY)]
 

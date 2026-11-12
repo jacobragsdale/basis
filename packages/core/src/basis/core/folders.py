@@ -131,12 +131,16 @@ class Folder:
         if not self.root.is_dir():
             msg = f"the folder {self.name}, at {self.root}, is not there or not reachable from here: mount it, or correct {variable(('folders', self.name, 'path'))}"
             raise FolderError(msg)
-        path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex[:12]}{TEMPORARY}")
         try:
+            path.parent.mkdir(parents=True, exist_ok=True)
             with temporary.open("xb") as file:
                 _written(file, content)
             temporary.replace(path)
+        except OSError as error:
+            temporary.unlink(missing_ok=True)
+            msg = f"{relative} cannot be written into {self.name}, at {path} ({error.strerror or error}): close it where it is open, as in Excel, or move what holds its path, and run again"
+            raise FolderError(msg) from error
         except BaseException:
             temporary.unlink(missing_ok=True)
             raise
