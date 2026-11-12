@@ -73,3 +73,19 @@ def test_review_lists_the_suppressions_and_skips_a_change_adds_and_the_tests_it_
     assert "| `x.py` | a suppression | `x = eval('1') # noqa: S307 -- a constant` |" in listed  # a cell's spaces collapsed
     assert "| `tests/test_x.py` | a test removed | `def test_gone() -> None: ...` |" in listed
     assert "| `tests/test_y.py` | a patch | `monkeypatch.setattr('os.sep', '/')` |" in listed
+
+
+def test_review_counts_only_the_suppressions_a_change_introduces_not_those_an_edited_line_already_carried(tmp_path: Path, git: Git) -> None:
+    git(tmp_path, "init", "--quiet", "--initial-branch=main")
+    git(tmp_path, "config", "user.email", "t@example.com")
+    git(tmp_path, "config", "user.name", "t")
+    (tmp_path / "x.py").write_text("x = eval('1')  # noqa: S307 -- a constant\ny = 2\n", encoding="utf-8")
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "--quiet", "-m", "first")
+    git(tmp_path, "checkout", "--quiet", "-b", "change")
+    (tmp_path / "x.py").write_text("x = eval('1 + 1')  # noqa: S307 -- a constant\ny = 3  # noqa: E501 -- a long line\n", encoding="utf-8")
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "--quiet", "-m", "change")
+    listed = review.added_markdown(tmp_path, "HEAD")
+    assert "S307" not in listed  # carried over from the line the edit replaced
+    assert "| `x.py` | a suppression | `y = 3 # noqa: E501 -- a long line` |" in listed

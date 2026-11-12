@@ -10,6 +10,7 @@ check of a folder with changes no commit holds is not recorded, since no commit 
 
 import re
 import sys
+from collections import Counter
 from datetime import datetime
 from importlib.metadata import entry_points, version
 from pathlib import Path
@@ -215,26 +216,51 @@ def added_markdown(repo: Path, ref: str) -> str:
         return "\n".join([*lines, "Nothing to compare with: this is the first commit."]) + "\n"
     printed = clone.output(found.git, found.root, "diff", "--unified=0", "--no-color", "--no-renames", base, commit, "--", ".", raw=True) or ""
     entries: list[tuple[str, str, str]] = []
-    path = ""
-    for line in printed.splitlines():
-        if line.startswith("+++ "):
-            path = line.removeprefix("+++ ").removeprefix("b/").removeprefix(found.prefix)
-        elif line.startswith("--- "):
-            path = path or line.removeprefix("--- ").removeprefix("a/").removeprefix(found.prefix)
-        elif line.startswith("+") and not line.startswith("+++"):
-            text = line[1:]
-            if gates.SUPPRESSION.search(text) or "# basis: allow-mocks" in text:
-                entries.append((path, "a suppression", text.strip()))
-            elif _SKIPPING.search(text):
-                entries.append((path, "a skip", text.strip()))
-            elif "monkeypatch.setattr(" in text:  # a test's stand-in for code, which the mock gate does not see: counted, never refused
-                entries.append((path, "a patch", text.strip()))
-        elif line.startswith("-") and not line.startswith("---") and _TEST.match(line[1:]):
-            entries.append((path, "a test removed", line[1:].strip()))
+    for path, removed, added in _files(printed, found.prefix):
+        carried = Counter(kind for line in removed if (kind := _exception(line)) is not None)
+        for text in added:
+            kind = _exception(text)
+            if kind is None:
+                continue
+            if carried[kind] > 0:  # the line it replaced carried the same exception, which the change only kept
+                carried[kind] -= 1
+                continue
+            entries.append((path, kind[0], text.strip()))
+        entries += [(path, "a test removed", line.strip()) for line in removed if _TEST.match(line)]
     if not entries:
         return "\n".join([*lines, f"None since {base[:12]}."]) + "\n"
     rows = [f"| `{_cell(where)}` | {what} | `{_cell(text)}` |" for where, what, text in entries]
     return "\n".join([*lines, f"Against {base[:12]}:", "", "| File | What | Line |", "|---|---|---|", *rows]) + "\n"
+
+
+def _files(printed: str, prefix: str) -> list[tuple[str, list[str], list[str]]]:
+    """Each file of the unified diff `printed`, as its path in the repo, the lines it removes and the lines it adds."""
+    files: list[tuple[str, list[str], list[str]]] = []
+    for line in printed.splitlines():
+        if line.startswith("--- "):
+            files.append((line.removeprefix("--- ").removeprefix("a/").removeprefix(prefix), [], []))
+        elif line.startswith("+++ ") and files:
+            added = line.removeprefix("+++ ").removeprefix("b/").removeprefix(prefix)
+            files[-1] = (files[-1][0] if added == "/dev/null" else added, files[-1][1], files[-1][2])
+        elif line.startswith("-") and files:
+            files[-1][1].append(line[1:])
+        elif line.startswith("+") and files:
+            files[-1][2].append(line[1:])
+    return files
+
+
+def _exception(text: str) -> tuple[str, str] | None:
+    """What exception to a check the line `text` carries, as its kind and what it names, or None: a line that keeps
+    the same one as a line its change removes introduces nothing."""
+    if (match := gates.SUPPRESSION.search(text)) is not None:
+        return ("a suppression", " ".join(match.group("what").split()))
+    if "# basis: allow-mocks" in text:
+        return ("a suppression", "allow-mocks")
+    if (skip := _SKIPPING.search(text)) is not None:
+        return ("a skip", skip.group(0))
+    if "monkeypatch.setattr(" in text:  # a test's stand-in for code, which the mock gate does not see: counted, never refused
+        return ("a patch", text.strip())
+    return None
 
 
 def exceptions_markdown(pyproject: Path) -> str:

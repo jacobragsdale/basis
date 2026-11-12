@@ -4,10 +4,11 @@
 To run it in dev, reading the databases your own dev.env configures, and writing nothing to them:
     run(job, params="params/default.json", interval="2026-11-05..2026-11-06", env="dev")
 To run a saved run's transform again with the code you have now, and see what changed:
+    from basis.job import replay
     replay(job, "0193f2...", env="prod")
 """
 
-from basis.job import replay, run  # noqa: F401 -- replay is the docstring's other call
+from basis.job import run
 
 from basis.job.example import job
 

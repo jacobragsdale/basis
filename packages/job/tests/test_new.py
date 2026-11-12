@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from basis.core import gates
 from basis.core.new import UNRELEASED, NoReleaseError
 from basis.job import new, sync
 
@@ -101,3 +102,9 @@ def test_a_job_copies_the_files_it_names_and_no_cache_or_stray_file_of_the_examp
 def test_the_files_a_job_copies_are_every_file_of_the_example_but_its_ruff_settings() -> None:
     tracked = subprocess.run([GIT, "ls-files"], cwd=new.EXAMPLE, capture_output=True, text=True, check=True).stdout.split()
     assert sorted(tracked) == sorted([*new.EXAMPLE_FILES, "ruff.toml"])
+
+
+def test_a_new_job_carries_no_suppression_so_review_lists_none_for_it(tmp_path: Path) -> None:
+    repo = new.repo(tmp_path / "pricing-etl", "prices", index=None, framework_path=CHECKOUT, install=False)
+    carried = [f"{path.name}: {line}" for path in (repo / "jobs" / "prices").rglob("*.py") for line in path.read_text(encoding="utf-8").splitlines() if gates.SUPPRESSION.search(line)]
+    assert carried == []
