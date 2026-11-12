@@ -191,7 +191,7 @@ def compare(before: Document, after: Document) -> Changes:
     return found
 
 
-def _operation(name: str, old: Document, new: Document, *, before: Document, after: Document, found: Changes) -> None:  # noqa: PLR0913 -- both operations, and the documents their references resolve in
+def _operation(name: str, old: Document, new: Document, *, before: Document, after: Document, found: Changes) -> None:
     if old.get("operationId") != new.get("operationId"):
         found.breaking.append(f"{name} has the operation id {new.get('operationId')}, renaming its client's function")
     old_status, new_status = _success(old), _success(new)
@@ -366,9 +366,7 @@ def _fields(parameters: Iterator[tuple[str, JsonValue | None, bool]], document: 
     return found
 
 
-def _flat(  # noqa: PLR0913 -- where, what, and how it is walked, by keyword
-    path: str, schema: JsonValue | None, document: Document, *, required: bool, skipped: list[tuple[str, str]], within: frozenset[str] = frozenset()
-) -> Iterator[tuple[str, Shape]]:
+def _flat(path: str, schema: JsonValue | None, document: Document, *, required: bool, skipped: list[tuple[str, str]], within: frozenset[str] = frozenset()) -> Iterator[tuple[str, Shape]]:
     """`schema`'s shape at `path`, and every field's within it, by its path: `.key` for a property, `[N]` for a
     tuple's item N, `[]` for an array's items, `{}` for a map's values, and `<Model>` before the fields of each model
     of a union of two or more. A component already being walked is not walked again, and each keyword the check

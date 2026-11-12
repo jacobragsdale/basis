@@ -190,9 +190,7 @@ def claim(table: Table, row: Row, until: datetime, *, timeout_s: float) -> bool:
     return table.update(row.id, was="pending", seen=row.attempts, to={"attempts": row.attempts + 1, "next_at": until}, timeout_s=timeout_s)
 
 
-def record(  # noqa: PLR0913 -- the attempt, by keyword
-    table: Table, declared: Outbox, row: Row, failure: Failure | None, *, seen: int, attempts: int, at: datetime, reported: bool, timeout_s: float
-) -> Status | None:
+def record(table: Table, declared: Outbox, row: Row, failure: Failure | None, *, seen: int, attempts: int, at: datetime, reported: bool, timeout_s: float) -> Status | None:
     """Record how the `attempts`-th attempt at `row`'s call went, at `at`, unless the row has changed since its attempts
     were `seen`: `done`; `refused` for good, due to `basis relay` to report at once unless `reported` says the caller
     reports it itself; or `pending`, due again after its backoff. The status it recorded, or None where it recorded

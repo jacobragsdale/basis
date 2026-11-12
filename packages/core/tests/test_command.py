@@ -197,9 +197,12 @@ def test_a_repo_without_tool_basis_refuses_every_verb_that_reads_or_writes_its_f
 def test_a_repo_without_tool_basis_still_tells_its_version_and_checks_its_desktop(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     folder = repo(tmp_path, '[project]\nname = "app"\n')
     assert basis(folder, "--version") == 0
-    capsys.readouterr()
+    assert capsys.readouterr().out.startswith("basis-core ")
     basis(folder, "doctor")
-    assert "declares no basis parts" not in capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert "declares no basis parts" not in captured.err
+    assert captured.out.splitlines()[0].startswith("ok: ")  # the desktop's first check, which runs as outside a repo
+    assert any(line.startswith(("ok: uv", "ERROR: uv")) for line in [*captured.out.splitlines(), *captured.err.splitlines()])
 
 
 def test_a_folder_in_no_repo_says_how_to_make_one(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

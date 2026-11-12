@@ -23,7 +23,7 @@ from basis.job.runs import PACKAGE, Draft, Result, Transformed, finish, targets_
 from basis.job.version import VERSION
 
 
-def replay(  # noqa: PLR0913 -- what it replays, and where it saves and traces, by keyword
+def replay(
     job: Job,
     source: Snapshot,
     *,
@@ -44,12 +44,12 @@ def replay(  # noqa: PLR0913 -- what it replays, and where it saves and traces, 
         return _replay(job, source, params=params, snapshot_root=snapshot_root, clock=clock, tracer=tracer)
 
 
-def _replay(job: Job, source: Snapshot, *, params: Path | None, snapshot_root: Root | None, clock: Callable[[], datetime], tracer: Tracer) -> tuple[Result, list[OperationDiff]]:  # noqa: PLR0913 -- replay's, by keyword
+def _replay(job: Job, source: Snapshot, *, params: Path | None, snapshot_root: Root | None, clock: Callable[[], datetime], tracer: Tracer) -> tuple[Result, list[OperationDiff]]:
     with core_runs.replaying(source, name=job.name, module=job.module, params=params, parse=job.params.model_validate_json, reads=job.inputs.declared()) as opened:
         return _replayed(job, source, opened, snapshot_root=snapshot_root, clock=clock, tracer=tracer)
 
 
-def _replayed(job: Job, source: Snapshot, opened: core_runs.Replay[Params], *, snapshot_root: Root | None, clock: Callable[[], datetime], tracer: Tracer) -> tuple[Result, list[OperationDiff]]:  # noqa: PLR0913 -- replay's, by keyword
+def _replayed(job: Job, source: Snapshot, opened: core_runs.Replay[Params], *, snapshot_root: Root | None, clock: Callable[[], datetime], tracer: Tracer) -> tuple[Result, list[OperationDiff]]:
     original = opened.original
     interval = original.parsed_interval()
     record = Draft(

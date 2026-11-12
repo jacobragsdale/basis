@@ -137,9 +137,7 @@ def building(path: Path) -> Generator[Path]:
     folder.rename(path)
 
 
-def repo(  # noqa: PLR0913 -- the part says what it adds and where its packages come from, by keyword
-    folder: Path, *, templates: Path, values: Mapping[str, str], distributions: Mapping[str, str], version: str, index: str | None, checkout: Path | None
-) -> None:
+def repo(folder: Path, *, templates: Path, values: Mapping[str, str], distributions: Mapping[str, str], version: str, index: str | None, checkout: Path | None) -> None:
     """The shared templates and the part's `templates` in `folder`, which `building` gives, each with `{NAME}`
     replaced by `values[NAME]`, `{upper}` by the first version the repo does not take (`upper_bound`), and `{source}`
     by where the repo's basis packages come from (see `sources`): with neither an index nor a checkout, the tag or the

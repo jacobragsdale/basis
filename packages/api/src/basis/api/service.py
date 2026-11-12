@@ -206,7 +206,7 @@ class Route:
 
 
 class _Declare(Protocol):
-    def __call__(  # noqa: PLR0913 -- what a route declares, each by keyword
+    def __call__(
         self,
         path: str,
         handler: FunctionType,
@@ -222,7 +222,7 @@ class _Declare(Protocol):
 
 
 def _route(method: Method) -> _Declare:
-    def declare(  # noqa: PLR0913 -- by keyword
+    def declare(
         path: str,
         handler: FunctionType,
         *,

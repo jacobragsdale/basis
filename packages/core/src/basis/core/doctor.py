@@ -88,7 +88,7 @@ type Describe = Callable[[Exception], str]
 """A failure's one line, `REASON: FIX`, as `basis` prints it."""
 
 
-def doctor(  # noqa: PLR0913 -- what it checks and how it reaches the databases, by keyword
+def doctor(
     repo: Path | None,
     parts: Mapping[str, Part],
     desktop: Desktop,
@@ -280,9 +280,7 @@ def _environment(repo: Path, desktop: Desktop, describe: Describe) -> list[Found
     return found
 
 
-def _environment_of(  # noqa: PLR0913 -- the environment, and how doctor reaches what it configures
-    given: str, repo: Path | None, desktop: Desktop, describe: Describe, *, databases: Callable[[Settings, str], Database], lakes: Callable[[str, Settings], lake.Lake]
-) -> list[Found]:
+def _environment_of(given: str, repo: Path | None, desktop: Desktop, describe: Describe, *, databases: Callable[[Settings, str], Database], lakes: Callable[[str, Settings], lake.Lake]) -> list[Found]:
     """`basis doctor --env ENV`: where the environment's settings come from, whether each of its databases' logins
     answers, whether each other resource it configures is reachable, as its kind checks (`basis.core.kinds`), and
     whether its run store is reachable."""

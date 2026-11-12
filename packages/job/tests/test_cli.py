@@ -139,15 +139,24 @@ def test_a_relative_interval_for_a_job_with_no_calendar_is_one_error_line(repo: 
     )
 
 
-@pytest.mark.parametrize("verb", [[*RUN, "--publish"], ["resume", "basis.job.example.job", "0193f2d4-0000-7000-8000-000000000001"]], ids=["run --publish", "resume"])
-def test_a_run_that_would_write_to_prod_is_refused_unless_the_deployment_sets_the_flag(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, verb: list[str]) -> None:
+@pytest.mark.parametrize(
+    ("verb", "then"),
+    [
+        ([*RUN, "--publish"], "because database 'warehouse' is not configured, and the run publishes to it"),
+        (["resume", "basis.job.example.job", "0193f2d4-0000-7000-8000-000000000001"], "ERROR: no run 0193f2d4-0000-7000-8000-000000000001 under "),
+    ],
+    ids=["run --publish", "resume"],
+)
+def test_a_run_that_would_write_to_prod_is_refused_unless_the_deployment_sets_the_flag(
+    repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, verb: list[str], then: str
+) -> None:
     monkeypatch.setenv("BASIS_ENV", "prod")
     assert basis(repo, *verb) == 1
     line = error_line(capsys)
     assert "would write to prod, which basis refuses unless the process sets BASIS_PROD_WRITES=1" in line
     monkeypatch.setenv("BASIS_PROD_WRITES", "1")
-    basis(repo, *verb)
-    assert "would write to prod" not in capsys.readouterr().err  # it gets as far as its database, which is not configured, or its run, which is not saved
+    assert basis(repo, *verb) == 1
+    assert then in error_line(capsys)  # past the refusal, as far as its database, which is not configured, or its run, which is not saved
 
 
 def test_a_run_whose_params_do_not_validate_names_the_field_and_the_file(repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -195,13 +204,14 @@ def test_a_resume_of_a_run_that_never_published_is_refused_in_one_line(repo: Pat
     assert only_error(capsys.readouterr().err) == f"ERROR: run {run_id} is checked, and was not asked to publish: run it again with --publish"
 
 
-def test_a_run_told_again_records_it_and_resume_takes_again_too(repo: Path, snapshot_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """A resume publishes as its run was told to; `--again` tells a resume of a run that was not."""
+def test_a_run_told_again_records_it_in_its_manifest(repo: Path, snapshot_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """So that its resume publishes as it was told to, which `test_publishing.py` holds a resume to."""
     assert basis(repo, *RUN, "--again") == 0
     run_id = next(json.loads(line)["run_id"] for line in capsys.readouterr().err.splitlines() if '"run_id"' in line)
     assert snapshots.find(Root.at(snapshot_root), run_id).record().again
-    assert basis(repo, "resume", run_id, "--again") == 1
-    assert error_line(capsys) == f"ERROR: run {run_id} is checked, and was not asked to publish: run it again with --publish"
+    assert basis(repo, *RUN) == 0
+    later = next(json.loads(line)["run_id"] for line in capsys.readouterr().err.splitlines() if '"run_id"' in line)
+    assert not snapshots.find(Root.at(snapshot_root), later).record().again
 
 
 @pytest.mark.parametrize(

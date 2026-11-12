@@ -126,7 +126,7 @@ def test_an_integer_beyond_its_column_is_refused() -> None:
     assert check_values(target, spec, Changes(insert=pd.DataFrame({"n": [40_000.0]}))) == ["insert: n: values from 40000 to 40000, beyond SMALLINT's -32768 to 32767 that a float holds exactly"]
 
 
-def text(type_: str, length: int | None, *, unit: Unit, encoding: str | None, charset: str | None, max_bytes: int | None = None) -> DestColumn:  # noqa: PLR0913 -- a column's storage, each by keyword
+def text(type_: str, length: int | None, *, unit: Unit, encoding: str | None, charset: str | None, max_bytes: int | None = None) -> DestColumn:
     """A string column `note` of `type_`, holding `length` of its `unit`, stored in `encoding`, which `charset` names."""
     return DestColumn("note", type_, length, None, None, nullable=True, generated=False, defaulted=False, unit=unit, max_bytes=max_bytes, encoding=encoding, charset=charset)
 

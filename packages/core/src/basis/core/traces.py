@@ -159,7 +159,7 @@ def tracing(used: Tracer) -> Generator[None]:
 
 
 @contextmanager
-def trace(  # noqa: PLR0913 -- the run, and where its spans go, by keyword
+def trace(
     operation: str, *, service: str, settings: Traces | None, version: str | None, environment: str | None, given: TracerProvider | None = None, **attributes: str
 ) -> Generator[tuple[Tracer, Span]]:
     """A run's one trace: a provider of its own, exporting where `settings` say, or `given`, a test's with an

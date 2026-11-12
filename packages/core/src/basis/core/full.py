@@ -44,9 +44,7 @@ QA_LATER = "it runs when you push, once the change is committed"
 """Why `basis upgrade`'s check leaves the QA tier out."""
 
 
-def full(  # noqa: PLR0913 -- the repo, its parts, and how the check reaches the world, by keyword
-    repo: Path, files: Sequence[AgentFiles], parts: Mapping[str, Part], *, run: Runner, report: Report, folder: Path, clock: Callable[[], datetime], with_qa: bool = True
-) -> int:
+def full(repo: Path, files: Sequence[AgentFiles], parts: Mapping[str, Part], *, run: Runner, report: Report, folder: Path, clock: Callable[[], datetime], with_qa: bool = True) -> int:
     """Run `basis check --full` on the repo at `repo`, whose untracked files are in `folder`, and with `with_qa` the QA
     tier; 0 when every piece that ran passed."""
     found = clone.of(repo)

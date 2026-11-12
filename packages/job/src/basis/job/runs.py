@@ -125,7 +125,7 @@ def open_sql(job: Job) -> None:
         raise BasisError("; ".join(problems))
 
 
-def run(  # noqa: PLR0913 -- what the run reads and where it saves, by keyword
+def run(
     job: Job,
     settings: Settings,
     request: Request,
@@ -473,7 +473,7 @@ class Draft:
         """The record, with each value the run's clocks and ids gave its transform."""
         return replace(self, clocks={name: list(values) for name, values in kept.clocks.items()}, ids={name: list(values) for name, values in kept.ids.items()})
 
-    def done(  # noqa: PLR0913 -- how the run ended, by keyword
+    def done(
         self,
         status: Status,
         *,
@@ -492,9 +492,7 @@ class Draft:
         ))  # fmt: skip
 
 
-def finish(  # noqa: PLR0913 -- what the run saves, by keyword
-    record: RunRecord, root: Root | None, params_text: str, tables: Mapping[str, pa.Table], planned: Mapping[str, Planned], *, reports: Mapping[str, pd.DataFrame] | None = None
-) -> Result:
+def finish(record: RunRecord, root: Root | None, params_text: str, tables: Mapping[str, pa.Table], planned: Mapping[str, Planned], *, reports: Mapping[str, pd.DataFrame] | None = None) -> Result:
     """The run's result, its snapshot saved: its inputs, each table's changes and each workbook's rows, as an insert."""
     changes = {name: entry.changes for name, entry in planned.items() if entry.changes is not None} | {name: Changes(insert=frame) for name, frame in (reports or {}).items()}
     snapshot = snapshots.write(root, record, params_text, tables, changes, package=PACKAGE) if root is not None else None
@@ -533,7 +531,7 @@ def summary(record: RunRecord) -> dict[str, object]:
     }
 
 
-def resume(  # noqa: PLR0913 -- resume's, by keyword
+def resume(
     job: Job,
     source: Snapshot,
     settings: Settings,
@@ -570,7 +568,7 @@ def resume(  # noqa: PLR0913 -- resume's, by keyword
         return final
 
 
-def _finish_files(  # noqa: PLR0913 -- the run, and how it reaches what it writes, by keyword
+def _finish_files(
     job: Job,
     source: Snapshot,
     record: RunRecord,

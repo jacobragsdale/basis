@@ -47,7 +47,7 @@ type Reach = Callable[[str], tuple[httpx2.AsyncClient, Waits]]
 system's waits, or the fake's, which take no time."""
 
 
-def load(  # noqa: PLR0913 -- what the run reads, and how it reaches it, by keyword
+def load(
     datasets: Mapping[str, Dataset],
     interval: Interval | None,
     *,

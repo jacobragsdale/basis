@@ -36,6 +36,7 @@ dev = [
     "ruff==0.17.4",
     "schemathesis>=4.33.1",  # the requests basis-api's checks send an API on its fakes: basis.api.fuzz
     "ty==0.0.99",
+    "vulture>=2.16",
 ]
 
 [tool.ruff]
@@ -58,6 +59,7 @@ ignore = [
     "TC003",  # Moving imports under TYPE_CHECKING breaks code that reads annotations at runtime (Pydantic, FastAPI).
     "CPY001",  # A copyright header is a legal decision per repository, not a lint fix.
     "D",  # Agents read this code. A required docstring gets written to satisfy the rule; write one only where it says what code and types cannot.
+    "PLR0913",  # Arguments by keyword are clearer than a parameter object; PLR0917 still caps the positional ones at five.
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -85,6 +87,7 @@ ignore = [
 # A module the scripts import from their own folder, which Python puts first on sys.path; scripts/ is no package.
 "scripts/shared.py" = ["INP001"]
 "scripts/surface.py" = ["INP001"]  # run in the workspace, whose basis it reads, so no script header of its own
+"scripts/dead_code.py" = ["INP001"]  # run in the workspace, whose vulture it takes
 # The eval's entry point, which puts its own folder first on sys.path, as the scripts' do; evals/ is no package.
 "evals/run.py" = ["INP001"]
 

@@ -83,7 +83,7 @@ def settings(*names: str) -> GivenSettings:
     )  # fmt: skip
 
 
-def run(job: Job, found: Mapping[str, fakes.Database], frame: pd.DataFrame, root: Path, *, again: bool = False, interval: str = "2026-11-05..2026-11-06") -> runs.Result:  # noqa: PLR0913 -- a test's knobs, each by keyword
+def run(job: Job, found: Mapping[str, fakes.Database], frame: pd.DataFrame, root: Path, *, again: bool = False, interval: str = "2026-11-05..2026-11-06") -> runs.Result:
     folder = root / "data"
     folder.mkdir(exist_ok=True)
     frame.to_parquet(folder / "prices.parquet", index=False)

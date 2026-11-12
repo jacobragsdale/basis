@@ -69,7 +69,7 @@ class Replay[P]:
 
 
 @contextmanager
-def replaying[P](source: Snapshot, *, name: str, module: str, params: Path | None, parse: Callable[[str], P], reads: Collection[str]) -> Generator[Replay[P]]:  # noqa: PLR0913 -- the part says what it is and reads, by keyword
+def replaying[P](source: Snapshot, *, name: str, module: str, params: Path | None, parse: Callable[[str], P], reads: Collection[str]) -> Generator[Replay[P]]:
     """Open `source`, a run of the part `name` (or of its `module`), to run it again with the run's params or `params`,
     which `parse` validates. `reads` names the inputs the part reads now, each of which the run must have saved. Every
     record logged in the block carries the replay's id, `name` and the run it replays, and none logged after it does."""
@@ -89,7 +89,7 @@ def replaying[P](source: Snapshot, *, name: str, module: str, params: Path | Non
         yield Replay(original, run_id, parsed, params_text, params_path, saved)
 
 
-def resume(  # noqa: PLR0913 -- the part says what it is and writes, by keyword
+def resume(
     source: Snapshot, record: RunRecord, *, name: str, targets: Mapping[str, Target], databases: Callable[[str], Database], version: str, clock: Callable[[], datetime], again: bool = False
 ) -> RunRecord:
     """Finish publishing `record`, a run of `name` that committed to some of its databases and failed on another, from
@@ -143,7 +143,7 @@ class Regression[D]:
     reasons: list[str]
 
 
-def regress[D](  # noqa: PLR0913 -- the part says what it is and how it replays, by keyword
+def regress[D](
     root: Root, name: str, *, package: str, last: int, labels: Mapping[str, str], replay: Callable[[Snapshot], tuple[RunRecord, list[D]]], statuses: Collection[str] = ("published",)
 ) -> list[Regression[D]]:
     """Replay the last `last` runs of `package`'s `name` whose status is one of `statuses`, published by default, and

@@ -139,7 +139,7 @@ def table_of(scratch: Scratch) -> str:
     return f"etl_it_docs_{scratch.suffix}"
 
 
-def publish(scratch: Scratch, write: FrameWrite, rows: pd.DataFrame, root: Path, *, row: type[etl.Row] = Doc, table: str | None = None) -> runs.Result:  # noqa: PLR0913 -- a test's knobs, each by keyword
+def publish(scratch: Scratch, write: FrameWrite, rows: pd.DataFrame, root: Path, *, row: type[etl.Row] = Doc, table: str | None = None) -> runs.Result:
     data = root / "data"
     data.mkdir(parents=True)
     rows.to_parquet(data / "docs.parquet", index=False)

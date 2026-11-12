@@ -508,9 +508,7 @@ class HttpClient:
     async def post[T](self, path: str, reply: type[T], /, *, query: Query | None = None, body: Body = None, segments: Mapping[str, Segment] | None = None) -> T:
         return await self.call("POST", path, reply, query=query, body=body, segments=segments)
 
-    async def call[T](  # noqa: PLR0913 -- the request's parts, by keyword
-        self, method: HttpMethod, path: str, reply: type[T], /, *, query: Query | None = None, body: Body = None, segments: Mapping[str, Segment] | None = None
-    ) -> T:
+    async def call[T](self, method: HttpMethod, path: str, reply: type[T], /, *, query: Query | None = None, body: Body = None, segments: Mapping[str, Segment] | None = None) -> T:
         return await self._calls.call(method, filled(path, segments), reply, query=query, body=body)
 
     async def send(self, method: SendMethod, path: str, body: Body = None, /, *, key: str, segments: Mapping[str, Segment] | None = None) -> None:

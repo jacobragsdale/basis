@@ -86,7 +86,7 @@ async def dirty_price(
     return domain.dirty_price(found, holding.face, holding.settle, accrued, clean)
 
 
-async def bond_yield(  # noqa: PLR0913, PLR0917 -- what the route reads and reaches, each a parameter FastAPI fills
+async def bond_yield(  # noqa: PLR0917 -- what the route reads and reaches, each a parameter FastAPI fills
     security: Security,
     settle: date,
     warehouse: Annotated[api.Reader, api.given(WAREHOUSE)],
@@ -140,7 +140,7 @@ async def coupons(security: Security, warehouse: Annotated[api.Reader, api.given
     return frame[list(CouponRow.model_fields)]
 
 
-async def record_settlement(  # noqa: PLR0913 -- the request, and each thing the route reaches, as api.given gives it
+async def record_settlement(
     request: SettlementRequest,
     *,
     user: Annotated[api.User | None, api.given(api.User)],

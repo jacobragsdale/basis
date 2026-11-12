@@ -33,7 +33,7 @@ that run at the same time, and [PLAN.md](PLAN.md) the review after the MVP and i
 ```sh
 uv sync --all-packages              # every member; a plain `uv sync` installs only what basis releases, and removes optim
 uv run pre-commit install           # once per clone: the commit hook runs the checks below
-uv run pre-commit run --all-files   # ruff, ty with every rule an error, the lockfile, the import contracts, file hygiene
+uv run pre-commit run --all-files   # ruff, ty with every rule an error, dead code, the lockfile, the import contracts, file hygiene
 uv run pytest -n auto               # every package's unit tests, optim's among them, and scripts/tests, from the root
 uv run scripts/release.py check     # every member at the root's one version, pinning basis-core at it (docs/releasing.md)
 uv run pytest -m integration        # real SQL Server and Oracle, every package's: packages/job/tests/integration/README.md

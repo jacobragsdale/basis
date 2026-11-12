@@ -34,7 +34,7 @@ from basis.job.diff import OperationDiff
 log = logging.getLogger(__name__)
 
 
-def run(  # noqa: PLR0913 -- main.py writes every value out, by keyword
+def run(
     job: ModuleType,
     *,
     params: str | Path,
@@ -89,11 +89,6 @@ class Fixture(Model):
     """`START..END`, or null for a job that runs without one."""
     now: AwareDatetime | None = None
     """The time each clock the job's `Inputs` declare reads, which a job that declares one must give."""
-
-
-def fixture_interval(folder: Path) -> str | None:
-    """A fixture's interval, from its `fixture.json`: `{"interval": "2026-11-05..2026-11-06"}`, or null for none."""
-    return read_fixture(folder).interval
 
 
 FIXTURE = "fixture.json"

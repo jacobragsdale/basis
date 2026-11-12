@@ -27,7 +27,7 @@ writes at its root instead."""
 EXAMPLE_NAME = re.compile(r'name="accruals"')
 
 
-def app(path: Path, name: str, job: str | None, *, index: str | None, framework_path: Path | None, install: bool = True) -> Path:  # noqa: PLR0913 -- where, what, and where its packages come from, by keyword
+def app(path: Path, name: str, job: str | None, *, index: str | None, framework_path: Path | None, install: bool = True) -> Path:
     """A new repo at `path` with the API `name`, copied from the example in its layers, and, with `job`, a job named
     so beside it; its dependencies installed and git initialised, the first commit the author's. basis-api and
     basis-job come from `index`, from a checkout of basis at `framework_path` installed editable, or, with neither, from

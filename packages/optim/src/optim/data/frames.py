@@ -58,12 +58,6 @@ def to_columns(frame: pd.DataFrame) -> Columns:
     return {str(column): frame[column].astype(object).where(frame[column].notna(), None).tolist() for column in frame.columns}
 
 
-def to_models[R: Row](row: type[R], frame: pd.DataFrame) -> list[R]:
-    """A validated frame's rows as models, for small frames you want typed attributes on (one per portfolio)."""
-    records = frame.astype(object).where(frame.notna(), None).to_dict("records")
-    return [row.model_validate(record) for record in records]
-
-
 def _column(label: str, values: list[object], adapter: TypeAdapter[list[object]], dtype: Dtype, which: Callable[[int], str]) -> pd.Series:
     try:
         return pd.Series(adapter.validate_python(values), dtype=dtype)

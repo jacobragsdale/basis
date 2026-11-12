@@ -142,7 +142,7 @@ class HttpClient:
                 msg = f"{resource.name} answered {method} {path} with a body that is not a {name}"
                 raise BadReply(msg, resource=resource.name, status=response.status_code) from error
 
-    async def request(  # noqa: PLR0913 -- the request's parts, by keyword
+    async def request(
         self, method: HttpMethod, path: str, *, query: Query | None = None, content: bytes | None = None, headers: Mapping[str, str] | None = None, attributes: Mapping[str, str] | None = None
     ) -> httpx2.Response:
         """One call, in a span of its own with `attributes` besides its own, and within its deadline, whose reply must
@@ -157,9 +157,7 @@ class HttpClient:
         with self._tracer.start_as_current_span(f"{resource.name} {method}", kind=SpanKind.CLIENT, attributes=given) as span:
             yield span
 
-    async def _exchange(  # noqa: PLR0913 -- the request's parts, by keyword
-        self, span: Span, method: HttpMethod, path: str, *, query: Query | None, content: bytes | None, headers: Mapping[str, str]
-    ) -> httpx2.Response:
+    async def _exchange(self, span: Span, method: HttpMethod, path: str, *, query: Query | None, content: bytes | None, headers: Mapping[str, str]) -> httpx2.Response:
         """The service's 2xx reply to the request, within the deadline, made again while it is an `Unavailable` GET and
         a backoff fits before the deadline."""
         resource = self._resource
@@ -200,9 +198,7 @@ class HttpClient:
             log.info("%s is unavailable for %s %s: making it again in %.3gs", resource.name, method, path, wait_s, extra={"resource": resource.name, "resent": resent, "wait_s": wait_s})
             await waits.sleep(wait_s)
 
-    async def _attempt(  # noqa: PLR0913 -- the request's parts, by keyword
-        self, method: HttpMethod, path: str, *, query: Query | None, content: bytes | None, headers: Mapping[str, str], limit: deadlines.Limit, ends_at: float
-    ) -> httpx2.Response:
+    async def _attempt(self, method: HttpMethod, path: str, *, query: Query | None, content: bytes | None, headers: Mapping[str, str], limit: deadlines.Limit, ends_at: float) -> httpx2.Response:
         """One attempt at the request, within what is left of the deadline: the service's reply, whatever its status.
         It raises `Timeout` once the deadline passes, and the transport's failure as `Unavailable` or `Failed`."""
         resource = self._resource
@@ -222,7 +218,7 @@ class HttpClient:
             raise transport_failure(resource.name, resource.name, f"{method} {path}", error) from error
 
 
-def _retry_in(method: HttpMethod, failure: ServiceError, response: httpx2.Response | None, *, resent: int, ends_at: float, waits: Waits) -> float | None:  # noqa: PLR0913 -- what the attempt was, and its clock
+def _retry_in(method: HttpMethod, failure: ServiceError, response: httpx2.Response | None, *, resent: int, ends_at: float, waits: Waits) -> float | None:
     """The seconds to wait before making the request again after `failure`, its `resent`-th resend: only for an
     `Unavailable` GET, `MAX_RESENDS` times at most, and only where the wait ends before the deadline, on `waits`'
     clock; otherwise None."""

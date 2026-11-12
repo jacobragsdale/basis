@@ -325,7 +325,7 @@ def _read(store: Store, path: Root) -> Snapshot:
     return Snapshot(store, path, manifest)
 
 
-def write(root: Root, record: RunRecord, params_json: str, inputs: Mapping[str, pa.Table], changes: Mapping[str, Changes], *, package: str) -> Snapshot:  # noqa: PLR0913 -- the run, and the part whose run it is, by keyword
+def write(root: Root, record: RunRecord, params_json: str, inputs: Mapping[str, pa.Table], changes: Mapping[str, Changes], *, package: str) -> Snapshot:
     """Save a new run in the store at `root`, under the part `package`: each dataset the store does not hold yet, then
     the run's manifest. Each input is stored as the Arrow table the run loaded, which nothing the run's code does can
     change, and each output's frame, conformed to its declared columns, as `frames.to_arrow` makes it, so the same rows

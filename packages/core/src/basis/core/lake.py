@@ -126,7 +126,7 @@ Archiving = ledgered.Run
 """What a part's run says of the archive it writes: its interval is the partition's, so it has one."""
 
 
-def archive(archiving: Archiving, output: str, rows: pa.Table, store: Lake, database: Database, *, table: str, path: str) -> ArchivedRecord:  # noqa: PLR0913 -- the run, the output, where it goes, and its ledger
+def archive(archiving: Archiving, output: str, rows: pa.Table, store: Lake, database: Database, *, table: str, path: str) -> ArchivedRecord:
     """Archive `rows`, the run's output `output`, as the partition `path` of the lake's `table`, recording it in
     `database`'s ledger (`basis.core.ledgered`), as the module's docstring says, and what became of it."""
     if (interval := archiving.interval) is None:

@@ -202,7 +202,7 @@ def recorded(rows: Rows, dialect: SqlDialect, ledger: str, run_id: str) -> dict[
     return {str(row[0]): Counts(*(int(str(value)) for value in row[1:])) for row in found}
 
 
-def overlapping(rows: Rows, dialect: SqlDialect, ledger: str, *, job: str, output: str, interval: Interval | None) -> list[str]:  # noqa: PLR0913 -- the ledger, and what it is asked of
+def overlapping(rows: Rows, dialect: SqlDialect, ledger: str, *, job: str, output: str, interval: Interval | None) -> list[str]:
     """The runs `ledger` has of the job's output for an interval overlapping `interval`, or at all: `Writer.overlapping`."""
     binds: dict[str, object] = {"job": job, "output": output}
     sql = f"SELECT DISTINCT run_id FROM {ledger} WHERE job = {dialect.bind('job')} AND output = {dialect.bind('output')}"

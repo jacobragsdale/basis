@@ -237,7 +237,7 @@ def store(settings: Settings, folder: Path) -> Root | Problem:
         return f"the QA store {location} cannot be opened ({' '.join(str(error).split())})", "fix BASIS_SNAPSHOT_ROOT in the QA settings, or reach the store from this machine"
 
 
-def context(declared: Declared, settings: Settings, *, store: Root, repo: Path, commit: str | None, part: str) -> Qa:  # noqa: PLR0913 -- what the tier found, by keyword
+def context(declared: Declared, settings: Settings, *, store: Root, repo: Path, commit: str | None, part: str) -> Qa:
     """What the tier gives the part `part`: settings `problems` found safe, the QA store, and databases that refuse
     what `writes` does not list."""
     tables = declared.tables()
@@ -281,9 +281,7 @@ def tier(repo: Path, parts: Mapping[str, Part], *, commit: str | None, folder: P
     return _safely(found, read(source), planning, source=source, repo=repo, folder=folder, commit=commit)
 
 
-def _safely(  # noqa: PLR0913 -- what the tier found, by keyword
-    found: Declared, settings: Settings, planning: Mapping[str, Callable[[Qa], QaPlan]], *, source: Path, repo: Path, folder: Path, commit: str | None
-) -> Outcome:
+def _safely(found: Declared, settings: Settings, planning: Mapping[str, Callable[[Qa], QaPlan]], *, source: Path, repo: Path, folder: Path, commit: str | None) -> Outcome:
     """Each part's runs, once the settings read from `source` are safe, the store opens, and no plan is refused."""
     if refused := problems(settings, found, source=source):
         return Outcome(refused=tuple(refused))

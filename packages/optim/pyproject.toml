@@ -62,11 +62,11 @@ show-fixes = true
 select = ["ALL"]  # every rule; opt out below, with a reason
 ignore = [
     "D",  # module docstrings are prose, not pydocstyle sections
+    "PLR0913",  # arguments by keyword are clearer than a parameter object; PLR0917 still caps the positional ones at five, as the root's ruff does
     "CPY",  # no copyright headers
     "COM812",  # conflicts with the formatter
     "TC",  # annotations are lazy on 3.14, and pydantic needs its types at runtime
     "PLR2004",  # 0.5, 1e-6 and friends read better inline than as constants
-    "PLR0913",  # keyword-only arguments are clearer than a parameter object
     "FBT003",  # stdlib calls such as `captureWarnings(True)` take positional booleans
     "TD003", "FIX002",  # `TODO(port)` marks where a port writes code; there is no issue to link
 ]

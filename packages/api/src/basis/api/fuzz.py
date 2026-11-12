@@ -223,7 +223,7 @@ def _test(strategy: SearchStrategy[Request], checks: list[CheckFunction], header
     return given(case=strategy)(configured(run))
 
 
-def _problem(service: Service, label: str, name: str, mode: str, *, failed: _Failed, sent: _Sent) -> Problem:  # noqa: PLR0913 -- what the line names, and where its request is written
+def _problem(service: Service, label: str, name: str, mode: str, *, failed: _Failed, sent: _Sent) -> Problem:
     exceptions = getattr(failed.error, "exceptions", [failed.error])
     named = sorted((str(getattr(entry, "code", "")), str(getattr(entry, "title", type(entry).__name__))) for entry in exceptions)
     found = "; ".join(f"{title} ({code})" if code else title for code, title in named)

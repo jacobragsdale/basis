@@ -28,7 +28,6 @@ Currency = Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]  # ISO 4217
 # security's trading increment is what makes trade quantities exact.
 Price = Annotated[float, Field(gt=0)]
 Quantity = Annotated[float, Field(gt=0)]  # face amount for a bond, currency units for cash
-Par = Annotated[int, Field(gt=0)]  # a trading denomination, in whole units of quantity
 Weight = Annotated[float, Field(ge=0, le=1)]
 Rating = Literal[
     "AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-",
