@@ -281,7 +281,9 @@ The destination checks run only where the database is configured.
 ## Params
 
 A subclass of `etl.Params` is a strict pydantic model: an unknown key is refused, and no value is coerced. A run reads
-one JSON file of params. A field's docstring is its description in `basis describe`.
+one JSON file of params. A field's docstring is its description in `basis describe`. A param that holds several values
+is a `tuple`, as `desks: tuple[str, ...] = ()`, which reads a JSON list: a `list` default is mutable, which ruff's
+RUF012 refuses.
 
 ## Interval
 

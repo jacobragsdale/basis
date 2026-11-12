@@ -32,3 +32,14 @@ def test_the_agent_block_names_every_kind_of_column() -> None:
     block = " ".join((ROOT / "templates" / "agents.md").read_text(encoding="utf-8").split())
     assert "A column is a `float`, `str`, `bool`, `date` or `datetime`." in block
     assert list(frames._TYPES) == ["float", "str", "bool", "date", "datetime"]  # noqa: SLF001 -- the kinds the sentence above lists
+
+
+def test_a_list_param_is_a_tuple_as_the_reference_says_which_reads_a_json_list_and_ruff_takes() -> None:
+    reference = " ".join((ROOT / "docs" / "reference.md").read_text(encoding="utf-8").split())
+    assert "A param that holds several values is a `tuple`, as `desks: tuple[str, ...] = ()`" in reference
+
+    class Given(etl.Params):
+        desks: tuple[str, ...] = ()
+
+    assert Given.model_validate_json('{"desks": ["rates", "credit"]}').desks == ("rates", "credit")
+    assert Given().desks == ()
