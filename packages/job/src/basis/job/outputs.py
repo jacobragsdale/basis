@@ -159,6 +159,77 @@ class FrameEffect(Effect):
         return self.checked(instance.values[self.name])  # noqa: PD011 -- the outputs by name, no frame's values
 
 
+@dataclass(frozen=True)
+class RowCount:
+    """The table's rows, within `within`, a share, of the median of the job's last `last` published runs' rows of it,
+    as `within=0.5` allows half as many to half as many again. A job with no published run before has nothing to
+    compare, and passes; a replay reads no history, and passes too."""
+
+    within: float
+    last: int = 10
+
+    def __post_init__(self) -> None:
+        if not self.within > 0:
+            msg = f"a row count's band is a share of the median above 0, as within=0.5, not {self.within}"
+            raise ValueError(msg)
+        if self.last < 1:
+            msg = f"last is the number of published runs, 1 or more, not {self.last}"
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True)
+class NullRate:
+    """The share of the table's rows whose `column` is null, at most `at_most`, from 0 to 1."""
+
+    column: str
+    at_most: float
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.at_most <= 1:
+            msg = f"a share of nulls is from 0 to 1, not {self.at_most}"
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True)
+class Total:
+    """The total of the table's float `column`, within `within` of the total of an input's column, `matches`, as
+    `trades.quantity`: what reconciles a load with what it read."""
+
+    column: str
+    matches: str
+    within: float = 0.0
+
+    def __post_init__(self) -> None:
+        dataset, _, column = self.matches.partition(".")
+        if not dataset or not column:
+            msg = f"matches names DATASET.COLUMN, an input and its column, as 'trades.quantity', not {self.matches!r}"
+            raise ValueError(msg)
+        if self.within < 0:
+            msg = f"within is 0 or more, not {self.within}"
+            raise ValueError(msg)
+
+
+type Expectation = RowCount | NullRate | Total
+"""What a table's rows are expected to be, before anything is written (`basis.job.expectations`)."""
+
+
+def _expected(row: type[Row], table: str, expect: tuple[Expectation, ...]) -> None:
+    columns = {column.name: column for column in row.columns}
+    for expectation in expect:
+        match expectation:
+            case NullRate(column=name) if name not in columns:
+                msg = f"{table}: expects {name}'s share of nulls, and its row has no column {name}"
+                raise ValueError(msg)
+            case Total(column=name) if name not in columns or columns[name].kind != "float":
+                msg = f"{table}: expects {name}'s total, and {name} is no float column of its row"
+                raise ValueError(msg)
+            case RowCount() | NullRate() | Total():
+                pass
+            case _:
+                msg = f"{table}: an expectation is an etl.RowCount, etl.NullRate or etl.Total, not {expectation!r}"
+                raise TypeError(msg)
+
+
 class Table[V: (pd.DataFrame, Changes)](Named):
     """A declared output, named by its attribute on the job's `Outputs`. On an instance, its value is the frame the
     transform returned, or for `Manual()`, the `Changes`."""
@@ -166,10 +237,13 @@ class Table[V: (pd.DataFrame, Changes)](Named):
     @overload
     def __init__(self: Table[Changes], row: type[Row], *, database: str, table: str, write: Manual, key: tuple[str, ...] | None = None) -> None: ...
     @overload
-    def __init__(self: Table[pd.DataFrame], row: type[Row], *, database: str, table: str, write: FrameWrite, key: tuple[str, ...] | None = None) -> None: ...
-    def __init__(self, row: type[Row], *, database: str, table: str, write: Write, key: tuple[str, ...] | None = None) -> None:
+    def __init__(self: Table[pd.DataFrame], row: type[Row], *, database: str, table: str, write: FrameWrite, key: tuple[str, ...] | None = None, expect: tuple[Expectation, ...] = ()) -> None: ...
+    def __init__(self, row: type[Row], *, database: str, table: str, write: Write, key: tuple[str, ...] | None = None, expect: tuple[Expectation, ...] = ()) -> None:
         self.target = Target(row, database, table, write, key)
         _validate(self.target)
+        _expected(row, table, tuple(expect))
+        self.expect = tuple(expect)
+        """What the table's rows are expected to be, each a reason not to write where they are not."""
 
     @overload
     def __get__(self, instance: None, owner: type) -> Self: ...

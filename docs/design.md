@@ -484,6 +484,15 @@ starts, such as `previous-business-day`, `previous-month` or `today-7d..today`, 
 the zone and business days of the job's `CALENDAR`, which it requires, to dates, and the run's manifest records those
 dates, so `replay` and `regress` rerun exactly the interval the run had. The Python API and the QA tier take dates.
 
+**Expectations of an output.** A table declares what its rows are expected to be, `expect=(etl.RowCount(within=0.5),
+etl.NullRate("price", at_most=0.01), etl.Total("value", matches="trades.value"))`, decided on 2026-11-11 for step
+12.5 of [the plan](../PLAN.md), the roadmap's output checks, and open to the maintainer's review. They are the checks
+that catch most bad loads, a load far smaller or larger than usual, a column gone null, a total that no longer
+reconciles, and each is cheap: a row count is held to the job's own recent published runs, which the run store
+already holds, and needs nothing new recorded. They run before any write, beside the framework's checks, and each
+that fails is a reason as a check's is. No library: what pandera or Great Expectations add is breadth basis does not
+need, and their failures would not be basis's one line. A replay reads no history, so its row counts hold.
+
 **Backfill.** `basis backfill JOB --from DAY --to DAY` makes the runs a scheduler would have made for those days, one
 per business day of the job's `CALENDAR`, each for its day's interval, oldest first, and stops at the first that does
 not do what it was asked, decided on 2026-11-11 for step 12.4 of [the plan](../PLAN.md) and open to the maintainer's

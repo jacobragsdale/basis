@@ -52,7 +52,7 @@ from basis.core.settings import Settings, SettingsError, publish_refusal, variab
 from basis.core.snapshots import InputRecord, PublishRecord, RunRecord, Snapshot, Status
 from basis.core.storage import Root
 from basis.core.tables import Changes
-from basis.job import effects, handles
+from basis.job import effects, expectations, handles
 from basis.job.changes import Planned, plan
 from basis.job.handles import Kept
 from basis.job.inputs import Clock, Fetch, Mongo, sql_problems
@@ -224,6 +224,7 @@ def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
         declared, fetched = job.inputs.declared(), _reach(settings, this.faked)
         loaded, inputs = load(declared, request.interval, open_database=databases, reach=fetched, tracer=this.tracer, data=request.data, open_folder=this.open_folder, open_mongo=this.open_mongo)
         tables = {name: frames.to_arrow(frame) for name, frame in loaded.items()}
+        past = expectations.history(snapshot_root, job.name, job.outputs, package=PACKAGE)  # the job's recent published rows, for its row counts
     except Exception as error:
         log.exception("could not load the inputs")
         return _summarized(finish(record.done("failed", error=_headline(error), finished_at=clock()), snapshot_root, params_text, {}, {}))
@@ -232,7 +233,7 @@ def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
     except Exception as error:  # a defect: the inputs' declarations are checked when their class is made
         log.exception("could not give the transform its clocks and ids")
         return _summarized(finish(record.with_outputs({}, inputs).done("failed", error=_headline(error), finished_at=clock()), snapshot_root, params_text, tables, {}))
-    made = transformed(job, params, tables, request.interval, kept)
+    made = transformed(job, params, tables, request.interval, kept, past=past)
     planned, reasons = made.planned, made.reasons
     for name, entry in planned.items():
         if (spec := specs.get(name)) is not None and entry.changes is not None:
@@ -397,7 +398,7 @@ class Transformed:
     effects_planned: effects.Planned = field(default_factory=effects.Planned)
 
 
-def transformed(job: Job, params: Params, tables: Mapping[str, pa.Table], interval: Interval | None, kept: Kept) -> Transformed:
+def transformed(job: Job, params: Params, tables: Mapping[str, pa.Table], interval: Interval | None, kept: Kept, *, past: expectations.History | None = None) -> Transformed:
     """Each table's changes, and every reason not to write them. The transform and the check are each given frames of
     their own of the inputs, so neither sees what the other changed in them. A transform or check that raises is a
     reason that names the line of job code that raised; the log holds its traceback."""
@@ -412,6 +413,7 @@ def transformed(job: Job, params: Params, tables: Mapping[str, pa.Table], interv
     reasons = [reason for entry in planned.values() for reason in entry.reasons]
     made = effects.plan(outputs, interval)
     reasons.extend(made.reasons)
+    reasons.extend(expectations.reasons(outputs, tables, past or {}))
     try:
         checked = job.inputs(fresh(tables), interval=interval, handles=kept.handles)
         reasons.extend(f"check: {reason}" for reason in job.run_check(checked, outputs, params))

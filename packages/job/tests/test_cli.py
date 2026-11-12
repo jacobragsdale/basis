@@ -176,6 +176,7 @@ def test_describe_prints_the_contract_as_json(repo: Path, capsys: pytest.Capture
         "write": "ReplaceWhere",
         "key": ["trade_date", "account_id", "security_id"],
         "columns": [],
+        "expect": [],
     }
     assert described["inputs"]["accounts"]["empty"] == "fail"
 

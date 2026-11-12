@@ -15,7 +15,7 @@ from basis.core.jsontext import dumps as json_text
 from basis.core.messages import Mail
 from basis.core.tables import Changes, Delete, Range
 from basis.job.inputs import Clock, Cursor, Excel, Fetch, File, Ids, Inputs, Mongo, NextLink, Offset, Query
-from basis.job.outputs import Append, Email, ExcelReport, InsertNew, Lake, Manual, MongoUpsert, Outputs, Replace, ReplaceWhere, Slack, Table, Upsert
+from basis.job.outputs import Append, Email, ExcelReport, Expectation, InsertNew, Lake, Manual, MongoUpsert, NullRate, Outputs, Replace, ReplaceWhere, RowCount, Slack, Table, Total, Upsert
 from basis.job.params import Params
 from basis.job.rows import Json, MaxLength, Row, Zone
 from basis.job.version import VERSION
@@ -34,6 +34,7 @@ __all__ = [
     "Email",
     "Excel",
     "ExcelReport",
+    "Expectation",
     "Fetch",
     "File",
     "Ids",
@@ -48,6 +49,7 @@ __all__ = [
     "Mongo",
     "MongoUpsert",
     "NextLink",
+    "NullRate",
     "Offset",
     "Outputs",
     "Params",
@@ -56,8 +58,10 @@ __all__ = [
     "Replace",
     "ReplaceWhere",
     "Row",
+    "RowCount",
     "Slack",
     "Table",
+    "Total",
     "Upsert",
     "Zone",
     "calendar",

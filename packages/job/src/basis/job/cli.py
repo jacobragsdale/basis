@@ -453,6 +453,7 @@ def describe(job: jobs.Job) -> dict[str, object]:
                 "write": type(table.target.write).__name__,
                 "key": list(table.target.key) if table.target.key is not None else None,
                 "columns": _columns(table.target.row.columns),
+                "expect": [repr(expectation) for expectation in table.expect],
             }
             for name, table in job.outputs.declared().items()
         },

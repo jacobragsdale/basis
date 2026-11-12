@@ -183,7 +183,7 @@ them, the last time the run kept, or the run's start, and new ids, and logs that
 
 ## Outputs
 
-### `etl.Table(row, *, database, table, write, key=None)`
+### `etl.Table(row, *, database, table, write, key=None, expect=())`
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -192,6 +192,20 @@ them, the last time the run kept, or the run's start, and new ids, and logs that
 | `table` | `str` | `TABLE` or `SCHEMA.TABLE`: letters, digits, underscores and `$`, never quoted. |
 | `write` | a write mode | How the table is written. |
 | `key` | `tuple[str, ...]` or `None` | The columns that identify a row; none of them may be nullable. |
+| `expect` | a tuple of expectations | What the frame the transform returns is expected to be, below; not for `Manual()`. |
+
+### Expectations
+
+Each is evaluated on the frame the transform returns, before anything is written, with the framework's checks, and
+one that fails is a reason not to write, as `prices: 4 rows, and the last 3 published runs' median is 11: expected
+5.5 to 16.5, within 50% of it`. A column an expectation names that the row lacks is refused where the table is
+declared.
+
+| Expectation | Holds |
+|---|---|
+| `etl.RowCount(within=, last=10)` | The frame's rows, within `within`, a share, of the median of the rows the job's last `last` published runs wrote of the table, as the run store holds them: `within=0.5` allows half as many to half as many again. With no published run before, there is nothing to compare, and it holds; a replay reads no history, so it holds there too. |
+| `etl.NullRate(column, at_most=)` | The share of rows whose `column` is null, at most `at_most`, from 0 to 1. |
+| `etl.Total(column, matches=, within=0.0)` | The total of the float `column`, within `within` of the total of an input's column, `matches`, as `"trades.quantity"`. |
 
 ### Write modes
 
