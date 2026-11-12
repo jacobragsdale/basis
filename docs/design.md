@@ -331,6 +331,22 @@ a duplicate by its `Idempotency-Key`. basis provides the outbox table's DDL, as 
 ddl`. A route that writes no database makes the call at once, since it has nothing to undo, and a failure there
 answers as its kind of service error does (see [What jobs and APIs share](#what-jobs-and-apis-share)).
 
+A request that a UI sends again, because it lost the answer to a dropped connection or a timeout, must not write twice,
+which matters before any route submits an order. A route that writes declares `idempotency="required"` or
+`"optional"`, decided on 2026-11-11 (step 12.8), and its database a table of keys, `api.database(...,
+idempotency=api.idempotency(TABLE, keep_s=...))`, whose DDL `basis ddl` prints beside the outbox's. A request's
+`Idempotency-Key`, as the IETF's Idempotency-Key draft has it, is kept in the request's own transaction, by the route,
+the user and the key, with a fingerprint of the request as it was sent (its method, path, query and body) and, once the
+handler returns, what it answered: the key commits exactly when the request's writes do, and a request that fails
+keeps nothing, so it runs again. The same request with the same key, within `keep_s`, answers what the first did,
+status and JSON, without running the handler, so it writes and sends nothing; the same key with another request is
+refused, a 422 `idempotency-key-reused` naming the header, as the draft says; a key a request not yet committed holds
+is a 409 `idempotency-key-in-use`, which a UI retries; and a route that requires a key answers a request without one
+400 `idempotency-key-missing`. Keeping the key in the request's transaction, rather than in a cache or a store of its
+own, is what makes it exact: there is no moment where the writes committed and the key did not, or the other way
+round. A key older than `keep_s` is deleted when it is sent again, and rows are otherwise not swept, which a repo does
+with a job of its own where its table grows. The CORS settings let a page of an allowed origin send the header.
+
 Identity is optional. A request with a token has it verified (signature, expiry, issuer and audience), and an invalid or
 expired token is refused rather than treated as anonymous, so a broken sign-in in a UI fails loudly. A handler sees the
 user as `User | None`, so the type checker makes it handle the anonymous case, and the user goes into every log record,

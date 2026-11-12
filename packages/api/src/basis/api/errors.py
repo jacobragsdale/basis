@@ -274,6 +274,31 @@ class OutcomeUnknownError(Error):
     title = "Whether the request's writes committed is not known"
 
 
+class IdempotencyKeyMissingError(Error):
+    """A request without an `Idempotency-Key` to a route that requires one (`idempotent.py`)."""
+
+    status = HTTPStatus.BAD_REQUEST
+    title = "The request needs an Idempotency-Key"
+
+
+class IdempotencyKeyReusedError(Error):
+    """A request whose `Idempotency-Key` a request that was not this one was sent with."""
+
+    status = HTTPStatus.UNPROCESSABLE_CONTENT
+    title = "The Idempotency-Key was sent with another request"
+
+
+class IdempotencyKeyInUseError(Error):
+    """A request whose `Idempotency-Key` a request not yet committed holds."""
+
+    status = HTTPStatus.CONFLICT
+    title = "A request with the Idempotency-Key is still being served"
+
+
+IDEMPOTENCY_ERRORS: tuple[type[Error], ...] = (IdempotencyKeyMissingError, IdempotencyKeyReusedError, IdempotencyKeyInUseError)
+"""The errors of a request's `Idempotency-Key`, which `Route.answers` adds to a route that keeps them."""
+
+
 class BodyTooLargeError(Error):
     """A request body over the settings' `serve.max_body_bytes`, which every route that takes a body may answer."""
 

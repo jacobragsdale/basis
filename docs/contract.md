@@ -26,6 +26,7 @@ document at `/openapi.json`.
 | Each error | Its status, under `application/problem+json`: a 422 as `ValidationProblem`, any other as `Problem` |
 | An operation's errors | `x-basis-errors`: each error it may answer, as `{"status": 404, "type": "unknown-bond", "title": "No bond has that ISIN"}`, by status and type |
 | A dataset route | Its success lists `application/vnd.apache.arrow.stream` as `{"type": "string", "format": "binary"}` beside its JSON |
+| A route that keeps its requests' keys | An `Idempotency-Key` header parameter, `required` where the route requires one, its schema one to 255 visible ASCII characters: see [A request sent twice](#a-request-sent-twice) |
 | A stream of live updates | Its success is `text/event-stream`, `{"type": "string"}`, with `x-basis-event`, `{"schema": ...}`, the schema of each event's data: see [Live updates](#live-updates) |
 
 What a success answers is what the app sends: each float is `{"type": ["number", "null"]}`, since NaN and ±inf
@@ -60,6 +61,24 @@ each field at fault (see [Errors](#errors)).
 | A route that takes no body | Refuses one |
 | A query key | Refused unless the route declares it; given twice for one value, refused |
 | Query and path text | Read by its type's grammar: `10`, `0.045`, `true`, `2026-11-06`, a UUID in groups of 8-4-4-4-12 |
+
+### A request sent twice
+
+A route that writes may keep each request's `Idempotency-Key`, from step 12.8, as the IETF's Idempotency-Key draft
+has it; the document lists the header among its parameters, required where the route requires it. A UI that sends a
+request again, because it lost the answer, sends it with the same key, and gets the first one's answer.
+
+| The request | The answer |
+|---|---|
+| A new key | The route's own; a success keeps the key with its answer, and a failure keeps nothing |
+| The key again, with the same method, path, query and body, within the API's time to keep it | The first answer's status and JSON, and nothing written or sent again |
+| The key again, with another request | 422 `idempotency-key-reused`, whose `errors` name the parameter `Idempotency-Key` |
+| The key while its first request is still being served | 409 `idempotency-key-in-use`: send it again once that one has answered |
+| No key, where the route requires one | 400 `idempotency-key-missing` |
+| A key that is not one to 255 visible ASCII characters | 422 `invalid-request`, naming the parameter `Idempotency-Key` |
+
+A key is the user's own, and the route's: another user, or another route, may send the same one. A key a UI makes
+is new for each thing it asks for, as a UUID, and the same each time it sends that again.
 
 A query parameter that is a list takes its key once for each value, `?security=A&security=B`. The full grammar of query
 and path text is in [`strict.py`](../packages/api/src/basis/api/strict.py)'s docstring.
@@ -120,6 +139,9 @@ The errors basis answers itself, besides each API's own:
 | `service-denied` | 502 | Another service answered 401 or 403, or a database refused the API's login or a permission | |
 | `service-bad-reply` | 502 | Another service answered with a body that is not the reply the API declares for the call | |
 | `service-failed` | 502 | Another service answered 500 or any other status that is not a 2xx, or a database failed the statement | |
+| `idempotency-key-missing` | 400 | A route that requires an `Idempotency-Key` has a request without one: see [A request sent twice](#a-request-sent-twice) | |
+| `idempotency-key-reused` | 422 | The `Idempotency-Key` was sent with another request | |
+| `idempotency-key-in-use` | 409 | A request with the `Idempotency-Key` is still being served; a UI sends it again once that one answers | |
 | `about:blank` | 404, 405, 500 | No route, the wrong method, or an error the API did not expect, whose problem says nothing more | |
 
 A `service-` problem is a failure of something the route called that its handler did not handle, one of basis's kinds
@@ -238,7 +260,7 @@ BASIS_ALLOWED_ORIGINS='["https://positions.example"]'
 ```
 
 The API then answers those origins' preflight requests, and lets their pages send `Authorization`, `Content-Type`,
-`traceparent` and `tracestate`, with the methods `GET`, `POST`, `PUT`, `PATCH` and `DELETE`, and read `X-Request-Id`,
+`Idempotency-Key`, `traceparent` and `tracestate`, with the methods `GET`, `POST`, `PUT`, `PATCH` and `DELETE`, and read `X-Request-Id`,
 `traceparent` and `WWW-Authenticate`. It allows no credentialed request, since a UI's token is a header, not a cookie,
 and a browser keeps its answer to a preflight request for 600 seconds. Without the setting, or with `[]`, every other origin's page is refused. A `*` is refused when the
 settings are read.
@@ -301,7 +323,7 @@ The example API's document is
 [`packages/api/src/basis/api/example/openapi.json`](../packages/api/src/basis/api/example/openapi.json), the sample
 basis-ui generates its client from and tests against, pinned to a commit of this repo. It holds every part of the
 contract: query and path parameters, a JSON body with numbers and dates, a time with its offset, a dataset route,
-`coupons`, with its Arrow, whose columns declare each of the six display formats, a 422 a handler names its fields in, a stream of live updates, `quote`, a route that writes and books its write with another
+`coupons`, with its Arrow, whose columns declare each of the six display formats, a 422 a handler names its fields in, a stream of live updates, `quote`, a route that writes, keeps an optional `Idempotency-Key`, and books its write with another
 service through its database's outbox, `record_settlement`, and the errors basis adds, that route's 502 among them. `uv run python -m
 basis.api.example` writes it, and the example's tests fail when it differs from the example's service, or when it
 breaks its contract with basis's last release, whose copy of it, `openapi.released.json` beside it, `scripts/release.py version` writes. Beside it, `coupons.arrows` is a sample of that route's Arrow stream, the fake warehouse's US912810TM64 as the

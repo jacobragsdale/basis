@@ -33,6 +33,7 @@ Paths are under `src/basis/api/`.
 | `deadlines.py` | A route's deadline, basis-core's deadline around a block's calls (`basis.core.deadlines`, of kind `route`), which caps each call its request makes, basis-core's client's included: `limit`, how long one call may take, and whose deadline sets it, and `exceeded`, its 504. |
 | `pool.py` | The process pool, spawned at startup: each compute call's deadline, span and log fields, an exception sent back only where pickle makes it again (`UncrossableError` otherwise), new processes once calls past their deadlines hold every one, and the in-process runs of `fakes.Compute`, which answer exceptions as the pool does. |
 | `routes.py` | Each route as the app serves it: its deadline, its request read strictly before FastAPI's handler, a domain exception answered as the most specific meaning the route declares, its undeclared errors refused, a dataset's Arrow when the request asks for it, and `add`, which adds the routes to an app with each operation's id its handler's name and its errors under their statuses. |
+| `idempotent.py` | A request that can be sent twice: a route's `idempotency=`, its requests' `Idempotency-Key`s kept in the written database's `api.idempotency` table, in the request's transaction, with the request's fingerprint and its answer; the same request again answers the same, another with the key is refused, and a key in use is a 409. Its table's statements in each dialect (`Sql`) and its DDL. Its docstring is the reference. |
 | `streams.py` | A stream of live updates, `api.stream`, as server-sent events: its handler called again every `every_s`, each call within the route's deadline and in a transaction of its own, an event when its answer changes, a heartbeat, a slow reader dropped, and its end when the token expires, `serve.stream_s` passes or the app drains. Its docstring is the reference. |
 | `openapi.py` | The OpenAPI document, as the app serves it and a repo commits it: `Application`, whose `openapi()` `finish`es FastAPI's (problem media types and strict models; every number a JSON number); `document` and `text`, made without settings; `operations`, `mapping` and `array`, which `contract.py` reads documents by too. Its docstring is the reference. |
 | `contract.py` | The breaking-change check, basis-api's `Part.contract`: `openapi.json` against the committed `openapi.released.json`, which `basis release-document VERSION` writes (`release`), with no tag or history read; what breaks a UI on each side, each model of a union by itself, each operation's `x-basis-errors` by type, and each keyword it does not compare listed. Its docstring is the reference. |
@@ -86,6 +87,10 @@ Paths are under `src/basis/api/`.
   reads a field by any key but a plain alias or its name, and `BackgroundTasks`. The body is
   validated once: FastAPI's handler gets basis's value through `internals.ValidatedOnce`, and never validates it again.
   A body sent to a route that declares none is a 422.
+- A route that declares `idempotency=` writes one database, which declares `api.idempotency`; its key is kept in the
+  request's transaction, so it commits exactly when the writes do, and a replay runs no handler, writes nothing and
+  sends nothing. The key is read strictly with the request, and the fake keeps its table in memory, a key another
+  transaction holds failing as a unique key's insert does.
 - A route never answers a `Response` of its own: one declared is refused, and one returned is a 500 whose writes roll
   back. A stream (`streams.py`) is basis's own response, each call of its handler a request of its own, with the
   route's deadline.

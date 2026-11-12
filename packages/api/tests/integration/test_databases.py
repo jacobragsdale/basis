@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import textwrap
+import threading
 import time
 import uuid
 from collections.abc import Callable, Generator, Iterator, Mapping
@@ -34,7 +35,7 @@ from pydantic import BaseModel, ConfigDict, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from basis import api
-from basis.api import fakes, outboxes, relay
+from basis.api import fakes, idempotent, outboxes, relay
 from basis.api.outboxes import Row
 from basis.api.resources import DatabaseResource
 from basis.core import command
@@ -595,3 +596,86 @@ def test_relay_fails_with_one_error_line_naming_a_call_that_aged_out(outboxed: O
     assert lines[-1].startswith(f"ERROR: service booking's outbox has a call aged out, and made no more: POST /bookings to ledger with Idempotency-Key {KEY}")
     assert [row.status for row in outboxed.rows()] == ["expired"]
     del sys.modules[module]
+
+
+# Requests that can be sent twice
+
+
+@dataclass(frozen=True)
+class Keyed:
+    """A scratch database with a table of `Idempotency-Key`s, as `basis ddl` prints it, and a service whose route
+    keeps them."""
+
+    scratch: Scratch
+    table: str
+
+    def app(self, *, keep_s: float = 3600) -> api.App:
+        keys = api.database("warehouse", deadline_s=10, max_concurrent=4, idempotency=api.idempotency(self.table, keep_s=keep_s))
+        insert = f"INSERT INTO {self.scratch.table} (security, price) VALUES ({self.scratch.bind('security')}, {self.scratch.bind('price')})"
+
+        async def keep(price: Price, warehouse: Annotated[api.Writer, api.given(keys)]) -> Price:
+            await warehouse.execute(insert, security=price.security, price=price.price)
+            if price.price < 0:
+                msg = f"{price.security} is refused after its write"
+                raise Refused(msg)
+            return price
+
+        route = api.post("/kept", keep, deadline_s=30, response=Price, errors=[Refused], anonymous=True, idempotency="required")
+        service = api.Service(name="keyed", settings=api.Settings, resources=[keys], routes=[route])
+        return api.build(service, settings=api.Settings.given(databases={"warehouse": self.scratch.settings}))
+
+    def kept(self) -> list[tuple[object, ...]]:
+        return self.scratch.rows(f"SELECT idempotency_key, route, status_code FROM {self.table} ORDER BY created_at")  # the body, a CLOB, as the replay reads it
+
+
+@pytest.fixture
+def keyed(scratch: Scratch) -> Iterator[Keyed]:
+    table = f"{scratch.table}_keys"
+    scratch.execute(*(statement for statement in idempotent.ddl("warehouse", table, scratch.dialect).split(";\n") if statement.strip()))
+    yield Keyed(scratch, table)
+    scratch.drop(table)
+
+
+def test_a_request_sent_again_with_its_key_writes_once_and_answers_the_same(keyed: Keyed) -> None:
+    with TestClient(keyed.app().asgi) as client:
+        first = client.post("/kept", json=PRICE, headers={"idempotency-key": "price-1"})
+        again = client.post("/kept", json=PRICE, headers={"idempotency-key": "price-1"})
+        reused = client.post("/kept", json=PRICE | {"price": 99.5}, headers={"idempotency-key": "price-1"})
+    assert first.status_code == again.status_code == HTTPStatus.OK
+    assert first.json() == again.json() == PRICE
+    assert (reused.status_code, reused.json()["type"]) == (HTTPStatus.UNPROCESSABLE_CONTENT, "idempotency-key-reused")
+    assert _stored(keyed.scratch) == [("US912810TM64", Decimal("101.25"))]
+    [(key, route, status)] = keyed.kept()
+    assert (key, route, float(str(status))) == ("price-1", "keep", HTTPStatus.OK)
+
+
+def test_a_request_that_fails_keeps_no_key(keyed: Keyed) -> None:
+    with TestClient(keyed.app().asgi) as client:
+        assert client.post("/kept", json=PRICE | {"price": -1.0}, headers={"idempotency-key": "price-1"}).status_code == HTTPStatus.CONFLICT
+    assert (_stored(keyed.scratch), keyed.kept()) == ([], [])
+
+
+def test_a_key_kept_past_keep_s_is_a_new_request(keyed: Keyed) -> None:
+    with TestClient(keyed.app(keep_s=1).asgi) as client:
+        client.post("/kept", json=PRICE, headers={"idempotency-key": "price-1"}).raise_for_status()
+        time.sleep(1.5)
+        other = {"security": "US912810TN48", "price": 99.5}
+        client.post("/kept", json=other, headers={"idempotency-key": "price-1"}).raise_for_status()
+    assert [row[0] for row in _stored(keyed.scratch)] == ["US912810TM64", "US912810TN48"]
+    assert len(keyed.kept()) == 1
+
+
+def test_a_key_another_transaction_adds_first_is_a_conflict_once_it_commits(keyed: Keyed) -> None:
+    """The insert that a key's second request makes waits on the first's, and fails as a unique key's once that
+    commits: the `Conflict` a route answers as `idempotency-key-in-use`."""
+    settings = GivenSettings(databases={"warehouse": keyed.scratch.settings})
+    row = idempotent.Kept(id="a" * 64, idempotency_key="k", route="keep", subject=None, fingerprint="f" * 64, created_at=datetime.now(UTC), status_code=200, body="{}")
+    database = open_database(settings, "warehouse")
+    with database.statements(writes=True) as first, database.statements(writes=True) as second:
+        idempotent.Sql(first, keyed.table, keyed.scratch.dialect).add(row, timeout_s=10)
+        waiting = threading.Thread(target=lambda: (time.sleep(0.5), first.commit()))
+        waiting.start()
+        with pytest.raises(api.Conflict):
+            idempotent.Sql(second, keyed.table, keyed.scratch.dialect).add(row, timeout_s=10)
+        waiting.join()
+    assert len(keyed.kept()) == 1

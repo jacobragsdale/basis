@@ -328,6 +328,17 @@ def test_a_settlement_is_booked_with_the_ledger_by_its_id_once_its_row_commits(c
     assert [(settlement["settlement_id"], settlement)] == ledger.booked
 
 
+def test_a_settlement_sent_again_with_its_key_is_recorded_and_booked_once(client: TestClient, warehouse: fakes.Database, ledger: Ledger) -> None:
+    headers = signed_in() | {"idempotency-key": "settle-1"}
+    first = client.post("/settlements", json=SETTLEMENT, headers=headers)
+    again = client.post("/settlements", json=SETTLEMENT, headers=headers)
+    assert (again.status_code, again.json()) == (first.status_code, first.json())
+    assert len(warehouse.committed) == 1
+    assert len(ledger.booked) == 1
+    reused = client.post("/settlements", json=SETTLEMENT | {"face": 2000000.0}, headers=headers)
+    assert kind(reused) == (HTTPStatus.UNPROCESSABLE_CONTENT, "idempotency-key-reused")
+
+
 @pytest.mark.parametrize(
     ("settlement", "problem"),
     [

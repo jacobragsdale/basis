@@ -21,7 +21,7 @@ import pyarrow as pa
 from opentelemetry.trace import Span, SpanKind, Tracer
 from pydantic import BaseModel, ValidationError
 
-from basis.api import arrow, dataset, deadlines, fakes, outboxes
+from basis.api import arrow, dataset, deadlines, fakes, idempotent, outboxes
 from basis.api.errors import OutcomeUnknownError
 from basis.api.resources import Bind, Body, DatabaseResource, HttpMethod, Query, Segment, SendMethod, filled
 from basis.api.service import DeclarationError
@@ -87,6 +87,19 @@ class OpenDatabase:
             msg = f"database {name} is faked by statements that are not a fakes.Transaction, which keep no outbox: fake it with fakes.Database"
             raise RuntimeError(msg)
         return outboxes.Sql(statements, declared.table, self.dialect)
+
+    def keys(self, statements: Statements) -> idempotent.Table:
+        """The database's table of `Idempotency-Key`s, as the transaction `statements` belongs to reaches it."""
+        declared, name = self.resource.idempotency, self.resource.name
+        if declared is None:
+            msg = f"database {name} declares no idempotency table"
+            raise RuntimeError(msg)
+        if isinstance(statements, fakes.Transaction):
+            return statements.idempotency()
+        if self.dialect is None:
+            msg = f"database {name} is faked by statements that are not a fakes.Transaction, which keep no keys: fake it with fakes.Database"
+            raise RuntimeError(msg)
+        return idempotent.Sql(statements, declared.table, self.dialect)
 
 
 _WRITING: ContextVar[tuple[deadlines.Deadline, DatabaseSession] | None] = ContextVar("basis.api.opened.writing", default=None)
@@ -216,6 +229,31 @@ class DatabaseSession:
         )  # fmt: skip
         await self._call("outbox", f"INSERT INTO {declared.table}", lambda statements, timeout_s: database.table(statements).add(row, timeout_s=timeout_s))
         self._sent.append((row, client))
+
+    async def claim(self, key_id: str, kept: Callable[[], idempotent.Kept]) -> idempotent.Kept | None:
+        """The row of the key `key_id` that a request kept, in this transaction, or None once this request has added
+        `kept()`, its own: a row kept longer than the table's `keep_s` is deleted first, as if never kept. Adding a key
+        another transaction holds fails as its insert does, a `Conflict`."""
+        database = self._database
+        declared = database.resource.idempotency
+        if declared is None:
+            msg = f"database {database.resource.name} declares no idempotency table"
+            raise RuntimeError(msg)
+        found = await self._call("idempotency", f"find in {declared.table}", lambda statements, timeout_s: database.keys(statements).find(key_id, timeout_s=timeout_s))
+        if found is not None and found.created_at <= utc_now() - timedelta(seconds=declared.keep_s):
+            await self._call("idempotency", f"forget in {declared.table}", lambda statements, timeout_s: database.keys(statements).forget(key_id, timeout_s=timeout_s))
+            found = None
+        if found is not None:
+            return found
+        row = kept()
+        await self._call("idempotency", f"add to {declared.table}", lambda statements, timeout_s: database.keys(statements).add(row, timeout_s=timeout_s))
+        return None
+
+    async def answered(self, key_id: str, status_code: int, body: str | None) -> None:
+        """Write what the request answers into its key's row, which commits with its writes."""
+        database = self._database
+        table = database.resource.idempotency.table if database.resource.idempotency is not None else "?"
+        await self._call("idempotency", f"answer in {table}", lambda statements, timeout_s: database.keys(statements).complete(key_id, status_code, body, timeout_s=timeout_s))
 
     async def _call[T](self, operation: str, sql: str, work: Callable[[Statements, float], T]) -> T:
         resource = self._database.resource

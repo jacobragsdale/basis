@@ -735,12 +735,17 @@ UNBOXED = api.Service(name="unboxed", settings=api.Settings, resources=[PLAIN, L
 
 def test_ddl_of_a_service_without_an_outbox_is_one_error_line(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert _basis(repo, "ddl", f"{__name__}:UNBOXED", "--dialect", "mssql") == 1
-    assert capsys.readouterr().err.splitlines()[-1].startswith("ERROR: service unboxed keeps no outbox, so it has no table to create: declare one where a route sends a call")
+    assert capsys.readouterr().err.splitlines()[-1].startswith("ERROR: service unboxed keeps no outbox, and no idempotency table, so it has no table to create: declare one where a route sends a call")
 
 
 def test_ddl_prints_the_examples_outbox(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert _basis(repo, "ddl", "basis.api.example.service", "--dialect", "mssql") == 0
     assert capsys.readouterr().out.startswith("CREATE TABLE accruals_outbox (\n")
+
+
+def test_ddl_prints_the_examples_idempotency_table(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert _basis(repo, "ddl", "basis.api.example.service", "--dialect", "oracle") == 0
+    assert "CREATE TABLE accruals_requests (\n    id VARCHAR2(64 CHAR) NOT NULL,\n" in capsys.readouterr().out
 
 
 def test_basis_lists_relay_and_ddl_in_a_repo_with_an_api(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:

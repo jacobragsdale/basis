@@ -55,7 +55,7 @@ from basis.api.dependencies import given
 from basis.api.errors import DeclarationError, DomainError, Error, FieldError, ParameterError, PointerError, Problem, ValidationProblem, error, pointer
 from basis.api.identity import SignInRequiredError, User
 from basis.api.loading import load
-from basis.api.resources import Bind, Cache, Client, Clock, Ids, Outbox, Reader, Resource, Writer, cache, clock, database, http, ids, outbox
+from basis.api.resources import Bind, Cache, Client, Clock, Idempotency, Ids, Outbox, Reader, Resource, Writer, cache, clock, database, http, idempotency, ids, outbox
 from basis.api.service import Route, Service, delete, get, patch, post, put, stream
 from basis.api.settings import Serve, Settings, SettingsError
 from basis.api.tables import Table
@@ -83,6 +83,7 @@ __all__ = [
     "Error",
     "Failed",
     "FieldError",
+    "Idempotency",
     "Ids",
     "NotFound",
     "Outbox",
@@ -118,6 +119,7 @@ __all__ = [
     "get",
     "given",
     "http",
+    "idempotency",
     "ids",
     "load",
     "outbox",

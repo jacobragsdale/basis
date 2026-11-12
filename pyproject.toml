@@ -80,6 +80,8 @@ ignore = [
 "packages/core/src/basis/core/databases/*.py" = ["S608"]
 # The same of the outbox's statements, whose table `api.outbox` restricts as a ledger's name is.
 "packages/api/src/basis/api/outboxes.py" = ["S608"]
+# And of the table of a request's Idempotency-Key, which `api.idempotency` restricts the same way.
+"packages/api/src/basis/api/idempotent.py" = ["S608"]
 # And of a dialect's query of a table's first rows, whose columns, table and filter its caller builds so.
 "packages/core/src/basis/core/dialects.py" = ["S608"]
 # A generated repo's files, which `new` copies; they are not part of the package.

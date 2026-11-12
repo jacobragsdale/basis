@@ -67,8 +67,8 @@ if TYPE_CHECKING:
 
 __all__ = [
     "NAME", "TABLE", "TABLE_LENGTH", "Bind", "Body", "Cache", "CacheResource", "Client", "Clock", "ClockResource", "DatabaseResource", "HttpMethod",
-    "HttpResource", "Ids", "IdsResource", "Opened", "Outbox", "Query", "QueryValue", "Reader", "Resource", "Segment", "SendMethod", "Session", "Writer", "cache",
-    "check_outboxes", "checked_path", "clock", "database", "filled", "http", "ids", "outbox",
+    "HttpResource", "Idempotency", "Ids", "IdsResource", "Opened", "Outbox", "Query", "QueryValue", "Reader", "Resource", "Segment", "SendMethod", "Session", "Writer", "cache",
+    "check_outboxes", "checked_path", "clock", "database", "filled", "http", "idempotency", "ids", "outbox",
 ]  # fmt: skip
 
 type Bind = str | int | float | Decimal | bool | date | datetime | UUID | bytes | None
@@ -100,6 +100,19 @@ class Outbox:
 
 
 @dataclass(frozen=True)
+class Idempotency:
+    """A database's table of the `Idempotency-Key`s of the requests that wrote it, each with what its request answered,
+    so a request sent again is answered the same and changes nothing more (see `basis.api.idempotency`)."""
+
+    table: str
+    """The table, `name` or `schema.name`, as `basis ddl SERVICE --dialect DIALECT` creates it: the service's own,
+    in the database, which the routes' write login reads and writes."""
+    keep_s: float
+    """Seconds a key is kept from its request's commit: the same key after that is a new request. A UI sends a request
+    again within it, as it retries one whose answer it lost."""
+
+
+@dataclass(frozen=True)
 class DatabaseResource:
     name: str
     """The name its settings are under, as `BASIS_DATABASES__WAREHOUSE__KIND` for `warehouse`."""
@@ -112,6 +125,9 @@ class DatabaseResource:
     outbox: Outbox | None = None
     """Where the calls its routes send to other services wait for their commit and their service, or None for a
     database whose routes send none."""
+    idempotency: Idempotency | None = None
+    """Where the `Idempotency-Key` of each request that writes it is kept, for a route that declares `idempotency=`,
+    or None for a database none of whose routes do."""
 
 
 V_co = TypeVar("V_co", covariant=True)
@@ -133,16 +149,34 @@ class CacheResource(Generic[V_co]):  # noqa: UP046 -- covariant, so any cache is
 type Resource = DatabaseResource | HttpResource | CacheResource[object] | ClockResource | IdsResource
 
 
-def database(name: str, *, deadline_s: float, max_concurrent: int, outbox: Outbox | None = None) -> DatabaseResource:
+def database(name: str, *, deadline_s: float, max_concurrent: int, outbox: Outbox | None = None, idempotency: Idempotency | None = None) -> DatabaseResource:
     """A database basis-core's settings configure under `name`, SQL Server or Oracle, whose statements a handler
-    writes in that database's SQL; with `outbox`, where the calls its routes send wait (`api.outbox`)."""
+    writes in that database's SQL; with `outbox`, where the calls its routes send wait (`api.outbox`); with
+    `idempotency`, where the keys of the requests that write it are kept (`api.idempotency`)."""
     if isinstance(max_concurrent, bool) or not isinstance(max_concurrent, int) or max_concurrent < 1:
         msg = f"database {name} runs at most {max_concurrent!r} statements at once: give it max_concurrent, a whole number of 1 or more"
         raise DeclarationError(msg)
     if outbox is not None and not isinstance(outbox, Outbox):
         msg = f"database {name}'s outbox is {outbox!r}: declare it with api.outbox(TABLE, max_age_s=..., backoff_s=..., max_backoff_s=...)"
         raise DeclarationError(msg)
-    return DatabaseResource(_named(name, "database"), _deadline(name, deadline_s), max_concurrent, outbox)
+    if idempotency is not None and not isinstance(idempotency, Idempotency):
+        msg = f"database {name}'s idempotency is {idempotency!r}: declare it with api.idempotency(TABLE, keep_s=...)"
+        raise DeclarationError(msg)
+    return DatabaseResource(_named(name, "database"), _deadline(name, deadline_s), max_concurrent, outbox, idempotency)
+
+
+def idempotency(table: str, *, keep_s: float) -> Idempotency:
+    """A database's table of the `Idempotency-Key`s of the requests that wrote it, each kept `keep_s` seconds."""
+    if not isinstance(table, str) or not re.fullmatch(TABLE, table):
+        msg = f"api.idempotency({table!r}): its table is a name, or schema.name, of letters, digits, underscores and $, which its SQL names unquoted"
+        raise DeclarationError(msg)
+    if len(bare := table.rpartition(".")[2]) > TABLE_LENGTH:
+        msg = f"idempotency table {table}'s name is {len(bare)} characters: give it {TABLE_LENGTH} at most, after its schema, so its key's constraint, pk_NAME, fits the 128 both databases allow"
+        raise DeclarationError(msg)
+    if isinstance(keep_s, bool) or not isinstance(keep_s, int | float) or not 0 < keep_s < math.inf:
+        msg = f"idempotency table {table}'s keep_s is {keep_s!r}: give it the seconds a key is kept, above 0"
+        raise DeclarationError(msg)
+    return Idempotency(table, keep_s)
 
 
 def outbox(table: str, *, max_age_s: float, backoff_s: float, max_backoff_s: float) -> Outbox:

@@ -37,7 +37,7 @@ service = api.Service(
         api.stream("/bonds/{security}/quote", handlers.quote, deadline_s=5, every_s=2, response=Quote, errors=[UNPRICED]),
         api.get("/bonds/{security}/yield", handlers.bond_yield, deadline_s=5, response=Yield, errors=[UNKNOWN_BOND, UNPRICED, NO_YIELD, *OUTSIDE_ITS_LIFE]),
         api.get("/bonds/{security}/coupons", handlers.coupons, deadline_s=5, response=api.Table[handlers.CouponRow], errors=[UNKNOWN_BOND]),
-        api.post("/settlements", handlers.record_settlement, status=HTTPStatus.CREATED, deadline_s=5, response=Settlement, errors=[UNKNOWN_BOND, *OUTSIDE_ITS_LIFE]),
+        api.post("/settlements", handlers.record_settlement, status=HTTPStatus.CREATED, deadline_s=5, response=Settlement, errors=[UNKNOWN_BOND, *OUTSIDE_ITS_LIFE], idempotency="optional"),
     ],
     fakes="basis.api.example.dev:fakes",
 )

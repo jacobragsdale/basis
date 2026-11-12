@@ -18,6 +18,8 @@ FastAPI makes the document from the routes, and basis finishes it, so that it sa
   them when pydantic's differ;
 - a dataset route's success lists `application/vnd.apache.arrow.stream` beside its JSON, as a binary string, the one
   form of a binary body that generated clients read as one;
+- a route that keeps its requests' `Idempotency-Key`s lists the header among its parameters, required where the route
+  requires it (`idempotent.py`);
 - a stream's success is `text/event-stream`, a string, with `x-basis-event` beside its schema, the schema of each
   event's data (`streams.py`).
 
@@ -36,7 +38,7 @@ from typing import override
 from fastapi import FastAPI
 from pydantic import JsonValue, TypeAdapter
 
-from basis.api import routes, streams, sync
+from basis.api import idempotent, routes, streams, sync
 from basis.api.errors import MEDIA_TYPE, described
 from basis.api.service import Route, Service
 from basis.core.sync import MARKER
@@ -83,6 +85,10 @@ def finish(found: dict[str, JsonValue], declared: Sequence[Route] = ()) -> dict[
             operation["x-basis-errors"] = errors(route)
             if route.every_s is not None:
                 _streamed(operation, route)
+            if route.idempotency is not None:
+                header: JsonValue = {"name": idempotent.HEADER, "in": "header", "required": route.idempotency == "required", "schema": dict(idempotent.SCHEMA)}
+                parameters: list[JsonValue] = [*array(operation.get("parameters")), header]
+                operation["parameters"] = parameters
         for status, response in mapping(operation.get("responses")).items():
             content = mapping(mapping(response).get("content"))
             if (status == "default" or (status.isdigit() and int(status) >= HTTPStatus.BAD_REQUEST)) and "application/json" in content:

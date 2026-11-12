@@ -920,6 +920,16 @@
               }
             }
           },
+          "409": {
+            "description": "idempotency-key-in-use: A request with the Idempotency-Key is still being served",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
           "413": {
             "description": "body-too-large: The request body is too large",
             "content": {
@@ -931,7 +941,7 @@
             }
           },
           "422": {
-            "description": "invalid-request: The request is not valid; matured: The bond matures on or before the settlement date; not-issued: The bond is issued after the settlement date",
+            "description": "invalid-request: The request is not valid; matured: The bond matures on or before the settlement date; not-issued: The bond is issued after the settlement date; idempotency-key-reused: The Idempotency-Key was sent with another request",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -993,9 +1003,19 @@
             "title": "No bond has that ISIN"
           },
           {
+            "status": 409,
+            "type": "idempotency-key-in-use",
+            "title": "A request with the Idempotency-Key is still being served"
+          },
+          {
             "status": 413,
             "type": "body-too-large",
             "title": "The request body is too large"
+          },
+          {
+            "status": 422,
+            "type": "idempotency-key-reused",
+            "title": "The Idempotency-Key was sent with another request"
           },
           {
             "status": 422,
@@ -1056,6 +1076,19 @@
             "status": 504,
             "type": "service-timeout",
             "title": "A call took longer than its deadline"
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "pattern": "^[!-~]+$"
+            }
           }
         ]
       }

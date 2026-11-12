@@ -109,6 +109,19 @@ After a release, this sends each example to the deployed API and validates its a
 uv run basis smoke --env qa
 ```
 
+## Take a request a UI may send twice
+
+A route that places something, an order or a settlement, keeps its requests' `Idempotency-Key`s, so a UI that lost an
+answer sends the request again and changes nothing more. Declare a table for the keys on the database it writes,
+create it with `uv run basis ddl --dialect mssql`, and say whether the route requires a key:
+
+```python
+WAREHOUSE = api.database("warehouse", deadline_s=5, max_concurrent=8, idempotency=api.idempotency("accruals_requests", keep_s=86_400))
+api.post("/settlements", handlers.record_settlement, status=HTTPStatus.CREATED, deadline_s=5, response=Settlement, errors=[...], idempotency="required")
+```
+
+The handler is unchanged. A test sends the request twice with one `Idempotency-Key` header, and finds it written once.
+
 ## Stream live updates to a UI
 
 A page that shows a value as it changes opens a stream. Its handler is an ordinary GET's, which returns the value now;

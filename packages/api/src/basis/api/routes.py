@@ -18,6 +18,7 @@
 import asyncio
 import functools
 import inspect
+import logging
 from collections.abc import Callable, Coroutine, Mapping
 from contextvars import ContextVar
 from http import HTTPStatus
@@ -26,24 +27,46 @@ from typing import ClassVar, override
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
+from pydantic import TypeAdapter
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import Receive, Scope, Send
 
-from basis.api import arrow, deadlines, streams, strict
+from basis.api import arrow, deadlines, idempotent, outboxes, streams, strict
 from basis.api.dataset import Rows
 from basis.api.dependencies import running
-from basis.api.errors import BodyTooLargeError, DomainError, Error, Problem, ValidationProblem, described
-from basis.api.identity import SignInRequiredError
+from basis.api.errors import (
+    BodyTooLargeError,
+    DomainError,
+    Error,
+    IdempotencyKeyInUseError,
+    IdempotencyKeyMissingError,
+    IdempotencyKeyReusedError,
+    ParameterError,
+    Problem,
+    ValidationProblem,
+    described,
+)
+from basis.api.identity import USER, SignInRequiredError, User
 from basis.api.internals import Validated, replace_call, validate_body_once
 from basis.api.service import Route, Service
-from basis.core.errors import ServiceError
+from basis.api.sessions import DatabaseSession
+from basis.core.errors import Conflict, ServiceError
+from basis.core.opened import utc_now
 
+log = logging.getLogger(__name__)
 _INVALID = "invalid-request: The request is not valid"
 _ARROW: ContextVar[bool] = ContextVar("basis.api.routes.arrow", default=False)
 """Whether the request a dataset route is answering asks for Arrow."""
 _SERVING: ContextVar[Request] = ContextVar("basis.api.routes.serving")
+_PRINTED: ContextVar[str] = ContextVar("basis.api.routes.printed", default="")
+"""The fingerprint of the request a route that keeps its `Idempotency-Key` is answering: its method, path, query and
+body as they were sent."""
+_INVALID_KEY: strict.ErrorEntry = {
+    "type": "value_error", "loc": ("header", idempotent.HEADER), "msg": "An Idempotency-Key is one to 255 visible ASCII characters: send one, as the id of what the request makes",
+    "input": None,
+}  # fmt: skip
 """The request the route is answering, which a stream reads its app and its token's expiry from."""
 
 
@@ -93,6 +116,8 @@ class Served(APIRoute):
             replace_call(dependant, declared.handler, _opening_stream(declared, meanings))
         elif declared.rows is not None:
             replace_call(dependant, declared.handler, _answering_table(declared, declared.rows) if declared.table else _answering_arrow(declared, declared.rows))
+        elif declared.idempotency is not None:
+            replace_call(dependant, declared.handler, _keeping(declared, _refusing_responses(declared)))
         else:
             replace_call(dependant, declared.handler, _refusing_responses(declared))
         handle = super().get_route_handler()
@@ -101,6 +126,9 @@ class Served(APIRoute):
             reads = declared.reads
             errors = [*strict.path_errors(reads, request.path_params), *strict.query_errors(reads, request.query_params.multi_items())]
             given = request
+            raw = b""
+            if declared.idempotency is not None and (key := request.headers.get(idempotent.HEADER)) is not None and not idempotent.valid(key):
+                errors.append(_INVALID_KEY)
             if reads.body is not None and (raw := await _body(request, running(request).settings.serve.max_body_bytes)):
                 kind = request.headers.get("content-type")
                 value, wrong = await asyncio.to_thread(strict.body, reads.body, raw, kind) if len(raw) > OFF_THE_LOOP else strict.body(reads.body, raw, kind)
@@ -112,6 +140,7 @@ class Served(APIRoute):
                 raise RequestValidationError(errors)
             token = _ARROW.set(declared.rows is not None and arrow.wanted(request.headers.get("accept")))
             serving = _SERVING.set(given)
+            printed = _PRINTED.set(idempotent.fingerprint(request.method, request.url.path, request.url.query, raw) if declared.idempotency is not None else "")
             try:
                 response = await handle(given)
                 if declared.rows is not None:
@@ -122,6 +151,7 @@ class Served(APIRoute):
                     raise  # what the route answers, or a defect, which the request boundary answers 500
                 raise found from error
             finally:
+                _PRINTED.reset(printed)
                 _SERVING.reset(serving)
                 _ARROW.reset(token)
 
@@ -188,6 +218,60 @@ def _refusing_responses(declared: Route) -> Callable[..., object]:
         return _refused(declared, handler(**values))
 
     return answer_sync
+
+
+def _keeping(declared: Route, inner: Callable[..., object]) -> Callable[..., object]:
+    """`declared`'s handler, `inner`, as FastAPI calls it, for a route that keeps its requests' `Idempotency-Key`s in
+    the database it writes (`idempotent.py`): a request with a key that one made before answers as that one did,
+    without running the handler, or is refused where it is another request; any other runs the handler, and its answer
+    is kept with its key, in its transaction."""
+    parameter = next(ask.parameter for ask in declared.asks if ask.given == declared.writes)
+    adapter: TypeAdapter[object] | None = TypeAdapter(declared.response) if declared.response is not None else None
+
+    @functools.wraps(declared.handler)
+    async def keep(**values: object) -> object:
+        request = _SERVING.get()
+        key = request.headers.get(idempotent.HEADER)
+        if key is None:
+            if declared.idempotency == "required":
+                msg = f"{declared.name} needs an Idempotency-Key: send one, the same each time the request is sent again"
+                raise IdempotencyKeyMissingError(msg)
+            return await inner(**values)  # ty: ignore[invalid-await] -- the handler of a route that writes, an async def
+        session = values[parameter]
+        if not isinstance(session, DatabaseSession):  # pragma: no cover -- what `given` gives a route that writes
+            msg = f"{declared.name}'s {parameter} is a {type(session).__qualname__}, not the request's transaction"
+            raise TypeError(msg)
+        user = request.scope.get(USER)
+        subject = user.subject if isinstance(user, User) else None
+        key_id, printed = idempotent.ident(declared.name, subject, key), _PRINTED.get()
+
+        def kept() -> idempotent.Kept:
+            return idempotent.Kept(
+                id=key_id, idempotency_key=key, route=declared.name[: outboxes.ROUTE_LENGTH], subject=subject, fingerprint=printed, created_at=utc_now(),
+                status_code=None, body=None,
+            )  # fmt: skip
+
+        try:
+            found = await session.claim(key_id, kept)
+        except Conflict as busy:
+            msg = "a request with this Idempotency-Key has not finished: send it again once it has, and it answers as that one did"
+            raise IdempotencyKeyInUseError(msg) from busy
+        if found is not None and found.status_code is None:  # pragma: no cover -- a key commits only with its answer
+            msg = "a request with this Idempotency-Key has not finished: send it again once it has, and it answers as that one did"
+            raise IdempotencyKeyInUseError(msg)
+        if found is not None and found.fingerprint != printed:
+            detail = "was sent with another request: send a new key with a new request, and this one only with the request it was sent with"
+            msg = f"This Idempotency-Key {detail}"
+            raise IdempotencyKeyReusedError(msg, errors=[ParameterError(detail=detail, parameter=idempotent.HEADER)])
+        if found is not None:
+            log.info("%s answers as the request its Idempotency-Key was first sent with", declared.name, extra={"route": declared.name, "replayed": True})
+            return Response(found.body, status_code=int(found.status_code or HTTPStatus.OK), media_type="application/json" if found.body is not None else None)
+        answer = await inner(**values)  # ty: ignore[invalid-await] -- the handler of a route that writes, an async def
+        body = None if adapter is None else adapter.dump_json(adapter.validate_python(answer, from_attributes=True), by_alias=True).decode()
+        await session.answered(key_id, declared.status, body)
+        return answer
+
+    return keep
 
 
 def _opening_stream(declared: Route, meanings: Mapping[type, type[DomainError]]) -> Callable[..., object]:

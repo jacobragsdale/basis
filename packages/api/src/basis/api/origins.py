@@ -22,7 +22,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 """The methods a route answers, which a page of an allowed origin may send."""
-HEADERS = ("Authorization", "Content-Type", "traceparent", "tracestate")
+HEADERS = ("Authorization", "Content-Type", "Idempotency-Key", "traceparent", "tracestate")
 EXPOSED = ("X-Request-Id", "traceparent", "WWW-Authenticate")
 PREFLIGHT_S = 600
 """How long a browser may keep an answer to its preflight request before it asks again."""

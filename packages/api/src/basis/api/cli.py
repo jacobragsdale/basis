@@ -106,7 +106,11 @@ def part() -> Part:
             noun="service",
             names=_services,
             verbs={
-                "ddl": Shared("print the CREATE TABLE of each outbox the service's databases declare", lambda n: _ddl(DdlArgs(n.name, "mssql" if n.dialect == "mssql" else "oracle")), _ddl_arguments)
+                "ddl": Shared(
+                    "print the CREATE TABLE of each outbox and idempotency table the service's databases declare",
+                    lambda n: _ddl(DdlArgs(n.name, "mssql" if n.dialect == "mssql" else "oracle")),
+                    _ddl_arguments,
+                )
             },
         ),
         contract=_contract,
@@ -264,16 +268,21 @@ def _relay(args: ServeArgs) -> int:
 
 
 def _ddl(args: DdlArgs) -> int:
-    from basis.api import outboxes  # noqa: PLC0415 -- the DDL loads when the verb runs
+    from basis.api import idempotent, outboxes  # noqa: PLC0415 -- the DDL loads when the verb runs
 
     found = load(args.service)
-    declared = [(resource.name, resource.outbox) for resource in found.resources if isinstance(resource, DatabaseResource) and resource.outbox is not None]
-    if not declared:
+    databases = [resource for resource in found.resources if isinstance(resource, DatabaseResource)]
+    created = [
+        *(outboxes.ddl(database.name, database.outbox.table, args.dialect) for database in databases if database.outbox is not None),
+        *(idempotent.ddl(database.name, database.idempotency.table, args.dialect) for database in databases if database.idempotency is not None),
+    ]
+    if not created:
         return fail(
-            f"service {found.name} keeps no outbox, so it has no table to create",
-            "declare one where a route sends a call after its commit, as api.database(NAME, ..., outbox=api.outbox(TABLE, ...)); an API's requests write no ledger",
+            f"service {found.name} keeps no outbox, and no idempotency table, so it has no table to create",
+            "declare one where a route sends a call after its commit, as api.database(NAME, ..., outbox=api.outbox(TABLE, ...)), or keeps its requests' keys,"
+            " as api.database(NAME, ..., idempotency=api.idempotency(TABLE, ...)); an API's requests write no ledger",
         )
-    sys.stdout.write("\n".join(outboxes.ddl(database, declared_outbox.table, args.dialect) for database, declared_outbox in declared))
+    sys.stdout.write("\n".join(created))
     return 0
 
 

@@ -28,16 +28,40 @@ from typing import Final
 import pyarrow as pa
 
 from basis.api.compute import ComputeFunction
+from basis.api.idempotent import Kept
 from basis.api.outboxes import Row
 from basis.api.resources import Bind, Resource
 from basis.core.databases.base import Statements
 from basis.core.databases.failures import failure
-from basis.core.errors import DATABASE_KINDS, Denied, Failed, ServiceError, Unavailable
+from basis.core.errors import DATABASE_KINDS, Conflict, Denied, Failed, ServiceError, Unavailable
 from basis.core.fakes import Clock, Failures, Http, Ids
 
 __all__ = [
-    "DATABASE_KINDS", "OUTBOX_ADD", "OUTBOX_DUE", "OUTBOX_PROBE", "OUTBOX_UPDATE", "Answer", "Cache", "Clock", "Compute", "Database", "Fake", "Faked", "FakedDriverError",
-    "Fakes", "Http", "Ids", "Outbox", "Respond", "Rows", "Statement",
+    "DATABASE_KINDS",
+    "IDEMPOTENCY_ADD",
+    "IDEMPOTENCY_COMPLETE",
+    "IDEMPOTENCY_FIND",
+    "IDEMPOTENCY_FORGET",
+    "OUTBOX_ADD",
+    "OUTBOX_DUE",
+    "OUTBOX_PROBE",
+    "OUTBOX_UPDATE",
+    "Answer",
+    "Cache",
+    "Clock",
+    "Compute",
+    "Database",
+    "Fake",
+    "Faked",
+    "FakedDriverError",
+    "Fakes",
+    "Http",
+    "Idempotency",
+    "Ids",
+    "Outbox",
+    "Respond",
+    "Rows",
+    "Statement",
     "Transaction",
 ]  # fmt: skip
 
@@ -56,6 +80,12 @@ type Answer = Rows | int | Respond
 statement changed; or a `Respond`, whose function of the binds gives either."""
 
 
+IDEMPOTENCY_FIND: Final = "idempotency find"
+IDEMPOTENCY_ADD: Final = "idempotency add"
+IDEMPOTENCY_COMPLETE: Final = "idempotency complete"
+IDEMPOTENCY_FORGET: Final = "idempotency forget"
+"""The fake table of `Idempotency-Key`s' statements, as `Database.fails(kind, statement=...)` names them: a key's
+read, its insert, the answer written into it, and the delete of one kept too long."""
 OUTBOX_PROBE: Final = "outbox probe"
 OUTBOX_ADD: Final = "outbox add"
 OUTBOX_DUE: Final = "outbox due"
@@ -99,6 +129,9 @@ class Database:
         self.rolled_back: list[Statement] = []
         self._lock = threading.Lock()
         self._outbox: dict[str, Row] = {row.id: row for row in outbox}
+        self._keys: dict[str, Kept] = {}
+        self._claimed: set[str] = set()
+        """The keys a transaction has added and not yet ended, which another transaction's insert collides with."""
         self._name: str | None = None
         self._failing = Failures[str | None]("a fake database", DATABASE_KINDS)
         """What fails, by the SQL of the one statement, or None for every statement."""
@@ -156,6 +189,31 @@ class Database:
         """The outbox's rows, as committed, in the order they were sent."""
         with self._lock:
             return sorted(self._outbox.values(), key=lambda row: (row.created_at, row.id))
+
+    @property
+    def idempotency(self) -> list[Kept]:
+        """The rows of the table of `Idempotency-Key`s, as committed, in the order they were made."""
+        with self._lock:
+            return sorted(self._keys.values(), key=lambda row: (row.created_at, row.id))
+
+    def claim(self, key_id: str, *, forgotten: bool) -> None:
+        """Hold `key_id` for a transaction that adds it, or fail as a unique key's insert does: where another
+        transaction holds it, or it is committed and the transaction has not deleted it."""
+        with self._lock:
+            if key_id in self._claimed or (key_id in self._keys and not forgotten):
+                cause = FakedDriverError(f"a row of the idempotency table has the id {key_id} already")
+                raise failure(self.name, Conflict, cause) from cause
+            self._claimed.add(key_id)
+
+    def settle(self, added: Mapping[str, Kept], forgotten: Iterable[str], *, committed: bool) -> None:
+        """End a transaction's hold on the keys it added, keeping them, and deleting those it deleted, where it
+        committed."""
+        with self._lock:
+            self._claimed.difference_update(added)
+            if committed:
+                for key_id in forgotten:
+                    self._keys.pop(key_id, None)
+                self._keys.update(added)
 
     def keep(self, rows: Iterable[Row]) -> None:
         """Commit the outbox's rows a transaction added."""
@@ -217,6 +275,14 @@ class Transaction:
     """The outbox's rows this transaction has added since it last committed, which only it sees until it commits."""
     swapped: list[tuple[Row, Row]] = field(default_factory=list[tuple[Row, Row]])
     """Each change of an outbox's row this transaction has made since it last committed, before and after."""
+    keys_added: dict[str, Kept] = field(default_factory=dict[str, Kept])
+    """The rows of the table of keys this transaction has added since it last committed, which only it sees."""
+    keys_forgotten: set[str] = field(default_factory=set[str])
+    """The committed rows of the table of keys this transaction has deleted since it last committed."""
+
+    def idempotency(self) -> Idempotency:
+        """The database's table of `Idempotency-Key`s, as this transaction reaches it."""
+        return Idempotency(self)
 
     def outbox(self) -> Outbox:
         """The database's outbox, as this transaction reaches it."""
@@ -244,8 +310,11 @@ class Transaction:
         self._refuse_reads("commit")
         self.committed = True
         self.database.keep(self.added.values())
+        self.database.settle(self.keys_added, self.keys_forgotten, committed=True)
         self.added.clear()
         self.swapped.clear()
+        self.keys_added.clear()
+        self.keys_forgotten.clear()
 
     def roll_back(self) -> None:
         """What ending the transaction without committing takes: forgetting the outbox's rows it added, and undoing
@@ -254,6 +323,9 @@ class Transaction:
         for before, after in reversed(self.swapped):
             self.database.unswap(before, after)
         self.swapped.clear()
+        self.database.settle(self.keys_added, (), committed=False)
+        self.keys_added.clear()
+        self.keys_forgotten.clear()
 
     def _refuse_reads(self, what: str) -> None:
         if not self.writes:
@@ -303,6 +375,47 @@ class Outbox:
             return False
         self.transaction.swapped.append(swapped)
         return True
+
+
+@dataclass(frozen=True)
+class Idempotency:
+    """A fake database's table of `Idempotency-Key`s, as one transaction reaches it: `basis.api.idempotent.Table`, in
+    memory. Its reads see the rows other transactions committed and the ones this one added; an insert of a key another
+    transaction holds fails as a unique key's does, at once, where a real database would wait for that transaction."""
+
+    transaction: Transaction
+
+    def find(self, key_id: str, *, timeout_s: float) -> Kept | None:
+        del timeout_s
+        transaction = self.transaction
+        transaction.database.check(IDEMPOTENCY_FIND)
+        if (added := transaction.keys_added.get(key_id)) is not None:
+            return added
+        if key_id in transaction.keys_forgotten:
+            return None
+        return next((row for row in transaction.database.idempotency if row.id == key_id), None)
+
+    def add(self, row: Kept, *, timeout_s: float) -> None:
+        del timeout_s
+        transaction = self.transaction
+        transaction._refuse_reads("add a key")  # noqa: SLF001 -- the transaction's own check, of this fake's
+        transaction.database.check(IDEMPOTENCY_ADD)
+        transaction.database.claim(row.id, forgotten=row.id in transaction.keys_forgotten)
+        transaction.keys_added[row.id] = row
+
+    def complete(self, key_id: str, status_code: int, body: str | None, *, timeout_s: float) -> None:
+        del timeout_s
+        transaction = self.transaction
+        transaction.database.check(IDEMPOTENCY_COMPLETE)
+        found = transaction.keys_added[key_id]  # a request completes only the key it added
+        transaction.keys_added[key_id] = found.model_copy(update={"status_code": status_code, "body": body})
+
+    def forget(self, key_id: str, *, timeout_s: float) -> None:
+        del timeout_s
+        transaction = self.transaction
+        transaction._refuse_reads("delete a key")  # noqa: SLF001 -- the transaction's own check, of this fake's
+        transaction.database.check(IDEMPOTENCY_FORGET)
+        transaction.keys_forgotten.add(key_id)
 
 
 class Cache:

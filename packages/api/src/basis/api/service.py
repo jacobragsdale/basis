@@ -74,7 +74,7 @@ from basis.api import strict, tables
 from basis.api.compute import Compute, ComputeFunction
 from basis.api.dataset import Rows, rows
 from basis.api.dependencies import GivenCompute, GivenDatabase, GivenResource, GivenSettings
-from basis.api.errors import Answerable, BodyTooLargeError, DeclarationError, DomainError, Error, NotReadyError, OutcomeUnknownError
+from basis.api.errors import IDEMPOTENCY_ERRORS, Answerable, BodyTooLargeError, DeclarationError, DomainError, Error, IdempotencyKeyMissingError, NotReadyError, OutcomeUnknownError
 from basis.api.identity import GivenUser, SignInRequiredError, User, annotation_refusal
 from basis.api.resources import Cache, CacheResource, Client, Clock, ClockResource, DatabaseResource, HttpResource, Ids, IdsResource, Opened, Reader, Resource, Session, Writer, check_outboxes
 from basis.api.settings import Settings
@@ -85,12 +85,14 @@ RESERVED = ("/health", "/docs", "/redoc", "/openapi.json")
 NAME = re.compile(r"[a-z][a-z0-9-]{0,62}")
 _PARAMETER = re.compile(r"\{[^}]*\}")
 _REFERENCE = re.compile(r"[A-Za-z_][\w.]*:[A-Za-z_]\w*")
-BASIS_ERRORS: tuple[Answerable, ...] = (*KINDS, NotReadyError, BodyTooLargeError, OutcomeUnknownError)
+BASIS_ERRORS: tuple[Answerable, ...] = (*KINDS, NotReadyError, BodyTooLargeError, OutcomeUnknownError, *IDEMPOTENCY_ERRORS)
 """The errors basis raises itself, which a route never declares: `Route.answers` adds each where the route can meet it:
 every kind another service's calls can raise, those a database's statements can (`DATABASE_KINDS`), a cache's read's
-or a compute call's `Timeout`, `BodyTooLargeError` where it takes a body, and `OutcomeUnknownError` where it writes."""
+or a compute call's `Timeout`, `BodyTooLargeError` where it takes a body, `OutcomeUnknownError` where it writes, and
+the errors of an `Idempotency-Key` where it keeps them (`IDEMPOTENCY_ERRORS`)."""
 
 type Method = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
+type Idempotent = Literal["required", "optional"]
 _RESOURCES = (DatabaseResource, HttpResource, CacheResource, ClockResource, IdsResource)
 
 
@@ -130,6 +132,10 @@ class Route:
     anonymous: bool = False
     """That anyone may make the route's requests, which a route that is not a GET says, where it does not ask for the
     user: a route that changes what the service holds knows who asked, or says that it need not."""
+    idempotency: Idempotent | None = None
+    """For a route that writes, whether a request's `Idempotency-Key` is `"required"` or `"optional"`, kept in the
+    written database's `api.idempotency` table with what the request answered, so the same request sent again is
+    answered the same and changes nothing more: see `idempotent.py`. None for a route that reads none."""
     every_s: float | None = None
     """For a stream of live updates, which `api.stream` declares, the seconds between one call of its handler and the
     next: see `streams.py`. None for a route that answers each request once."""
@@ -199,10 +205,12 @@ class Route:
         object.__setattr__(self, "asks", asks)
         _check_anonymous(self, asks)
         object.__setattr__(self, "writes", _written(self, asks))
+        _check_idempotency(self)
         object.__setattr__(self, "reads", strict.shape(self.path, handler, self.name))
         body = (BodyTooLargeError,) if self.reads.body is not None else ()
         unknown = (OutcomeUnknownError,) if self.writes is not None else ()
-        object.__setattr__(self, "answers", (*self.errors, *_met(asks), *body, *unknown))
+        keyed = () if self.idempotency is None else tuple(error for error in IDEMPOTENCY_ERRORS if self.idempotency == "required" or error is not IdempotencyKeyMissingError)
+        object.__setattr__(self, "answers", (*self.errors, *_met(asks), *body, *unknown, *keyed))
 
     @property
     def shape(self) -> tuple[Method, str]:
@@ -223,6 +231,7 @@ class _Declare(Protocol):
         dataset: bool = False,
         smoke: Mapping[str, object] | None = None,
         anonymous: bool = False,
+        idempotency: Idempotent | None = None,
     ) -> Route: ...
 
 
@@ -238,14 +247,15 @@ def _route(method: Method) -> _Declare:
         dataset: bool = False,
         smoke: Mapping[str, object] | None = None,
         anonymous: bool = False,
+        idempotency: Idempotent | None = None,
     ) -> Route:
-        return Route(method, path, handler, deadline_s, response, errors, status, dataset, smoke, anonymous)
+        return Route(method, path, handler, deadline_s, response, errors, status, dataset, smoke, anonymous, idempotency)
 
     declare.__name__ = declare.__qualname__ = method.lower()
     declare.__doc__ = (
         f"A route that answers {method} requests to `path` with `handler`: within `deadline_s` seconds, with `response` and `status` when it succeeds, and with one of `errors` when it fails;"
         " with `dataset=True`, `response` is rows, which it answers as Arrow when the request asks for it."
-        + ("" if method == "GET" else " Its handler asks for the user, or the route declares `anonymous=True`, that anyone may make it.")
+        + ("" if method == "GET" else " Its handler asks for the user, or the route declares `anonymous=True`, that anyone may make it; with `idempotency=`, a request's Idempotency-Key is kept.")
     )
     return declare
 
@@ -257,6 +267,22 @@ def stream(path: str, handler: FunctionType, *, deadline_s: float, every_s: floa
     the first call answers its problem, with its status, as any route's does; a failure of a later one is the stream's
     last event, its problem. See `streams.py`."""
     return Route("GET", path, handler, deadline_s, response, errors, every_s=every_s)
+
+
+def _check_idempotency(route: Route) -> None:
+    """That a route that keeps its requests' keys says how, and writes one database, whose answer is a model's JSON."""
+    declared: object = route.idempotency
+    if declared is None:
+        return
+    if declared not in {"required", "optional"}:
+        msg = f"{route.name} declares idempotency={declared!r}: give idempotency='required' or 'optional', whether its requests must send an Idempotency-Key"
+        raise DeclarationError(msg)
+    if route.writes is None:
+        msg = f"{route.name} declares idempotency=..., and writes no database to keep its requests' keys in: ask for an api.Writer of a database that declares api.idempotency(...), or drop it"
+        raise DeclarationError(msg)
+    if route.rows is not None:
+        msg = f"{route.name} declares idempotency=..., and answers a dataset, which its key cannot keep: answer a model"
+        raise DeclarationError(msg)
 
 
 def _check_stream(route: Route) -> None:
@@ -456,6 +482,7 @@ class Service:
         _check_user(self.name, self.user, routes)
         _check_example_user(self.name, self.user, self.example_user)
         check_outboxes(self.name, [(route.name, route.deadline_s, route.writes) for route in routes if route.writes is not None])
+        _check_keys(routes)
         seen: dict[tuple[Method, str], Route] = {}
         for route in routes:
             if (first := seen.get(route.shape)) is not None:
@@ -464,6 +491,17 @@ class Service:
                 raise DeclarationError(msg)
             seen[route.shape] = route
         _check_names(self.name, routes)
+
+
+def _check_keys(routes: Sequence[Route]) -> None:
+    """That each route that keeps its requests' `Idempotency-Key`s writes a database that declares a table for them."""
+    for route in routes:
+        if route.idempotency is not None and route.writes is not None and route.writes.idempotency is None:
+            msg = (
+                f"{route.name} keeps its requests' Idempotency-Keys, and {route.writes.name} declares no table for them:"
+                f" declare one, as api.database({route.writes.name!r}, ..., idempotency=api.idempotency(TABLE, keep_s=...)), and create it with `basis ddl`"
+            )
+            raise DeclarationError(msg)
 
 
 def _check_ui(name: str, folder: str | None) -> None:
