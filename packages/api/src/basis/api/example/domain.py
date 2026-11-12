@@ -71,6 +71,16 @@ class Bond(BaseModel):
     maturity: date
 
 
+class Quote(BaseModel):
+    """A bond's latest clean price, which a UI that shows it live is sent each time it changes."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    security_id: str
+    clean: float
+    """Per 100 of face, as the pricing service quotes it."""
+
+
 class DirtyPrice(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 

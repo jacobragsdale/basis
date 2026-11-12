@@ -4,7 +4,7 @@ user, one of its resources, or a compute function. A database's is the request's
 handler has returned and FastAPI has validated its response (`GivenDatabase`). `basis.api.service` checks what each
 handler asks for when its route is declared."""
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 
 from fastapi import params
@@ -29,6 +29,9 @@ class Runtime:
     resources: Opened
     writes: Mapping[object, DatabaseResource]
     """The database each handler that writes one writes, by the handler."""
+    draining: Callable[[], bool] = lambda: False
+    """Whether the app is shutting down, so that each stream of live updates ends, and its UI connects to another
+    replica."""
 
 
 def running(request: Request) -> Runtime:

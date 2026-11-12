@@ -16,7 +16,7 @@ fakes alone, with the development key, which `basis dev`'s app verifies; `--real
 as `basis check --full` writes each one Schemathesis finds, gives its `target`, the path and the query exactly as the
 URL carried them, percent-encoded, in place of `path` and `query`, and its body's bytes as `content`, its text, or
 `content_base64`, in place of `body`. The route reads all of it as strictly as it reads any request. A response
-that succeeds prints its JSON on stdout. One that fails prints its problem on stdout too, and the one `ERROR` line on
+that succeeds prints its JSON on stdout; a stream of live updates (`api.stream`) prints its first event's, and ends. One that fails prints its problem on stdout too, and the one `ERROR` line on
 stderr, and exits 1. A response that is not JSON, of either kind, prints the one `ERROR` line alone, with its status
 and its content type."""
 
@@ -24,7 +24,7 @@ import base64
 import json
 import re
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
@@ -32,9 +32,9 @@ from typing import Literal, Self
 from urllib.parse import quote, urlsplit
 
 from fastapi.testclient import TestClient
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, model_validator
 
-from basis.api import dev, errors, strict, tokens
+from basis.api import dev, errors, streams, strict, tokens
 from basis.api.app import build
 from basis.api.compute import ComputeFunction
 from basis.api.fakes import Compute, Fake, Faked
@@ -136,23 +136,33 @@ def _called(service: Service, name: str, request: str | Mapping[str, object], *,
     if given.user is not None:
         headers |= {"authorization": f"Bearer {signed(service, configured, given.user)}"}
     app = build(service, settings=configured, fakes=faked)
+    params: list[tuple[str, str | float | None]] | None = None
+    if given.target is not None:
+        target = _target(route, given.target)
+    else:
+        target = _url(route, given)
+        params = [(key, _text(value)) for key, values in given.query.items() for value in (values if isinstance(values, list) else [values])]
     with TestClient(app.asgi, raise_server_exceptions=False) as client:  # runs the lifespan, as `basis serve` does
-        if given.target is not None:
-            response = client.request(route.method, _target(route, given.target), headers=headers, content=given.sent())
+        if route.every_s is not None:
+            with client.stream(route.method, target, params=params, headers=headers, content=given.sent()) as streamed:
+                if streams.MEDIA_TYPE in streamed.headers.get("content-type", ""):
+                    return route, Called(streamed.status_code, _first_event(streamed.iter_lines()))  # and leaves, which ends the stream
+                streamed.read()
+                response = streamed
         else:
-            response = client.request(
-                route.method,
-                _url(route, given),
-                params=[(key, _text(value)) for key, values in given.query.items() for value in (values if isinstance(values, list) else [values])],
-                headers=headers,
-                content=given.sent(),
-            )
+            response = client.request(route.method, target, params=params, headers=headers, content=given.sent())
     kind = response.headers.get("content-type")
     if response.content and not strict.is_json(kind):
         fix = "basis call gives JSON alone, so serve the API with basis dev, and request the route there"
         msg = f"{route.name} answered {response.status_code} with {kind or 'a body of no content type'}, not JSON: {fix}"
         raise DeclarationError(msg)
     return route, Called(response.status_code, response.json() if response.content else None)
+
+
+def _first_event(lines: Iterator[str]) -> JsonValue:
+    """The data of a stream's first event, which `basis call` gives as a stream's answer."""
+    data = next((line.removeprefix("data: ") for line in lines if line.startswith("data: ")), "null")
+    return TypeAdapter(JsonValue).validate_json(data)
 
 
 def signed(service: Service, settings: Settings | None, claims: Mapping[str, JsonValue]) -> str:

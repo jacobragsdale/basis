@@ -56,7 +56,7 @@ from basis.api.errors import DeclarationError, DomainError, Error, FieldError, P
 from basis.api.identity import SignInRequiredError, User
 from basis.api.loading import load
 from basis.api.resources import Bind, Cache, Client, Clock, Ids, Outbox, Reader, Resource, Writer, cache, clock, database, http, ids, outbox
-from basis.api.service import Route, Service, delete, get, patch, post, put
+from basis.api.service import Route, Service, delete, get, patch, post, put, stream
 from basis.api.settings import Serve, Settings, SettingsError
 from basis.api.tables import Table
 from basis.core.errors import BadReply, Conflict, Denied, Failed, NotFound, Rejected, ServiceError, Timeout, Unavailable, missing
@@ -127,6 +127,7 @@ __all__ = [
     "put",
     "serve",
     "serve_on_fakes",
+    "stream",
 ]
 
 

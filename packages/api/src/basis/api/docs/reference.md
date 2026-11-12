@@ -33,6 +33,7 @@ on to a repository function, and never calls its methods. A module of `tests/` a
 | `dataset=True` | A route of a few rows that answers `list[Row]` as Arrow to a UI that asks for it |
 | `smoke=` | A read-only example request, `{"path": {...}, "query": {...}}`, that `basis smoke` sends a deployment |
 | `anonymous=True` | A route that is not a GET, which anyone may call; every other such route asks for the user |
+| `api.stream(PATH, handler, *, deadline_s, every_s, response, errors)` | Live updates to a UI, as server-sent events: a GET whose handler basis calls again every `every_s`, sending `response`, a model, each time it changes |
 | `api.Settings` | The settings' base class: the service's own fields beside basis's, read once from `BASIS_*` variables |
 | `api.User` | The signed-in user's base class: a field for each claim beyond the subject |
 | `api.load` | The service the repo lists under `[project.entry-points."basis.apis"]` |

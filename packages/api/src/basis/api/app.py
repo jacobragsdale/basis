@@ -155,7 +155,7 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | 
             },
         )
         try:
-            yield {STATE: Runtime(configured, resources, writes)}
+            yield {STATE: Runtime(configured, resources, writes, draining=lambda: lifecycle.stage is not Stage.READY)}
         finally:
             lifecycle.advance(Stage.STOPPING)
             try:

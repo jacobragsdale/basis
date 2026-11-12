@@ -109,6 +109,20 @@ After a release, this sends each example to the deployed API and validates its a
 uv run basis smoke --env qa
 ```
 
+## Stream live updates to a UI
+
+A page that shows a value as it changes opens a stream. Its handler is an ordinary GET's, which returns the value now;
+basis calls it again every `every_s` seconds, each call within `deadline_s`, and sends the value as an event whenever
+it changes:
+
+```python
+api.stream("/bonds/{security}/quote", handlers.quote, deadline_s=5, every_s=2, response=Quote, errors=[UNPRICED])
+```
+
+Test the handler as any other, on fakes. `basis call quote '{"path": {"security": "US912810TM64"}}' --fake` prints the
+stream's first event, and a test that reads the stream itself ends it sooner with `Settings.given(serve={"stream_s":
+0.05})`.
+
 ## Change what a UI relies on
 
 Add beside it; never change it in place. `basis check --full`, which the push hook runs, fails on a change to

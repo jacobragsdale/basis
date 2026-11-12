@@ -12,7 +12,7 @@ from fastapi import Path, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from basis.api.example import domain, repository
-from basis.api.example.domain import Accrual, Bond, Convention, DayCount, DirtyPrice, Settlement, Yield
+from basis.api.example.domain import Accrual, Bond, Convention, DayCount, DirtyPrice, Quote, Settlement, Yield
 from basis.api.example.errors import PeriodReversed, PeriodTooLong
 from basis.api.example.resources import CLOCK, IDS, LEDGER, PRICING, SOLVE, TERMS, WAREHOUSE, Settings
 
@@ -84,6 +84,11 @@ async def dirty_price(
     accrued = domain.accrued_at(found, holding.face, holding.settle)
     clean = await repository.clean_price(pricing, security)
     return domain.dirty_price(found, holding.face, holding.settle, accrued, clean)
+
+
+async def quote(security: Security, pricing: Annotated[api.Client, api.given(PRICING)]) -> Quote:
+    """The bond's clean price now, which its route streams, calling this again every few seconds."""
+    return Quote(security_id=security, clean=await repository.clean_price(pricing, security))
 
 
 async def bond_yield(  # noqa: PLR0913, PLR0917 -- what the route reads and reaches, each a parameter FastAPI fills

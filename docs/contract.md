@@ -26,6 +26,7 @@ document at `/openapi.json`.
 | Each error | Its status, under `application/problem+json`: a 422 as `ValidationProblem`, any other as `Problem` |
 | An operation's errors | `x-basis-errors`: each error it may answer, as `{"status": 404, "type": "unknown-bond", "title": "No bond has that ISIN"}`, by status and type |
 | A dataset route | Its success lists `application/vnd.apache.arrow.stream` as `{"type": "string", "format": "binary"}` beside its JSON |
+| A stream of live updates | Its success is `text/event-stream`, `{"type": "string"}`, with `x-basis-event`, `{"schema": ...}`, the schema of each event's data: see [Live updates](#live-updates) |
 
 What a success answers is what the app sends: each float is `{"type": ["number", "null"]}`, since NaN and ±inf
 answer null, and each of a model's fields is `required`, a field with a default among them, since the app sends every
@@ -196,6 +197,26 @@ response among them.
 
 The Python port of parallax's formatter, for Slack and email text (step 5.3), reads the same object.
 
+## Live updates
+
+A route that streams live updates, declared with `api.stream`, answers a GET with server-sent events, from step 12.1.
+Its handler returns the value now, a model, which basis calls when the stream opens and every few seconds after,
+the route's own interval, and the stream sends the value whenever it differs from the last one sent.
+
+| What | The stream |
+|---|---|
+| Its request | A GET, read as strictly as any, its token in `Authorization: Bearer TOKEN`, so a UI reads it with `fetch`, since a browser's `EventSource` sends no header |
+| A failure as it opens | Its problem, with its status, as any route answers it, and no stream |
+| Its response | `200`, `Content-Type: text/event-stream`, `Cache-Control: no-cache` and `X-Accel-Buffering: no`, never compressed, with `X-Request-Id` and `traceparent` as any response |
+| Its first message | `retry: 1000`, the milliseconds a reader waits before it connects again, and the first event |
+| An event | `data: {...}`, one line of the model's JSON, of the default type, and no `id`: a reader that connects again gets the current value first, so no `Last-Event-ID` is read |
+| A heartbeat | `: heartbeat`, a comment, after 15 seconds without a message (`serve.heartbeat_s`) |
+| A failure later | `event: problem`, its data the problem the route answers, as in [Errors](#errors), and the stream ends |
+| Its end | `event: end`, `{"reason": "expired"}` when the token expires, so the UI connects again with its renewed token; `"limit"` after 300 seconds (`serve.stream_s`); `"shutdown"` when the replica stops |
+
+A reader too slow to take a message within `serve.heartbeat_s` loses its stream, and connects again. Every message
+ends with a blank line, as server-sent events do. The sample's `quote` streams a bond's clean price.
+
 ## One origin
 
 A UI and its API sit behind one host: the ingress routes `/api` to the API, removing the prefix, and the rest to the UI.
@@ -263,6 +284,7 @@ passes, saying so. `basis review` prints what the check found, with each keyword
 | A new success status | Yes |
 | A body the route no longer takes, or now requires | Yes |
 | A dataset route that no longer answers Arrow | Yes |
+| A route that starts or stops streaming events; a stream's event is compared as a response | Yes |
 | A path parameter renamed | No, since a path's parameters are compared by their place in it |
 | A model added to a response's union, or a field of one of its models retyped | Yes |
 | A field required in one model of a request's union | Yes |
@@ -279,7 +301,7 @@ The example API's document is
 [`packages/api/src/basis/api/example/openapi.json`](../packages/api/src/basis/api/example/openapi.json), the sample
 basis-ui generates its client from and tests against, pinned to a commit of this repo. It holds every part of the
 contract: query and path parameters, a JSON body with numbers and dates, a time with its offset, a dataset route,
-`coupons`, with its Arrow, whose columns declare each of the six display formats, a 422 a handler names its fields in, a route that writes and books its write with another
+`coupons`, with its Arrow, whose columns declare each of the six display formats, a 422 a handler names its fields in, a stream of live updates, `quote`, a route that writes and books its write with another
 service through its database's outbox, `record_settlement`, and the errors basis adds, that route's 502 among them. `uv run python -m
 basis.api.example` writes it, and the example's tests fail when it differs from the example's service, or when it
 breaks its contract with basis's last release, whose copy of it, `openapi.released.json` beside it, `scripts/release.py version` writes. Beside it, `coupons.arrows` is a sample of that route's Arrow stream, the fake warehouse's US912810TM64 as the

@@ -39,7 +39,7 @@ from pathlib import Path
 
 from pydantic import ConfigDict, JsonValue, ValidationError
 
-from basis.api import arrow, openapi
+from basis.api import arrow, openapi, streams
 from basis.core.errors import BasisError
 from basis.core.model import Model
 from basis.core.verbs import table
@@ -213,6 +213,11 @@ def _operation(name: str, old: Document, new: Document, *, before: Document, aft
     _read(name, *answers, found)
     found.skipped.extend(f"{name}: {path}'s {keyword}" for path, keyword in dict.fromkeys(skipped))
     _errors(name, old, new, found)
+    old_stream, new_stream = _stream(old, old_status), _stream(new, new_status)
+    if old_stream and not new_stream:
+        found.breaking.append(f"{name} no longer streams events, and answers once")
+    elif new_stream and not old_stream:
+        found.breaking.append(f"{name} streams events, and no longer answers once")
     old_arrow, new_arrow = _arrow(old, old_status), _arrow(new, new_status)
     if old_arrow and not new_arrow:
         found.breaking.append(f"{name} no longer answers Arrow")
@@ -334,7 +339,15 @@ def _content(operation: Document, status: str | None) -> Document:
 
 
 def _answer(operation: Document, status: str | None) -> JsonValue | None:
-    return openapi.mapping(_content(operation, status).get("application/json")).get("schema")
+    """What a success answers: its JSON's schema, or a stream's events'."""
+    content = _content(operation, status)
+    if streams.MEDIA_TYPE in content:
+        return openapi.mapping(openapi.mapping(openapi.mapping(content[streams.MEDIA_TYPE]).get("x-basis-event")).get("schema")) or None
+    return openapi.mapping(content.get("application/json")).get("schema")
+
+
+def _stream(operation: Document, status: str | None) -> bool:
+    return streams.MEDIA_TYPE in _content(operation, status)
 
 
 def _arrow(operation: Document, status: str | None) -> bool:

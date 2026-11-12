@@ -1,7 +1,8 @@
 """Accrued interest on a fixed-rate bond: the coupon interest earned between two dates under the bond's day count
 convention, which a buyer pays the seller at settlement. Given a bond's terms, the service accrues over any period;
 for a bond in its warehouse, it accrues since the last coupon, prices the bond with the pricing service's clean price,
-solves for its yield to maturity in the service's process pool, lists its coupons, a dataset that a UI's grid can take
+streams its clean price to a UI that shows it live, solves for its yield to maturity in the service's process pool,
+lists its coupons, a dataset that a UI's grid can take
 as Arrow, and records settlements for a signed-in user, booking each with the ledger service through the warehouse's
 outbox.
 
@@ -19,7 +20,7 @@ from http import HTTPStatus
 from basis import api
 
 from basis.api.example import handlers
-from basis.api.example.domain import Accrual, Bond, DayCount, DirtyPrice, Settlement, Yield
+from basis.api.example.domain import Accrual, Bond, DayCount, DirtyPrice, Quote, Settlement, Yield
 from basis.api.example.errors import NO_YIELD, OUTSIDE_ITS_LIFE, UNKNOWN_BOND, UNPRICED, PeriodReversed, PeriodTooLong
 from basis.api.example.resources import CLOCK, IDS, LEDGER, PRICING, TERMS, WAREHOUSE, Settings
 
@@ -33,6 +34,7 @@ service = api.Service(
         api.get("/conventions", handlers.conventions, deadline_s=1, response=list[DayCount], errors=[]),
         api.get("/bonds/{security}", handlers.bond, deadline_s=5, response=Bond, errors=[UNKNOWN_BOND]),
         api.get("/bonds/{security}/dirty-price", handlers.dirty_price, deadline_s=5, response=DirtyPrice, errors=[UNKNOWN_BOND, UNPRICED, *OUTSIDE_ITS_LIFE]),
+        api.stream("/bonds/{security}/quote", handlers.quote, deadline_s=5, every_s=2, response=Quote, errors=[UNPRICED]),
         api.get("/bonds/{security}/yield", handlers.bond_yield, deadline_s=5, response=Yield, errors=[UNKNOWN_BOND, UNPRICED, NO_YIELD, *OUTSIDE_ITS_LIFE]),
         api.get("/bonds/{security}/coupons", handlers.coupons, deadline_s=5, response=api.Table[handlers.CouponRow], errors=[UNKNOWN_BOND]),
         api.post("/settlements", handlers.record_settlement, status=HTTPStatus.CREATED, deadline_s=5, response=Settlement, errors=[UNKNOWN_BOND, *OUTSIDE_ITS_LIFE]),

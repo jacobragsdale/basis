@@ -17,7 +17,9 @@ FastAPI makes the document from the routes, and basis finishes it, so that it sa
   takes no null and needs no defaulted field, is then two schemas, `NAME-Input` and `NAME-Output`, as FastAPI names
   them when pydantic's differ;
 - a dataset route's success lists `application/vnd.apache.arrow.stream` beside its JSON, as a binary string, the one
-  form of a binary body that generated clients read as one.
+  form of a binary body that generated clients read as one;
+- a stream's success is `text/event-stream`, a string, with `x-basis-event` beside its schema, the schema of each
+  event's data (`streams.py`).
 
 The paths carry no `/api`: the deployment that serves a UI and its API on one host routes `/api` to the API and
 removes it, and the UI's client adds it.
@@ -34,7 +36,7 @@ from typing import override
 from fastapi import FastAPI
 from pydantic import JsonValue, TypeAdapter
 
-from basis.api import routes, sync
+from basis.api import routes, streams, sync
 from basis.api.errors import MEDIA_TYPE, described
 from basis.api.service import Route, Service
 from basis.core.sync import MARKER
@@ -79,6 +81,8 @@ def finish(found: dict[str, JsonValue], declared: Sequence[Route] = ()) -> dict[
     for _, _, operation in operations(found):
         if (route := by_name.get(str(operation.get("operationId")))) is not None:
             operation["x-basis-errors"] = errors(route)
+            if route.every_s is not None:
+                _streamed(operation, route)
         for status, response in mapping(operation.get("responses")).items():
             content = mapping(mapping(response).get("content"))
             if (status == "default" or (status.isdigit() and int(status) >= HTTPStatus.BAD_REQUEST)) and "application/json" in content:
@@ -86,6 +90,14 @@ def finish(found: dict[str, JsonValue], declared: Sequence[Route] = ()) -> dict[
     _strict(found)
     _outputs(found)
     return found
+
+
+def _streamed(operation: dict[str, JsonValue], route: Route) -> None:
+    """A stream's success, in `operation`, as `text/event-stream`, its events' schema the one FastAPI gave its JSON,
+    as `x-basis-event` (`streams.py`)."""
+    content = mapping(mapping(mapping(operation.get("responses")).get(str(route.status))).get("content"))
+    answered = mapping(content.pop("application/json", None))
+    mapping(content.get(streams.MEDIA_TYPE))["x-basis-event"] = {"schema": answered.get("schema")}
 
 
 def _outputs(found: dict[str, JsonValue]) -> None:

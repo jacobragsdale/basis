@@ -12,8 +12,7 @@ from importlib.metadata import EntryPoint
 from pathlib import Path
 
 import pytest
-from fastapi.responses import PlainTextResponse
-from pydantic import JsonValue, TypeAdapter
+from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from basis import api
 from basis.api import dev, fakes, loading, openapi, tokens
@@ -152,6 +151,13 @@ def test_call_prints_a_routes_response_as_json(repo: Path, capsys: pytest.Captur
 
 
 @pytest.mark.usefixtures("clean")
+def test_call_prints_a_streams_first_event_and_ends_it(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert basis(repo, "call", "quote", json.dumps({"path": {"security": ISIN}}), "--fake", *EXAMPLE) == 0
+    body, _ = _called(capsys)
+    assert body == {"security_id": ISIN, "clean": 98.5}
+
+
+@pytest.mark.usefixtures("clean")
 def test_call_runs_compute_in_the_pool(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("BASIS_COMPUTE__WORKERS", "1")
     assert basis(repo, "call", "bond_yield", json.dumps({"path": {"security": ISIN}, "query": {"settle": "2026-11-06"}}), "--fake", *EXAMPLE) == 0
@@ -179,7 +185,7 @@ def test_call_reads_its_request_from_stdin(repo: Path, monkeypatch: pytest.Monke
             ("accrued_interest", json.dumps({"query": {"settle": "2026-11-06"}})),
             "ERROR: accrued_interest answered 422 invalid-request, The request is not valid: parameter settle: Unknown query parameter: this route takes face, rate, start, end, convention",
         ),
-        (("bonds", "{}"), "ERROR: service accruals has no route named bonds: give one of accrued_interest, conventions, bond, dirty_price, bond_yield, coupons, record_settlement"),
+        (("bonds", "{}"), "ERROR: service accruals has no route named bonds: give one of accrued_interest, conventions, bond, dirty_price, quote, bond_yield, coupons, record_settlement"),
         (("bond", "{}"), "ERROR: bond's path /bonds/{security} needs security: give each in the request's path"),
         (("bond", '{"paths": {}}'), 'ERROR: the request to bond is not valid: paths: Extra inputs are not permitted: give one JSON object of "path", "query", "headers" and "body"'),
     ],
@@ -293,17 +299,24 @@ def test_dev_and_call_run_on_the_fakes_a_service_declares_and_no_others(referenc
         dev.fakes(_with_fakes(reference))
 
 
-def plain() -> dict[str, str]:
-    return PlainTextResponse("a price of 98.50")  # ty: ignore[invalid-return-type] -- a reply that is not JSON, on purpose
+class Priced(BaseModel):
+    price: float
 
 
-PLAIN = api.Service(name="plain", settings=api.Settings, routes=[api.get("/plain", plain, deadline_s=1, response=dict[str, str], errors=[])])
+def plain() -> list[Priced]:
+    return [Priced(price=98.5)]
+
+
+PLAIN = api.Service(name="plain", settings=api.Settings, routes=[api.get("/plain", plain, deadline_s=1, response=list[Priced], errors=[], dataset=True)])
+"""A route whose reply is not JSON where the request asks for Arrow."""
 
 
 @pytest.mark.usefixtures("clean")
 def test_a_reply_that_is_not_json_is_one_error_line_with_its_status_and_type(repo: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BASIS_GIT_SHA", "abc123")  # some setting of dev's, so the call reaches the route
-    assert basis(repo, "call", "plain", "{}", "--real", "--service", f"{__name__}:PLAIN") == 1
+    assert basis(repo, "call", "plain", '{"headers": {"accept": "application/vnd.apache.arrow.stream"}}', "--real", "--service", f"{__name__}:PLAIN") == 1
     out, err = capsys.readouterr()
     assert out == ""
-    assert err.splitlines()[-1] == "ERROR: plain answered 200 with text/plain; charset=utf-8, not JSON: basis call gives JSON alone, so serve the API with basis dev, and request the route there"
+    assert err.splitlines()[-1] == (
+        "ERROR: plain answered 200 with application/vnd.apache.arrow.stream, not JSON: basis call gives JSON alone, so serve the API with basis dev, and request the route there"
+    )

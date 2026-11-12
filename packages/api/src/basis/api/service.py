@@ -67,7 +67,8 @@ from types import FunctionType
 from typing import Annotated, Literal, Protocol, TypeAliasType, assert_never, get_args, get_origin
 
 from fastapi import params
-from pydantic import JsonValue, PydanticSchemaGenerationError, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue, PydanticSchemaGenerationError, TypeAdapter, ValidationError
+from starlette.responses import Response
 
 from basis.api import strict, tables
 from basis.api.compute import Compute, ComputeFunction
@@ -129,6 +130,9 @@ class Route:
     anonymous: bool = False
     """That anyone may make the route's requests, which a route that is not a GET says, where it does not ask for the
     user: a route that changes what the service holds knows who asked, or says that it need not."""
+    every_s: float | None = None
+    """For a stream of live updates, which `api.stream` declares, the seconds between one call of its handler and the
+    next: see `streams.py`. None for a route that answers each request once."""
     name: str = field(init=False)
     """The handler's name, which is the route's."""
     asks: tuple[Ask, ...] = field(init=False)
@@ -172,6 +176,7 @@ class Route:
             msg = f"{self.name}'s deadline is {deadline!r}: give it deadline_s, the seconds the route has to answer, above 0"
             raise DeclarationError(msg)
         _check_response(self)
+        _check_stream(self)
         _check_smoke(self)
         table_row = tables.row_of(self.response)
         object.__setattr__(self, "table", table_row is not None)
@@ -245,6 +250,32 @@ def _route(method: Method) -> _Declare:
     return declare
 
 
+def stream(path: str, handler: FunctionType, *, deadline_s: float, every_s: float, response: object, errors: Sequence[type[Error]]) -> Route:
+    """A stream of live updates, as server-sent events, that GET requests to `path` open: basis calls `handler` once
+    when the stream opens and again every `every_s` seconds, each call within `deadline_s` and in a transaction of its
+    own, and sends `response`, the model it returns, as an event whenever it changes, the first one always. A failure of
+    the first call answers its problem, with its status, as any route's does; a failure of a later one is the stream's
+    last event, its problem. See `streams.py`."""
+    return Route("GET", path, handler, deadline_s, response, errors, every_s=every_s)
+
+
+def _check_stream(route: Route) -> None:
+    """That a stream of live updates waits a time between its calls, and sends a model, from an `async def`, which a
+    stream awaits again and again. `stream` declares no dataset and no smoke example."""
+    every: object = route.every_s
+    if every is None:
+        return
+    if isinstance(every, bool) or not isinstance(every, int | float) or not 0 < every < math.inf:
+        msg = f"{route.name}'s every_s is {every!r}: give the seconds between one call of its handler and the next, above 0"
+        raise DeclarationError(msg)
+    if not (isinstance(route.response, type) and issubclass(route.response, BaseModel)):
+        msg = f"{route.name} streams {strict.named(route.response)}: a stream sends one event at a time, so declare a pydantic model of what each event holds"
+        raise DeclarationError(msg)
+    if not inspect.iscoroutinefunction(route.handler):
+        msg = f"{route.name} streams, and basis awaits its handler every every_s: declare it `async def {route.name}`"
+        raise DeclarationError(msg)
+
+
 def _check_anonymous(route: Route, asks: Sequence[Ask]) -> None:
     """That a route which is not a GET asks for the user or declares that it is anonymous, and that one which declares
     it is anonymous is neither a GET nor asks for the user."""
@@ -288,6 +319,12 @@ def _check_response(route: Route) -> None:
         raise DeclarationError(msg)
     if returns != declared and not (tables.row_of(declared) is not None and tables.is_frame_or_table(returns)):
         msg = f"{route.name} returns {strict.named(returns)}, and its route declares response={strict.named(declared)}: declare the one it returns"
+        raise DeclarationError(msg)
+    if isinstance(declared, type) and issubclass(declared, Response):
+        msg = (
+            f"{route.name} answers a {declared.__qualname__}, which basis cannot check, nor write in the document: declare the pydantic model it answers,"
+            " or api.stream(...) for a stream of live updates"
+        )
         raise DeclarationError(msg)
     if declared is not None and tables.row_of(declared) is None:
         try:

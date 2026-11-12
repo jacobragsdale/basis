@@ -57,7 +57,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from basis.api import errors
-from basis.api.identity import USER, Algorithm, Development, Identity, InvalidTokenError, Jwks, KeysUnavailableError, Machine, PublicKey, User, refuse_development
+from basis.api.identity import EXPIRES, USER, Algorithm, Development, Identity, InvalidTokenError, Jwks, KeysUnavailableError, Machine, PublicKey, User, refuse_development
 from basis.api.requests import HEALTH, REQUEST_ID
 from basis.api.service import DeclarationError, Service
 from basis.api.settings import Settings
@@ -130,6 +130,11 @@ class Verifier:
     async def verify(self, token: str) -> User:
         """The user `token` names, or `InvalidTokenError`, with what failed; or `KeysUnavailableError` when the
         sign-in system's keys, which would say, cannot be fetched."""
+        return (await self.verified(token))[0]
+
+    async def verified(self, token: str) -> tuple[User, float | None]:
+        """The user `token` names, as `verify` gives it, and when the token expires, in seconds since 1970, or None for
+        a token with no `exp`."""
         identity = self._identity
         try:
             header = jwt.get_unverified_header(token)
@@ -172,7 +177,7 @@ class Verifier:
             raise InvalidTokenError(msg)
         _check_times(claims, self._now().timestamp(), identity.leeway_s)
         try:
-            return self._user.model_validate(claims)
+            return self._user.model_validate(claims), _numeric_date(claims, "exp")
         except ValidationError as error:
             raise InvalidTokenError(_unclaimed(error)) from error
 
@@ -518,7 +523,7 @@ class Bearer:
             return
         span = trace.get_current_span()
         try:
-            user = await self._user(scope)
+            user, expires = await self._user(scope)
         except (InvalidTokenError, KeysUnavailableError) as refused:
             level = logging.INFO if isinstance(refused, InvalidTokenError) else logging.WARNING
             why = {"why": "; ".join(refused.__notes__)} if getattr(refused, "__notes__", None) else {}
@@ -528,15 +533,17 @@ class Bearer:
             await errors.response(refused, request_id if isinstance(request_id, UUID) else None)(scope, receive, send)
             return
         scope[USER] = user
+        if expires is not None:
+            scope[EXPIRES] = expires
         if user is not None:
             span.set_attribute("enduser.id", user.subject)
         with logs.fields(user=user.subject if user is not None else None):
             await self.app(scope, receive, send)
 
-    async def _user(self, scope: Scope) -> User | None:
+    async def _user(self, scope: Scope) -> tuple[User | None, float | None]:
         found = [value for name, value in scope["headers"] if name == b"authorization"]
         if not found:
-            return None
+            return None, None
         if len(found) > 1:
             msg = "the request has more than one Authorization header"
             raise InvalidTokenError(msg)
@@ -544,7 +551,7 @@ class Bearer:
         if scheme.lower() != "bearer" or not token.strip():
             msg = "the Authorization header holds no bearer token: send `Authorization: Bearer TOKEN`, or no Authorization header for an anonymous request"
             raise InvalidTokenError(msg)
-        return await self.verifier.verify(token.strip())
+        return await self.verifier.verified(token.strip())
 
 
 def sign(identity: Identity, subject: str, *, issued: datetime, expires: datetime, claims: Mapping[str, JsonValue] | None = None) -> str:

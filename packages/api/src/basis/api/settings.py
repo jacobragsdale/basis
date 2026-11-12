@@ -38,6 +38,13 @@ class Serve(Model):
     """The largest request body a route takes, in bytes: a larger one answers 413 `body-too-large`, refused by its
     `Content-Length` before any of it is read, or once that many bytes have arrived. A body is read whole and parsed
     in memory, so this bounds what one request holds."""
+    heartbeat_s: Annotated[float, Field(gt=0)] = 15
+    """Seconds a stream of live updates (`api.stream`) goes without a message before it sends a heartbeat, a comment
+    the reader ignores, so that no proxy between it and the browser closes a connection it thinks idle; and the
+    longest one message may take to be sent, after which a reader too slow to take it loses its stream."""
+    stream_s: Annotated[float, Field(gt=0)] = 300
+    """Seconds one stream of live updates lasts at most, after which it ends, saying so, and the UI connects again: so
+    a connection is never held for ever, and each replica's streams move as the cluster moves its requests."""
 
 
 class Pool(Model):

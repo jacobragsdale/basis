@@ -8,7 +8,8 @@ The app is built from its settings' defaults alone, never the environment, as a 
 a service that verifies tokens is given the development key, as `basis dev` is (`dev.settings`), and every request is
 signed in as its example user (`Service.example_user`), so a signed-in handler's body runs; the anonymous request's
 401 is basis's own, which its tests check. Each compute function runs in the process (`fakes.Compute`), unless the
-service's fakes give one; a service that reaches no database and no other service needs no fakes declared.
+service's fakes give one; a service that reaches no database and no other service needs no fakes declared. A stream
+of live updates lasts `STREAM_S` here, so each request to one answers its first event and ends.
 
 Schemathesis makes `EXAMPLES` requests to each operation that its document allows, and as many that it refuses, each
 the same on every run (`derandomize`), so no check is flaky, and checks that the app never answers 500, answers only
@@ -157,7 +158,12 @@ def _settings(service: Service) -> Settings:
         names = ", ".join(".".join(str(part) for part in entry["loc"]) for entry in error.errors(include_url=False, include_input=False))
         msg = f"basis check builds the app from its settings' defaults alone, and {names} {'has' if len(error.errors()) == 1 else 'have'} none: give each a default in the service's Settings"
         raise BasisError(msg) from None
-    return dev.settings(service, given)
+    settled = dev.settings(service, given)
+    return settled.model_copy(update={"serve": settled.serve.model_copy(update={"stream_s": STREAM_S})})
+
+
+STREAM_S = 0.05
+"""How long a stream of live updates lasts here, so that each request to one answers its first event and ends."""
 
 
 @dataclass(frozen=True)

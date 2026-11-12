@@ -241,6 +241,18 @@ def test_a_settlement_outside_the_bonds_life_is_refused_before_it_is_priced(pric
 # A bond's yield
 
 
+def test_a_bonds_quote_streams_its_clean_price_until_the_stream_ends(warehouse: fakes.Database, pricing: fakes.Http, ledger: Ledger, terms: fakes.Cache) -> None:
+    with TestClient(built(warehouse, pricing, ledger, terms, serve={"stream_s": 0.05}).asgi) as client:
+        response = client.get(f"/bonds/{ISIN}/quote")
+    assert response.headers["content-type"].startswith("text/event-stream")
+    data = [json.loads(line.removeprefix("data: ")) for line in response.text.splitlines() if line.startswith("data: ")]
+    assert data == [{"security_id": ISIN, "clean": 98.5}, {"reason": "limit"}]
+
+
+def test_a_quote_of_a_bond_the_pricing_service_does_not_price_is_unpriced(client: TestClient) -> None:
+    assert kind(client.get(f"/bonds/{UNPRICED}/quote")) == (HTTPStatus.NOT_FOUND, "unpriced")
+
+
 def test_a_bonds_yield_is_solved_from_its_dirty_price(client: TestClient) -> None:
     response = client.get(f"/bonds/{ISIN}/yield", params={"settle": "2026-11-06"})
     # 98.50 clean, and 171 days of 30/360 interest at 4.5% on 100: 100.6375 dirty, nine days of a 180-day period before

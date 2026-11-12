@@ -221,6 +221,26 @@ of the `openapi.json` that this repo's example API produces. [The contract page]
   allows, per environment; an empty list, the default, means the same origin only. basis-api can also serve a built UI
   folder at `/` from the same app, with its routes under `/api`, which gives one origin with no ingress split; ctzd's
   apps do this (see [ctzd](#ctzd-a-consumer)). The document's paths stay unprefixed either way.
+- **Live updates.** A page that shows a value as it changes reads a stream of server-sent events, decided on
+  2026-11-11 (step 12.1), on basis's side alone, since basis-ui builds no live updates yet; [basis-ui#46](https://github.com/jacobragsdale/basis-ui/issues/46) says
+  what a UI would rely on. A route declares one with `api.stream(PATH, handler, deadline_s=, every_s=, response=,
+  errors=)`: a GET, whose handler is an ordinary one that returns a model, the value now, which basis calls when the
+  stream opens and again every `every_s` seconds, sending the value as an event each time it differs from the last.
+  Server-sent events, not a WebSocket, since such a page only listens: they are one HTTP response, which passes the
+  ingress, the one origin and the bearer token unchanged, and a WebSocket is for a UI that must also send on the same
+  connection, which none does yet. What feeds a stream is the handler, polled, so each call is a request of its own
+  to what it reaches, within the route's deadline and in a transaction of its own, which holds no connection between
+  calls and needs no new fake: a subscription to another service would need basis-core's client to stream too, and
+  can be added beside it. The first call answers as any route does, a failure its problem with its status; a later
+  call that fails sends its problem as the stream's last event. In place of a route's deadline, a stream sends a
+  heartbeat after `serve.heartbeat_s` without a message, so no proxy closes it as idle, and ends, saying why, when
+  its token expires, when it has lasted `serve.stream_s`, or when the app drains, and the UI connects again; identity
+  is verified once, at connect. A slow reader holds nothing, since a stream calls its handler again only once its
+  last message has gone, and one that takes no message within `serve.heartbeat_s` loses its stream. The document
+  gives a stream's success as `text/event-stream`, with each event's schema as `x-basis-event`, which the
+  breaking-change check compares as a response. A route that declares a `Response` is refused, and so is a handler
+  that returns one, since nothing would check what it answers. [The contract page](contract.md#live-updates) gives
+  each message.
 - **Recorded responses.** `basis records export` writes chosen recorded requests and responses as JSON files in the
   format basis-ui's fixture mode reads. They hold client data, so they go in a folder git ignores, never in a commit.
 

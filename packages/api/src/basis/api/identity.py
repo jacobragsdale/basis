@@ -63,6 +63,9 @@ from basis.core.settings import SettingsError, variable
 USER = "basis.user"
 """The scope key that holds the request's `User`, or None for an anonymous request, in a service that declares a
 user. It is absent from a request whose token was refused, and from every request of a service that declares none."""
+EXPIRES = "basis.expires"
+"""The scope key that holds when the request's token expires, in seconds since 1970, where it has a token with an
+`exp`: a stream of live updates ends then, so that the UI connects again with a token it has renewed."""
 VERIFIED = frozenset({"iss", "aud", "exp", "nbf", "iat", "sub"})
 """The claims basis verifies itself, which a service's `User` does not declare."""
 

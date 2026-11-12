@@ -434,6 +434,146 @@
         ]
       }
     },
+    "/bonds/{security}/quote": {
+      "get": {
+        "summary": "Quote",
+        "description": "The bond's clean price now, which its route streams, calling this again every few seconds.",
+        "operationId": "quote",
+        "parameters": [
+          {
+            "name": "security",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z0-9]{12}$",
+              "description": "The bond's ISIN.",
+              "title": "Security"
+            },
+            "description": "The bond's ISIN."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A stream of server-sent events, each event's data one of the route's models, as x-basis-event gives it",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "x-basis-event": {
+                  "schema": {
+                    "$ref": "#/components/schemas/Quote"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unpriced: The pricing service has no price for the bond",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid-request: The request is not valid",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationProblem"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "service-not-found: A service the request called has no such thing; service-conflict: A service or database the request called refused it as a conflict; service-rejected: A service or database the request called refused it as invalid; service-denied: A service or database the request called denied it; service-bad-reply: A service the request called answered with a reply that is not the one it declares; service-failed: A call the request made failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "service-unavailable: A service or database the request calls is unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "service-timeout: A call took longer than its deadline",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-basis-errors": [
+          {
+            "status": 404,
+            "type": "unpriced",
+            "title": "The pricing service has no price for the bond"
+          },
+          {
+            "status": 422,
+            "type": "invalid-request",
+            "title": "The request is not valid"
+          },
+          {
+            "status": 502,
+            "type": "service-bad-reply",
+            "title": "A service the request called answered with a reply that is not the one it declares"
+          },
+          {
+            "status": 502,
+            "type": "service-conflict",
+            "title": "A service or database the request called refused it as a conflict"
+          },
+          {
+            "status": 502,
+            "type": "service-denied",
+            "title": "A service or database the request called denied it"
+          },
+          {
+            "status": 502,
+            "type": "service-failed",
+            "title": "A call the request made failed"
+          },
+          {
+            "status": 502,
+            "type": "service-not-found",
+            "title": "A service the request called has no such thing"
+          },
+          {
+            "status": 502,
+            "type": "service-rejected",
+            "title": "A service or database the request called refused it as invalid"
+          },
+          {
+            "status": 503,
+            "type": "service-unavailable",
+            "title": "A service or database the request calls is unavailable"
+          },
+          {
+            "status": 504,
+            "type": "service-timeout",
+            "title": "A call took longer than its deadline"
+          }
+        ]
+      }
+    },
     "/bonds/{security}/yield": {
       "get": {
         "summary": "Bond Yield",
@@ -1288,6 +1428,29 @@
         ],
         "title": "Problem",
         "description": "RFC 9457 problem details."
+      },
+      "Quote": {
+        "properties": {
+          "security_id": {
+            "type": "string",
+            "title": "Security Id"
+          },
+          "clean": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "title": "Clean"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "security_id",
+          "clean"
+        ],
+        "title": "Quote",
+        "description": "A bond's latest clean price, which a UI that shows it live is sent each time it changes."
       },
       "Settlement": {
         "properties": {

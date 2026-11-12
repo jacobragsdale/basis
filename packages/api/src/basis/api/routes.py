@@ -18,7 +18,7 @@
 import asyncio
 import functools
 import inspect
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
 from contextvars import ContextVar
 from http import HTTPStatus
 from typing import ClassVar, override
@@ -31,7 +31,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import Receive, Scope, Send
 
-from basis.api import arrow, deadlines, strict
+from basis.api import arrow, deadlines, streams, strict
 from basis.api.dataset import Rows
 from basis.api.dependencies import running
 from basis.api.errors import BodyTooLargeError, DomainError, Error, Problem, ValidationProblem, described
@@ -43,6 +43,8 @@ from basis.core.errors import ServiceError
 _INVALID = "invalid-request: The request is not valid"
 _ARROW: ContextVar[bool] = ContextVar("basis.api.routes.arrow", default=False)
 """Whether the request a dataset route is answering asks for Arrow."""
+_SERVING: ContextVar[Request] = ContextVar("basis.api.routes.serving")
+"""The request the route is answering, which a stream reads its app and its token's expiry from."""
 
 
 class UndeclaredError(RuntimeError):
@@ -74,6 +76,9 @@ class Served(APIRoute):
     @override
     async def handle(self, scope: Scope, receive: Receive, send: Send) -> None:
         declared = self.declared
+        if declared.every_s is not None:  # a stream, each of whose calls has the deadline (`streams.py`)
+            await super().handle(scope, receive, send)
+            return
         with deadlines.route(declared.name, declared.deadline_s):
             await super().handle(scope, receive, send)
 
@@ -82,10 +87,15 @@ class Served(APIRoute):
         dependant = self.dependant
         declared = self.declared
         validate_body_once(dependant)
-        if declared.rows is not None:  # the endpoint stays the handler, which `given` finds the route's writes by
-            replace_call(dependant, declared.handler, _answering_table(declared, declared.rows) if declared.table else _answering_arrow(declared, declared.rows))
-        handle = super().get_route_handler()
         meanings: dict[type, type[DomainError]] = {error.exception: error for error in declared.errors if issubclass(error, DomainError)}
+        # the endpoint stays the handler, which `given` finds the route's writes by
+        if declared.every_s is not None:
+            replace_call(dependant, declared.handler, _opening_stream(declared, meanings))
+        elif declared.rows is not None:
+            replace_call(dependant, declared.handler, _answering_table(declared, declared.rows) if declared.table else _answering_arrow(declared, declared.rows))
+        else:
+            replace_call(dependant, declared.handler, _refusing_responses(declared))
+        handle = super().get_route_handler()
 
         async def strictly(request: Request) -> Response:
             reads = declared.reads
@@ -101,41 +111,96 @@ class Served(APIRoute):
             if errors:
                 raise RequestValidationError(errors)
             token = _ARROW.set(declared.rows is not None and arrow.wanted(request.headers.get("accept")))
+            serving = _SERVING.set(given)
             try:
                 response = await handle(given)
                 if declared.rows is not None:
                     response.headers.add_vary_header("Accept")
                 return response  # noqa: TRY300 -- what the route answers; the handlers below refuse what it raised
-            except Error as error:
-                if not isinstance(error, declared.answers):
-                    fix = (
-                        "ask for the user in its parameters, as Annotated[User | None, api.given(User)], which adds it to the route's errors"
-                        if isinstance(error, SignInRequiredError)
-                        else "add it to the route's errors=[...], or raise one it declares"
-                    )
-                    msg = f"{declared.name} raised {type(error).__qualname__}, which its route does not declare: {fix}"
-                    raise UndeclaredError(msg) from error
-                raise
-            except ServiceError as error:
-                if not isinstance(error, declared.answers):
-                    msg = (
-                        f"{declared.name} raised {type(error).__qualname__} of {error.resource}, which nothing its route asks for raises:"
-                        " reach each resource through what the handler asks for with api.given, which adds the kinds it raises to the route's errors"
-                    )
-                    raise UndeclaredError(msg) from error
-                raise
-            except HTTPException as error:
-                msg = f"{declared.name} raised an HTTPException {error.status_code}, which no route declares: raise an api.Error subclass, and declare it in the route's errors=[...]"
-                raise UndeclaredError(msg) from error
             except Exception as error:
-                meant = next((meanings[kind] for kind in type(error).__mro__ if kind in meanings), None)
-                if meant is None:
-                    raise  # a defect, which the request boundary answers 500
-                raise meant(str(error) or meant.title) from error
+                if (found := answered(declared, meanings, error)) is error:
+                    raise  # what the route answers, or a defect, which the request boundary answers 500
+                raise found from error
             finally:
+                _SERVING.reset(serving)
                 _ARROW.reset(token)
 
         return strictly
+
+
+def answered(declared: Route, meanings: Mapping[type, type[DomainError]], error: Exception) -> Exception:
+    """What `declared` answers for `error`, which its handler raised: the error itself where the route declares it, or
+    a kind of service error it can meet; the meaning it declares for a domain's exception, by the exception's class;
+    and `UndeclaredError`, a defect, for an `api.Error`, a kind or an `HTTPException` it does not declare. Any other
+    exception is a defect, and itself."""
+    match error:
+        case Error() if not isinstance(error, declared.answers):
+            fix = (
+                "ask for the user in its parameters, as Annotated[User | None, api.given(User)], which adds it to the route's errors"
+                if isinstance(error, SignInRequiredError)
+                else "add it to the route's errors=[...], or raise one it declares"
+            )
+            undeclared = UndeclaredError(f"{declared.name} raised {type(error).__qualname__}, which its route does not declare: {fix}")
+        case ServiceError() if not isinstance(error, declared.answers):
+            undeclared = UndeclaredError(
+                f"{declared.name} raised {type(error).__qualname__} of {error.resource}, which nothing its route asks for raises:"
+                " reach each resource through what the handler asks for with api.given, which adds the kinds it raises to the route's errors"
+            )
+        case Error() | ServiceError():
+            return error
+        case HTTPException():
+            undeclared = UndeclaredError(
+                f"{declared.name} raised an HTTPException {error.status_code}, which no route declares: raise an api.Error subclass, and declare it in the route's errors=[...]"
+            )
+        case _:
+            meant = next((meanings[kind] for kind in type(error).__mro__ if kind in meanings), None)
+            if meant is None:
+                return error
+            answer = meant(str(error) or meant.title)
+            answer.__cause__ = error
+            return answer
+    undeclared.__cause__ = error
+    return undeclared
+
+
+def _refused(declared: Route, found: object) -> object:
+    """`found`, which `declared`'s handler returned, unless it is a `Response`, which nothing would check: a defect,
+    raised before the request's writes commit, so they roll back."""
+    if isinstance(found, Response):
+        msg = f"{declared.name} returned a {type(found).__qualname__}, which basis cannot check: return the {strict.named(declared.response)} its route declares"
+        raise UndeclaredError(msg)
+    return found
+
+
+def _refusing_responses(declared: Route) -> Callable[..., object]:
+    """`declared`'s handler, as FastAPI calls it, refusing a `Response` it returns."""
+    handler = declared.handler
+    if inspect.iscoroutinefunction(handler):
+
+        @functools.wraps(handler)
+        async def answer_async(**values: object) -> object:
+            return _refused(declared, await handler(**values))
+
+        return answer_async
+
+    @functools.wraps(handler)
+    def answer_sync(**values: object) -> object:
+        return _refused(declared, handler(**values))
+
+    return answer_sync
+
+
+def _opening_stream(declared: Route, meanings: Mapping[type, type[DomainError]]) -> Callable[..., object]:
+    """`declared`'s handler, as FastAPI calls it, for a stream of live updates: its first call, which answers as any
+    route's does when it fails, and then the stream, which calls it again (`streams.py`)."""
+
+    @functools.wraps(declared.handler)
+    async def open_stream(**values: object) -> Response:
+        stream = streams.Stream.opened(declared, _SERVING.get(), values, functools.partial(answered, declared, meanings))
+        first = await stream.call()
+        return streams.Events(stream.events(first), send_s=stream.runtime.settings.serve.heartbeat_s)
+
+    return open_stream
 
 
 def _answering_arrow(declared: Route, rows: Rows) -> Callable[..., object]:
@@ -144,7 +209,7 @@ def _answering_arrow(declared: Route, rows: Rows) -> Callable[..., object]:
     handler = declared.handler
 
     def answer(found: object) -> Response:
-        values = rows.adapter.validate_python(found, from_attributes=True)  # as FastAPI validates a JSON response
+        values = rows.adapter.validate_python(_refused(declared, found), from_attributes=True)  # as FastAPI validates a JSON response
         dumped = rows.adapter.dump_python(values, by_alias=True)
         return Response(arrow.encode(rows, dumped), status_code=declared.status, media_type=arrow.MEDIA_TYPE)
 
@@ -152,14 +217,14 @@ def _answering_arrow(declared: Route, rows: Rows) -> Callable[..., object]:
 
         @functools.wraps(handler)
         async def answer_async(**values: object) -> object:
-            found = await handler(**values)
+            found = _refused(declared, await handler(**values))
             return await asyncio.to_thread(answer, found) if _ARROW.get() else found
 
         return answer_async
 
     @functools.wraps(handler)
     def answer_sync(**values: object) -> object:
-        found = handler(**values)
+        found = _refused(declared, handler(**values))
         return answer(found) if _ARROW.get() else found
 
     return answer_sync
@@ -174,7 +239,7 @@ def _answering_table(declared: Route, rows: Rows) -> Callable[..., object]:
     media = {True: arrow.MEDIA_TYPE, False: "application/json"}
 
     def answer(found: object) -> Response:
-        table = arrow.conform(rows, found, f"the table {declared.name} returned")
+        table = arrow.conform(rows, _refused(declared, found), f"the table {declared.name} returned")
         wanted = _ARROW.get()
         return Response(arrow.write(table) if wanted else arrow.as_json(table), status_code=declared.status, media_type=media[wanted])
 
@@ -249,6 +314,9 @@ def responses(declared: Route) -> dict[int | str, dict[str, object]]:
     listed: dict[int | str, dict[str, object]] = {
         status: {"model": ValidationProblem if status == HTTPStatus.UNPROCESSABLE_CONTENT else Problem, "description": "; ".join(kinds)} for status, kinds in sorted(by_status.items())
     }
+    if declared.every_s is not None:
+        content = {streams.MEDIA_TYPE: {"schema": {"type": "string"}}}
+        listed[declared.status] = {"description": "A stream of server-sent events, each event's data one of the route's models, as x-basis-event gives it", "content": content}
     if declared.rows is not None:
         content = {arrow.MEDIA_TYPE: {"schema": {"type": "string", "format": "binary"}}}
         listed[declared.status] = {"description": "The rows, as JSON, or as an Arrow IPC stream when the request's Accept asks for it", "content": content}
