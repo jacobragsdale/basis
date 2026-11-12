@@ -484,7 +484,15 @@ starts, such as `previous-business-day`, `previous-month` or `today-7d..today`, 
 the zone and business days of the job's `CALENDAR`, which it requires, to dates, and the run's manifest records those
 dates, so `replay` and `regress` rerun exactly the interval the run had. The Python API and the QA tier take dates.
 
-**Messages.** Slack messages go through channel webhooks, as the firm already posts to its channels, and email through
+**Backfill.** `basis backfill JOB --from DAY --to DAY` makes the runs a scheduler would have made for those days, one
+per business day of the job's `CALENDAR`, each for its day's interval, oldest first, and stops at the first that does
+not do what it was asked, decided on 2026-11-11 for step 12.4 of [the plan](../PLAN.md) and open to the maintainer's
+review. The run store is its only state: run again with the same days, it skips each day whose newest run did what it
+was asked, resumes one that stopped while it published, so nothing is written twice, and runs the rest. It takes days,
+not relative intervals, and runs one day at a time, never in parallel, since a day's `ReplaceWhere` or upsert may
+depend on the day before.
+
+ Slack messages go through channel webhooks, as the firm already posts to its channels, and email through
 the firm's SMTP relay. Both have fakes, and nothing is sent in tests, `replay`, `regress` or the QA tier. Their numbers
 are written by a Python port of parallax's number formatter, decided on 2026-11-08, which reads the same display
 formats as the UI (see [What a UI can rely on](#what-a-ui-can-rely-on)), so a number reads in a message as it does in

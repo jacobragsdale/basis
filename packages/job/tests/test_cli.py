@@ -468,3 +468,19 @@ def test_a_run_whose_query_file_is_missing_fails_before_it_reads_its_settings(re
     line = only_error(capsys.readouterr().err)
     assert "trades reads " in line
     assert line.endswith("trade.sql, which does not exist: name the file in sql=, relative to " + str(EXAMPLE))
+
+
+def test_a_backfill_runs_each_business_day_stops_at_the_first_that_fails_and_carries_on_from_it(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    argv = ["backfill", "basis.job.example.job", "--params", str(EXAMPLE / "params/default.json"), "--data", str(EXAMPLE / "tests/fixture")]
+    assert basis(repo, *argv, "--from", "2026-11-05", "--to", "2026-11-05") == 0
+    assert [(step["day"], step["did"], step["status"]) for step in json.loads(capsys.readouterr().out)] == [("2026-11-05", "ran", "checked")]
+    assert basis(repo, *argv, "--from", "2026-11-05", "--to", "2026-11-09") == 1  # the fixture holds 5 November's trades alone, which the job's check refuses for the 6th
+    captured = capsys.readouterr()
+    assert [(step["day"], step["did"], step["status"]) for step in json.loads(captured.out)] == [("2026-11-05", "skipped", "checked"), ("2026-11-06", "ran", "failed")]
+    assert only_error(captured.err).startswith("ERROR: the backfill of basis.job.example.job stopped at 2026-11-06: run ")
+    assert only_error(captured.err).endswith(": fix what it says, then run the same backfill again, which carries on from 2026-11-06")
+
+
+def test_a_backfill_whose_days_are_backwards_is_one_error_line(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert basis(repo, "backfill", "basis.job.example.job", "--params", str(EXAMPLE / "params/default.json"), "--from", "2026-11-06", "--to", "2026-11-05") == 1
+    assert only_error(capsys.readouterr().err) == "ERROR: --from 2026-11-06 is after --to 2026-11-05: give the first day, then the last"

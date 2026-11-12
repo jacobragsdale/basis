@@ -35,7 +35,8 @@ step's own commit keeps it true.
 | 12.8 | basis-api's, in progress in another checkout | |
 | 12.2 Services that need a login | Done: a service's `login` (`basis.core.logins`: bearer, header, basic, client credentials, Entra, Kerberos), which every client and `basis doctor` carry; a job's `Fetch` takes a POST that only reads, rows under a key, and pages (`NextLink`, `Cursor`, `Offset`). No real identity provider or KDC verified it: [the pilot](docs/pilot.md#5-a-services-login-122), **(work)** | `3725935`, the commit "Step 12.2: a fetch's POST and pages" |
 | 12.3 Files from a folder | Done: `etl.File(..., folder=, delimiter=, encoding=)`, its file name a pattern whose every match is read in name order; `basis.core.paths`, the pure rule a folder's path keeps. No real share verified it: [the pilot](docs/pilot.md#6-a-csv-dropped-on-a-share-123), **(work)** | the commit "Step 12.3" |
-| 12.4 to 12.7, 12.9 | To do | |
+| 12.4 Backfill | Done: `basis backfill JOB --from DAY --to DAY` (`basis.job.backfill`), one run per business day in order, stopping at the first failure; run again, it skips each done day and resumes a partial one, from the run store alone | the commit "Step 12.4" |
+| 12.5 to 12.7, 12.9 | To do | |
 
 Phases 6 to 8 first reached GitHub's CI on 2026-11-11; what it found is fixed in commits of their own, named
 "CI: ...": `c504f54` (HiGHS 1.16's banner on stdout broke optim's JSON), `73889f6` (core named optim), and the

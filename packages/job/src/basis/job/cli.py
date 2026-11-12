@@ -13,7 +13,7 @@ import os
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -27,7 +27,7 @@ from basis.core.storage import Root
 from basis.core.sync import Problem
 from basis.core.tables import Column
 from basis.core.verbs import Difference, Part, Regress, Regressed, Regressions, Runs, Shared, Verb, fail
-from basis.job import api, ddl, docs, loader, new, qa, replays, runs, sync
+from basis.job import api, backfill, ddl, docs, loader, new, qa, replays, runs, sync
 from basis.job import job as jobs
 from basis.job.diff import SAMPLE, OperationDiff
 
@@ -135,9 +135,45 @@ def part() -> Part:
                 "ddl": Shared("print CREATE TABLE statements for a job's tables, or for the ledger", lambda n: _ddl(DdlArgs(n.name, n.ledger, n.dialect)), _ddl_arguments),
             },
         ),
+        verbs=(Verb("backfill", "run a job once for each business day from --from to --to, in order, carrying on from where a backfill stopped", _backfill_arguments, _backfill_from),),
         qa=qa.plan,
         smoke=_smoke,
     )
+
+
+def _backfill_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("job", metavar="JOB", help="the job, by its name or module")
+    parser.add_argument("--params", type=command.existing_file, required=True, help="the params JSON file, the same for every day")
+    parser.add_argument("--from", dest="first", type=_day, required=True, help="the first day, YYYY-MM-DD")
+    parser.add_argument("--to", dest="last", type=_day, required=True, help="the last day, YYYY-MM-DD, itself included")
+    parser.add_argument("--data", type=command.existing_folder, help="a folder of files that replace the datasets they name, for every day")
+    parser.add_argument("--label", type=command.label, action="append", default=[], help="KEY=VALUE, recorded in each run's manifest; repeatable")
+    parser.add_argument("--publish", action="store_true", help="write each day's changes to their databases, if every check passes")
+    command.environment_argument(parser)
+
+
+def _day(text: str) -> date:
+    try:
+        return date.fromisoformat(text)
+    except ValueError as error:
+        msg = f"{text!r} is no day: give one as YYYY-MM-DD"
+        raise argparse.ArgumentTypeError(msg) from error
+
+
+def _backfill_from(n: argparse.Namespace) -> int:
+    """`basis backfill JOB`: each day's step as JSON on stdout, and the day it stopped at as its one ERROR line."""
+    job = jobs.load(n.job)
+    logs.include(job.module.partition(".")[0])
+    runs.open_sql(job)
+    environment = environments.load(n.env, Settings)
+    if n.publish:
+        environment.refuse_writes(f"basis backfill {job.name} --publish")
+    settings = environment.settings
+    steps, failure = backfill.backfill(
+        job, settings, params=n.params, first=n.first, last=n.last, publish=n.publish, snapshot_root=settings.snapshots(), environment=environment.name, labels=dict(n.label), data=n.data
+    )
+    _print([{"day": step.day.isoformat(), "did": step.did, "run_id": step.run_id, "status": step.status} for step in steps])
+    return fail(*failure) if failure is not None else 0
 
 
 def _smoke(repo: Path, env: str, commit: str | None) -> list[Problem]:  # noqa: ARG001 -- a job's dry run is of the checkout's code, whatever commit an environment serves
