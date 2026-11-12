@@ -19,7 +19,7 @@ from importlib.util import find_spec
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from basis.core import hooks
+from basis.core import hooks, supply
 from basis.core.errors import BasisError
 
 GIT = "https://github.com/jacobragsdale/basis"
@@ -191,7 +191,7 @@ def sources(distributions: Mapping[str, str], *, version: str, index: str | None
         raise NewError(msg)
     if index is not None:
         comment = "# Every package comes from this index, which proxies PyPI; a name it lacks fails, rather than coming from PyPI."
-        return f'{comment}\n[[tool.uv.index]]\nname = "internal"\nurl = "{index}"\ndefault = true\n'
+        return f'{supply.block(distributions)}\n{comment}\n[[tool.uv.index]]\nname = "internal"\nurl = "{index}"\ndefault = true\n'
     if checkout is not None:
         root = checkout.resolve()
         if missing := [folder for folder in (*distributions.values(), FOLDER) if not (root / folder / "pyproject.toml").exists()]:
@@ -217,7 +217,7 @@ def sources(distributions: Mapping[str, str], *, version: str, index: str | None
         raise NoReleaseError(msg)
     else:
         lines = [f'{name} = {{ git = "{GIT}", subdirectory = "{folder}", tag = "v{version}" }}' for name, folder in distributions.items()]
-    return "[tool.uv.sources]\n" + "\n".join(lines) + "\n"
+    return supply.block(distributions) + "\n[tool.uv.sources]\n" + "\n".join(lines) + "\n"
 
 
 def write_templates(repo: Path, templates: Path, values: Mapping[str, str]) -> None:

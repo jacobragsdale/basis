@@ -156,7 +156,7 @@ def test_a_direct_url_that_is_not_what_pep_610_describes_is_refused_with_the_fix
 
 def test_an_index_replaces_pypi_so_a_name_it_lacks_never_comes_from_pypi() -> None:
     found = tomllib.loads(sources(PART, version="0.7.0", index="https://feed.example.com/simple", checkout=None, installed=unread))["tool"]["uv"]
-    assert found == {"index": [{"name": "internal", "url": "https://feed.example.com/simple", "default": True}]}
+    assert found["index"] == [{"name": "internal", "url": "https://feed.example.com/simple", "default": True}]
 
 
 def test_a_folder_that_is_not_a_checkout_of_basis_is_refused(tmp_path: Path) -> None:

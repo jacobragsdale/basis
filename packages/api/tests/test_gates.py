@@ -38,8 +38,12 @@ accruals = "accruals.service:service"
 [tool.basis]
 parts = ["api"]
 coverage = 90
+
+[tool.uv]
+exclude-newer = "7 days"
 """
-"""An API repo's own: pytest's settings are basis's, in the pytest.ini `basis sync` writes."""
+"""An API repo's own: pytest's settings are basis's, in the pytest.ini `basis sync` writes; the dependency cooldown
+`basis new` writes, which `basis check --full` checks (step 12.9)."""
 
 
 class Steps:

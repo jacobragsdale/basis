@@ -1,6 +1,8 @@
 """`basis check --full`, which the push hook runs: `basis check`, then `regress` where the run store is reachable, the QA
 tier where the repo declares one and this machine has its settings file (`basis.core.qa`), each part's contract
-diff, each part's checks too slow for every commit (`Part.full_checks`), which run first, and mutation testing of the domain functions the change touches, in WSL and on Linux (`basis.core.mutation`).
+diff, each part's checks too slow for every commit (`Part.full_checks`), which run first, mutation testing of the
+domain functions the change touches, in WSL and on Linux (`basis.core.mutation`), and the supply chain's checks, its
+dependency cooldown and `uv audit` (`basis.core.supply`), either of which fails it.
 Each piece that does not run prints one `SKIPPED:` line that says why, and each that runs prints one line of what it
 found. `regress` seeing an output change fails nothing: the change may be meant, and `basis review` shows it to the
 reviewer; nor does a mutant that survives, or mutmut failing. A failure to regress, a QA tier that refuses or a QA run
@@ -22,7 +24,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from basis.core import check, clone, hygiene, mutation, qa, review
+from basis.core import check, clone, hygiene, mutation, qa, review, supply
 from basis.core.check import Runner
 from basis.core.errors import BasisError
 from basis.core.settings import Settings, locate
@@ -44,9 +46,20 @@ QA_LATER = "it runs when you push, once the change is committed"
 """Why `basis upgrade`'s check leaves the QA tier out."""
 
 
-def full(repo: Path, files: Sequence[AgentFiles], parts: Mapping[str, Part], *, run: Runner, report: Report, folder: Path, clock: Callable[[], datetime], with_qa: bool = True) -> int:
+def full(
+    repo: Path,
+    files: Sequence[AgentFiles],
+    parts: Mapping[str, Part],
+    *,
+    run: Runner,
+    report: Report,
+    folder: Path,
+    clock: Callable[[], datetime],
+    with_qa: bool = True,
+    audit: Callable[[Path], supply.Audited] = supply.audit,
+) -> int:
     """Run `basis check --full` on the repo at `repo`, whose untracked files are in `folder`, and with `with_qa` the QA
-    tier; 0 when every piece that ran passed."""
+    tier; 0 when every piece that ran passed. `audit` is a test's."""
     found = clone.of(repo)
     commit = found.head() if found is not None else None
     clean = found is not None and found.clean()  # before the check, which may write what git does not ignore
@@ -65,12 +78,15 @@ def full(repo: Path, files: Sequence[AgentFiles], parts: Mapping[str, Part], *, 
         tier = _qa(repo, parts, commit=commit, folder=folder, report=report) if with_qa else _skip_qa(QA_LATER)
         contracts, broken, unoffered = _contracts(repo, parts, report)
         mutated = _mutation(repo)
+        exposed = _supply(repo, audit)
     else:
         why = "basis check failed, as above"
         regressed, tier, contracts, broken, unoffered = _skip_regress(why), _skip_qa(why), {}, 0, why
         _skipped("the contract diffs", why)
         mutated = _skip_mutation(why)
-    passed = checked and not slow and not regressed.failures and not tier.refused and not any(run.failure for run in tier.runs) and not broken
+        _skipped("the supply chain's checks", why)
+        exposed = 0
+    passed = checked and not slow and not regressed.failures and not tier.refused and not any(run.failure for run in tier.runs) and not broken and not exposed
     if found is None or commit is None:
         _skipped("the record for basis review", "the repo is in no clone with a commit")
     elif not clean:
@@ -197,6 +213,17 @@ def _contracts(repo: Path, parts: Mapping[str, Part], report: Report) -> tuple[d
         diff = found[name]
         _said(f"the {name} part's contract is unchanged" if diff is None else f"the {name} part's contract: {_summary(diff)}, as `uv run basis review` shows")
     return found, broken, None
+
+
+def _supply(repo: Path, audit: Callable[[Path], supply.Audited]) -> int:
+    """The supply chain's checks (`basis.core.supply`): the cooldown, then `uv audit`; how many problems they found."""
+    problems = [found] if (found := supply.cooldown(repo)) is not None else []
+    audited = audit(repo)
+    if audited.skipped is not None:
+        _skipped("uv audit", audited.skipped)
+    elif not audited.problems:
+        _said(f"uv audit found no known vulnerability in {audited.packages} packages")
+    return sum(fail(*problem) for problem in [*problems, *audited.problems])
 
 
 def _mutation(repo: Path) -> review.MutationRecord:

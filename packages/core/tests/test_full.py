@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from basis.core import check, clone, command, environments, full, hooks, review, sync
+from basis.core import check, clone, command, environments, full, hooks, review, supply, sync
 from basis.core.errors import BasisError
 from basis.core.verbs import Difference, Part, Qa, QaPlan, QaRun, Regress, Regressed, Regressions, Runs, Shared
 
@@ -39,7 +39,7 @@ def repo(tmp_path: Path, git: Git) -> Path:
     """A clone of a repo whose files are what basis writes, with every change committed."""
     folder = tmp_path / "repo"
     folder.mkdir()
-    (folder / "pyproject.toml").write_text('[tool.basis]\nparts = ["alpha"]\ncoverage = 90\n', encoding="utf-8")
+    (folder / "pyproject.toml").write_text('[tool.basis]\nparts = ["alpha"]\ncoverage = 90\n\n[tool.uv]\nexclude-newer = "7 days"\n', encoding="utf-8")
     sync.write(folder, [])
     git(folder, "init", "--quiet")
     hooks.ensure(folder)
@@ -202,6 +202,7 @@ def test_a_failing_check_skips_regress_and_the_qa_tier_and_records_that_the_comm
         "SKIPPED: the QA tier: basis check failed, as above",
         "SKIPPED: the contract diffs: basis check failed, as above",
         "SKIPPED: mutation testing: basis check failed, as above",
+        "SKIPPED: the supply chain's checks: basis check failed, as above",
     ]
     assert asked == []
     assert not record(repo).passed
@@ -468,3 +469,15 @@ def test_a_record_from_before_mutation_testing_still_reads() -> None:
     kept = review.Record(commit="c", folder="", checked_at=AT, checked=True, passed=True, versions={}, regress=review.RegressRecord(skipped="x"), qa=review.QaRecord(skipped="y"))
     older = kept.model_dump(mode="json", exclude={"mutation"})
     assert review.Record.model_validate(older).mutation.skipped == "the basis that checked this commit tested no mutants"
+
+
+def test_a_vulnerable_dependency_or_a_missing_cooldown_fails_the_full_check_one_line_each(repo: Path, capsys: pytest.CaptureFixture[str], git: Git) -> None:
+    (repo / "pyproject.toml").write_text('[tool.basis]\nparts = ["alpha"]\ncoverage = 90\n', encoding="utf-8")
+    git(repo, "commit", "--quiet", "--no-verify", "--all", "--message", "No cooldown")
+    vulnerable = supply.Audited(problems=[("jinja2 2.11.2 has the known vulnerability PYSEC-2021-66", "upgrade it to 2.11.3 or later")], packages=2)
+    assert full.full(repo, [], {"alpha": Part()}, run=passing, report=command.reported, folder=repo, clock=lambda: AT, audit=lambda _: vulnerable) == 1
+    errors = [line for line in capsys.readouterr().err.splitlines() if line.startswith("ERROR")]
+    assert errors == [
+        'ERROR: pyproject.toml takes a dependency as soon as it is published: add exclude-newer = "7 days" under [tool.uv], as `basis new` writes it',
+        "ERROR: jinja2 2.11.2 has the known vulnerability PYSEC-2021-66: upgrade it to 2.11.3 or later",
+    ]

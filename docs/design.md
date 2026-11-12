@@ -807,6 +807,19 @@ Loop time, from an edit to every check passing, was to be measured by the eval, 
 [Evals](#evals)). If the commit hook passes a budget of a minute,
 its tests move to the push hook, and the commit hook runs only the tests a change touches.
 
+**The supply chain.** A repo takes a dependency only once it has been public a week: `basis new` writes `[tool.uv]
+exclude-newer = "7 days"` into its `pyproject.toml`, and `basis check --full` fails without it, and runs `uv audit` of
+the locked project, each known vulnerability one `ERROR` line naming the version that fixes it, decided on 2026-11-11
+for step 12.9 of [the plan](../PLAN.md) and open to the maintainer's review. Both are uv's own, confirmed against uv
+0.13.6's documentation: `exclude-newer` takes a duration, which the lock records as a span, so `uv lock --locked` holds
+from day to day, and `uv audit` asks OSV and exits 0, 1 with a vulnerability, and 2 when it cannot ask, which skips
+it with one `SKIPPED` line rather than fail every push from a machine that cannot reach OSV. `uv audit` is a preview in
+that version, so basis names its preview feature and reads its JSON, and a uv that changes it is caught by its tests.
+basis's own packages, and every package they bring, as the environment that made the repo has them, are exempt
+(`exclude-newer-package`), since basis chose and tested those versions, some younger than a week; what a repo adds
+itself, and anything new it brings, waits. The workspace itself takes no cooldown yet, so basis's own floors may be
+younger than a week when a release sets them.
+
 ## Evals
 
 basis is judged by whether agents succeed in it, so it carries an eval. Twenty to fifty tasks drawn from real tickets
