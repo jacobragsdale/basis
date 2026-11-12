@@ -93,3 +93,21 @@ def test_a_repo_with_no_lock_has_nothing_to_audit(tmp_path: Path) -> None:
 def test_the_audit_asks_uv_for_json_of_the_locked_project() -> None:
     assert supply.AUDIT[:3] == ("uv", "audit", "--locked")
     assert "--output-format" in supply.AUDIT
+
+
+def test_basiss_own_requirements_are_exempt_even_where_uvx_did_not_install_them(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`uvx basis-job` installs no `dev` extra, so ruff and ty, which basis pins exactly, are not installed where a
+    repo is made, and a pin younger than the cooldown would leave the repo unlockable (CI, 2026-11-12)."""
+    installed: dict[str, list[str]] = {
+        "basis-core": ['ruff==0.17.4; extra == "dev"', "pydantic>=2.14.3"],
+        "pydantic": ["pydantic-core==2.50.4", 'email-validator>=2; extra == "email"'],
+        "pydantic-core": [],
+    }
+
+    def requires(name: str) -> list[str]:
+        if name not in installed:
+            raise supply.metadata.PackageNotFoundError(name)
+        return installed[name]
+
+    monkeypatch.setattr(supply.metadata, "requires", requires)
+    assert supply.closure(["basis-core"]) == {"basis-core", "ruff", "pydantic", "pydantic-core"}  # not pydantic's own extras

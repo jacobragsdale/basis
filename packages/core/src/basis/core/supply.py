@@ -45,16 +45,19 @@ def block(parts: Iterable[str] = ()) -> str:
 
 
 def closure(names: Iterable[str]) -> set[str]:
-    """`names` and every distribution they require, as this environment has them installed, by their normalized names:
-    each extra of `names`, which a repo takes as `basis-job[dev]`, and no extra of anything else; one that is not
-    installed, as a requirement for another platform, brings nothing."""
+    """`names` and every distribution they require, by their normalized names: each requirement of `names`, of every
+    extra, which a repo takes as `basis-job[dev]`, whether or not this environment installed it, as `uvx` leaves the
+    `dev` extra's exact pins of ruff and ty out; and what those require in turn, as this environment has them
+    installed, no extra of theirs. One that is not installed brings nothing more."""
     given = {_normalized(name) for name in names}
     found: set[str] = set()
+    seen: set[str] = set()
     todo = sorted(given)
     while todo:
         name = todo.pop()
-        if name in found:
+        if name in seen:
             continue
+        seen.add(name)
         try:
             required = metadata.requires(name) or []
         except metadata.PackageNotFoundError:
@@ -65,6 +68,8 @@ def closure(names: Iterable[str]) -> set[str]:
                 continue
             if (match := _REQUIREMENT.match(requirement)) is not None:
                 todo.append(_normalized(match.group(0)))
+                if name in given:
+                    found.add(_normalized(match.group(0)))  # basis's own requirement, installed or not
     return found
 
 
