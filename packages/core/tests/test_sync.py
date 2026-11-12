@@ -459,3 +459,12 @@ def test_another_checkout_inside_the_repo_is_never_read_or_written_as_the_repos(
     (worktree / "tests").mkdir()
     (worktree / "tests" / "test_x.py").write_text("from unittest import mock\n\nx = 1  # noqa\n", encoding="utf-8")
     assert (gates.mocks(tmp_path), gates.suppressions(tmp_path)) == ([], [])
+
+
+def test_the_pipelines_check_fetches_the_history_check_full_compares_with_so_mutation_testing_is_of_the_change() -> None:
+    """Azure Pipelines fetches one commit by default, which has no parent and no merge base, so `basis check --full`
+    would take every domain function as new."""
+    pipeline = yaml.safe_load((sync.TEMPLATES / "azure-pipelines.yml").read_text(encoding="utf-8"))
+    [check] = [stage for stage in pipeline["stages"] if stage["stage"] == "check"]
+    [checkout] = [step for step in check["jobs"][0]["steps"] if "checkout" in step]
+    assert checkout == {"checkout": "self", "fetchDepth": 0}

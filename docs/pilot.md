@@ -105,16 +105,16 @@ git add --all; git commit -m "First commit"     # the commit hook runs basis che
 
 ### An Azure Pipelines checkout's depth and tags
 
-The generated `azure-pipelines.yml` checks out with a bare `- checkout: self`, which in a YAML pipeline is a shallow
-fetch of depth 1 by default, with no tags. Since step 7.12 the API contract check compares `openapi.json` with the
-committed `openapi.released.json` and needs no history. What still reads history is `basis check --full`'s mutation
-testing of the domain functions a change touches and `basis review`'s list of what a change adds, both of which compare
-a commit with where it branched. Push the pilot repo to the firm's Azure DevOps, create a pipeline from its
-`azure-pipelines.yml`, and run it on a branch with one commit beyond `main`.
+The generated `azure-pipelines.yml`'s check stage checks out with `fetchDepth: 0`, the whole history, since a bare
+`- checkout: self` in a YAML pipeline is a shallow fetch of depth 1 by default, with no tags, and `basis check --full`'s
+mutation testing compares a commit with where it branched, or its parent. Since step 7.12 the API contract check
+compares `openapi.json` with the committed `openapi.released.json` and needs no history. Push the pilot repo to the
+firm's Azure DevOps, create a pipeline from its `azure-pipelines.yml`, and run it on a branch with one commit beyond
+`main`.
 
 **Send back:** the pipeline's log of its checkout step and of `basis check --full`, every `SKIPPED:` line among them,
-and the organisation's default for "Shallow fetch" (Project settings, Pipelines, Settings). If the run fails for want
-of history, the fix is `fetchDepth: 0` on the checkout, in basis's template.
+the mutation record's base commit, and whether the organisation's "Shallow fetch" setting (Project settings, Pipelines,
+Settings) overrides the YAML's `fetchDepth`.
 
 ### The lake's rename on the firm's account
 

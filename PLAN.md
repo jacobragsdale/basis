@@ -650,7 +650,8 @@ Each needs a design decision first, written into [the design](docs/design.md) in
   already closed.
 - **Proving a port.** Per system, by its owner. No verb.
 - **The firm's CI.** The roadmap's 4.6. The generated pipeline's `basis check --full` stage stays ready; note that
-  its checkout must fetch what 7.12's contract check needs, or nothing once the released document is committed.
+  its check stage's checkout fetches the whole history (`fetchDepth: 0`), for mutation testing's comparison with where
+  a change branched; 7.12's contract check needs none.
 
 ## Open decisions
 

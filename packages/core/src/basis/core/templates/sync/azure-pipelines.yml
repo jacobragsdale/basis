@@ -29,7 +29,10 @@ stages:
         pool:
           vmImage: ubuntu-latest  # STUB: the team's agent pool
         steps:
+          # The whole history: Azure Pipelines fetches one commit by default, which has no parent and no merge base,
+          # and check --full compares the change with where it branched, or its parent, to mutate only what it touched.
           - checkout: self
+            fetchDepth: 0
           - script: curl -LsSf https://astral.sh/uv/0.13.7/install.sh | sh  # STUB: uv as the team's agents get it
             displayName: Install uv
           - script: |
