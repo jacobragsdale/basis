@@ -74,9 +74,9 @@ class LedgerEntry:
 
 
 class Reader(Protocol):
-    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pd.DataFrame:
+    def fetch(self, sql: str, interval: Interval | None, *, what: str, given: Mapping[str, Bind] | None = None) -> pd.DataFrame:
         """The rows a query returns, its columns Arrow-backed, of the types the driver gave them, binding the interval
-        where it names it."""
+        where it names it, and each of `given` it names."""
         ...
 
     def batches(self, sql: str, interval: Interval | None, *, what: str) -> Iterator[pa.RecordBatch]:
@@ -179,16 +179,18 @@ def ledger_values(entry: LedgerEntry) -> tuple[object, ...]:
     )  # fmt: skip
 
 
-def binds_named(sql: str, dialect: SqlDialect, interval: Interval | None, *, what: str) -> dict[str, datetime]:
-    """The interval's binds that a query names, in `dialect`'s binds."""
+def binds_named(sql: str, dialect: SqlDialect, interval: Interval | None, *, what: str, given: Mapping[str, Bind] | None = None) -> dict[str, Bind]:
+    """The interval's binds that a query names, in `dialect`'s binds, and each of `given` it names, such as a
+    watermark."""
     names = [name for name in ("interval_start", "interval_end") if dialect.binds(sql, name)]
     if names and interval is None:
         msg = f"{what} binds the interval ({', '.join(names)}), and this run has none: give it one"
         raise ValueError(msg)
+    extra: dict[str, Bind] = {name: value for name, value in (given or {}).items() if dialect.binds(sql, name)}
     if interval is None:
-        return {}
+        return extra
     binds = interval.binds()
-    return {name: binds[name] for name in names}
+    return {**{name: binds[name] for name in names}, **extra}
 
 
 type Rows = Callable[[str, Mapping[str, object]], list[tuple[object, ...]]]

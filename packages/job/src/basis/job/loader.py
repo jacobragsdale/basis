@@ -17,8 +17,10 @@ import logging
 import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 from typing import Never
+from zoneinfo import ZoneInfo
 
 import httpx2
 import pandas as pd
@@ -27,14 +29,15 @@ from opentelemetry.trace import Tracer
 
 from basis.core import folders, mongo
 from basis.core.databases import Database
+from basis.core.databases.base import Bind
 from basis.core.errors import BadReply
 from basis.core.frames import from_arrow
 from basis.core.interval import Interval
 from basis.core.logs import ms_since
 from basis.core.opened import HttpClient, Waits
-from basis.core.snapshots import InputRecord
+from basis.core.snapshots import InputRecord, WatermarkRecord
 from basis.core.storage import Root
-from basis.job.inputs import Cursor, Dataset, Excel, Fetch, File, Mongo, NextLink, Offset, Query
+from basis.job.inputs import WATERMARK, Cursor, Dataset, Excel, Fetch, File, Mongo, NextLink, Offset, Query, Watermark
 from basis.job.rows import Row, conform
 
 log = logging.getLogger(__name__)
@@ -59,8 +62,10 @@ def load(
     data: Path | None,
     open_folder: folders.Opener | None = None,
     open_mongo: MongoOpener | None = None,
+    marks: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, pd.DataFrame], dict[str, InputRecord]]:
-    """Every dataset's frame and where it came from, by name."""
+    """Every dataset's frame and where it came from, by name; `marks` gives each watermarked query's watermark, as
+    `basis.job.watermarks.since` finds it, its `initial` where it gives none."""
     files = {name: found for name in datasets if data is not None and (found := _data_file(data, name)) is not None}
     frames: dict[str, pd.DataFrame] = {}
     records: dict[str, InputRecord] = {}
@@ -82,7 +87,7 @@ def load(
                 msg = f"{name} is a {type(dataset).__name__}, which nothing reads"
                 raise TypeError(msg)
     with ThreadPoolExecutor(max_workers=max(len(by_database) + bool(fetches), 1)) as pool:
-        futures = [pool.submit(_copied(_read_database, open_database(database), queries, interval)) for database, queries in by_database.items()]
+        futures = [pool.submit(_copied(_read_database, open_database(database), queries, interval, marks or {})) for database, queries in by_database.items()]
         if fetches:
             futures.append(pool.submit(_copied(lambda: asyncio.run(_fetch_all(fetches, interval, reach, tracer)))))
     for future in futures:
@@ -102,7 +107,7 @@ def _copied[**A, T](work: Callable[A, T], *args: A.args, **kwargs: A.kwargs) -> 
     return lambda: context.run(work, *args, **kwargs)
 
 
-def _read_database(database: Database, queries: Mapping[str, Query], interval: Interval | None) -> dict[str, tuple[pd.DataFrame, InputRecord]]:
+def _read_database(database: Database, queries: Mapping[str, Query], interval: Interval | None, marks: Mapping[str, str]) -> dict[str, tuple[pd.DataFrame, InputRecord]]:
     loaded: dict[str, tuple[pd.DataFrame, InputRecord]] = {}
     with database.reading() as reader:
         for name, query in queries.items():
@@ -110,14 +115,38 @@ def _read_database(database: Database, queries: Mapping[str, Query], interval: I
             what = f"dataset {name} ({query.sql})"
             try:
                 bound = interval.in_zone(query.zone) if interval is not None and query.zone is not None else interval
-                frame = conform(reader.fetch(query.text(), bound, what=what), query.row, what=what, naive="in_zone")
+                given, since = _watermark(query, marks.get(name))
+                frame = conform(reader.fetch(query.text(), bound, what=what, given=given), query.row, what=what, naive="in_zone")
             except Exception as error:
                 error.add_note(f"while loading {what} from database {database.name}")
                 raise
-            record = InputRecord(source=query.describe(), rows=len(frame), read_ms=ms_since(start))
+            mark = _reached(query.watermark, since, frame) if query.watermark is not None and since is not None else None
+            record = InputRecord(source=query.describe(), rows=len(frame), read_ms=ms_since(start), watermark=mark)
             log.info("loaded", extra={"dataset": name, "source": record.source, "rows": record.rows, "ms": record.read_ms})
             loaded[name] = (frame, record)
     return loaded
+
+
+def _watermark(query: Query, text: str | None) -> tuple[dict[str, Bind], str | None]:
+    """The bind of a watermarked query's watermark, `text`, or its `initial`, and its text as the manifest records it:
+    a datetime naive in its column's zone, as the column holds it."""
+    if (mark := query.watermark) is None:
+        return {}, None
+    value = mark.bind(text if text is not None else mark.initial, query.row)
+    bound: Bind = value
+    if isinstance(value, datetime):
+        zone = next(column.zone for column in query.row.columns if column.name == mark.column) or "UTC"
+        bound = value.astimezone(ZoneInfo(zone)).replace(tzinfo=None)
+    return {WATERMARK: bound}, mark.text(value)
+
+
+def _reached(mark: Watermark, since: str, frame: pd.DataFrame) -> WatermarkRecord:
+    """What a watermarked query bound, and the highest value of its column it read, or what it bound where it read none."""
+    values = frame[mark.column].dropna()
+    if not len(values):
+        return WatermarkRecord(column=mark.column, since=since, through=since)
+    highest = values.max()
+    return WatermarkRecord(column=mark.column, since=since, through=mark.text(highest.to_pydatetime() if isinstance(highest, pd.Timestamp) else highest))
 
 
 async def _fetch_all(fetches: Mapping[str, Fetch], interval: Interval | None, reach: Reach, tracer: Tracer) -> dict[str, tuple[pd.DataFrame, InputRecord]]:

@@ -20,7 +20,7 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal, Protocol, Self, overload, override
 from urllib.parse import quote
@@ -84,6 +84,51 @@ class Dataset:
         raise NotImplementedError
 
 
+@dataclass(frozen=True)
+class Watermark:
+    """Where an incremental query starts: the highest value of `column` the job's last publish read, which the query
+    binds as `watermark`, as `WHERE updated_at > %(watermark)s` in SQL Server or `> :watermark` in Oracle, or
+    `initial`, its text, as `2026-11-01T00:00:00Z`, before any. A run's manifest records what it bound and the
+    highest value it read, and the next run's watermark is the newest run's that published, or began to, so a run
+    that only checks moves nothing (`basis.job.watermarks`). A column is a `datetime`, bound naive in its column's
+    zone, as the column holds it, a `date`, a `float` or a `str`."""
+
+    column: str
+    initial: str
+
+    def bind(self, text: str, row: type[Row]) -> date | datetime | float | str:
+        """The value `text` names, as its column's type binds it; a datetime as an aware one, which the query's zone
+        makes naive."""
+        kind = {column.name: column.kind for column in row.columns}[self.column]
+        try:
+            match kind:
+                case "datetime":
+                    found: date | datetime | float | str = datetime.fromisoformat(text)
+                case "date":
+                    found = date.fromisoformat(text)
+                case "float":
+                    found = float(text)
+                case _:
+                    found = text
+        except ValueError as error:
+            msg = f"watermark {self.column}: {text!r} is no {kind} ({error}): give one as its column holds, as 2026-11-01T00:00:00Z for a datetime"
+            raise ValueError(msg) from error
+        if isinstance(found, datetime):
+            if found.tzinfo is None:
+                msg = f"watermark {self.column}: {text!r} has no offset: give one, as 2026-11-01T00:00:00Z"
+                raise ValueError(msg)
+            return found.astimezone(UTC)
+        return found
+
+    def text(self, value: object) -> str:
+        """The text a manifest records of a watermark's value."""
+        if isinstance(value, datetime):
+            return value.astimezone(UTC).isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+        return repr(value) if isinstance(value, float) else str(value)
+
+
 class Query(Dataset):
     """Rows that a SQL file, in the database's own dialect, selects from a named database: `:interval_start` and
     `:interval_end` bind the interval in Oracle, `%(interval_start)s` and `%(interval_end)s` in SQL Server, as naive
@@ -91,8 +136,22 @@ class Query(Dataset):
     `booked_at`, in New York's time, gives `zone="America/New_York"`. An interval whose end that zone shows twice, as
     its clocks go back, is refused, since the query would read another span than the run's."""
 
-    def __init__(self, row: type[Row], *, database: str, sql: str, empty: Empty, zone: str | None = None) -> None:
+    def __init__(self, row: type[Row], *, database: str, sql: str, empty: Empty, zone: str | None = None, watermark: Watermark | None = None) -> None:
         super().__init__(row, empty=empty, base=_caller_folder())
+        if watermark is not None:
+            kinds = {column.name: column.kind for column in row.columns}
+            if watermark.column not in kinds:
+                msg = f"watermark {watermark.column!r}: its row has no column {watermark.column}: name one of {', '.join(kinds)}"
+                raise ValueError(msg)
+            if not watermark.initial:
+                msg = f"watermark {watermark.column!r}: a watermark's initial value is given, the lowest a first run reads after, as initial='2026-11-01T00:00:00Z'"
+                raise ValueError(msg)
+            try:
+                watermark.bind(watermark.initial, row)
+            except ValueError as error:
+                msg = f"watermark {watermark.column!r}: initial {watermark.initial!r} is no {kinds[watermark.column]}: give one as its column holds, as 2026-11-01T00:00:00Z"
+                raise ValueError(msg) from error
+        self.watermark = watermark
         if not IDENTIFIER.match(database):
             msg = f"database {database!r}: a database's name is lower-case letters, digits and underscores, as in BASIS_DATABASES__{database.upper()}__KIND"
             raise ValueError(msg)
@@ -122,11 +181,14 @@ class Query(Dataset):
         or that it binds a name but the interval's, which a replay with other params could not read the same."""
         if not self.path.is_file():
             return [f"{self.name} reads {self.path}, which does not exist: name the file in sql=, relative to {self.base}"]
-        if extra := sorted(binds(self.text()) - INTERVAL_BINDS):
-            return [f"{self.name} binds {', '.join(extra)}: a query binds only interval_start and interval_end; filter on a param in the transform"]
+        allowed = INTERVAL_BINDS | ({WATERMARK} if self.watermark is not None else set())
+        if extra := sorted(binds(self.text()) - allowed):
+            return [f"{self.name} binds {', '.join(extra)}: a query binds only interval_start and interval_end, and watermark where it declares one; filter on a param in the transform"]
         return []
 
 
+WATERMARK = "watermark"
+"""The name a query binds its watermark by, where it declares one."""
 INTERVAL_BINDS = frozenset({"interval_start", "interval_end"})
 """The names a query may bind: the run's interval's ends, as `Interval.binds` gives them."""
 _UNBOUND = re.compile(r"--[^\n]*|/\*.*?\*/|'(?:[^']|'')*'|\"[^\"]*\"", re.DOTALL)

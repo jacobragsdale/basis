@@ -52,7 +52,7 @@ from basis.core.settings import Settings, SettingsError, publish_refusal, variab
 from basis.core.snapshots import InputRecord, PublishRecord, RunRecord, Snapshot, Status
 from basis.core.storage import Root
 from basis.core.tables import Changes
-from basis.job import effects, expectations, handles
+from basis.job import effects, expectations, handles, watermarks
 from basis.job.changes import Planned, plan
 from basis.job.handles import Kept
 from basis.job.inputs import Clock, Fetch, Mongo, sql_problems
@@ -223,7 +223,10 @@ def _run(job: Job, settings: Settings, request: Request, this: _Run) -> Result:
         return _summarized(finish(record.done("failed", reasons=reasons, finished_at=clock()), snapshot_root, params_text, {}, {}))
     try:
         declared, fetched = job.inputs.declared(), _reach(settings, this.faked)
-        loaded, inputs = load(declared, request.interval, open_database=databases, reach=fetched, tracer=this.tracer, data=request.data, open_folder=this.open_folder, open_mongo=this.open_mongo)
+        marks = watermarks.since(snapshot_root, job.name, job.inputs, package=PACKAGE)  # where each incremental query starts
+        loaded, inputs = load(
+            declared, request.interval, open_database=databases, reach=fetched, tracer=this.tracer, data=request.data, open_folder=this.open_folder, open_mongo=this.open_mongo, marks=marks
+        )
         tables = {name: frames.to_arrow(frame) for name, frame in loaded.items()}
         past = expectations.history(snapshot_root, job.name, job.outputs, package=PACKAGE)  # the job's recent published rows, for its row counts
     except Exception as error:

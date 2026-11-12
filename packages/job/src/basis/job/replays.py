@@ -56,7 +56,10 @@ def _replayed(job: Job, source: Snapshot, opened: core_runs.Replay[Params], *, s
         run_id=opened.run_id, job=job.name, module=job.module, version=VERSION, git_sha=None, started_at=clock(), interval=original.interval,
         params_path=opened.params_path, params_sha256=snapshots.params_digest(opened.params_text),
         labels={"replay_of": original.run_id}, data=None, replay_of=original.run_id, trace_id=logs.trace_id(),
-        inputs={name: InputRecord(source=f"snapshot: {original.run_id}", rows=table.num_rows, read_ms=0.0) for name, table in opened.saved.items()},
+        inputs={  # a watermark as the run recorded it: the replay reads what the run read
+            name: InputRecord(source=f"snapshot: {original.run_id}", rows=table.num_rows, read_ms=0.0, watermark=entry.watermark if (entry := original.inputs.get(name)) is not None else None)
+            for name, table in opened.saved.items()
+        },
     )  # fmt: skip
     tables = {name: opened.saved[name] for name in job.inputs.declared()}
     kept = handles.replayed(job.inputs, original, tracer)

@@ -174,3 +174,28 @@ def test_an_oracle_number_with_no_precision_beyond_2_53_fails_the_run_rather_tha
     assert result.record.status == "failed"
     assert result.record.error is not None
     assert "column id is a NUMBER with no precision, which the driver reads as a float, and holds 1.2345678901234568e+17, beyond 2^53" in result.record.error
+
+
+def test_a_watermarked_query_binds_the_last_runs_highest_value_in_its_columns_zone(source: Scratch, tmp_path: Path) -> None:
+    """Step 12.7: each dialect binds a datetime watermark naive in its column's zone, New York's here, so a run reads
+    only the rows after what the run before read."""
+    insert(source, (date(2026, 11, 5), "S1", Decimal("1.00"), None, datetime(2026, 11, 5, 9, 30)), (date(2026, 11, 5), "S2", Decimal("2.00"), None, datetime(2026, 11, 5, 10, 30)))
+
+    class Inputs(etl.Inputs):
+        prices = etl.Query(Price, database="source", sql=f"sql/{source.dialect}_watermarked.sql", empty="allow", watermark=etl.Watermark("booked_at", initial="2026-11-05T14:30:00Z"))
+
+    class Outputs(etl.Outputs):
+        prices = etl.Table(Price, database="unused", table="prices", write=etl.Append())
+
+    def transform(inputs: Inputs, _params: etl.Params) -> Outputs:
+        return Outputs(prices=inputs.prices)
+
+    job = Job("watermarked", "tests.watermarked", etl.Params, Inputs, Outputs, transform, None, Path(__file__).parent)
+    (tmp_path / "params.json").write_text("{}", encoding="utf-8")
+    isolation = {"isolation": "read_committed"} if source.dialect == "oracle" else {}
+    result = runs.run(job, GivenSettings(databases={"source": source.settings | isolation}), runs.Request(tmp_path / "params.json", None), snapshot_root=Root.at(tmp_path))
+    assert result.record.status == "checked", result.record
+    assert result.record.inputs["prices"].rows == 1  # 14:30 UTC is 09:30 in New York, bound so: only S2, at 10:30 there, is after it
+    mark = result.record.inputs["prices"].watermark
+    assert mark is not None
+    assert (mark.since, mark.through) == ("2026-11-05T14:30:00+00:00", "2026-11-05T15:30:00+00:00")

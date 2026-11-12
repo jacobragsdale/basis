@@ -566,6 +566,15 @@ none of its rows, so a replay copies nothing and a resume streams it again from 
 changed since. It is a kind of output after archives, made only by `--publish`, and it is not held to `MAX_ROWS`.
 Streaming a frame through a transform in batches waits until a job needs it.
 
+**Incremental loads.** A query binds only the interval, and, where it declares one, a watermark:
+`etl.Query(..., watermark=etl.Watermark("updated_at", initial="2026-11-01T00:00:00Z"))`, bound as `watermark`, decided
+on 2026-11-11 for step 12.7 of [the plan](../PLAN.md) and open to the maintainer's review. The watermark is an input
+the manifest records, what the query bound and the highest value of the column it read, so a replay, which reads the
+snapshot, reads what the run read, and the run store is its only state: the next run binds the newest run's highest
+value, of the runs that published or began to, so a run that only checks moves nothing, and one that stopped partway,
+which a resume finishes, is not read again. A datetime binds naive in its column's zone, as the column holds it. Params
+still never change what is read.
+
 **Environments.** Every command that touches the firm's systems needs `--env dev|qa|prod`, or `BASIS_ENV`, and has no
 default, so no command reaches an environment nobody named. Each user keeps one file per environment, `basis/ENV.env` in
 their own configuration folder, beside `desktop.toml`, holding its hosts, paths and secrets, and every repo they work in

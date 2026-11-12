@@ -283,8 +283,8 @@ class OracleReader:
     connection: Connection
     max_rows: int
 
-    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pd.DataFrame:
-        binds = binds_named(sql, ORACLE, interval, what=what)
+    def fetch(self, sql: str, interval: Interval | None, *, what: str, given: Mapping[str, Bind] | None = None) -> pd.DataFrame:
+        binds = binds_named(sql, ORACLE, interval, what=what, given=given)
         tables: list[pa.Table] = []
         rows = 0
         try:

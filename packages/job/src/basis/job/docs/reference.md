@@ -73,7 +73,7 @@ Every frame that enters or leaves a job is conformed to its row:
 
 ## Inputs
 
-### `etl.Query(row, *, database, sql, empty, zone=None)`
+### `etl.Query(row, *, database, sql, empty, zone=None, watermark=None)`
 
 Rows a SQL file selects from a database.
 
@@ -84,12 +84,22 @@ Rows a SQL file selects from a database.
 | `sql` | `str` | The SQL file, relative to the file that declares the query. |
 | `empty` | `"fail"` or `"allow"` | Whether a run may continue when the query returns no rows. |
 | `zone` | `str` or `None` | The zone the interval binds in: None for naive UTC, or the zone of the naive times the query compares them with. |
+| `watermark` | `etl.Watermark(column, initial=)` or `None` | For an incremental load: where the query starts, which it binds as `watermark`. |
 
 A query binds only the run's interval, as naive UTC datetimes, or naive times in its `zone`: `%(interval_start)s` and
 `%(interval_end)s` in SQL Server, `:interval_start` and `:interval_end` in Oracle. A query that filters a column of naive
 New York times gives `zone="America/New_York"`, so it reads the run's span and not one shifted by the offset; an
 interval that starts or ends inside the hour that zone shows twice is refused. A query that names them in a run
 without an interval fails.
+
+A query with a `watermark` also binds it, `%(watermark)s` or `:watermark`, as `WHERE updated_at > %(watermark)s`, so a
+run reads only what is new: the highest value of `column` that the job's newest run read, of the runs that published,
+or began to and stopped partway, which `basis resume` finishes; before any, `initial`, its text, as
+`"2026-11-01T00:00:00Z"`. A run that only checks, or fails before it writes, moves nothing. A `datetime` column's
+watermark binds naive in the column's zone, as the column holds it; a `date`, a `float` or a `str` as it is. The
+manifest records what the query bound and the highest value it read, `inputs.NAME.watermark`'s `since` and `through`,
+so a replay, which reads the snapshot, reads what the run read. The interval binds as before, so an incremental job
+that runs each day keeps its ledger's rerun guard; a query binds no other name.
 An Oracle `NUMBER` without a precision arrives as a float, whatever digits it holds, so one beyond 2^53 fails the run:
 select an identifier as text, as `TO_CHAR(id)`, and cast an amount `AS NUMBER(p,s)`.
 

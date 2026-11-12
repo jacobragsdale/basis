@@ -79,7 +79,8 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
   takes through `basis.core.tables`.
 - Nothing about a table is assumed: a write mode, a `Zone` and an input's `empty` are always declared.
   A new option gets no default that depends on how jobs usually look.
-- A query binds only the interval, as `interval_start` and `interval_end` (Oracle reserves `START`), and a fetch's
+- A query binds only the interval, as `interval_start` and `interval_end` (Oracle reserves `START`), and its watermark
+  where it declares one, which the manifest records (`watermarks.py`), and a fetch's
   path only the interval's ends, as `{start}` and `{end}`. Params never change what is read.
 - Nothing is written to a database unless every check passed for every output, and only from `basis run --publish` or
   `basis resume`. Each database's tables and ledger rows commit in one transaction.

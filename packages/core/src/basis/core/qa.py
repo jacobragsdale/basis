@@ -41,6 +41,7 @@ from pydantic import ConfigDict, Field, ValidationError
 
 from basis.core import environments, invalid, kinds
 from basis.core.databases import Counts, Database, LedgerEntry, Reader, Statements, Writer, open_database
+from basis.core.databases.base import Bind
 from basis.core.destination import TableSpec
 from basis.core.errors import BasisError
 from basis.core.interval import Interval
@@ -332,8 +333,8 @@ class _GuardedWriter:
     database: str
     tables: frozenset[str]
 
-    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pd.DataFrame:
-        return self.writer.fetch(sql, interval, what=what)
+    def fetch(self, sql: str, interval: Interval | None, *, what: str, given: Mapping[str, Bind] | None = None) -> pd.DataFrame:
+        return self.writer.fetch(sql, interval, what=what, given=given)
 
     def batches(self, sql: str, interval: Interval | None, *, what: str) -> Iterator[pa.RecordBatch]:
         return self.writer.batches(sql, interval, what=what)

@@ -38,7 +38,8 @@ step's own commit keeps it true.
 | 12.4 Backfill | Done: `basis backfill JOB --from DAY --to DAY` (`basis.job.backfill`), one run per business day in order, stopping at the first failure; run again, it skips each done day and resumes a partial one, from the run store alone | the commit "Step 12.4" |
 | 12.5 Expectations of an output | Done: `Table(..., expect=)`, with `etl.RowCount` (a band around the median of the job's last published runs, from the run store), `etl.NullRate` and `etl.Total` (against an input's column), each a reason before any write (`basis.job.expectations`) | the commit "Step 12.5" |
 | 12.6 Tables that do not fit in memory | Done: `etl.LakeCopy(etl.Query(...), lake=...)`, a kind of output after archives that streams a query's Arrow batches (`Reader.batches`, each dialect's and the fake's) to Parquet files (`lake.Streamed`), each batch conformed to the row, with no frame of the table and no transform | the commit "Step 12.6" |
-| 12.7, 12.9 | To do | |
+| 12.7 Incremental loads | Done: `etl.Query(..., watermark=etl.Watermark(column, initial=))`, bound as `watermark`; the manifest's input records what it bound and the highest value read (`WatermarkRecord`), and the next run starts from the newest written run's (`basis.job.watermarks`); readers take extra binds (`given`) | the commit "Step 12.7" |
+| 12.9 | To do | |
 
 Phases 6 to 8 first reached GitHub's CI on 2026-11-11; what it found is fixed in commits of their own, named
 "CI: ...": `c504f54` (HiGHS 1.16's banner on stdout broke optim's JSON), `73889f6` (core named optim), and the

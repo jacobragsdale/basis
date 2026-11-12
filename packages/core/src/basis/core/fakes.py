@@ -493,9 +493,9 @@ class _DatabaseReader:
     tables: dict[str, _Held]
     """The tables it reads: the database's, or a writer's copies of them."""
 
-    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pd.DataFrame:
+    def fetch(self, sql: str, interval: Interval | None, *, what: str, given: Mapping[str, Bind] | None = None) -> pd.DataFrame:
         self.database.fail("fetch")
-        return self.database.answer(sql, interval.binds() if interval is not None else {}, what=f"{what}'s query")
+        return self.database.answer(sql, {**(interval.binds() if interval is not None else {}), **(given or {})}, what=f"{what}'s query")
 
     def batches(self, sql: str, interval: Interval | None, *, what: str) -> Iterator[pa.RecordBatch]:
         self.database.fail("fetch")

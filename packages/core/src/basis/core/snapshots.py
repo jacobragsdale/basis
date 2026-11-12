@@ -36,11 +36,22 @@ publishes says so, and `basis resume` finishes it, asking each ledger what it ho
 committed; `partial`: some committed and one failed, which `basis resume` finishes."""
 
 
+class WatermarkRecord(Model):
+    """Where an incremental query started and what it reached: the value it bound, `since`, and the highest value of
+    `column` it read, `through`, or `since` where it read none, each as text."""
+
+    column: str
+    since: str
+    through: str
+
+
 class InputRecord(Model):
     source: str
     """Where it was read: `DATABASE: SQL_FILE`, `file: PATH`, or `data: PATH` for a run on files."""
     rows: int
     read_ms: float
+    watermark: WatermarkRecord | None = None
+    """For a query that declares a watermark, what it bound and the highest value it read."""
 
 
 class DeleteRecord(Model):

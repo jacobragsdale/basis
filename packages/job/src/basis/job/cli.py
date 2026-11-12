@@ -30,6 +30,7 @@ from basis.core.verbs import Difference, Part, Regress, Regressed, Regressions, 
 from basis.job import api, backfill, ddl, docs, loader, new, qa, replays, runs, sync
 from basis.job import job as jobs
 from basis.job.diff import SAMPLE, OperationDiff
+from basis.job.inputs import Dataset, Query
 from basis.job.outputs import LakeCopy
 
 log = logging.getLogger(__name__)
@@ -445,7 +446,7 @@ def describe(job: jobs.Job) -> dict[str, object]:
         "job": job.name,
         "module": job.module,
         "params": job.params.model_json_schema(),
-        "inputs": {name: {"source": dataset.describe(), "empty": dataset.empty, "columns": _columns(dataset.row.columns)} for name, dataset in job.inputs.declared().items()},
+        "inputs": {name: {"source": dataset.describe(), "empty": dataset.empty, "columns": _columns(dataset.row.columns)} | _watermark(dataset) for name, dataset in job.inputs.declared().items()},
         "given": {name: resource.kind for name, resource in job.inputs.declared_resources().items()},
         "outputs": {
             name: {
@@ -473,6 +474,12 @@ def describe(job: jobs.Job) -> dict[str, object]:
         },
         "check": job.check is not None,
     }
+
+
+def _watermark(dataset: Dataset) -> dict[str, object]:
+    """A watermarked query's column and initial value, as `describe` lists them, or nothing."""
+    mark = dataset.watermark if isinstance(dataset, Query) else None
+    return {"watermark": {"column": mark.column, "initial": mark.initial}} if mark is not None else {}
 
 
 def _columns(columns: Sequence[Column]) -> list[dict[str, object]]:

@@ -347,8 +347,8 @@ class MssqlReader:
     connection: Connection
     max_rows: int
 
-    def fetch(self, sql: str, interval: Interval | None, *, what: str) -> pd.DataFrame:
-        binds = binds_named(sql, MSSQL, interval, what=what)
+    def fetch(self, sql: str, interval: Interval | None, *, what: str, given: Mapping[str, Bind] | None = None) -> pd.DataFrame:
+        binds = binds_named(sql, MSSQL, interval, what=what, given=given)
         with closing(self.connection.cursor()) as cursor, statement(self.database, _KIND, sql) as traced:
             if binds:
                 cursor.execute(sql, binds)
