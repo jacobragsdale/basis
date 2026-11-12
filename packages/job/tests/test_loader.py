@@ -14,6 +14,7 @@ from opentelemetry.trace import NoOpTracer
 import basis.job as etl
 from basis.core import fakes
 from basis.core.databases import Database, open_database
+from basis.core.errors import BadReply
 from basis.core.interval import Interval
 from basis.core.opened import Waits
 from basis.core.settings import GivenSettings, SettingsError
@@ -191,3 +192,105 @@ def test_a_query_binds_its_interval_in_the_zone_it_says_its_column_compares_in(t
     source.answers[sql.read_text(encoding="utf-8")] = lambda binds: bound.append(binds["interval_start"]) or prices({})
     load(Inputs.declared(), DAY, open_database=lambda _: source, data=None)
     assert bound == [start]
+
+
+class Service:
+    """Another service that answers each request with the next of `pages`, as JSON, and keeps each request it is sent,
+    as its method, path, query and JSON body."""
+
+    def __init__(self, *pages: object) -> None:
+        self.pages = list(pages)
+        self.asked: list[tuple[str, str, dict[str, list[str]], object]] = []
+
+    async def __call__(self, scope: Message, receive: Callable[[], Awaitable[Message]], send: Callable[[Message], Awaitable[None]]) -> None:
+        body = b""
+        while True:
+            message = await receive()
+            body += message.get("body", b"")
+            if not message.get("more_body"):
+                break
+        self.asked.append((scope["method"], scope["path"], parse_qs(scope["query_string"].decode()), json.loads(body) if body else None))
+        await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"application/json")]})
+        await send({"type": "http.response.body", "body": json.dumps(self.pages.pop(0)).encode()})
+
+
+ROW = {"day": "2026-11-05", "security_id": "S1", "price": 1}
+
+
+def fetched(fetch: etl.Fetch, service: Service, tmp_path: Path) -> pd.DataFrame:
+    class Inputs(etl.Inputs):
+        prices = fetch
+
+    frames, _ = load(Inputs.declared(), DAY, open_database=no_databases, data=tmp_path, reach=reaching(fakes.Http(service)))
+    return frames["prices"]
+
+
+def test_a_fetch_may_post_a_body_that_only_reads_its_interval_formatted_into_it(tmp_path: Path) -> None:
+    service = Service([ROW])
+    fetch = etl.Fetch(Price, http="pricing", path="/prices/search", deadline_s=5, empty="fail", method="POST", body={"desk": "rates", "from": "{start}", "on": "{start:%Y-%m-%d}", "n": 3})
+    assert fetched(fetch, service, tmp_path)["security_id"].tolist() == ["S1"]
+    assert service.asked == [("POST", "/prices/search", {}, {"desk": "rates", "from": "2026-11-05T00:00:00+00:00", "on": "2026-11-05", "n": 3})]
+    assert fetch.describe() == "pricing: POST /prices/search"
+
+
+def test_a_fetchs_rows_may_be_a_list_under_a_key_of_the_reply(tmp_path: Path) -> None:
+    fetch = etl.Fetch(Price, http="pricing", path="/prices", deadline_s=5, empty="fail", rows="result.items")
+    assert fetched(fetch, Service({"result": {"items": [ROW, ROW | {"security_id": "S2"}], "total": 2}}), tmp_path)["security_id"].tolist() == ["S1", "S2"]
+    with pytest.raises(BadReply, match=r"dataset prices \(pricing: GET /prices\) has no list of rows at result\.items"):
+        fetched(fetch, Service({"result": {}}), tmp_path)
+
+
+def test_a_fetch_follows_the_next_link_each_page_gives_until_there_is_none(tmp_path: Path) -> None:
+    service = Service({"data": [ROW], "links": {"next": "/prices?page=2"}}, {"data": [ROW | {"security_id": "S2"}], "links": {"next": "http://pricing/prices?page=3"}}, {"data": [], "links": {}})
+    fetch = etl.Fetch(Price, http="pricing", path="/prices", deadline_s=5, empty="fail", rows="data", pages=etl.NextLink("links.next"))
+    assert fetched(fetch, service, tmp_path)["security_id"].tolist() == ["S1", "S2"]
+    assert [(path, query) for _, path, query, _ in service.asked] == [("/prices", {}), ("/prices", {"page": ["2"]}), ("/prices", {"page": ["3"]})]
+
+
+def test_a_next_link_to_another_origin_is_refused_so_the_login_goes_nowhere_else(tmp_path: Path) -> None:
+    fetch = etl.Fetch(Price, http="pricing", path="/prices", deadline_s=5, empty="fail", rows="data", pages=etl.NextLink("next"))
+    with pytest.raises(BadReply, match=r"pricing's next page is at https://elsewhere\.example/steal, which is not pricing's: a fetch follows its own service's links alone"):
+        fetched(fetch, Service({"data": [ROW], "next": "https://elsewhere.example/steal"}), tmp_path)
+
+
+def test_a_fetch_sends_the_cursor_each_page_gives_in_the_query_or_the_body(tmp_path: Path) -> None:
+    service = Service({"rows": [ROW], "cursor": "c2"}, {"rows": [ROW], "cursor": None})
+    fetch = etl.Fetch(Price, http="pricing", path="/prices?desk=rates", deadline_s=5, empty="fail", rows="rows", pages=etl.Cursor("cursor", param="after"))
+    assert len(fetched(fetch, service, tmp_path)) == 2
+    assert [query for _, _, query, _ in service.asked] == [{"desk": ["rates"]}, {"desk": ["rates"], "after": ["c2"]}]
+    posted = Service({"rows": [ROW], "cursor": "c2"}, {"rows": [ROW]})
+    fetch = etl.Fetch(Price, http="pricing", path="/search", deadline_s=5, empty="fail", method="POST", body={"desk": "rates"}, rows="rows", pages=etl.Cursor("cursor", param="after"))
+    fetched(fetch, posted, tmp_path)
+    assert [body for _, _, _, body in posted.asked] == [{"desk": "rates"}, {"desk": "rates", "after": "c2"}]
+
+
+def test_a_fetch_pages_by_offset_until_a_page_is_short(tmp_path: Path) -> None:
+    service = Service([ROW, ROW], [ROW, ROW], [ROW])
+    fetch = etl.Fetch(Price, http="pricing", path="/prices", deadline_s=5, empty="fail", pages=etl.Offset(param="offset", size=2, size_param="limit"))
+    assert len(fetched(fetch, service, tmp_path)) == 5
+    assert [query for _, _, query, _ in service.asked] == [{"offset": [str(n)], "limit": ["2"]} for n in (0, 2, 4)]
+    posted = Service([ROW, ROW], [])
+    fetch = etl.Fetch(Price, http="pricing", path="/search", deadline_s=5, empty="fail", method="POST", pages=etl.Offset(param="skip", size=2))
+    fetched(fetch, posted, tmp_path)
+    assert [body for _, _, _, body in posted.asked] == [{"skip": 0}, {"skip": 2}]  # a POST's offset is a number in its body
+
+
+def test_a_fetch_that_pages_past_its_most_pages_fails_rather_than_loop(tmp_path: Path) -> None:
+    fetch = etl.Fetch(Price, http="pricing", path="/prices", deadline_s=5, empty="fail", rows="data", pages=etl.Cursor("next", param="c", max_pages=2))
+    with pytest.raises(BadReply, match="pricing still names a next page after 2 pages of dataset prices: raise its max_pages, or narrow the interval"):
+        fetched(fetch, Service({"data": [ROW], "next": "a"}, {"data": [ROW], "next": "b"}), tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("declared", "message"),
+    [
+        (lambda: {"method": "PUT"}, "a fetch is a GET, or a POST that only reads, not PUT"),
+        (lambda: {"body": {"a": 1}}, "a GET sends no body: declare method='POST'"),
+        (lambda: {"method": "POST", "body": {"a": object()}}, "its body is JSON"),
+        (lambda: {"pages": etl.Offset(param="offset", size=0)}, "an offset's page size is 1 or more"),
+        (lambda: {"pages": etl.Cursor("next", param="c", max_pages=0)}, "max_pages is 1 or more"),
+    ],
+)
+def test_a_fetchs_declaration_is_checked_where_it_is_made(declared: Callable[[], dict[str, Any]], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        etl.Fetch(Price, http="pricing", path="/prices", deadline_s=5, empty="fail", **declared())

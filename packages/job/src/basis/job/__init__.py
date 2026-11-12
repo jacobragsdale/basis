@@ -14,7 +14,7 @@ from basis.core.interval import Interval
 from basis.core.jsontext import dumps as json_text
 from basis.core.messages import Mail
 from basis.core.tables import Changes, Delete, Range
-from basis.job.inputs import Clock, Excel, Fetch, File, Ids, Inputs, Mongo, Query
+from basis.job.inputs import Clock, Cursor, Excel, Fetch, File, Ids, Inputs, Mongo, NextLink, Offset, Query
 from basis.job.outputs import Append, Email, ExcelReport, InsertNew, Lake, Manual, MongoUpsert, Outputs, Replace, ReplaceWhere, Slack, Table, Upsert
 from basis.job.params import Params
 from basis.job.rows import Json, MaxLength, Row, Zone
@@ -29,6 +29,7 @@ __all__ = [
     "Calendar",
     "Changes",
     "Clock",
+    "Cursor",
     "Delete",
     "Email",
     "Excel",
@@ -46,6 +47,8 @@ __all__ = [
     "MaxLength",
     "Mongo",
     "MongoUpsert",
+    "NextLink",
+    "Offset",
     "Outputs",
     "Params",
     "Query",

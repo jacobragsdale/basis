@@ -32,7 +32,7 @@ from basis.core.logs import ms_since
 from basis.core.opened import HttpClient, Waits
 from basis.core.snapshots import InputRecord
 from basis.core.storage import Root
-from basis.job.inputs import Dataset, Excel, Fetch, File, Mongo, Query
+from basis.job.inputs import Cursor, Dataset, Excel, Fetch, File, Mongo, NextLink, Offset, Query
 from basis.job.rows import Row, conform
 
 log = logging.getLogger(__name__)
@@ -138,24 +138,88 @@ async def _fetch_all(fetches: Mapping[str, Fetch], interval: Interval | None, re
 
 
 async def _fetch(name: str, fetch: Fetch, interval: Interval | None, client: HttpClient) -> tuple[pd.DataFrame, InputRecord]:
-    """The fetch's rows, or the kind of `ServiceError` its GET failed with, as basis-core's client makes it, or
-    `BadReply` for a reply that is not rows of the fetch's row, which `json_rows` says why of."""
+    """The fetch's rows, each page's in turn, or the kind of `ServiceError` a call failed with, as basis-core's client
+    makes it, or `BadReply` for a reply that is not rows of the fetch's row, which `json_rows` says why of."""
     start = time.perf_counter()
     what = f"dataset {name} ({fetch.describe()})"
     try:
-        location = fetch.location(interval)
-        response = await client.request("GET", location)
-        try:
-            frame = json_rows(response.content, fetch.row, what=what)
-        except (ValueError, TypeError) as error:
-            msg = f"{fetch.http} answered GET {location} with a body that is not rows of {fetch.row.__name__}"
-            raise BadReply(msg, resource=fetch.http, status=response.status_code, reason=str(error)) from error
+        frame, pages = await _pages(fetch, interval, client, what=what)
     except Exception as error:
         error.add_note(f"while loading {what}")
         raise
     record = InputRecord(source=fetch.describe(), rows=len(frame), read_ms=ms_since(start))
-    log.info("loaded", extra={"dataset": name, "source": record.source, "rows": record.rows, "ms": record.read_ms})
+    log.info("loaded", extra={"dataset": name, "source": record.source, "rows": record.rows, "pages": pages, "ms": record.read_ms})
     return frame, record
+
+
+async def _pages(fetch: Fetch, interval: Interval | None, client: HttpClient, *, what: str) -> tuple[pd.DataFrame, int]:
+    """Each page's rows of the fetch, as its `pages` says, and how many pages there were."""
+    location = fetch.location(interval)
+    body = fetch.content(interval)
+    paging = fetch.pages
+    query: dict[str, str | int] = {}
+    if isinstance(paging, Offset):
+        query = _offset(paging, 0)
+    entries: list[dict[str, object]] = []
+    origin: httpx2.URL | None = None
+    for page in range(1, (paging.max_pages if paging is not None else 1) + 1):
+        sent = body | query if body is not None else None
+        asked = str(httpx2.URL(location).copy_merge_params({key: str(value) for key, value in query.items()})) if body is None and query else location
+        response = await client.request(fetch.method, asked, content=json.dumps(sent).encode() if sent is not None else None)
+        origin = origin or response.request.url
+        try:
+            parsed = _parsed(response.content, what=what)
+            found = _entries(parsed, fetch.rows, what=what)
+        except (ValueError, TypeError) as error:
+            msg = f"{fetch.http} answered {fetch.method} {location} with a body that is not rows of {fetch.row.__name__}"
+            raise BadReply(msg, resource=fetch.http, status=response.status_code, reason=str(error)) from error
+        entries += found
+        match paging:
+            case None:
+                return _frame(entries, fetch.row, what=what), page
+            case NextLink():
+                link = _at(parsed, paging.field)
+                if link in (None, ""):
+                    return _frame(entries, fetch.row, what=what), page
+                location = _same_origin(fetch, response.request.url.join(str(link)), origin)
+                query = {}
+            case Cursor():
+                cursor = _at(parsed, paging.field)
+                if cursor in (None, ""):
+                    return _frame(entries, fetch.row, what=what), page
+                query = {paging.param: str(cursor)}
+            case Offset():
+                if len(found) < paging.size:
+                    return _frame(entries, fetch.row, what=what), page
+                query = _offset(paging, page * paging.size)
+    pages = paging.max_pages if paging is not None else 1
+    msg = f"{fetch.http} still names a next page after {pages} pages of {what.split(' (', 1)[0]}: raise its max_pages, or narrow the interval"
+    raise BadReply(msg, resource=fetch.http)
+
+
+def _offset(paging: Offset, offset: int) -> dict[str, str | int]:
+    sent: dict[str, str | int] = {paging.param: offset}
+    if paging.size_param is not None:
+        sent[paging.size_param] = paging.size
+    return sent
+
+
+def _same_origin(fetch: Fetch, link: httpx2.URL, origin: httpx2.URL) -> str:
+    """The next page's URL, refused where it is not the service's own origin, which the fetch's login is for."""
+    if (link.scheme, link.host, link.port) != (origin.scheme, origin.host, origin.port):
+        msg = f"{fetch.http}'s next page is at {link.copy_with(query=None)}, which is not {fetch.http}'s: a fetch follows its own service's links alone"
+        raise BadReply(msg, resource=fetch.http)
+    return str(link)
+
+
+def _at(parsed: object, path: str) -> object:
+    """The value at the dotted `path` of a JSON reply, or None where it has none."""
+    found = parsed
+    for key in path.split("."):
+        if not isinstance(found, dict):
+            return None
+        found = found.get(key)
+    return found
 
 
 def json_rows(content: bytes, row: type[Row], *, what: str) -> pd.DataFrame:
@@ -163,18 +227,35 @@ def json_rows(content: bytes, row: type[Row], *, what: str) -> pd.DataFrame:
     digits it was sent with, and `conform` converts each value as it converts a CSV's. A field the row has no column
     for, a value that is an object or a list, and `NaN` or `Infinity`, which Python reads and JSON has not, are
     refused; a field an object leaves out is null. This and `conform` are the one place a fetch's rows become a frame."""
+    return _frame(_entries(_parsed(content, what=what), None, what=what), row, what=what)
+
+
+def _parsed(content: bytes, *, what: str) -> object:
+    """A reply's JSON, each number as its digits."""
 
     def refuse(constant: str) -> Never:
         msg = f"{what} has {constant}, which is no JSON number: send a value its row reads, or null"
         raise ValueError(msg)
 
-    parsed: object = json.loads(content, parse_float=str, parse_int=str, parse_constant=refuse)
+    return json.loads(content, parse_float=str, parse_int=str, parse_constant=refuse)
+
+
+def _entries(parsed: object, rows: str | None, *, what: str) -> list[dict[str, object]]:
+    """The objects of a reply's list of rows, at the dotted path `rows` where the reply holds it under one."""
+    found = _at(parsed, rows) if rows is not None else parsed
+    if not isinstance(found, list):
+        msg = f"{what} has no list of rows at {rows}" if rows is not None else f"{what} is not a JSON list of objects, one per row"
+        raise TypeError(msg)
     entries: list[dict[str, object]] = []
-    for entry in parsed if isinstance(parsed, list) else [parsed]:
-        if not isinstance(parsed, list) or not isinstance(entry, dict):
+    for entry in found:
+        if not isinstance(entry, dict):
             msg = f"{what} is not a JSON list of objects, one per row"
             raise TypeError(msg)
         entries.append({str(key): value for key, value in entry.items()})
+    return entries
+
+
+def _frame(entries: list[dict[str, object]], row: type[Row], *, what: str) -> pd.DataFrame:
     names = row.names()
     if unknown := sorted({key for entry in entries for key in entry} - set(names)):
         msg = f"{what} has fields its row has no column for: {', '.join(unknown)}"

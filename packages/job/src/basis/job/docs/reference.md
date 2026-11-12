@@ -11,7 +11,7 @@ not listed is named by its module path. The module exports:
 | Name | Required | What it is |
 |---|---|---|
 | `Params` | yes | A subclass of `etl.Params`: the job's parameters. |
-| `Inputs` | yes | A subclass of `etl.Inputs`: one `Query`, `Fetch` or `File` attribute per dataset, and a `Clock` or `Ids` attribute for each the transform uses. |
+| `Inputs` | yes | A subclass of `etl.Inputs`: one `Query`, `Fetch`, `File`, `Excel` or `Mongo` attribute per dataset, and a `Clock` or `Ids` attribute for each the transform uses. |
 | `Outputs` | yes | A subclass of `etl.Outputs`: one `Table` attribute per table written. |
 | `transform(inputs, params)` | yes | Returns an instance of `Outputs`, with every declared output by name. |
 | `check(inputs, outputs, params)` | no | Returns a list of reasons not to write; an empty list writes. |
@@ -93,26 +93,39 @@ without an interval fails.
 An Oracle `NUMBER` without a precision arrives as a float, whatever digits it holds, so one beyond 2^53 fails the run:
 select an identifier as text, as `TO_CHAR(id)`, and cast an amount `AS NUMBER(p,s)`.
 
-### `etl.Fetch(row, *, http, path, deadline_s, empty)`
+### `etl.Fetch(row, *, http, path, deadline_s, empty, method="GET", body=None, rows=None, pages=None)`
 
-Rows another service answers a GET with: the one way a job reaches another service.
+Rows another service answers with: the one way a job reaches another service.
 
 | Parameter | Type | Description |
 |---|---|---|
 | `row` | `type[etl.Row]` | The rows' columns. |
-| `http` | `str` | The service's name, as `BASIS_HTTP__NAME__*` configures it. |
+| `http` | `str` | The service's name, as `BASIS_HTTP__NAME__*` configures it, its login among them. |
 | `path` | `str` | The service's own path, after its base URL. `{start}` and `{end}` give the interval's ends in ISO 8601, as `2026-11-05T00:00:00+00:00`, or in the format the path names, as `prices/{start:%Y-%m-%d}`, each percent-encoded, so a `+` reaches the service as a `+`. |
-| `deadline_s` | `float` | Seconds the GET may take, from the first byte sent to the last byte of the reply, the attempts it makes again included. |
+| `deadline_s` | `float` | Seconds each call may take, from the first byte sent to the last byte of the reply, the attempts it makes again included. |
 | `empty` | `"fail"` or `"allow"` | Whether a run may continue when the service answers no rows. |
+| `method` | `"GET"` or `"POST"` | A POST only reads, as a search does, and is never made again. |
+| `body` | a JSON object, or `None` | A POST's body. Each string in it formats the interval's ends as `path` does, not percent-encoded, as `{"from": "{start}", "on": "{start:%Y-%m-%d}"}`. |
+| `rows` | `str`, or `None` | Where the reply is an object, the dotted path to its list of rows, as `result.items`. |
+| `pages` | `etl.NextLink`, `etl.Cursor`, `etl.Offset`, or `None` | How the service pages its rows; each page is a call of its own. |
 
-The service answers a JSON list of objects, one per row, each of the row's columns by name; a field the object leaves
-out is null, and a field the row has no column for, a value that is an object or a list, or `NaN` or `Infinity`, which
-are no JSON numbers, fails the run. Each value is read as its text, as a CSV's is, so a number keeps the digits it was
-sent with. A GET that fails fails the run, its `error` naming the kind of service error it is: `Timeout` past
-`deadline_s` or for a 504; `Unavailable` for a service that cannot be reached or answers 502, 503 or 429, which the GET
-makes again, after a backoff, while `deadline_s` allows; `BadReply` for a reply that is not the rows; and `NotFound`,
-`Conflict`, `Rejected`, `Denied` or `Failed` for a 404, a 409, a 400 or 422, a 401 or 403, or any other status. The rows
-are saved in the snapshot like any input's, so a replay never calls the service.
+How a service pages its rows, each with `max_pages=1000`, past which the run fails rather than loop:
+
+| Pages | The next page |
+|---|---|
+| `etl.NextLink(field)` | The URL or path at the dotted `field` of the reply, as `links.next`, until it is null, empty or missing. A link to another origin than the service's fails the run, so its login goes nowhere else. |
+| `etl.Cursor(field, param=)` | The value at `field`, sent as `param`, in the query of a GET and the body of a POST, until it is null, empty or missing. |
+| `etl.Offset(param=, size=, size_param=None)` | `param`, the rows before the page, and `size_param`, where it is named, the page's size, from 0, until a page holds fewer than `size` rows. |
+
+The service answers a JSON list of objects, one per row, or an object that holds one at `rows`, each of the row's
+columns by name; a field the object leaves out is null, and a field the row has no column for, a value that is an
+object or a list, or `NaN` or `Infinity`, which are no JSON numbers, fails the run. Each value is read as its text, as
+a CSV's is, so a number keeps the digits it was sent with. A call that fails fails the run, its `error` naming the
+kind of service error it is: `Timeout` past `deadline_s` or for a 504; `Unavailable` for a service that cannot be
+reached or answers 502, 503 or 429, which a GET makes again, after a backoff, while `deadline_s` allows; `BadReply` for
+a reply that is not the rows; and `NotFound`, `Conflict`, `Rejected`, `Denied` or `Failed` for a 404, a 409, a 400 or
+422, a 401 or 403, or any other status. The rows are saved in the snapshot like any input's, so a replay never calls
+the service.
 
 ### `etl.File(row, *, path, empty)`
 

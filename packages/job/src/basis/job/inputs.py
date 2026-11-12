@@ -15,6 +15,7 @@ its record, and a replay of the run is given the same values again, in the same 
 function of what the run saved."""
 
 import inspect
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -142,26 +143,116 @@ def sql_problems(inputs: type[Inputs]) -> list[str]:
     return [problem for dataset in inputs.declared().values() if isinstance(dataset, Query) for problem in dataset.problems()]
 
 
+@dataclass(frozen=True)
+class NextLink:
+    """Pages a reply links: the next page's URL or path is the value at `field`, a dotted path into the reply, as
+    `links.next`, and there is none where it is null, empty or missing. A link to another origin than the service's
+    is refused, so a login is never sent elsewhere."""
+
+    field: str
+    max_pages: int = 1000
+    """The most pages a run fetches: past it, the fetch fails rather than loop."""
+
+    def __post_init__(self) -> None:
+        _paging(self.field, self.max_pages)
+
+
+@dataclass(frozen=True)
+class Cursor:
+    """Pages a reply gives a cursor for: the value at `field`, a dotted path into the reply, sent as `param` with the
+    next request, in its query for a GET and its body for a POST; there is none where it is null, empty or missing."""
+
+    field: str
+    param: str
+    max_pages: int = 1000
+
+    def __post_init__(self) -> None:
+        _paging(self.field, self.max_pages)
+
+
+@dataclass(frozen=True)
+class Offset:
+    """Pages of `size` rows from an offset: each request sends `param`, the rows before it, and `size_param`, where
+    it is given, the page's size, in its query for a GET and its body for a POST; a page of fewer rows is the last."""
+
+    param: str
+    size: int
+    size_param: str | None = None
+    max_pages: int = 1000
+
+    def __post_init__(self) -> None:
+        if self.size < 1:
+            msg = f"an offset's page size is 1 or more, not {self.size}"
+            raise ValueError(msg)
+        _paging(self.param, self.max_pages)
+
+
+type Pages = NextLink | Cursor | Offset
+"""How a service pages a fetch's rows."""
+
+
+def _paging(field: str, max_pages: int) -> None:
+    if not field:
+        msg = "a page's field or param is named"
+        raise ValueError(msg)
+    if max_pages < 1:
+        msg = f"max_pages is 1 or more, not {max_pages}"
+        raise ValueError(msg)
+
+
 class Fetch(Dataset):
-    """Rows another service answers a GET with: a JSON list of objects, one per row, each of the row's columns by its
+    """Rows another service answers with: a JSON list of objects, one per row, each of the row's columns by its
     name, which a run reads as it reads a CSV's text, so a decimal or a time may come as a string, and a number keeps
-    the digits it was sent with. `http` names the service, as `BASIS_HTTP__NAME__URL` configures it, and `path` is the
+    the digits it was sent with. `rows`, a dotted path such as `result.items`, names the list where the reply is an
+    object that holds it. `http` names the service, as `BASIS_HTTP__NAME__URL` configures it, and `path` is the
     service's own, after its base URL, binding only the run's interval: `{start}` and `{end}` give its ends in ISO
     8601, as `2026-11-05T00:00:00+00:00`, or in the format the path names, as `prices/{start:%Y-%m-%d}`, each
-    percent-encoded, so that its `+` and `:` reach the service as they are. The GET has `deadline_s` and a span of its
-    own, and its rows are saved in the run's snapshot like any input's, so a replay never calls the service."""
+    percent-encoded, so that its `+` and `:` reach the service as they are.
 
-    def __init__(self, row: type[Row], *, http: str, path: str, deadline_s: float, empty: Empty) -> None:
+    A fetch is a GET, or a POST that only reads, as a search is, whose `body` is JSON, each string of it formatting the
+    interval's ends as the path does, not percent-encoded; a POST is never made again when the service is unavailable,
+    as a GET is. `pages` says how the service pages its rows (`NextLink`, `Cursor`, `Offset`), and each page is a call
+    of its own, with `deadline_s`. Every call has a span of its own, and the rows are saved in the run's snapshot like
+    any input's, so a replay never calls the service."""
+
+    def __init__(
+        self,
+        row: type[Row],
+        *,
+        http: str,
+        path: str,
+        deadline_s: float,
+        empty: Empty,
+        method: Literal["GET", "POST"] = "GET",
+        body: Mapping[str, object] | None = None,
+        rows: str | None = None,
+        pages: Pages | None = None,
+    ) -> None:
         super().__init__(row, empty=empty, base=_caller_folder())
+        if method not in {"GET", "POST"}:
+            msg = f"a fetch is a GET, or a POST that only reads, not {method}"
+            raise ValueError(msg)
+        if body is not None and method == "GET":
+            msg = "a GET sends no body: declare method='POST' for a request that reads with one"
+            raise ValueError(msg)
+        try:
+            json.dumps(body)
+        except (TypeError, ValueError) as error:
+            msg = f"{path}: its body is JSON, of strings, numbers, booleans, nulls, lists and objects ({error})"
+            raise ValueError(msg) from error
         self.resource: HttpResource = resources.http(http, deadline_s=deadline_s)
         self.path = path
+        self.method: Literal["GET", "POST"] = method
+        self.body = dict(body) if body is not None else ({} if method == "POST" else None)
+        self.rows = rows
+        self.pages = pages
 
     @property
     def http(self) -> str:
         return self.resource.name
 
     def location(self, interval: Interval | None) -> str:
-        """The path of the run's GET, its interval's ends formatted in, and percent-encoded."""
+        """The path of the run's request, its interval's ends formatted in, and percent-encoded."""
         if "{" not in self.path:
             return self.path
         if interval is None:
@@ -169,9 +260,43 @@ class Fetch(Dataset):
             raise ValueError(msg)
         return self.path.format(start=_End.of(interval.start), end=_End.of(interval.end))
 
+    def content(self, interval: Interval | None) -> dict[str, object] | None:
+        """The body of the run's POST, its interval's ends formatted into each string, or None for a GET."""
+        if self.body is None:
+            return None
+        return {key: _formatted(value, interval, self.path) for key, value in self.body.items()}
+
     @override
     def describe(self) -> str:
-        return f"{self.http}: GET {self.path}"
+        return f"{self.http}: {self.method} {self.path}"
+
+
+def _formatted(value: object, interval: Interval | None, path: str) -> object:
+    """`value` of a fetch's body, its strings formatting the interval's ends as ISO 8601 or the format they name."""
+    match value:
+        case str() if "{" in value:
+            if interval is None:
+                msg = f"{path}'s body formats the interval, and this run has none: give it one"
+                raise ValueError(msg)
+            return value.format(start=_Iso.of(interval.start), end=_Iso.of(interval.end))
+        case dict():
+            return {key: _formatted(item, interval, path) for key, item in value.items()}
+        case list():
+            return [_formatted(item, interval, path) for item in value]
+        case _:
+            return value
+
+
+class _Iso(datetime):
+    """An interval's end as a fetch's body gives it: in ISO 8601 unless the string names a format."""
+
+    @classmethod
+    def of(cls, moment: datetime) -> _Iso:
+        return cls.combine(moment.date(), moment.timetz())
+
+    @override
+    def __format__(self, spec: str) -> str:
+        return super().__format__(spec) if spec else self.isoformat()
 
 
 class _End(datetime):
