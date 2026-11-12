@@ -60,7 +60,11 @@ Rules to keep:
   reaches another of its endpoints; a path put together by hand that holds a query, a fragment or a dot segment is
   refused.
 - Another service's URL, CA bundle and proxy are its settings, `BASIS_HTTP__NAME__URL`, `__CA_BUNDLE` and `__PROXY`;
-  basis reads no `SSL_CERT_FILE` or `HTTP_PROXY`.
+  basis reads no `SSL_CERT_FILE` or `HTTP_PROXY`. How a call signs in to it is a setting too, never code:
+  `BASIS_HTTP__NAME__LOGIN__KIND`, `bearer`, `header`, `basic`, `client_credentials`, `entra` or `negotiate`, with
+  that kind's variables under `__LOGIN__`, as `basis docs api/reference` lists them.
+- A secret setting may name a secret of the environment's Key Vault, `keyvault:NAME`, with `BASIS_VAULT__URL` and
+  `BASIS_VAULT__VIA`; it is fetched as the settings load. Add each such name to `.env.example`, never its value.
 - A service whose callers sign in declares `user=User`, its subclass of `api.User` with a field for each claim it
   needs beside the subject, and a handler asks for `Annotated[User | None, api.given(User)]`: None is an anonymous
   request, and a route that needs a user raises `api.SignInRequiredError`, which basis adds to the errors of every

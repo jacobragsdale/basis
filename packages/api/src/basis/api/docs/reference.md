@@ -49,7 +49,7 @@ Each is declared once in `resources.py`, by name, with its deadline, and asked f
 |---|---|---|
 | `api.database(name, deadline_s=, max_concurrent=, outbox=None)` | `api.Reader`, or `api.Writer` in a route that writes | `BASIS_DATABASES__NAME__*` |
 | `api.outbox(table, max_age_s=, backoff_s=, max_backoff_s=)` | (the outbox of a database a route writes, for `send`) | |
-| `api.http(name, deadline_s=)` | `api.Client` | `BASIS_HTTP__NAME__URL`, `__CA_BUNDLE`, `__PROXY` |
+| `api.http(name, deadline_s=)` | `api.Client` | `BASIS_HTTP__NAME__URL`, `__CA_BUNDLE`, `__PROXY`, `__LOGIN__*` |
 | `api.cache(name, Value, ttl_s=, max_entries=, deadline_s=)` | `api.Cache[Value]`, of a frozen model | |
 | `api.clock(name)` | `api.Clock` | |
 | `api.ids(name)` | `api.Ids` | |
@@ -59,6 +59,15 @@ An `api.Reader` gives `fetch(Row, SQL, **binds)`, `fetch_one(Row, SQL, **binds)`
 an Arrow table checked once; an `api.Writer` adds `execute(SQL, **binds)`. Every value is bound. An `api.Client` gives
 `get(PATH, Reply, query=, segments=)` and its kin, and `send(METHOD, PATH, body, key=, segments=)`, a call that
 changes the other service's state, made after the commit in a route that writes.
+
+How an `api.Client` signs in to the service is its settings', `BASIS_HTTP__NAME__LOGIN__KIND` with the variables each
+kind takes under `__LOGIN__`, never code: `bearer`, `__TOKEN`; `header`, `__NAME` and `__VALUE`, as `X-API-Key`;
+`basic`, `__USER` and `__PASSWORD`; `client_credentials`, `__TOKEN_URL`, `__CLIENT_ID`, `__CLIENT_SECRET` and
+`__SCOPE`; `entra`, `__VIA`, `workload_identity` in a pod or `cli` after `az login`, and `__SCOPE`; `negotiate`,
+Kerberos as the user Windows logged on or `kinit` got, which takes `basis-core[kerberos]`. A token is fetched when a
+call first needs it, kept until a minute before it expires, and fetched again once when the service answers 401; a
+login the service or the identity provider refuses is `Denied`. A fake has no settings, so a test's calls carry none.
+`basis doctor --env ENV` signs in as the service would, and a 401 or 403 is its `ERROR` line.
 
 ## Errors
 
@@ -110,4 +119,8 @@ fake's `fails(...)` makes the next call fail as the real resource would.
 | `basis release-document VERSION` | Records `openapi.json` as `openapi.released.json`, in the commit a release tags |
 
 `serve`, `call --real`, `relay` and `smoke` act in the environment `--env` names, or `BASIS_ENV`'s, with its
-settings from `~/.config/basis/ENV.env`, or in a pod its deployment's.
+settings from `~/.config/basis/ENV.env`, or in a pod its deployment's. A secret setting there may name a secret of the
+environment's Azure Key Vault instead of holding it, as `BASIS_DATABASES__WAREHOUSE__CONNECTION_STRING=keyvault:NAME`,
+with the vault as `BASIS_VAULT__URL` and how this machine signs in to it as `BASIS_VAULT__VIA`, `workload_identity` or
+`cli`; each named secret is fetched once as the settings load, and one the vault lacks or refuses is the command's
+`ERROR` line, naming the variable.
