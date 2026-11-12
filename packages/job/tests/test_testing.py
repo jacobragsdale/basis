@@ -88,6 +88,18 @@ def test_a_fixture_holds_a_file_for_each_sheet_rather_than_reading_its_folder(tm
         check_fixture(sheeted, tmp_path, params_file(tmp_path), tmp_path / "snapshots")
 
 
+class _Dropped(etl.Inputs):
+    prices = etl.File(Price, folder="drops", path="prices_*.csv", empty="fail")
+
+
+def test_a_fixture_holds_a_file_for_each_file_on_a_share_as_for_a_sheet(tmp_path: Path) -> None:
+    job = make_job(write=etl.Append())
+    dropped = Job(job.name, job.module, job.params, _Dropped, job.outputs, job.transform, None, job.directory)
+    (tmp_path / "fixture.json").write_text('{"interval": null}', encoding="utf-8")
+    with pytest.raises(ContractError, match=r"has no file for \['prices'\]: add NAME\.csv or NAME\.parquet for each"):
+        check_fixture(dropped, tmp_path, params_file(tmp_path), tmp_path / "snapshots")
+
+
 def queried(tmp_path: Path, sql: str | None, *, name: str = "price.sql") -> Job:
     """A job whose one input is a query of `name`, a file holding `sql`, or none where `sql` is None."""
     if sql is not None:

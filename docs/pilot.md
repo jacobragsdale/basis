@@ -247,3 +247,20 @@ Run it on a Citrix desktop and in WSL, and for `entra` with `via=workload_identi
 **Send back:** how the service asks a client to sign in (its `WWW-Authenticate` header on a 401, if it gives one),
 `basis doctor`'s line for the service, the run's last line, and for `negotiate` whether a desktop needed anything
 beyond its Windows logon, and what a pod needed (a keytab, `kinit`, `KRB5_CONFIG`).
+
+## 6. A CSV dropped on a share (12.3)
+
+Step 12.3 reads a CSV or Parquet file from a shared folder (`etl.File(..., folder=, delimiter=, encoding=)`, its file
+name a pattern), tested on local folders alone. In the pilot repo, declare one as a job's input, in the folder section
+1 configured (`BASIS_FOLDERS__REPORTS__PATH`), and drop a CSV there the way the firm's feeds do, its name stamped:
+
+```python
+trades = etl.File(Trade, folder="reports", path="basis-pilot/trades_{start:%Y%m%d}_*.csv", delimiter=",", encoding="utf-8-sig", empty="fail")
+```
+
+```sh
+uv run basis run JOB --env dev --interval yesterday   # on Citrix, against the UNC share, then in WSL against its mount
+```
+
+**Send back:** the run's last line and the manifest's `inputs` record for the file, the encoding and delimiter the
+firm's feeds use, and whether a feed writes its file in place, so a run could read half of it, or renames it in.

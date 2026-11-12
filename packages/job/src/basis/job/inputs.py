@@ -14,6 +14,7 @@ A transform that needs the time or new ids declares a `Clock` or `Ids` on its `I
 its record, and a replay of the run is given the same values again, in the same order, so the transform stays a
 function of what the run saved."""
 
+import codecs
 import inspect
 import json
 import re
@@ -30,6 +31,7 @@ import pandas as pd
 
 from basis.core import resources
 from basis.core.interval import Interval
+from basis.core.paths import WILD, inside
 from basis.core.resources import HttpResource
 from basis.core.tables import IDENTIFIER
 from basis.job.rows import Row
@@ -313,30 +315,63 @@ class _End(datetime):
 
 
 class File(Dataset):
-    """A Parquet or CSV file, by path or URL. `{start}` and `{end}` in the path format the interval's ends, as
-    `rates/{start:%Y-%m-%d}.csv`. A CSV's values are text, which the row converts, so `001234` stays a string where
-    the row says so; an empty field is null."""
+    """A Parquet or CSV file, by path or URL, or, with `folder`, by its path inside a shared folder, as
+    `BASIS_FOLDERS__FOLDER__PATH` gives the folder on each machine, as a CSV dropped on a share is read. `{start}` and
+    `{end}` in the path format the interval's ends, as `rates/{start:%Y-%m-%d}.csv`. A CSV's values are text, which
+    the row converts, so `001234` stays a string where the row says so; an empty field is null. Its `delimiter` and
+    `encoding` are declared, as `;` and `cp1252` for a file a Windows tool in Europe writes.
 
-    def __init__(self, row: type[Row], *, path: str, empty: Empty) -> None:
+    In a folder, a file's name may hold `*` and `?`, as `drops/trades_{start:%Y%m%d}_*.csv`: every file that matches
+    is read, in name order, as one dataset, and none fails the run, as a missing file does (`basis.core.folders`)."""
+
+    def __init__(self, row: type[Row], *, path: str, empty: Empty, folder: str | None = None, delimiter: str = ",", encoding: str = "utf-8") -> None:
         super().__init__(row, empty=empty, base=_caller_folder())
         if not path.endswith((".csv", ".parquet")):
             msg = f"{path}: a file dataset is .csv or .parquet"
             raise ValueError(msg)
+        if folder is not None and not IDENTIFIER.match(folder):
+            msg = f"folder {folder!r}: a folder's name is lower-case letters, digits and underscores, as in BASIS_FOLDERS__{folder.upper()}__PATH"
+            raise ValueError(msg)
+        if folder is not None:
+            inside(path, folder)  # refuses a path that leaves the folder, where it is declared
+        if WILD.search(path):
+            if folder is None:
+                msg = f"{path}: only a file in a folder may hold * or ?, as folder='drops', path='trades_*.csv'"
+                raise ValueError(msg)
+            if WILD.search(path.replace("\\", "/").rpartition("/")[0]):
+                msg = f"{path}: only a file's name may hold * or ?, never a folder's"
+                raise ValueError(msg)
+        if len(delimiter) != 1:
+            msg = f"{path}: a CSV's delimiter is one character, not {delimiter!r}"
+            raise ValueError(msg)
+        try:
+            codecs.lookup(encoding)
+        except LookupError as error:
+            msg = f"{path}: {encoding} is no encoding Python knows: name one, as utf-8, utf-8-sig or cp1252"
+            raise ValueError(msg) from error
+        if path.endswith(".parquet") and (delimiter, encoding) != (",", "utf-8"):
+            msg = f"{path}: a Parquet file has no delimiter or encoding: declare them for a CSV alone"
+            raise ValueError(msg)
         self.path = path
+        self.folder = folder
+        self.delimiter = delimiter
+        self.encoding = encoding
 
     def location(self, interval: Interval | None) -> str:
-        """The path for a run: absolute, or a URL."""
+        """The path for a run, its interval's ends formatted in: absolute, or a URL, or its folder's own."""
         path = self.path
         if "{" in path:
             if interval is None:
                 msg = f"{path} formats the interval, and this run has none: give it one"
                 raise ValueError(msg)
             path = path.format(start=interval.start, end=interval.end)
+        if self.folder is not None:
+            return path
         return path if "://" in path else str(self.base / path)
 
     @override
     def describe(self) -> str:
-        return f"file: {self.path}"
+        return f"{self.folder}: {self.path}" if self.folder is not None else f"file: {self.path}"
 
 
 class Excel(Dataset):

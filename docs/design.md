@@ -499,7 +499,13 @@ that a job failed stay with Airflow and Datadog, not basis.
 machine's settings give: `\\server\share` on Windows, and a mount path in WSL and in a pod. basis reads and writes Excel
 with pandas' `read_excel` (calamine) and `to_excel` (xlsxwriter), in an optional extra, `basis-core[excel]`.
 Every write goes to a temporary file that is then renamed into place, so a portfolio manager never opens a half-written
-file.
+file. A CSV or Parquet file dropped on a share reaches a job as a `File` with `folder=`, decided on 2026-11-11 for step
+12.3 of [the plan](../PLAN.md) and open to the maintainer's review: its path is inside the folder, as a workbook's is,
+with the CSV's delimiter and encoding declared, `cp1252` or `utf-8-sig` as a Windows tool writes it, and a file name
+may hold `*` and `?`, as `drops/positions_{start:%Y%m%d}_*.csv`, since a file that lands carries a time no job knows.
+Every file that matches is read, in name order, as one dataset, whose record names each; none fails the run, as a
+missing file does, asking whether it has landed. A pattern never reaches into another folder, and nothing is moved
+or deleted after a read: what a run read stays where it was, and a replay reads the snapshot.
 
 **Mongo and SQL Server JSON.** The firm uses Mongo, and is moving that data to SQL Server's native `json` columns, so a
 job that reads Mongo and publishes to SQL Server is the migration. basis reads Mongo, and writes to it as upserts by a

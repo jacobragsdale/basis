@@ -11,6 +11,7 @@ portfolio manager's Excel among them, sees the old file or the new one, never ha
 is atomic on NFS, SMB and every local filesystem. A frame's datetimes are written in the zone each column names, as
 Excel has no zones."""
 
+import fnmatch
 import hashlib
 import io
 import math
@@ -20,7 +21,7 @@ from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import date, datetime, time
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
 import pandas as pd
@@ -29,6 +30,7 @@ from opentelemetry.trace import Span, SpanKind
 
 from basis.core import traces
 from basis.core.errors import BasisError
+from basis.core.paths import WILD, OutsideError, inside
 from basis.core.settings import Settings, SettingsError, variable
 
 EXCEL = (".xlsx", ".xlsm", ".xlsb", ".xls")
@@ -62,11 +64,41 @@ class Folder:
 
     def at(self, relative: str) -> Path:
         """The file `relative` names in the folder: a relative path of `/`-separated parts, none of them `..`."""
-        parts = PurePosixPath(relative.replace("\\", "/")).parts
-        if not parts or PureWindowsPath(relative).is_absolute() or PurePosixPath(relative).is_absolute() or ".." in parts or PureWindowsPath(relative).drive:
-            msg = f"{relative!r} is no path inside the folder {self.name}: give one relative to it, as positions/2026-11-05.xlsx, which never leaves it"
-            raise FolderError(msg)
+        try:
+            parts = inside(relative, self.name)
+        except OutsideError as error:
+            raise FolderError(str(error)) from None
         return self.root.joinpath(*parts)
+
+    def matching(self, pattern: str) -> list[str]:
+        """The files in the folder `pattern` names, in name order, as paths inside it: a path whose file name may hold
+        `*` and `?`, as `drops/trades_*.csv`, and whose folders may not; a file still being written, as `TEMPORARY`
+        names it, never matches. None is a `FolderError` that asks whether it has landed."""
+        where = self.at(pattern)
+        parent = PurePosixPath(pattern.replace("\\", "/")).parent
+        if not WILD.search(where.name):
+            found = [pattern] if where.is_file() else []
+        else:
+            listed = where.parent.iterdir() if where.parent.is_dir() else iter(())
+            names = sorted(path.name for path in listed if path.is_file() and fnmatch.fnmatchcase(path.name, where.name) and not path.name.endswith(TEMPORARY))
+            found = [(parent / name).as_posix() for name in names]
+        if not found:
+            if not self.root.is_dir():
+                msg = f"the folder {self.name}, at {self.root}, is not there or not reachable from here: mount it, or correct {variable(('folders', self.name, 'path'))}"
+                raise FolderError(msg)
+            msg = f"{self.name} has no file matching {pattern}, at {where}: has it landed, or is the path wrong?"
+            raise FolderError(msg)
+        return [path.removeprefix("./") for path in found]
+
+    def read_bytes(self, relative: str) -> bytes:
+        """The file at `relative`: a span of its own, on the tracer of the run that reads it."""
+        with _span(self.name, "read", relative):
+            path = self.at(relative)
+            try:
+                return path.read_bytes()
+            except OSError as error:
+                msg = f"{relative} in {self.name}, at {path}, cannot be read ({error.strerror or error}): check it is there and this user may read it"
+                raise FolderError(msg) from error
 
     def read_sheet(self, relative: str, sheet: str) -> pd.DataFrame:
         """The sheet `sheet` of the workbook at `relative`, its first row the columns' names, each cell as text: a

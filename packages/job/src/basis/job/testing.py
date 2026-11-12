@@ -32,7 +32,7 @@ from basis.core.storage import Root
 from basis.core.testing import ContractError
 from basis.job import api, handles, runs
 from basis.job import job as jobs
-from basis.job.inputs import Excel, Fetch, Inputs, Mongo, Query, sql_problems
+from basis.job.inputs import Excel, Fetch, File, Inputs, Mongo, Query, sql_problems
 from basis.job.rows import Row, conform
 
 FORBIDDEN = (
@@ -92,7 +92,10 @@ def check_fixture(job: jobs.Job, fixture: Path, params: Path, snapshot_root: Pat
     __tracebackhide__ = True
     datasets = job.inputs.declared()
     sourced = (Query, Fetch, Excel, Mongo)  # what a run reads outside the repo, from a database, a service, a shared folder or Mongo
-    if missing := sorted(name for name, dataset in datasets.items() if isinstance(dataset, sourced) and not any((fixture / f"{name}{suffix}").exists() for suffix in (".csv", ".parquet"))):
+    shared = {name for name, dataset in datasets.items() if isinstance(dataset, File) and dataset.folder is not None}  # a file dropped on a share
+    if missing := sorted(
+        name for name, dataset in datasets.items() if (isinstance(dataset, sourced) or name in shared) and not any((fixture / f"{name}{suffix}").exists() for suffix in (".csv", ".parquet"))
+    ):
         msg = f"{job.name}'s fixture {fixture} has no file for {missing}: add NAME.csv or NAME.parquet for each"
         raise ContractError(msg)
     found = api.read_fixture(fixture)

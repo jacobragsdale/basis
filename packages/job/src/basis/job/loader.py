@@ -22,11 +22,13 @@ from typing import Never
 
 import httpx2
 import pandas as pd
+import pyarrow.parquet as pq
 from opentelemetry.trace import Tracer
 
 from basis.core import folders, mongo
 from basis.core.databases import Database
 from basis.core.errors import BadReply
+from basis.core.frames import from_arrow
 from basis.core.interval import Interval
 from basis.core.logs import ms_since
 from basis.core.opened import HttpClient, Waits
@@ -290,6 +292,26 @@ def _read_file(dataset: Dataset, location: str, *, source: str) -> tuple[pd.Data
     return frame, record
 
 
+def _read_dropped(dataset: File, folder: folders.Folder, pattern: str) -> tuple[pd.DataFrame, InputRecord]:
+    """Every file in `folder` that `pattern` matches, in name order, as one frame of the dataset's row."""
+    start = time.perf_counter()
+    what = f"dataset {dataset.name} ({folder.name}: {pattern})"
+    try:
+        found = folder.matching(pattern)
+        parts = [
+            _read_csv(folder.read_bytes(path), delimiter=dataset.delimiter, encoding=dataset.encoding) if path.endswith(".csv") else from_arrow(pq.read_table(io.BytesIO(folder.read_bytes(path))))
+            for path in found
+        ]
+        frame = conform(pd.concat(parts, ignore_index=True) if len(parts) > 1 else parts[0], dataset.row, what=what, naive="in_zone")
+    except Exception as error:
+        error.add_note(f"while loading {what}")
+        raise
+    names = f" ({', '.join(path.rpartition('/')[2] for path in found)})" if found != [pattern] else ""
+    record = InputRecord(source=f"{folder.name}: {pattern}{names}", rows=len(frame), read_ms=ms_since(start))
+    log.info("loaded", extra={"dataset": dataset.name, "source": record.source, "rows": record.rows, "files": len(found), "ms": record.read_ms})
+    return frame, record
+
+
 def _read_sheet(dataset: Excel, folder: folders.Folder, location: str) -> tuple[pd.DataFrame, InputRecord]:
     start = time.perf_counter()
     what = f"dataset {dataset.name} ({dataset.folder}: {location} [{dataset.sheet}])"
@@ -307,7 +329,12 @@ def _read_one(name: str, dataset: File | Excel | Mongo, interval: Interval | Non
     """A dataset read on its own, on this thread: a file, a workbook's sheet, or a Mongo collection's documents."""
     match dataset:
         case File():
-            return _read_file(dataset, dataset.location(interval), source=f"file: {dataset.path}")
+            if dataset.folder is None:
+                return _read_file(dataset, dataset.location(interval), source=f"file: {dataset.path}")
+            if open_folder is None:
+                msg = f"{name} reads a file in the folder {dataset.folder}, and the run was given no folders"
+                raise TypeError(msg)
+            return _read_dropped(dataset, open_folder(dataset.folder), dataset.location(interval))
         case Excel():
             if open_folder is None:
                 msg = f"{name} reads a workbook in the folder {dataset.folder}, and the run was given no folders"
@@ -338,12 +365,12 @@ def _read_mongo(dataset: Mongo, store: mongo.Store, max_documents: int, interval
     return frame, record
 
 
-def _read_csv(content: bytes) -> pd.DataFrame:
+def _read_csv(content: bytes, *, delimiter: str = ",", encoding: str = "utf-8") -> pd.DataFrame:
     """A CSV's columns as their text, as a fetch's arrive, for `conform` to type by the dataset's row: nothing is
     inferred, and only an empty field is null, never text such as `NA` or `null`. Every line after the header is a
     row, a blank one too, which in a CSV of one column is a null; the header is read as written, so a name it repeats
     is one `conform` refuses, where pandas would rename it `NAME.1`."""
-    read = pd.read_csv(io.BytesIO(content), header=None, dtype=_TEXT, keep_default_na=False, na_values=[""], skip_blank_lines=False)
+    read = pd.read_csv(io.BytesIO(content), header=None, dtype=_TEXT, keep_default_na=False, na_values=[""], skip_blank_lines=False, sep=delimiter, encoding=encoding)
     frame = read.iloc[1:].reset_index(drop=True)
     frame.columns = pd.Index([str(name) for name in read.iloc[0]] if len(read) else [], dtype=object)
     return frame

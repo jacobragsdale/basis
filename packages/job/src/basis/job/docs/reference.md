@@ -127,12 +127,20 @@ a reply that is not the rows; and `NotFound`, `Conflict`, `Rejected`, `Denied` o
 422, a 401 or 403, or any other status. The rows are saved in the snapshot like any input's, so a replay never calls
 the service.
 
-### `etl.File(row, *, path, empty)`
+### `etl.File(row, *, path, empty, folder=None, delimiter=",", encoding="utf-8")`
 
 A `.csv` or `.parquet` file, by a path relative to the declaring file, or a URL that `pyarrow.fs` reads. `{start}` and
 `{end}` in `path` format the interval's ends, as `rates/{start:%Y-%m-%d}.csv`. A CSV's values are read as text and
 converted by the row; an empty field is null, and so is a blank line in a CSV of one column. A header that names a
-column twice is refused.
+column twice is refused. `delimiter` and `encoding` say how the CSV was written, as `";"` and `"cp1252"` for one a
+Windows tool in Europe writes, or `"utf-8-sig"` for Excel's "CSV UTF-8"; a Parquet file takes neither.
+
+With `folder`, the file is one dropped on a shared folder, as `BASIS_FOLDERS__FOLDER__PATH` gives the folder on each
+machine, and `path` is inside it, never leaving it. Its file name, never a folder's, may hold `*` and `?`, as
+`drops/trades_{start:%Y%m%d}_*.csv` for a file that lands with a time no job knows: every file that matches is read,
+in name order, as one dataset, whose record names each, and a file still being written by basis is never one. No
+match fails the run, `empty` or not, asking whether the file has landed; a file that holds no rows is empty. Nothing
+is moved or deleted after a read. In a fixture, `NAME.csv` stands in for it, as for a query.
 
 ### `etl.Excel(row, *, folder, path, sheet, empty)`
 
@@ -490,7 +498,7 @@ berth's 40 characters do, keeps a database's secret parts in one secret that way
 | `BASIS_HTTP__NAME__LOGIN__KIND` | How each call signs in, with the variables each kind takes under `__LOGIN__`: `bearer`, `__TOKEN`; `header`, `__NAME` and `__VALUE`, as `X-API-Key`; `basic`, `__USER` and `__PASSWORD`; `client_credentials`, `__TOKEN_URL`, `__CLIENT_ID`, `__CLIENT_SECRET` and `__SCOPE`; `entra`, `__VIA`, `workload_identity` in a pod or `cli` after `az login`, and `__SCOPE`; `negotiate`, Kerberos as the user Windows logged on or `kinit` got, which takes `basis-core[kerberos]`. A token is kept until a minute before it expires. Without it, calls carry no login. |
 | `BASIS_MONGO__NAME__URI`, `__DATABASE`, `__TIMEOUT_S`, `__MAX_DOCUMENTS` | The Mongo database an `etl.Mongo` or `etl.MongoUpsert` names `NAME`: its connection string, a secret, the database the collections are in, the seconds each read or upsert may take, and the most documents a read may return. `__CA_BUNDLE` where its TLS needs one. |
 | `BASIS_LAKES__NAME__ACCOUNT`, `__CONTAINER`, `__AUTH` | The Azure Data Lake an `etl.Lake` names `NAME`: the storage account, the container its tables are folders of, and how this machine signs in: `key` or `sas`, with `__SECRET`, the account key or SAS token, a secret; `workload_identity`, in a pod whose service account is federated; or `cli`, on a desktop after `az login`. Azure's default chain of credentials is never used. `__EMULATOR`, `HOST:PORT`, points `key` or `sas` at Azurite, for a test. |
-| `BASIS_FOLDERS__NAME__PATH` | The absolute path on this machine of the shared folder an `etl.Excel` or `etl.ExcelReport` names `NAME`: `\\server\share\pm` on Windows, `/mnt/pm` in WSL and in a pod. |
+| `BASIS_FOLDERS__NAME__PATH` | The absolute path on this machine of the shared folder an `etl.Excel`, `etl.ExcelReport` or `etl.File(..., folder=)` names `NAME`: `\\server\share\pm` on Windows, `/mnt/pm` in WSL and in a pod. |
 | `BASIS_SLACK__NAME__WEBHOOK` | The incoming-webhook URL of the Slack channel a message names `NAME`, a secret. `__CA_BUNDLE` and `__PROXY` as for a service. |
 | `BASIS_EMAIL__NAME__HOST`, `__PORT`, `__SECURITY`, `__SENDER`, `__TO` | The relay an email named `NAME` goes through, `none`, `starttls` or `tls`, its sender's address, and, as JSON, the addresses it goes to, `["desk@example.com"]`: each environment's own. `__USER` and `__PASSWORD` where the relay asks for a login. |
 | `BASIS_TRACES__EXPORTER` | `otlp`, to post each run's spans to `BASIS_TRACES__ENDPOINT`, or `console`, to write them to stderr. Without it, spans go nowhere. |
