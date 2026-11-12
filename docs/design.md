@@ -393,10 +393,26 @@ stay simple.
 wait has a deadline, every call has a trace span, and every resource has a fake. The HTTP client (httpx2, with a proxy
 and a CA bundle), the clock, ids and tracing move with it, so jobs get them too, and basis-api builds on core's. A job
 declares them as it declares its datasets, so its transform stays pure and every run replays from its snapshot: a
-`Fetch` is a GET that binds the interval and answers a JSON list of rows, which the snapshot saves, and is the one way
+`Fetch` is a GET, or a POST that only reads, that binds the interval and answers JSON rows, a list or a list under one
+key of an object, page by page where the service pages them (step 12.2), which the snapshot saves, and is the one way
 a job reaches another service; a `Clock` or `Ids` gives the transform values that the run's record keeps, so that a
 replay is given them again. basis-api keeps what is a request's own, a route's deadline, which caps its calls, its
 transaction, the outbox, the compute pool and identity, and the cache.
+
+**Logins to services.** Most of the firm's internal services ask for a login, so a service's settings say how a part
+signs in to it, as `BASIS_HTTP__NAME__LOGIN__KIND`, decided on 2026-11-11 for step 12.2 of [the plan](../PLAN.md) and
+open to the maintainer's review: `bearer`, a fixed token; `header`, a key in a header the service names, such as
+`X-API-Key`; `basic`, a user and password; `client_credentials`, OAuth 2.0's token for a client id and secret from a
+token URL, as Entra ID and most identity providers give one; `entra`, Entra ID's token for a scope, through workload
+identity in a pod or `az login` on a desktop, as the lake signs in; and `negotiate`, Kerberos through SPNEGO, with the
+desktop user's Windows logon or the ticket `kinit` got, in an optional extra, `basis-core[kerberos]`. Every login is a
+setting, never code, so a repo's code reads the same in every environment and a test's fake needs none. A token is
+fetched when it is first needed, kept until a minute before it expires, and fetched again once when the service
+answers 401, through the service's own proxy and CA bundle; a login that is refused is `Denied`, with the variables
+to correct. Every secret is a `SecretStr`, and no log or span carries a header. A reply's next page is never fetched
+from another origin than the service's, so a login is never sent elsewhere. `basis doctor --env` signs in as a part
+would, and a 401 or 403 is a problem. Other schemes, such as mutual TLS or a signed request, wait until a service
+needs one.
 
 **Service errors.** Every resource and its fake raise one hierarchy of `basis.core`'s, so a failure means the same
 whatever was called. `ServiceError` carries the resource, the status and the detail, and each kind has its rule for

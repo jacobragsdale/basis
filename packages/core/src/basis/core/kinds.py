@@ -5,7 +5,7 @@ every check iterates.
 
 | Kind | Settings | Fake | doctor checks | The QA tier refuses |
 |---|---|---|---|---|
-| `http` | `BASIS_HTTP__NAME__*` | `fakes.Http` | that the service answers a GET of its URL, whatever its status | nothing: a service is read |
+| `http` | `BASIS_HTTP__NAME__*` | `fakes.Http` | that the service answers a GET of its URL, signed in as its login says, whatever its status but a 401 or 403 | nothing: a service is read |
 | `slack` | `BASIS_SLACK__NAME__*` | `fakes.Slack` | that Slack's webhook host answers, posting nothing | nothing: a QA run sends nothing |
 | `email` | `BASIS_EMAIL__NAME__*` | `fakes.Email` | that the relay greets and takes the login, sending nothing | nothing: a QA run sends nothing |
 | `mongo` | `BASIS_MONGO__NAME__*` | `fakes.Mongo` | that the database answers a ping | hosts and a database without the marker |
@@ -93,14 +93,19 @@ def _http(name: str, service: HttpService, probe: Probe) -> str:
         async with client(name, service) as reaching:
             return (await reaching.get("", timeout=PROBE_S)).status_code
 
-    del probe
     try:
-        return f" answers at {service.url} ({asyncio.run(get())})"
+        status = asyncio.run(get())
     except httpx2.TimeoutException as error:
         msg = f"{name} did not answer within {PROBE_S:g}s"
         raise BasisError(msg) from error
     except httpx2.RequestError as error:
         raise transport_failure(name, name, f"GET {service.url}", error) from error
+    if status in {401, 403}:  # a login the service refuses, or one it asks for and the settings do not give
+        prefix = f"BASIS_HTTP__{name.upper()}__LOGIN__"
+        if service.login is None:
+            raise _ProblemError((f"{probe.env}'s service {name} answers {status} at {service.url}, and its settings give no login", f"set {prefix}KIND and its secrets in {probe.where}"))
+        raise _ProblemError((f"{probe.env}'s service {name} refused its login ({status} at {service.url})", f"correct {prefix}* in {probe.where}"))
+    return f" answers at {service.url} ({status})"
 
 
 def _slack(name: str, channel: SlackChannel, probe: Probe) -> str:

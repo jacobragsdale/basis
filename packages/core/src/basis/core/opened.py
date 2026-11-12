@@ -14,7 +14,7 @@ other kind, is made again. How a client waits is a resource of its own (`Waits`)
 fake's, which waits no time and moves its clock on by each wait, so a test makes every attempt a deadline allows at
 once.
 
-How a part reaches another service is its settings' alone: its URL, CA bundle and proxy, never `SSL_CERT_FILE`,
+How a part reaches another service is its settings' alone: its URL, CA bundle, proxy and login (`basis.core.logins`), never `SSL_CERT_FILE`,
 `HTTP_PROXY` or any other variable of the environment's."""
 
 import asyncio
@@ -35,7 +35,7 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from pydantic_core import to_json
 
-from basis.core import deadlines
+from basis.core import deadlines, logins
 from basis.core.errors import BadReply, Failed, ServiceError, Timeout, Unavailable, answered
 from basis.core.resources import Body, ClockResource, HttpMethod, HttpResource, IdsResource, Query, QueryValue
 from basis.core.secrets import redacted
@@ -102,7 +102,7 @@ def client(name: str, service: HttpService) -> httpx2.AsyncClient:
     proxy = str(service.proxy) if service.proxy is not None else None
     shown_proxy = redacted(proxy) if proxy is not None else None
     log.debug("calls %s at %s", name, redacted(str(service.url)), extra={"resource": name, "ca_bundle": str(service.ca_bundle) if service.ca_bundle else None, "proxy": shown_proxy})
-    return httpx2.AsyncClient(base_url=str(service.url), verify=verify, proxy=proxy, trust_env=False)
+    return httpx2.AsyncClient(base_url=str(service.url), verify=verify, proxy=proxy, trust_env=False, auth=logins.auth(name, service))
 
 
 class HttpClient:

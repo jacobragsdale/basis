@@ -353,14 +353,15 @@ SLOW_REFUSAL = pytest.mark.skipif(sys.platform == "win32", reason="Windows retri
 
 
 @contextmanager
-def answering() -> Generator[tuple[int, list[tuple[str, str]]]]:
-    """A local HTTP server that answers 404 to everything, and the requests it was sent, as method and path."""
+def answering(status: Callable[[str | None], int] = lambda _: 404) -> Generator[tuple[int, list[tuple[str, str]]]]:
+    """A local HTTP server that answers each request the status `status` gives for its Authorization, 404 to all by
+    default, and the requests it was sent, as method and path."""
     asked: list[tuple[str, str]] = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def _answer(self) -> None:
             asked.append((self.command, self.path))
-            self.send_response(404)
+            self.send_response(status(self.headers.get("Authorization")))
             self.send_header("Content-Length", "0")
             self.end_headers()
 
@@ -410,6 +411,21 @@ def test_doctor_with_an_environment_checks_each_service_channel_and_relay_answer
         f"rates could not be reached for GET http://127.0.0.1:{closed}/: ConnectError): check BASIS_HTTP__RATES__* in {path}, and that this machine may reach it"
     )
     assert captured.err.splitlines()[1].endswith(f"check BASIS_EMAIL__DESK__* in {path}, and that this machine may reach it")
+
+
+def test_doctor_signs_in_to_a_service_as_a_part_would_and_a_refused_login_is_a_problem(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    feed(tmp_path)
+    with answering(lambda given: 200 if given == "Bearer good" else 401) as (port, _):
+        lines = [f"BASIS_HTTP__{name}__URL=http://127.0.0.1:{port}/" for name in ("PRICES", "RATES", "CURVES")]
+        lines += ["BASIS_HTTP__PRICES__LOGIN__KIND=bearer", "BASIS_HTTP__PRICES__LOGIN__TOKEN=good", "BASIS_HTTP__RATES__LOGIN__KIND=bearer", "BASIS_HTTP__RATES__LOGIN__TOKEN=stale"]
+        path = env_file(tmp_path, "dev", "\n".join(lines) + "\n")
+        assert doctor.doctor(None, {}, desktop(tmp_path), describe=command.one_line, env="dev", databases=Logins()) == 1
+    captured = capsys.readouterr()
+    assert f"ok: dev's service prices answers at http://127.0.0.1:{port}/ (200)" in captured.out.splitlines()
+    assert captured.err.splitlines() == [
+        f"ERROR: dev's service curves answers 401 at http://127.0.0.1:{port}/, and its settings give no login: set BASIS_HTTP__CURVES__LOGIN__KIND and its secrets in {path}",
+        f"ERROR: dev's service rates refused its login (401 at http://127.0.0.1:{port}/): correct BASIS_HTTP__RATES__LOGIN__* in {path}",
+    ]
 
 
 @SLOW_REFUSAL

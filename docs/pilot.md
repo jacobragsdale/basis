@@ -225,3 +225,25 @@ developer's desktop and WSL image, keep users from editing it, and which of the 
 
 **Send back:** the answer per tool and per platform (Citrix, WSL), who owns that deployment, and how long a change to
 it takes to reach the desktops.
+
+## 5. A service's login (12.2)
+
+Step 12.2 gave a service's settings a login (`BASIS_HTTP__NAME__LOGIN__KIND`: `bearer`, `header`, `basic`,
+`client_credentials`, `entra` or `negotiate`). Each was tested against a local server and fakes alone: no real
+identity provider, Entra tenant, `az` or KDC has signed anything in. Pick the one internal service a pilot job or API
+would call first, ask its owners how a client signs in, and in the pilot repo, with a `Fetch` of it in a job:
+
+```sh
+# in dev.env: BASIS_HTTP__SERVICE__URL=https://SERVICE.internal.example/, and the login, such as
+#   BASIS_HTTP__SERVICE__LOGIN__KIND=entra  BASIS_HTTP__SERVICE__LOGIN__VIA=cli  BASIS_HTTP__SERVICE__LOGIN__SCOPE=api://SERVICE/.default
+# or, for Kerberos, after `uv add 'basis-core[kerberos]'`:
+#   BASIS_HTTP__SERVICE__LOGIN__KIND=negotiate
+uv run basis doctor --env dev        # signs in as a run would: a 401 or 403 is its ERROR line
+uv run basis run JOB --env dev --interval yesterday
+```
+
+Run it on a Citrix desktop and in WSL, and for `entra` with `via=workload_identity` and for `negotiate`, in a pod.
+
+**Send back:** how the service asks a client to sign in (its `WWW-Authenticate` header on a 401, if it gives one),
+`basis doctor`'s line for the service, the run's last line, and for `negotiate` whether a desktop needed anything
+beyond its Windows logon, and what a pod needed (a keytab, `kinit`, `KRB5_CONFIG`).

@@ -100,6 +100,68 @@ class OracleSettings(Limits):
 type DatabaseSettings = Annotated[MssqlSettings | OracleSettings, Field(discriminator="kind")]
 
 
+HEADER = r"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$"
+"""An HTTP header's name, a token of RFC 9110's characters."""
+
+
+class BearerLogin(Model):
+    """A fixed token, sent as `Authorization: Bearer TOKEN`."""
+
+    kind: Literal["bearer"]
+    token: SecretStr
+
+
+class HeaderLogin(Model):
+    """A key, sent in the header the service names, such as `X-API-Key`."""
+
+    kind: Literal["header"]
+    name: Annotated[str, Field(pattern=HEADER)]
+    value: SecretStr
+
+
+class BasicLogin(Model):
+    """A user and password, sent as HTTP Basic authentication, which only HTTPS keeps secret."""
+
+    kind: Literal["basic"]
+    user: str
+    password: SecretStr
+
+
+class ClientCredentialsLogin(Model):
+    """OAuth 2.0's client credentials: a token for the client id and secret from the token URL, such as Entra ID's
+    `https://login.microsoftonline.com/TENANT/oauth2/v2.0/token`, sent as a bearer token until it expires."""
+
+    kind: Literal["client_credentials"]
+    token_url: HttpUrl
+    client_id: str
+    client_secret: SecretStr
+    scope: str | None = None
+    """The scope the token is for, such as `api://pricing/.default`, where the identity provider asks for one."""
+
+
+class EntraLogin(Model):
+    """Entra ID's token for `scope`, through the pod's workload identity, which AKS's webhook sets up, or as the user
+    `az login` signed in on a desktop, sent as a bearer token until it expires."""
+
+    kind: Literal["entra"]
+    via: Literal["workload_identity", "cli"]
+    scope: str
+    """The scope the token is for, such as `api://pricing/.default`."""
+
+
+class NegotiateLogin(Model):
+    """Kerberos through SPNEGO, `Authorization: Negotiate`, as the user Windows logged on or the ticket `kinit` got:
+    a repo that signs in so takes `basis-core[kerberos]`."""
+
+    kind: Literal["negotiate"]
+    service: str = "HTTP"
+    """The service class of the service's principal, `HTTP/HOST`, its host the URL's."""
+
+
+type HttpLogin = Annotated[BearerLogin | HeaderLogin | BasicLogin | ClientCredentialsLogin | EntraLogin | NegotiateLogin, Field(discriminator="kind")]
+"""How a part signs in to another service (`basis.core.logins`)."""
+
+
 class HttpService(Model):
     """Another service, and how to reach it: from these settings alone, never `SSL_CERT_FILE`, `HTTP_PROXY` or the
     like, which configure nothing basis decides."""
@@ -111,6 +173,8 @@ class HttpService(Model):
     in place of the operating system's trusted ones. Without it, the operating system's are trusted."""
     proxy: HttpUrl | None = None
     """The proxy each call goes through, such as `http://proxy.internal.example:8080`. Without it, calls go direct."""
+    login: HttpLogin | None = None
+    """How each call signs in, as `BASIS_HTTP__NAME__LOGIN__KIND` names it. Without it, calls carry no login."""
 
 
 class SlackChannel(Model):
