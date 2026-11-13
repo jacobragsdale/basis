@@ -55,7 +55,7 @@ page = bd.page(
 )
 async def show(as_of: str, book: str | None) -> tuple[object, ...]:
     asked = {"as_of": bd.day(as_of), "book": book or "", "search": ""}
-    summary, sectors, ratings, maturities, issuers = [await bd.load(dataset, **asked) for dataset in (SUMMARY, SECTORS, RATINGS, MATURITIES, ISSUERS)]
+    summary, sectors, ratings, maturities = [await bd.load(dataset, **asked) for dataset in (SUMMARY, SECTORS, RATINGS, MATURITIES)]
     total = summary.iloc[0]
     return (
         MARKET_VALUE.show(total["market_value"], change=total["market_value"] - total["prior_market_value"]),
@@ -65,6 +65,6 @@ async def show(as_of: str, book: str | None) -> tuple[object, ...]:
         bd.charts.bar(sectors, Sector, x="sector", y="weight", orientation="h"),
         bd.charts.bar(ratings, Rating, x="rating", y="weight"),
         bd.charts.bar(maturities, Bucket, x="bucket", y="market_value"),
-        bd.rows(issuers),
-        ISSUER_GRID.totals(issuers),
+        await bd.load_rows(ISSUERS, **asked),
+        await ISSUER_GRID.load_totals(ISSUERS, **asked),
     )

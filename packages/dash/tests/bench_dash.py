@@ -10,8 +10,9 @@ It prints JSON, and writes its scratch fixtures under `OUT_FOLDER`:
   cache's bytes and the process's resident memory after it;
 - **sessions**: the same app served by uvicorn on a socket, fifty sessions each asking again and again for an answer
   from the cache, while one other session's query takes two seconds: what the fifty waited, what the slow one did,
-  and what `/health/live` did; once for a small answer, a line of text, and once for a grid of 1,000 rows, whose
-  JSON the event loop writes.
+  and what `/health/live` did; for a small answer, a line of text, for a grid of 1,000 rows by `bd.rows`, whose JSON
+  the event loop writes, and for the same grid's rows and totals written once per value (`bd.load_rows`,
+  `GRID.load_totals`).
 
 The numbers go in `docs/design.md`; nothing here is a test."""
 
@@ -42,6 +43,7 @@ from basis.dash.building import build
 from basis.dash.driving import driving
 from basis.dash.example.data import POSITIONS, WAREHOUSE, Holding, Position
 from basis.dash.fixtures import FixtureDatabase
+from basis.dash.grids import Total
 
 SIZES = (1_000, 10_000, 50_000, 100_000)
 SESSIONS = 50
@@ -51,7 +53,10 @@ SLOW_S = 2.0
 EXAMPLE = Path(fixtures.__file__).parent / "example" / "fixtures"
 AS_OF = date(2026, 11, 12)
 
-GRID = bd.grid("bench-grid", Position, key="cusip", totals={"par": "sum", "market_value": "sum", "pnl": "sum", "ytw": bd.weighted("market_value")})
+TOTALS: dict[str, Total] = {"par": "sum", "market_value": "sum", "pnl": "sum", "ytw": bd.weighted("market_value")}
+GRID = bd.grid("bench-grid", Position, key="cusip", totals=TOTALS)
+WRITTEN = bd.grid("bench-written", Position, key="cusip", totals=TOTALS)
+"""The same grid, its rows and totals written once per value (`bd.load_rows`, `GRID.load_totals`)."""
 
 
 def _slow_sql(folder: Path) -> str:
@@ -64,13 +69,19 @@ def _slow_sql(folder: Path) -> str:
 OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd() / "bench"
 SLOW = bd.query("slow", WAREHOUSE, _slow_sql(OUT), Holding, binds={"as_of": date}, ttl_s=1, stale_s=1)
 
-page = bd.page("/", "Bench", layout=html.Div([html.Div(id="bench-day", children=AS_OF.isoformat()), GRID, html.Div(id="bench-slow"), html.Div(id="bench-count")]))
+page = bd.page("/", "Bench", layout=html.Div([html.Div(id="bench-day", children=AS_OF.isoformat()), GRID, WRITTEN, html.Div(id="bench-slow"), html.Div(id="bench-count")]))
 
 
 @callback(Output("bench-grid", "rowData"), Output("bench-grid", "dashGridOptions"), Input("bench-day", "children"))
 async def grid(day: str) -> tuple[object, object]:
     positions = await bd.load(POSITIONS, as_of=date.fromisoformat(day))
     return bd.rows(positions), GRID.totals(positions)
+
+
+@callback(Output("bench-written", "rowData"), Output("bench-written", "dashGridOptions"), Input("bench-day", "children"))
+async def written(day: str) -> tuple[object, object]:
+    as_of = date.fromisoformat(day)
+    return await bd.load_rows(POSITIONS, as_of=as_of), await WRITTEN.load_totals(POSITIONS, as_of=as_of)
 
 
 @callback(Output("bench-count", "children"), Input("bench-count", "title"), prevent_initial_call=True)
@@ -125,18 +136,22 @@ def grids() -> list[dict[str, object]]:
             components = drive.page("/")
             values = drive.first("/", components)
             [entry] = [entry for entry in drive.calls("/", components) if "bench-grid" in str(entry["output"])]
+            [written] = [entry for entry in drive.calls("/", components) if "bench-written" in str(entry["output"])]
             timings = []
             for _ in range(3):  # read once from the database, then twice from the cache
                 started = time.perf_counter()
                 called = drive.call(entry, values)
                 timings.append(((time.perf_counter() - started) * 1000, called.held_ms, len(called.content)))
             assert not called.failed, called.failures
+            drive.call(written, values)  # its rows and totals written, once
+            again = [drive.call(written, values) for _ in range(2)]
             found.append(
                 {
                     "rows": size,
                     "miss_ms": round(timings[0][0], 1),
                     "hit_ms": round(min(timings[1][0], timings[2][0]), 1),
                     "held_ms": round(max(timings[1][1], timings[2][1]), 1),
+                    "written_held_ms": round(max(found.held_ms for found in again), 1),
                     "json_mb": round(timings[0][2] / 1_048_576, 2),
                     "gzip1_mb": round(len(gzip.compress(called.content, compresslevel=1)) / 1_048_576, 2),
                     "cache_mb": round(drive.client.built.runtime.cache.bytes / 1_048_576, 1),
@@ -170,12 +185,16 @@ def _body(output: str, inputs: list[dict[str, object]]) -> dict[str, object]:
     return internals.request(output, inputs, changed=[])
 
 
-async def _sessions(base: str, *, rows: bool) -> dict[str, object]:
-    fast = (
-        _body("..bench-grid.rowData...bench-grid.dashGridOptions..", [{"id": "bench-day", "property": "children", "value": AS_OF.isoformat()}])
-        if rows
-        else _body("bench-count.children", [{"id": "bench-count", "property": "title", "value": "go"}])
-    )
+ANSWERS = {
+    "a line of text": ("bench-count.children", "bench-count", "title", "go"),
+    "1,000 rows by bd.rows": ("..bench-grid.rowData...bench-grid.dashGridOptions..", "bench-day", "children", AS_OF.isoformat()),
+    "1,000 rows written once": ("..bench-written.rowData...bench-written.dashGridOptions..", "bench-day", "children", AS_OF.isoformat()),
+}
+
+
+async def _sessions(base: str, *, answer: str) -> dict[str, object]:
+    output, component, prop, value = ANSWERS[answer]
+    fast = _body(output, [{"id": component, "property": prop, "value": value}])
     slow = _body("bench-slow.children", [{"id": "bench-slow", "property": "title", "value": "go"}])
     update = f"{base}/{internals.UPDATE}"
     async with httpx2.AsyncClient(timeout=30, limits=httpx2.Limits(max_connections=SESSIONS + 5)) as client:
@@ -214,7 +233,7 @@ async def _sessions(base: str, *, rows: bool) -> dict[str, object]:
         await probe
     ordered = sorted(waited)
     return {
-        "answer": "1,000 rows" if rows else "a line of text",
+        "answer": answer,
         "sessions": SESSIONS,
         "requests": len(waited),
         "fifty_done_s": round(fifty_s, 2),
@@ -229,15 +248,15 @@ async def _sessions(base: str, *, rows: bool) -> dict[str, object]:
     }
 
 
-def sessions(*, rows: bool) -> dict[str, object]:
+def sessions(answer: str) -> dict[str, object]:
     made = fixtures.database(WAREHOUSE, _fixtures(1_000))
     served = _serve(Slow(declared=made.declared, folder=made.folder, fixtures=made.fixtures))
     try:
-        return asyncio.run(_sessions(served.base, rows=rows))
+        return asyncio.run(_sessions(served.base, answer=answer))
     finally:
         served.server.should_exit = True
         served.thread.join(timeout=10)
 
 
 if __name__ == "__main__":
-    sys.stdout.write(json.dumps({"grids": grids(), "sessions": [sessions(rows=False), sessions(rows=True)]}, indent=2) + "\n")
+    sys.stdout.write(json.dumps({"grids": grids(), "sessions": [sessions(answer) for answer in ANSWERS]}, indent=2) + "\n")

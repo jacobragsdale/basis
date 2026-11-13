@@ -893,6 +893,33 @@ installed when `basis.dash` is imported): orjson, each object it has no type for
 `Patch`, a component or a figure, then Plotly's own escapes for JSON in a page, the same bytes as Dash's writer, a test
 holds, and Dash's writer for anything orjson still refuses. The same answer now holds the loop 53 ms.
 
+**Rows and totals written once.** `await bd.load_rows(DATASET, **params)` gives a dataset's rows as `bd.rows` gives
+them, already JSON (`bd.WrittenRows`, orjson's `Fragment`, which the writer embeds as it is and nobody can change),
+and `await GRID.load_totals(DATASET, **params)` a grid's totals: each made in a worker thread by the value's first
+caller and kept beside the value in the cache (`Cache.keep`), its bytes counted in `cache_mb` and dropped with the
+value, so every other caller of that value pays nothing for it, and a value read again is written again. `bd.rows`
+and `GRID.totals` stay for a frame a callback makes itself; the example's grids use the written forms. gzip needed
+nothing: Starlette 1.10's `GZipMiddleware` already compresses in a worker thread, under a limiter of its own. Measured
+again by the bench, after the writer and the written rows:
+
+| Rows | Held the loop, by `bd.rows` | Held the loop, written once | Cache |
+|---|---|---|---|
+| 1,000 | 11 ms | 0.9 ms | 0.8 MB |
+| 10,000 | 53 ms | 1.0 ms | 8.4 MB |
+| 50,000 | 383 ms | 9 ms | 42 MB |
+| 100,000 | 1,372 ms | 39 ms | 84 MB |
+
+| Fifty sessions, each answer | The slow query | The fifty's 1,000 answers | Each waited, median (p95) | `/health/live`, median (slowest) |
+|---|---|---|---|---|
+| A line of text | 2,010 ms | 1.7 s | 80 ms (103) | 23 ms (64) |
+| 1,000 rows by `bd.rows` | 2,207 ms | 8.1 s | 396 ms (528) | 99 ms (288) |
+| 1,000 rows written once | 2,086 ms | 2.8 s | 131 ms (213) | 65 ms (108) |
+
+A cached 10,000-row answer, which held the loop 212 ms, now holds it about 1 ms at a stretch and about 27 ms in all, the
+answer's bytes passed through orjson, the request boundary and the socket; fifty users on a 1,000-row grid wait
+131 ms where they waited 851. The cost is memory: the written rows are about one and a half times the Arrow table, so
+a value shown as a grid takes about two and a half times its Arrow bytes of the cache's ceiling.
+
 **The package is laid out for two lanes.** The foundations' modules build, serve and test an app; the data lane's
 (declarations, the cache, loads, views, fixtures) and the display lane's (theme, shell, page, grid, charts, states,
 exports and `static/`) are their own, and each lane adds its names to `bd` through a module only it edits

@@ -16,8 +16,9 @@ description: Add a page to a basis-dash app end to end, from its datasets to its
    `bd.select` and `bd.search`, its body `bd.stat` tiles, `bd.card`s holding a `bd.grid(ID, Row)` or a `bd.graph(ID)`.
    Prefix each id with the page's name, since every page shares the shell.
 5. Callbacks, in the same module: `@callback(Output(...), Input(...))` on an `async def`, each dataset read with
-   `await bd.load(DATASET, **params)`, answering `bd.rows(frame)`, `GRID.totals(frame)`, `TILE.show(value)` and a
-   `bd.charts` figure. Never a `dcc.Store` of rows: load again where another callback needs them.
+   `await bd.load(DATASET, **params)`, answering `await bd.load_rows(DATASET, **params)` and
+   `await GRID.load_totals(DATASET, **params)` for a grid that shows a dataset as it is (`bd.rows(frame)` and
+   `GRID.totals(frame)` for a frame the callback made), `TILE.show(value)` and a `bd.charts` figure. Never a `dcc.Store` of rows: load again where another callback needs them.
 6. Tests: the view's function in `tests/test_domain.py` on plain frames; the page in `tests/test_NAME.py` with
    `bd.testing.client(app)` and `client.fire(OUTPUT, {"ID.PROP": VALUE})`.
 7. Look at it: `uv run basis render /NAME` prints each output as the page shows it, and `uv run basis dev` serves it.

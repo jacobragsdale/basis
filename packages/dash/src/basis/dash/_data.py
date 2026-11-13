@@ -5,7 +5,7 @@ with. Only phase 15 edits this file."""
 from basis.dash import format  # noqa: A004 -- bd.format, the display formats, as api.format is an API's
 from basis.dash.browser import Rows, rows
 from basis.dash.declarations import Database, Dataset, Fetch, File, Folder, Json, Lake, MaxLength, Query, Row, Service, View, Zone, database, fetch, file, folder, http, json_text, lake, query, view
-from basis.dash.loads import LoadError, load, loaded, reload
+from basis.dash.loads import LoadError, WrittenRows, load, load_rows, loaded, reload
 from basis.dash.refreshing import refresh
 
 __all__: list[str] = [
@@ -23,6 +23,7 @@ __all__: list[str] = [
     "Rows",
     "Service",
     "View",
+    "WrittenRows",
     "Zone",
     "database",
     "fetch",
@@ -33,6 +34,7 @@ __all__: list[str] = [
     "json_text",
     "lake",
     "load",
+    "load_rows",
     "loaded",
     "query",
     "refresh",

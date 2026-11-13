@@ -36,14 +36,18 @@ from typing import Final, Literal
 
 import dash_ag_grid as dag
 import dash_mantine_components as dmc
+import orjson
 import pandas as pd
+import pyarrow as pa
 
 import dash
+from basis.core import frames
 from basis.core.display import Display
 from basis.core.rows import Row
 from basis.core.tables import Column
 from basis.dash import exports as exports_module
 from basis.dash import internals, states, texts, theme
+from basis.dash.declarations import Dataset
 from basis.dash.errors import DeclarationError
 from basis.dash.exports import DOWNLOAD, EXPORT
 from basis.dash.icons import icon
@@ -140,6 +144,24 @@ class Grid(html.Div):
     def export(self) -> dict[str, object]:
         """The ids of the grid's export buttons, which an export callback takes `n_clicks` from."""
         return {"type": EXPORT, "grid": self.declared.id, "kind": ALL}
+
+    async def load_totals(self, dataset: object, /, **params: object) -> Patch:
+        """`dataset`'s totals for `params`, as `totals` gives them, made in a worker thread once per value and kept with
+        it in the cache, so another caller pays nothing for them: await it in an `async` callback."""
+        from basis.dash import loads  # noqa: PLC0415 -- loads declares datasets, and the grid is declared before them
+
+        if not isinstance(dataset, Dataset):
+            msg = f"grid {self.declared.id}'s totals load a dataset, not {dataset!r}: give one bd.query, bd.file, bd.fetch or bd.view declares"
+            raise DeclarationError(msg)
+        declared = self.declared
+
+        def made(table: pa.Table) -> tuple[object, int]:
+            found = totals(frames.from_arrow(table), declared)
+            return found, len(orjson.dumps(found))
+
+        patched = Patch()
+        patched["pinnedBottomRowData"] = await loads.derived(dataset, params, f"totals {declared.id}", made)
+        return patched
 
     def exported(self, frame: pd.DataFrame, *, asked: Mapping[str, object] | None = None, loaded_at: datetime | None = None, name: str | None = None, title: str | None = None) -> dict[str, object]:
         """`frame` as the file the pressed button asks for, Excel or CSV, for the grid's download: named `name`, by

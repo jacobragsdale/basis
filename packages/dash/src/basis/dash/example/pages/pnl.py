@@ -64,7 +64,7 @@ page = bd.page(
 )
 async def show(as_of: str, book: str | None) -> tuple[object, ...]:
     asked = {"as_of": bd.day(as_of), "book": book or "", "search": ""}
-    summary, explained, sectors, movers = [await bd.load(dataset, **asked) for dataset in (SUMMARY, EXPLAINED, SECTORS, MOVERS)]
+    summary, explained, sectors = [await bd.load(dataset, **asked) for dataset in (SUMMARY, EXPLAINED, SECTORS)]
     total = summary.iloc[0]
     day, prior = float(total["pnl"]), float(total["prior_market_value"])
 
@@ -79,6 +79,6 @@ async def show(as_of: str, book: str | None) -> tuple[object, ...]:
         SPREAD.show(total["spread"], caption=share("spread")),
         bd.charts.waterfall(explained, Factor, x="factor", y="pnl", total="Day's P&L"),
         bd.charts.bar(sectors, Sector, x="sector", y="pnl"),
-        bd.rows(movers),
-        MOVER_GRID.totals(movers),
+        await bd.load_rows(MOVERS, **asked),
+        await MOVER_GRID.load_totals(MOVERS, **asked),
     )

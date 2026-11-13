@@ -9,6 +9,8 @@ changes its frame changes nobody else's.
 - **Versioned**: each value loaded has a number no other has, which a view's key carries for each of its inputs, so a
   view is computed again when an input is loaded again, and never otherwise (15.3).
 
+- **Written once**: a value's forms that callers share, its rows as JSON or a grid's totals, are kept beside it
+  (`derived`, `keep`), counted in its bytes and dropped with it, so a second caller of the value pays nothing for them.
 - **Backed off** after a read fails (`failed`): the key is not read again until `BACKOFF_FIRST_S` passes, which
   doubles with each failure to `BACKOFF_MOST_S`, and never past the dataset's `ttl_s`; a read that succeeds clears it
   (`cleared`). Meanwhile a load answers the stale value where one is kept, and the same failure where none is.
@@ -22,7 +24,7 @@ import logging
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Hashable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 import pyarrow as pa
@@ -59,6 +61,10 @@ class Entry:
     """The cache's clock past which it is dropped, even where a reload fails."""
     stale: bool = False
     """Whether it is a value past its TTL that a load answered because reading it again failed: never kept so."""
+    key: Key | None = None
+    """Where the cache keeps it."""
+    derived: dict[str, tuple[object, int]] = field(default_factory=dict[str, tuple[object, int]], compare=False, repr=False)
+    """Each form of it callers share, by name, with its bytes: see `Cache.keep`."""
 
 
 @dataclass(frozen=True)
@@ -113,7 +119,7 @@ class Cache:
         least recently used values past the ceiling; the entry, kept or not. `replaces` is what the key shares with
         the values it outdates, a view's key without its inputs' versions, whose last value is dropped."""
         now = self.clock()
-        entry = Entry(table, loaded_at, now, next(self._versions), now + ttl_s, now + ttl_s + stale_s)
+        entry = Entry(table, loaded_at, now, next(self._versions), now + ttl_s, now + ttl_s + stale_s, key=found)
         if replaces is not None:
             if (outdated := self._latest.get(replaces)) is not None:
                 self._drop(outdated)
@@ -134,6 +140,22 @@ class Cache:
             log.info("evicted %s from the cache", evicted[0], extra={"dataset": evicted[0], "bytes": self._entries[evicted].table.nbytes})
             self._drop(evicted)
         return entry
+
+    def derived(self, entry: Entry, name: str) -> object | None:
+        """The form `name` of `entry` its first caller made, or None."""
+        found = entry.derived.get(name)
+        return found[0] if found is not None else None
+
+    def keep(self, entry: Entry, name: str, value: object, size: int) -> None:
+        """Keep `value`, of `size` bytes, as the form `name` of `entry`, while the cache keeps `entry`, counted in its
+        bytes, evicting the least recently used values past the ceiling; nothing where the cache keeps it no more."""
+        held = self._entries.get(entry.key) if entry.key is not None else None
+        if held is None or held.version != entry.version or name in held.derived:
+            return
+        held.derived[name] = (value, size)
+        self._bytes += size
+        while self._bytes > self.max_bytes and self._entries:
+            self._drop(next(iter(self._entries)))
 
     def forget(self, found: Key) -> None:
         """Drop the value at `found`, so the next load reads it again."""
@@ -167,4 +189,4 @@ class Cache:
 
     def _drop(self, found: Key) -> None:
         if (entry := self._entries.pop(found, None)) is not None:
-            self._bytes -= entry.table.nbytes
+            self._bytes -= entry.table.nbytes + sum(size for _, size in entry.derived.values())

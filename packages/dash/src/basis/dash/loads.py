@@ -22,21 +22,27 @@ A load:
   frame;
 - **is one span and one log record**, `loaded DATASET`, with its dataset, params, rows, milliseconds and how the cache
   answered (`hit`, `miss`, or `shared`, a query another caller started);
+- **writes its rows once**, with `await bd.load_rows(DATASET, **params)`: the rows `bd.rows` gives, already JSON,
+  made in a worker thread by the value's first caller and kept with it in the cache, so another caller's answer
+  holds the event loop for none of them (step 17.6); a grid's totals likewise, `await GRID.load_totals(...)`;
 - **reports into the page's status** (`basis.dash.ids.STATUS`), inside a callback: `data[DATASET]` becomes
   `{"loaded_at": ISO 8601 UTC, "rows": N, "stale": false, "params": {NAME: VALUE}}`, a date as ISO text, merged into
   what the store holds through a `Patch`, so the store keeps every other dataset's."""
 
 import asyncio
 import inspect
-from collections.abc import Awaitable, Hashable, Mapping
+from collections.abc import Awaitable, Callable, Hashable, Mapping
 from datetime import date, datetime
 from typing import Protocol
 
+import orjson
 import pandas as pd
+import pyarrow as pa
 
 import dash
+from basis.core import frames
 from basis.core.errors import BasisError
-from basis.dash import internals
+from basis.dash import browser, internals
 from basis.dash.declarations import Dataset, File, Query
 from basis.dash.ids import STATUS
 
@@ -55,6 +61,8 @@ class Running(Protocol):
     def datasets(self) -> Mapping[int, Dataset]: ...
 
     def load(self, dataset: Dataset, params: Mapping[str, Hashable]) -> Awaitable[pd.DataFrame]: ...
+
+    def derived(self, dataset: Dataset, params: Mapping[str, Hashable], name: str, make: Callable[[pa.Table], tuple[object, int]]) -> Awaitable[object]: ...
 
     def deadline(self, resource: str) -> float | None:
         """The deadline of the database `resource` names, for a failure's sentence."""
@@ -77,6 +85,35 @@ def load(dataset: Dataset, /, **params: object) -> Awaitable[pd.DataFrame]:
         msg = f"{dataset.name} is loaded while no app is running: load it in a callback of a started app, or in a test inside bd.testing.client(app)"
         raise LoadError(msg)
     return running.load(dataset, checked(running, dataset, params))
+
+
+type WrittenRows = orjson.Fragment
+"""A dataset's rows, already JSON, as `bd.load_rows` gives them: what a grid's `rowData` takes, which a callback
+answers as it is, and which nobody can change."""
+
+
+async def load_rows(dataset: Dataset, /, **params: object) -> WrittenRows:
+    """`dataset`'s rows for `params`, as `bd.rows` gives them, already JSON, written once per value and kept with it:
+    await it in an `async` callback, and answer it as a grid's `rowData`."""
+    found = await derived(dataset, params, "rows", _written)
+    if not isinstance(found, orjson.Fragment):  # what `_written` made, kept as it was
+        raise TypeError(found)
+    return found
+
+
+def derived(dataset: Dataset, params: Mapping[str, object], name: str, make: Callable[[pa.Table], tuple[object, int]]) -> Awaitable[object]:
+    """`dataset`'s value for `params` in its form `name`, which `make` gives from its Arrow table, with its bytes:
+    made in a worker thread once per value, and kept with it."""
+    _awaited_on_the_loop(dataset)  # its caller, bd.load_rows or a grid's load_totals, is async itself
+    if running is None:
+        msg = f"{dataset.name} is loaded while no app is running: load it in a callback of a started app, or in a test inside bd.testing.client(app)"
+        raise LoadError(msg)
+    return running.derived(dataset, checked(running, dataset, params), name, make)
+
+
+def _written(table: pa.Table) -> tuple[object, int]:
+    written = orjson.dumps(browser.rows(frames.from_arrow(table)), option=orjson.OPT_NON_STR_KEYS)
+    return orjson.Fragment(written), len(written)
 
 
 def reload(dataset: Dataset, /, **params: object) -> bool:

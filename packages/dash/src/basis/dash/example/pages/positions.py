@@ -78,8 +78,8 @@ async def show(as_of: str, book: str | None, search: str | None) -> tuple[object
     shown, sectors, summary = await bd.load(SHOWN, **asked), await bd.load(SECTORS, **asked), await bd.load(SUMMARY, **asked)
     total = summary.iloc[0]
     return (
-        bd.rows(shown),
-        GRID.totals(shown),
+        await bd.load_rows(SHOWN, **asked),  # written once per value, so another caller's answer costs the loop nothing for them
+        await GRID.load_totals(SHOWN, **asked),
         MARKET_VALUE.show(total["market_value"], change=total["market_value"] - total["prior_market_value"]),
         DV01.show(total["dv01"]),
         YIELD.show(total["ytw"], change=total["ytw"] - total["prior_ytw"]),

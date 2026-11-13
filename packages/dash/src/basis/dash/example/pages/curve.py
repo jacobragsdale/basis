@@ -65,7 +65,7 @@ async def show(as_of: str, book: str | None) -> tuple[object, ...]:
         THIRTY.show(thirty, change=thirty_day),
         SLOPE.show(ten - two, change=ten_day - two_day),
         bd.charts.curve(points, Point, tenor="tenor", y="ytw", by="close"),
-        bd.rows(tenors),
+        await bd.load_rows(TENORS, as_of=day),
         bd.charts.scatter(shown[shown["sector"] != "Municipal"], Position, x="years", y="ytw", label="cusip", by="sector", fit=False),
         bd.charts.bar(maturities, Bucket, x="bucket", y="dv01"),
     )

@@ -9,7 +9,7 @@ import io
 import logging
 import math
 import time
-from collections.abc import Hashable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
@@ -106,6 +106,16 @@ class Runtime:
 
     async def load(self, dataset: Dataset, params: Mapping[str, Hashable]) -> pd.DataFrame:
         return frames.from_arrow((await self.fetch(dataset, params)).table)
+
+    async def derived(self, dataset: Dataset, params: Mapping[str, Hashable], name: str, make: Callable[[pa.Table], tuple[object, int]]) -> object:
+        """`dataset`'s value for `params` in its form `name`, which `make` gives, with its bytes, from its Arrow table:
+        made in a worker thread by the value's first caller, and kept with the value for every other."""
+        entry = await self.fetch(dataset, params)
+        if (found := self.cache.derived(entry, name)) is not None:
+            return found
+        value, size = await anyio.to_thread.run_sync(make, entry.table)
+        self.cache.keep(entry, name, value, size)
+        return value
 
     async def fetch(self, dataset: Dataset, params: Mapping[str, Hashable]) -> Entry:
         """`dataset`'s value for `params`, fresh from the cache or read: one span, one log record, and its status."""

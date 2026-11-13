@@ -36,7 +36,10 @@ Rules to keep:
   `bd.select` and `bd.search`, whose state is the URL's; a body of `bd.card`s, `bd.stat` tiles, `bd.grid(ID, Row)`
   and `bd.graph(ID)` with a figure from `bd.charts`. Plain `dmc`, `dag` and `dcc` components work beside them; never
   `dash_table.DataTable`, a URL of another origin, or a stylesheet from a CDN, which `basis check` refuses.
-- A callback answers `bd.rows(frame)` for a grid's `rowData`, `GRID.totals(frame)` for its `dashGridOptions`,
+- A callback answers `await bd.load_rows(DATASET, **params)` for a grid's `rowData` and
+  `await GRID.load_totals(DATASET, **params)` for its `dashGridOptions` where the grid shows a dataset as it is: each
+  is written once per value, in a worker thread, so another user's answer holds the event loop for none of it;
+  `bd.rows(frame)` and `GRID.totals(frame)` for a frame the callback made itself;
   `TILE.show(value)` for a tile's `children`, and a `bd.charts` figure for a graph's `figure`. A failure needs no
   handler: basis logs it once, keeps what the page showed, and tells the person in one sentence with the request's id.
 - An app reads, and never writes: its databases give a reader alone. Its settings are `bd.Settings`, or a subclass, as

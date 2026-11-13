@@ -43,6 +43,7 @@ page. `basis check` holds them, each failure one `ERROR` line with its fix.
 | `bd.reload(DATASET, **params)` | Drops the value, so the next load reads it, unless it was read less than `reload_s` ago |
 | `bd.loaded(DATASET, **params)` | When the value a load would answer was read, or None |
 | `bd.rows(frame)` | A frame's rows as a grid's `rowData` takes them: NaN as null, dates as ISO text |
+| `await bd.load_rows(DATASET, **params)` | A dataset's rows as `bd.rows` gives them, already JSON (`bd.WrittenRows`), written once per value in a worker thread and kept with it in the cache, so another caller pays nothing for them |
 
 `ttl_s` is how long a value is fresh; `stale_s`, how long past it a value may still be shown when a reload fails;
 neither has a default. `smoke=` is the params `basis smoke` loads the dataset with, or a function of no arguments that
@@ -57,7 +58,7 @@ returns them.
 | `bd.as_of(id, label, calendar=)`, `bd.date_range(id, label, presets=, default=, calendar=)`, `bd.select(id, label, options=, multiple=, default=)`, `bd.search(id, label, placeholder=)` | The filters, each kept in the URL's query string under its id; `bd.day(value)`, `bd.days(value)` read the first two, and `bd.options(frame, column)` gives a select's options |
 | `bd.grid(id, Row, key=, totals=, columns=, height=, search=, noun=, dataset=, exports=)` | AG Grid from the row: headers, formats, filters, a quick filter, a count, totals, and CSV and Excel exports |
 | `bd.column(header=, width=, pin=, hide=, signed=, bar=, heat=)`, `bd.weighted(by)` | A grid column's overrides, and a total weighted by another column |
-| `GRID.totals(frame)`, `GRID.exported(frame, asked=, loaded_at=, name=, title=)`, `GRID.export`, `GRID.download` | The totals row, as a callback's answer to the grid's `dashGridOptions`; an export's file, and the ids its callback takes and answers |
+| `GRID.totals(frame)`, `await GRID.load_totals(DATASET, **params)`, `GRID.exported(frame, asked=, loaded_at=, name=, title=)`, `GRID.export`, `GRID.download` | The totals row, as a callback's answer to the grid's `dashGridOptions`, of a frame or, written once per value, of a dataset; an export's file, and the ids its callback takes and answers |
 | `bd.graph(id, figure=, height=, dataset=)` | A graph with basis's config, whose `figure` a callback answers |
 | `bd.charts.line`, `bar`, `scatter`, `curve`, `waterfall`, `heatmap`, `histogram` | Figures from a frame and its row, their ticks and hover text in the row's formats |
 | `bd.stat(id, label, display, change=, period=, good=, span=, dataset=)`, `TILE.show(value, change=, caption=, history=)` | A stat tile, and its `children`: a change signed in its colour with its arrow, or a caption, plain muted text, for what is no change, such as a share of a total |
