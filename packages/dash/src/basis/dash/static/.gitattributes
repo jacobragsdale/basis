@@ -1,0 +1,3 @@
+# basis serves these files byte for byte, and tests compare them so, on Windows too: text stays LF in every checkout.
+* text eol=lf
+*.woff2 binary
