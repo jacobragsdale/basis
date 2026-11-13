@@ -223,6 +223,27 @@ MANTINE: Final[dict[str, str]] = {
 take basis-ui's colours, and switch with them. Mantine's body colour is the one its papers, inputs and menus take, so
 it is a card's, and basis's CSS gives the page its background."""
 
+DASH: Final[dict[str, str]] = {
+    "Fill-Interactive-Strong": "var(--basis-primary)",
+    "Fill-Interactive-Weak": "color-mix(in oklch, var(--basis-primary) 6%, transparent)",
+    "Fill-Inverse-Strong": "var(--basis-card)",
+    "Fill-Inverse-strong": "var(--basis-card)",
+    "Fill-Primary-Hover": "var(--basis-muted)",
+    "Fill-Primary-Active": "var(--basis-secondary)",
+    "Fill-Disabled": "var(--basis-muted)",
+    "Stroke-Strong": "var(--basis-input)",
+    "Stroke-Weak": "var(--basis-border)",
+    "Text-Strong": "var(--basis-foreground)",
+    "Text-Primary": "var(--basis-foreground)",
+    "Text-Weak": "var(--basis-muted-foreground)",
+    "Text-Disabled": "var(--basis-disabled)",
+    "Tooltip-Background-Color": "var(--basis-popover)",
+    "Tooltip-Border-Color": "var(--basis-border)",
+}
+"""Each of Dash 4's own variables, which its `dcc` components (inputs, dropdowns, date pickers, sliders, tooltips) draw
+with, without its `--Dash-` prefix, pointed at basis's tokens, so they take basis-ui's colours and switch with them.
+Its spacing, shading and tooltip layering stay Dash's."""
+
 _MIXED: Final[dict[str, str]] = {
     "primary-color-light": "color-mix(in oklch, var(--basis-primary) 12%, transparent)",
     "primary-color-light-hover": "color-mix(in oklch, var(--basis-primary) 18%, transparent)",
@@ -444,7 +465,7 @@ def font_name(stem: str) -> str:
 
 def stylesheet() -> str:
     """The CSS of the tokens, `static/theme.css`: the font faces, every token as `--basis-NAME` in each scheme, and
-    Mantine's variables pointed at them."""
+    Mantine's and Dash's variables pointed at them."""
     lines = [
         "/* Written by `python -m basis.dash.theme` from basis.dash.theme's table, which is basis-ui's default theme; do not edit",
         "   it by hand. A test fails when it and the table differ. */",
@@ -471,7 +492,9 @@ def stylesheet() -> str:
     lines += ["}", "", "html:root[data-mantine-color-scheme] {"]
     lines += [f"  --mantine-{name}: var(--basis-{token});" for name, token in MANTINE.items()]
     lines += [f"  --mantine-{name}: {given};" for name, given in _MIXED.items()]
-    lines += ["  --mantine-font-family: var(--basis-font-sans);", "  --mantine-font-family-monospace: var(--basis-font-mono);", "}", ""]
+    lines += ["  --mantine-font-family: var(--basis-font-sans);", "  --mantine-font-family-monospace: var(--basis-font-mono);"]
+    lines += [f"  --Dash-{name}: {given};" for name, given in DASH.items()]
+    lines += ["}", ""]
     return "\n".join(lines)
 
 

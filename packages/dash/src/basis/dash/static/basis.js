@@ -146,7 +146,65 @@
     return sign + spec.symbol + shown.slice(sign.length);
   }
 
+  /* The largest magnitude of a column, over the rows the grid was given: cached by the rows' array, which a new answer
+     replaces. */
+  var largest = new WeakMap();
+  function magnitude(params) {
+    var rows = params.api.getGridOption("rowData") || [];
+    var field = params.colDef.field;
+    var known = largest.get(rows);
+    if (!known) largest.set(rows, (known = {}));
+    if (!(field in known)) {
+      var most = 0;
+      for (var i = 0; i < rows.length; i++) {
+        var value = rows[i][field];
+        if (typeof value === "number" && Number.isFinite(value) && Math.abs(value) > most) most = Math.abs(value);
+      }
+      known[field] = most;
+    }
+    return known[field];
+  }
+
+  /* A cell's bar or heat colour behind its number, against its column's largest magnitude; none in the totals row. */
+  var HEAT_MOST = 24; /* percent of the colour at the largest value, so the text stays legible over it */
+  function scale(params, kind) {
+    var value = params.value;
+    if (params.node.rowPinned || typeof value !== "number" || !Number.isFinite(value) || value === 0) return null;
+    var most = magnitude(params);
+    if (!most) return null;
+    var share = Math.min(Math.abs(value) / most, 1);
+    if (kind === "bar") {
+      var colour = value < 0 ? "var(--basis-loss)" : "var(--basis-primary)";
+      var length = (share * 100).toFixed(2) + "%";
+      return {
+        backgroundImage: "linear-gradient(90deg, color-mix(in oklch, " + colour + " 20%, transparent) " + length + ", transparent " + length + ")",
+        backgroundSize: "100% 60%",
+        backgroundPosition: "0 50%",
+        backgroundRepeat: "no-repeat",
+      };
+    }
+    var pole = value < 0 ? "var(--basis-div-10)" : "var(--basis-div-2)";
+    return { backgroundColor: "color-mix(in oklch, " + pole + " " + (share * HEAT_MOST).toFixed(1) + "%, transparent)" };
+  }
+
+  /* A grid's quick filter: what the box holds, given to the grid in the browser alone. */
+  basis.search = function (text, id) {
+    var grids = window.dash_ag_grid;
+    if (grids && grids.getApiAsync && id) {
+      grids.getApiAsync(id.grid).then(
+        function (api) {
+          api.setGridOption("quickFilterText", text || "");
+        },
+        function () {
+          /* the grid is gone: nothing to filter */
+        },
+      );
+    }
+    return window.dash_clientside.no_update;
+  };
+
   basis.format = format;
   var grid = (window.dashAgGridFunctions = window.dashAgGridFunctions || {});
   grid.basisFormat = format;
+  grid.basisScale = scale;
 })();

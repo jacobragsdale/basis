@@ -598,6 +598,25 @@ machine without node, and required where `CI` is set. The function joins `window
 joins `window.dash_clientside.basis`, each added to what is there, never replacing it. The module is `texts`, since
 `bd.text` is the function's name.
 
+**The grid, as built (16.4).** `bd.grid(id, Row, key=, totals=, columns=, height=, search=)` is AG Grid Community,
+every column from the row: its header in words (`yield_to_worst` as "Yield to worst", an acronym in capitals), a
+number right-aligned in tabular figures through `basisFormat`, a filter of its kind (AG Grid's number, text or date
+filter, a date as ISO text through its `dateString` type), sorting and resizing, and a least width from the widest
+text its format writes for a large value of its kind, a total of a billion for an amount, so a value is never cut; the
+grid shares the rest of its width out, and scrolls sideways where the columns need more. Rows keep their ids by `key`,
+a text column never null. Totals are the server's: `grid.totals(frame)` sums (by `math.fsum`), counts, takes the
+least or most, or a mean weighted by another column over the rows where both are given (`bd.weighted("par")`), labels
+the row "Total" in the first text column with no total, and is a `Patch` of the grid's `dashGridOptions`, its pinned
+row alone, since AG Grid's pinned rows are an option, not a prop. They are the totals of the rows sent, not of a
+filter applied in the browser. The quick filter above the grid is the shell's one pattern-matching clientside
+callback for every grid, through `dash_ag_grid.getApiAsync`, so it filters with no request. A page overrides a column
+with `bd.column(header=, width=, pin=, hide=, signed=, bar=, heat=)`: gain and loss colours, a bar, or a heat colour,
+drawn in the browser against the column's largest magnitude in the rows sent, the heat at most 24% of the diverging
+scale's poles, where a test holds gain and loss text over it to 4.5:1. A header's filter mark shows on hover, focus or
+an active filter. `bd.grid` gives an `html.Div` subclass, which Dash sends as a `Div`, holding the declaration beside
+it on the server for its totals. Dash 4's own `--Dash-*` variables, which its `dcc` components draw with, point at
+the tokens too, held by a test to every colour variable Dash's bundle reads. The module is `grids`, as `texts` is.
+
 **Two ids every page has.** basis's chrome around every page holds two components whose ids are fixed and exported
 from `basis.dash.ids`, so the data and display lanes build against them: `NOTIFICATIONS`, DMC's
 `NotificationContainer`, whose `sendNotifications` prop takes a list of notifications, each a dict of DMC's

@@ -1,0 +1,298 @@
+"""The grid, which reads its row: `bd.grid(id, Row)` is an AG Grid, Community features only, whose every column comes
+from the row's, so a page never restates what the row declares:
+
+    POSITIONS = bd.grid("positions", Position, key="cusip", totals={"par": "sum", "ytw": bd.weighted("par")}, columns={"pnl": bd.column(signed=True)})
+
+    @callback(Output("positions", "rowData"), Output("positions", "dashGridOptions"), Input("as-of", "value"))
+    async def show(as_of: str) -> tuple[bd.Rows, Patch]:
+        positions = await bd.load(POSITIONS_DATA, as_of=bd.day(as_of))
+        return bd.rows(positions), POSITIONS.totals(positions)
+
+- **Each column** has its header (the name in words, `yield_to_worst` as "Yield to worst", an acronym in capitals),
+  its alignment (a number right, in tabular figures), its format (the column's display format, through basis's
+  browser formatter, `basisFormat`, which rounds as the server does), a filter of its kind (number, text or date),
+  sorting and resizing.
+- **Rows keep their ids** (`key`, a text column), so a refresh changes the rows that changed, and keeps the
+  selection and the scroll.
+- **Totals are the server's**, a pinned row under the rows: `grid.totals(frame)`, a change to the grid's options, sums, counts, takes the least or
+  most, or a mean weighted by a declared column (`bd.weighted("par")`), skipping missing values, as each column's
+  `totals` entry says, and labels the row in the first text column without one.
+- **A quick filter** over every column, above the grid, which filters in the browser alone; text a person can select
+  and copy; a height of its own, so a large table scrolls inside it and draws only the rows shown.
+- **A page overrides a column** where it must, with `bd.column(header=, width=, pin=, hide=, signed=, bar=, heat=)`:
+  a signed number in the gain and loss colours, a bar in the cell for a magnitude, or a heat scale behind it.
+
+The grid is `dag.AgGrid` itself, with its declaration kept beside it, so a page lays it out as any component."""
+
+import math
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Final, Literal
+
+import dash_ag_grid as dag
+import pandas as pd
+
+from basis.core.display import Display
+from basis.core.rows import Row
+from basis.core.tables import Column
+from basis.dash import texts, theme
+from basis.dash.errors import DeclarationError
+from basis.dash.icons import icon
+from dash import Patch, dcc, html
+from dash.development.base_component import Component
+
+type Total = Literal["sum", "mean", "min", "max", "count"] | Weighted
+type Pin = Literal["left", "right"]
+
+SEARCH: Final = "basis-grid-search"
+"""The type of a grid's quick filter's id, `{"type": SEARCH, "grid": ID}`, which the shell's one callback reads."""
+HEIGHT: Final = 520
+"""A grid's height in pixels, unless the page gives another: a large table scrolls inside it."""
+ACRONYMS: Final = frozenset(
+    {"id", "cusip", "isin", "sedol", "figi", "ticker", "oas", "dv01", "cs01", "pv01", "ytm", "ytw", "pnl", "usd", "eur", "gbp", "jpy", "fx", "nav", "mtd", "qtd", "ytd", "bp", "bps"}
+)
+"""Words a header writes in capitals."""
+_KINDS: Final = {"float": "number", "str": "text", "bool": "boolean", "date": "dateString", "datetime": "dateTimeString"}
+_FILTERS: Final = {"float": "agNumberColumnFilter", "str": "agTextColumnFilter", "bool": "agTextColumnFilter", "date": "agDateColumnFilter", "datetime": "agDateColumnFilter"}
+_TOTALS: Final = ("sum", "mean", "min", "max", "count")
+
+
+@dataclass(frozen=True)
+class Weighted:
+    """A mean weighted by another column of the row: `bd.weighted("par")`."""
+
+    by: str
+
+
+def weighted(by: str) -> Weighted:
+    """A total that is the mean of a column weighted by column `by`, over the rows where both are given."""
+    return Weighted(by)
+
+
+@dataclass(frozen=True, kw_only=True)
+class ColumnShown:
+    """How a page shows one column, where it must differ from what its row declares."""
+
+    header: str | None = None
+    width: int | None = None
+    """In pixels; by default the grid shares its width between its columns."""
+    pin: Pin | None = None
+    hide: bool = False
+    signed: bool = False
+    """A number in the gain colour above zero and the loss colour below."""
+    bar: bool = False
+    """A bar behind a number, as long as its magnitude against the column's largest."""
+    heat: bool = False
+    """A colour behind a number, from the diverging scale, by its value against the column's largest magnitude."""
+
+
+def column(*, header: str | None = None, width: int | None = None, pin: Pin | None = None, hide: bool = False, signed: bool = False, bar: bool = False, heat: bool = False) -> ColumnShown:
+    """A column shown otherwise than its row declares it."""
+    return ColumnShown(header=header, width=width, pin=pin, hide=hide, signed=signed, bar=bar, heat=heat)
+
+
+@dataclass(frozen=True)
+class Declared:
+    """What a grid was declared with, kept beside it for its totals."""
+
+    row: type[Row]
+    key: str | None
+    totals: Mapping[str, Total]
+    label: str | None
+    """The text column the totals row's label sits in."""
+
+
+class Grid(html.Div):
+    """A grid declared from a row, under its quick filter: `bd.grid(...)` makes one, and a page lays it out as any
+    component."""
+
+    declared: Declared
+
+    def totals(self, frame: pd.DataFrame) -> Patch:
+        """`frame`'s totals, the row pinned under the rows, as a change to the grid's `dashGridOptions`, which a callback
+        outputs: `Output(ID, "dashGridOptions")`. Only the pinned row changes; the grid's other options stay."""
+        patched = Patch()
+        patched["pinnedBottomRowData"] = totals(frame, self.declared)
+        return patched
+
+
+def grid(
+    id: str,  # noqa: A002 -- a component's id, as Dash names it
+    row: type[Row],
+    *,
+    key: str | None = None,
+    totals: Mapping[str, Total] | None = None,
+    columns: Mapping[str, ColumnShown] | None = None,
+    height: int | None = HEIGHT,
+    search: bool = True,
+) -> Grid:
+    """A grid of `row`'s columns at `id`, its rows known by `key`, with `totals` and `columns`' overrides, `height`
+    pixels tall, or as tall as its rows where None, for a short table, and a quick filter unless `search` is False.
+    What a page lays out: the grid, under its quick filter."""
+    if not (isinstance(row, type) and issubclass(row, Row)):
+        msg = f"grid {id}'s row is {row!r}: give a bd.Row subclass, whose columns the grid shows"
+        raise DeclarationError(msg)
+    by_name = {found.name: found for found in row.columns}
+    given_totals = dict(totals or {})
+    given_columns = dict(columns or {})
+    _check(id, row, by_name, key, given_totals=given_totals, given_columns=given_columns)
+    label = next((found.name for found in row.columns if found.kind == "str" and found.name not in given_totals), None)
+    options: dict[str, object] = {
+        "theme": theme.GRID,
+        "enableCellTextSelection": True,
+        "ensureDomOrder": True,
+        "animateRows": False,
+        "suppressDragLeaveHidesColumns": True,
+        "autoSizeStrategy": {"type": "fitGridWidth", "defaultMinWidth": 96},
+    }
+    if height is None:
+        options["domLayout"] = "autoHeight"
+    table = dag.AgGrid(
+        id=id,
+        rowData=[],
+        columnDefs=[_definition(found, given_columns.get(found.name, ColumnShown())) for found in row.columns],
+        defaultColDef={"sortable": True, "resizable": True, "filter": True},
+        dashGridOptions=options,
+        getRowId=f"params.data.{key}" if key is not None else None,
+        className="basis-grid-table",
+        style={"height": f"{height}px" if height is not None else None, "width": "100%"},
+    )
+    parts: list[Component] = []
+    if search:
+        box = dcc.Input(id={"type": SEARCH, "grid": id}, type="search", placeholder="Filter rows", debounce=False, className="basis-grid-search-input", autoComplete="off")
+        named = html.Span("Filter the rows", className="basis-visually-hidden")  # the box's name, which the label gives it
+        parts.append(html.Div([html.Label([icon("search"), named, box], className="basis-grid-search")], className="basis-grid-tools"))
+    shown = Grid([*parts, table], className="basis-grid")
+    object.__setattr__(shown, "declared", Declared(row, key, given_totals, label))  # beside the component, which Dash never sends
+    return shown
+
+
+def header(name: str) -> str:
+    """A column's name in words, as its header shows it: `yield_to_worst` as "Yield to worst", `oas_bps` as "OAS
+    BPS"."""
+    words = [word.upper() if word in ACRONYMS else word for word in name.split("_") if word]
+    if not words:
+        return name
+    first = words[0]
+    words[0] = first if first.isupper() else first[:1].upper() + first[1:]
+    return " ".join(words)
+
+
+def totals(frame: pd.DataFrame, declared: Declared) -> list[dict[str, object]]:
+    """The totals row of `frame`, by `declared`'s totals, with NaN as None; none where it declares none."""
+    if not declared.totals:
+        return []
+    found: dict[str, object] = {}
+    for name, total in declared.totals.items():
+        values = pd.to_numeric(frame[name], errors="coerce").astype("float64") if name in frame else pd.Series(dtype="float64")
+        found[name] = _total(values, frame, total)
+    if declared.label is not None:
+        found[declared.label] = "Total"
+    if declared.key is not None and declared.key not in found:
+        found[declared.key] = ""
+    return [found]
+
+
+def _total(values: pd.Series, frame: pd.DataFrame, total: Total) -> float | None:
+    given = values.dropna()
+    if isinstance(total, Weighted):
+        weights = pd.to_numeric(frame[total.by], errors="coerce").astype("float64")
+        both = values.notna() & weights.notna()
+        weight = float(weights[both].sum())
+        shown = float((values[both] * weights[both]).sum()) / weight if weight != 0 else math.nan
+    elif total == "count":
+        shown = float(len(given))
+    elif given.empty:
+        shown = math.nan
+    elif total == "sum":
+        shown = math.fsum(given.tolist())
+    elif total == "mean":
+        shown = math.fsum(given.tolist()) / len(given)
+    elif total == "min":
+        shown = float(given.min())
+    else:
+        shown = float(given.max())
+    return None if math.isnan(shown) else shown
+
+
+def _definition(found: Column, shown: ColumnShown) -> dict[str, object]:
+    defined: dict[str, object] = {"field": found.name, "headerName": shown.header or header(found.name), "cellDataType": _KINDS[found.kind], "filter": _FILTERS[found.kind]}
+    if found.kind == "float":
+        display = found.display if found.display is not None else Display(kind="number")
+        defined |= {
+            "type": "rightAligned",
+            "valueFormatter": texts.formatter(display),
+            "cellClass": ["ag-right-aligned-cell", "basis-num"],
+        }  # the type's class too, which a cellClass of its own replaces
+        rules = {}
+        if shown.signed:
+            rules |= {"basis-gain": "params.value > 0", "basis-loss": "params.value < 0"}
+        if rules:
+            defined["cellClassRules"] = rules
+        if shown.bar or shown.heat:
+            defined["cellStyle"] = {"function": f"basisScale(params, {'"bar"' if shown.bar else '"heat"'})"}
+    defined["minWidth"] = _least_width(found, defined["headerName"])
+    if shown.width is not None:
+        defined |= {"width": shown.width, "minWidth": min(shown.width, int(defined["minWidth"])), "suppressSizeToFit": True}
+    if shown.pin is not None:
+        defined["pinned"] = shown.pin
+    if shown.hide:
+        defined["hide"] = True
+    return defined
+
+
+_HEADER: Final = re.compile(r"\S")
+_WIDTHS: Final = {"str": 112, "bool": 84, "date": 104, "datetime": 164}
+"""The least width of a column of each kind, in pixels, so a value is never cut, at the grid's 13 px."""
+_DIGIT: Final = 7.4
+"""A tabular figure's width at 13 px of Inter, and about a letter's at the header's 12 px, in pixels."""
+_PADDING: Final = 40
+_SAMPLES: Final = {"pct": -0.9999, "bps": -0.9999, "price": -199.999, "price32": -199.99}
+"""A large value of each kind of display format, whose text sets a column's least width; an amount's is a billion."""
+"""A cell's padding, and the room a header keeps for its sort and filter marks."""
+
+
+def _least_width(found: Column, header_text: object) -> int:
+    """The least width that shows `found`'s values and its header whole: a number's by the text its format writes for
+    a large value of its kind, an amount of a billion, a total's size, or a rate of -99.99%."""
+    by_header = round(len(str(header_text)) * _DIGIT + _PADDING)
+    if found.kind != "float":
+        return max(_WIDTHS[found.kind], by_header)
+    display = found.display or Display(kind="number")
+    widest = texts.text(_SAMPLES.get(display.kind, -1_234_567_890.123), display)
+    return max(round(len(widest) * _DIGIT + _PADDING - 16), by_header, 84)
+
+
+def _check(id: str, row: type[Row], by_name: Mapping[str, Column], key: str | None, *, given_totals: Mapping[str, Total], given_columns: Mapping[str, ColumnShown]) -> None:  # noqa: A002 -- the grid's id
+    where = f"grid {id}"
+    if key is not None and (key not in by_name or by_name[key].kind != "str" or by_name[key].nullable):
+        msg = f"{where}'s key is {key!r}: name a text column of {row.__qualname__} that is never null, as each row's id"
+        raise DeclarationError(msg)
+    for name, total in given_totals.items():
+        if name not in by_name or by_name[name].kind != "float":
+            msg = f"{where} totals {name!r}, which is no number column of {row.__qualname__}: total one of {', '.join(sorted(n for n, c in by_name.items() if c.kind == 'float'))}"
+            raise DeclarationError(msg)
+        if isinstance(total, Weighted):
+            if total.by not in by_name or by_name[total.by].kind != "float":
+                msg = f"{where} weights {name!r} by {total.by!r}, which is no number column of {row.__qualname__}: weight by one"
+                raise DeclarationError(msg)
+        elif total not in _TOTALS:
+            msg = f"{where}'s total of {name!r} is {total!r}: give one of {', '.join(_TOTALS)}, or bd.weighted(COLUMN)"
+            raise DeclarationError(msg)
+    for name, shown in given_columns.items():
+        if name not in by_name:
+            msg = f"{where} shows {name!r}, which {row.__qualname__} does not declare: override one of its columns, {', '.join(by_name)}"
+            raise DeclarationError(msg)
+        if not isinstance(shown, ColumnShown):
+            msg = f"{where}'s column {name!r} is {shown!r}: give bd.column(...)"
+            raise DeclarationError(msg)
+        if (shown.signed or shown.bar or shown.heat) and by_name[name].kind != "float":
+            msg = f"{where}'s column {name!r} is no number, so it takes no signed colours, bar or heat"
+            raise DeclarationError(msg)
+        if shown.bar and shown.heat:
+            msg = f"{where}'s column {name!r} has a bar and a heat scale: give one"
+            raise DeclarationError(msg)
+        if shown.header is not None and not _HEADER.search(shown.header):
+            msg = f"{where}'s column {name!r} has an empty header: give it words, or leave it out"
+            raise DeclarationError(msg)

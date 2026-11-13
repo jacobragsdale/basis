@@ -30,7 +30,8 @@ Keep this table true in each step's own commit.
 | 16.1 Tokens and theme | Done: `basis.dash.theme`, its table held to basis-ui's `theme.css`; the CSS, Mantine, AG Grid and Plotly from it; the fonts | the commit "Step 16.1" |
 | 16.2 The shell and the page | Done: the header (title, environment, navigation, switch), `bd.page`'s body and filters, `bd.card`, the 404 page, tab titles, `bd.icon` | the commit "Step 16.2" |
 | 16.3 One number, one text | Done: `bd.text`; `basisFormat` in `static/basis.js`, held under node to `format.json`'s float cases and to core's text for each display format | the commit "Step 16.3" |
-| 16.4 to 16.9 Display | Not started | |
+| 16.4 The grid | Done: `bd.grid` from the row, `bd.column` overrides, server totals with `bd.weighted`, the quick filter in the browser, Dash's own variables on the tokens | the commit "Step 16.4" |
+| 16.5 to 16.9 Display | Not started | |
 | 17.1 to 17.8 The repo around it | Not started | |
 
 ## What the best Dash app is
@@ -458,7 +459,7 @@ Each has the pick this plan builds on. None blocks a step before the one named.
 |---|---|---|
 | DMC 3 on React 19, which Dash 4.5 calls experimental, or DMC 2.8.1 on React 18, Mantine 8's last line | DMC 3: it rendered clean here, and starting on 2 means a migration in every app within months. 14.1 found no open defect that DMC 2 avoids, and DMC 2.x has had no release since 2.8.1 | Settled by 14.1 |
 | Dash on FastAPI and uvicorn with awaited loads, or on Flask with a thread per request | FastAPI: one server for APIs and apps, on Windows too, and the road to live updates. The cost is that loads must be awaited, which basis enforces | 14.5 |
-| AG Grid Community, or Enterprise if the firm holds a licence (row grouping, pivots, range copy, Excel export in the browser) | Community; basis does totals and Excel on the server. An Enterprise key would be a setting, later | 16.4 |
+| AG Grid Community, or Enterprise if the firm holds a licence (row grouping, pivots, range copy, Excel export in the browser) | Community; basis does totals and Excel on the server. An Enterprise key would be a setting, later. Built so in 16.4: no Enterprise module loads | 16.4 |
 | May a repo hold an API and a Dash app? | No: one served thing per repo | 14.5 |
 | Do `Row` and serving move into core, which touches basis-job and basis-api? | Yes: a second copy of each would drift, and their tests prove the move | 14.3, 14.4 |
 | Does the look follow basis-ui's theme? | Yes, held by a drift test | 16.1 |
@@ -486,6 +487,9 @@ Each has the pick this plan builds on. None blocks a step before the one named.
   and FastAPI load only when a verb serves.
 - **An icon's CSS holds the SVG namespace's URL**, `http://www.w3.org/2000/svg`, inside each data URI, which a browser
   needs to draw it and never fetches. 17.1's check of URLs of another origin must pass it (found in 16.2).
+- **A grid's totals are the server's, so they do not follow a filter applied in the browser**, the quick filter's or a
+  column's: the totals row sums every row sent. Totals of the rows shown would be AG Grid's in the browser, or an
+  Enterprise aggregation; left as the brief settled it (found in 16.4).
 
 ## Rules for this work
 

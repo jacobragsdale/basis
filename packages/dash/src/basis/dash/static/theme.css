@@ -309,4 +309,19 @@ html:root[data-mantine-color-scheme] {
   --mantine-spacing-xl: calc(var(--basis-spacing) * 8);
   --mantine-font-family: var(--basis-font-sans);
   --mantine-font-family-monospace: var(--basis-font-mono);
+  --Dash-Fill-Interactive-Strong: var(--basis-primary);
+  --Dash-Fill-Interactive-Weak: color-mix(in oklch, var(--basis-primary) 6%, transparent);
+  --Dash-Fill-Inverse-Strong: var(--basis-card);
+  --Dash-Fill-Inverse-strong: var(--basis-card);
+  --Dash-Fill-Primary-Hover: var(--basis-muted);
+  --Dash-Fill-Primary-Active: var(--basis-secondary);
+  --Dash-Fill-Disabled: var(--basis-muted);
+  --Dash-Stroke-Strong: var(--basis-input);
+  --Dash-Stroke-Weak: var(--basis-border);
+  --Dash-Text-Strong: var(--basis-foreground);
+  --Dash-Text-Primary: var(--basis-foreground);
+  --Dash-Text-Weak: var(--basis-muted-foreground);
+  --Dash-Text-Disabled: var(--basis-disabled);
+  --Dash-Tooltip-Background-Color: var(--basis-popover);
+  --Dash-Tooltip-Border-Color: var(--basis-border);
 }

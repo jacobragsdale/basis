@@ -8,6 +8,7 @@ import re
 from http import HTTPStatus
 from pathlib import Path
 
+import dash
 import plotly.graph_objects as go
 import plotly.io as pio
 import pytest
@@ -96,6 +97,14 @@ def test_mantine_s_variables_point_at_tokens_that_exist() -> None:
     mapped = theme.tokens(theme.stylesheet(), "html:root[data-mantine-color-scheme]")
     for used in re.findall(r"var\(--basis-([\w-]+)\)", " ".join(mapped.values())):
         assert used in theme.TOKENS or used in theme.SCALE
+
+
+def test_every_colour_dash_s_own_components_read_is_a_token() -> None:
+    bundle = (Path(dash.__file__).parent / "dcc" / "dash_core_components.js").read_text(encoding="utf-8")
+    read = set(re.findall(r"--Dash-([A-Za-z-]+)", bundle)) - {"Spacing", "Shading-Strong", "Shading-Weak", "Tooltip-ZIndex", "Tooltip-PointerEvents", ""}
+    assert read <= set(theme.DASH), f"Dash reads {sorted(read - set(theme.DASH))}, which basis.dash.theme.DASH does not point at a token"
+    mapped = theme.tokens(theme.stylesheet(), "html:root[data-mantine-color-scheme]")
+    assert {name: mapped[f"Dash-{name}"] for name in theme.DASH} == theme.DASH
 
 
 @pytest.mark.parametrize("scheme", SCHEMES)
