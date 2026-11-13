@@ -32,7 +32,7 @@ and phase 16 (display), each in modules of its own, so they never edit one file.
 | `cli.py` | `part`: `basis serve [APP] --env ENV` and `basis dev [APP] [--env ENV]`. | Foundations; 17.x adds verbs |
 | `loading.py` | `load`, an app by entry point (`basis.dash_apps`) or module; `bd.load` is a dataset's (`loads.py`). | Foundations |
 | `testing.py` | `client`: an app built in the process, driven through FastAPI's `TestClient`, with `index`, `layout`, `dependencies`, `page` and `fire`, on the fakes the app declares or a test's. | Foundations; data from 15.4 |
-| Data's own, from 15.1 | `declarations.py` (`bd.Row`, `bd.database`, `bd.folder`, `bd.lake`, `bd.http`, `bd.query`, `bd.file`, `bd.fetch`, `bd.view`, and `check`, which building runs first), `format.py` (`bd.format`, each column's display format), `cache.py`, `loads.py` (`bd.load`, which app code imports, so it opens nothing), `runtime.py` (what a built app opens for its datasets, and how each is read, a view computed among them), `fixtures.py` (a fake database from `fixtures/QUERY.csv`, failing on demand, and `of`, the fakes an app declares), `refreshing.py` (`bd.refresh`), `browser.py` (`bd.rows`, named so the module never shadows the function). | Data |
+| Data's own, from 15.1 | `declarations.py` (`bd.Row`, `bd.database`, `bd.folder`, `bd.lake`, `bd.http`, `bd.query`, `bd.file`, `bd.fetch`, `bd.view`, and `check`, which building runs first), `format.py` (`bd.format`, each column's display format), `cache.py`, `loads.py` (`bd.load`, which app code imports, so it opens nothing), `runtime.py` (what a built app opens for its datasets, and how each is read, a view computed among them), `fixtures.py` (a fake database from `fixtures/QUERY.csv`, failing on demand, and `of`, the fakes an app declares), `refreshing.py` (`bd.refresh`), `browser.py` (`bd.rows`, named so the module never shadows the function), `sizes.py` (each callback's answer measured, and its budget). | Data |
 | Display's own, from 16.1 | `theme.py`, `icons.py`, `pages.py`, `shell.py`, `texts.py` (`bd.text`, and the browser formatter's spec), `grids.py` (`bd.grid`), `charts.py`, `states.py`, `exports.py`, `filters.py`. | Display |
 
 A lane adds a name to `bd` in two lines of its own file: the import, and the name in its `__all__`.
@@ -58,4 +58,5 @@ From the workspace's root:
 ```sh
 uv run pre-commit run --all-files   # ruff, ty, the lockfile and the import contracts
 uv run pytest packages/dash         # this package's tests
+uv run pytest -m integration packages/dash   # a query's load on real SQL Server and Oracle, as packages/job/tests/integration/README.md sets them up
 ```

@@ -553,6 +553,22 @@ with `Z`, the index left out. It is built a column at a time through Arrow: 19 m
 192 ms for 100,000, against pandas' `to_dict("records")`'s 46 and 458, which leaves NaN and dates JSON cannot hold.
 A frame with a column name twice, or naive times, is refused.
 
+Each callback's answer is one log record, `answered OUTPUT`, with its bytes of JSON before compression, its status and
+milliseconds, inside the request boundary so it carries the request's id (`basis.dash.sizes`); past 4 MB, about 10,000
+rows of 20 columns, it is a warning, which 17.1 makes a check. Measured on the development host in step 15.8, through
+`bd.testing` on basis-core's fake database, 20 columns (4 text, a date, 15 floats):
+
+| | 10,000 rows | 100,000 rows |
+|---|---|---|
+| A callback that loads and answers `bd.rows`, read from the database | 140 ms | 1,362 ms |
+| The same, answered from the cache | 113 ms | 1,285 ms |
+| Its answer | 3.76 MB of JSON | 37.6 MB |
+| `bd.load` answered from the cache (a frame made from Arrow) | 0.30 ms | 0.79 ms |
+
+While a 2 s query ran, `/health/live` answered in 0.5 ms (median of 1,194, the slowest 2.1 ms) and another callback in
+0.7 ms (the slowest 1.8 ms): the loop waited for nothing. A cache hit costs well under a millisecond, so the cost of a
+large page is its rows and their JSON, which is why 100,000 rows wait for the server-side row model (18).
+
 **What the status store holds.** Inside a callback, each load sets `STATUS`'s `data[DATASET]` to
 `{"loaded_at": "2026-11-13T14:05:00.123456Z", "rows": 1234, "stale": false, "params": {"as_of": "2026-11-13"}}`: when
 it was read from its source, in UTC, so a value the cache answered keeps its first time; its rows; whether it is a

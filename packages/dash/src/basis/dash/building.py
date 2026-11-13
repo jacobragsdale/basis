@@ -12,7 +12,8 @@
   (`basis.dash.shell`), and the callbacks of the app's own modules, its declaration's and its pages'
   (`internals.own_callbacks`);
 - basis-core's health routes, at the server's root for the cluster's probes and, where the proxy keeps the prefix,
-  under it too; the request boundary, outermost but for gzip at level 1; FastAPI's telemetry on the app's own tracer
+  under it too; the request boundary, outermost but for gzip at level 1, and inside it each callback's answer
+  measured (`basis.dash.sizes`); FastAPI's telemetry on the app's own tracer
   provider; and a lifespan that adds the settings' span exporter, marks the app ready, and on shutdown flushes the
   spans;
 - the server set up at once, so a callback's setup error fails the build, not the first request.
@@ -40,6 +41,7 @@ from basis.dash.app import App
 from basis.dash.errors import DeclarationError
 from basis.dash.runtime import Runtime
 from basis.dash.settings import Settings
+from basis.dash.sizes import Sizes
 
 log = logging.getLogger(__name__)
 
@@ -149,6 +151,7 @@ def build(app: App, *, settings: Settings | None = None, environment: str | None
     shell.wire(made)
     internals.own_callbacks(made, {app.module, *(page.module for page in app.pages)})
     internals.set_up(made)
+    server.add_middleware(Sizes, path=f"{made.config.routes_pathname_prefix}{internals.UPDATE}")  # inside the boundary, so its record carries the request's id
     server.add_middleware(boundary.Requests, health=health)
     server.add_middleware(GZipMiddleware, minimum_size=COMPRESS_FROM, compresslevel=COMPRESS_LEVEL)  # outside the boundary, which logs what the app answered
     return Built(app, configured, made, server, lifecycle, provider, runtime)
