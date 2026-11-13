@@ -4,6 +4,7 @@ import dataclasses
 import inspect
 import ipaddress
 import json
+import socket
 import ssl
 import sys
 import threading
@@ -782,6 +783,9 @@ def _authority(directory: Path) -> tuple[Path, ssl.SSLContext]:
 class _Prices(BaseHTTPRequestHandler):
     """Answers every GET with a price, as the pricing service, or a proxy in front of it, would."""
 
+    timeout = 10
+    """Seconds a connection's handshake and request may take, so a silent one ends its own thread."""
+
     def do_GET(self) -> None:
         body = json.dumps({"security": self.path.rsplit("/", 1)[-1], "price": 99.50}).encode()
         self.send_response(HTTPStatus.OK)
@@ -798,8 +802,8 @@ class _Prices(BaseHTTPRequestHandler):
 @contextlib.contextmanager
 def _serving(context: ssl.SSLContext | None = None) -> Generator[int]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Prices)
-    if context is not None:
-        server.socket = context.wrap_socket(server.socket, server_side=True)
+    if context is not None:  # each connection's handshake in its own thread, on its first read, within the handler's timeout
+        server.socket = context.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -822,6 +826,16 @@ def test_another_services_certificate_is_checked_against_the_declared_ca_bundle_
         undeclared = _quoted({"url": f"https://127.0.0.1:{port}"})
     assert trusting.json() == {"security": SECURITY, "price": 99.50}
     assert (undeclared.status_code, undeclared.json()["detail"]) == (HTTPStatus.SERVICE_UNAVAILABLE, f"pricing could not be reached for GET /prices/{SECURITY}: ConnectError")
+
+
+def test_the_tls_stand_in_serves_and_stops_beside_a_connection_that_never_shakes_hands(tmp_path: Path) -> None:
+    """The stand-in for another service shakes each connection's hand in that connection's own thread, within a timeout,
+    so one that opens and sends nothing, as a client's aborted handshake can leave one, never holds up the others or the
+    server's stop: in the accepting thread it did, and hung a Windows runner until pytest's timeout took the worker."""
+    bundle, context = _authority(tmp_path)
+    with _serving(context) as port, socket.create_connection(("127.0.0.1", port)):  # open, and silent
+        trusting = _quoted({"url": f"https://127.0.0.1:{port}", "ca_bundle": str(bundle)})
+    assert trusting.json() == {"security": SECURITY, "price": 99.50}
 
 
 @SLOW_REFUSAL

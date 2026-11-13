@@ -295,6 +295,8 @@ def signin(tmp_path: Path) -> Iterator[Signin]:
     served: Signin | None = None
 
     class Handler(BaseHTTPRequestHandler):
+        timeout = 10  # a connection's handshake and request, so a silent one ends its own thread
+
         def do_GET(self) -> None:
             assert served is not None
             served.fetches += 1
@@ -312,7 +314,7 @@ def signin(tmp_path: Path) -> Iterator[Signin]:
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
-    server.socket = server_context.wrap_socket(server.socket, server_side=True)
+    server.socket = server_context.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)  # each handshake in its connection's thread
     served = Signin(url=f"https://127.0.0.1:{server.server_address[1]}/.well-known/jwks.json", ca_bundle=ca_bundle)
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
