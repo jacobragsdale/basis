@@ -13,8 +13,11 @@
 |---|---|---|
 | `database(name, dialect=, deadline_s=, max_concurrent=)` | a SQL database, through its read login alone | basis-core's `BASIS_DATABASES__NAME__*` |
 | `folder(name)` | a shared folder | basis-core's `BASIS_FOLDERS__NAME__PATH` |
+| `lake(name)` | a lake's container | basis-core's `BASIS_LAKES__NAME__*` |
+| `http(name, deadline_s=)` | another service, answering JSON | basis-core's `BASIS_HTTP__NAME__*`, its login among them |
 | `query(name, database, sql, Row, binds=, ttl_s=, stale_s=)` | the rows a SQL file selects, binding only `binds` | its database |
-| `file(name, folder, path, Row, ttl_s=, stale_s=)` | a CSV or Parquet file in a folder | its folder |
+| `file(name, source, path, Row, sheet=, binds=, ttl_s=, stale_s=)` | a CSV, Parquet or a workbook's sheet in a folder, or Parquet in a lake, its path naming its params | its folder or lake |
+| `fetch(name, service, path, Row, binds=, rows_at=, ttl_s=, stale_s=)` | the JSON rows a GET answers, its params in the query | its service |
 | `view(name, function, Row, **inputs)` | a pure function's frame, of datasets and params | its inputs |
 
 - **A dataset's row** is a `bd.Row`, basis-core's, whose refusals name the fix in `bd.` words; every frame a dataset
@@ -24,7 +27,7 @@
   declared dialect, Oracle's `:as_of` or SQL Server's `%(as_of)s`. Building the app opens every file and checks its
   binds against the declared params, before any environment is read (`check`): a file that is missing, binds a name
   it does not declare, leaves a declared param unbound, or binds in the other dialect's form, is refused.
-- **Freshness is declared, never assumed**: a query and a file state `ttl_s`, how long a value is served before it is
+- **Freshness is declared, never assumed**: a query, a file and a fetch state `ttl_s`, how long a value is served before it is
   read again, and `stale_s`, how much longer a value past it may still be shown when a reload fails. There is no
   default for either, and a dataset that does not say is refused where it is declared, with the fix. A view's
   freshness is its inputs'.
@@ -37,6 +40,7 @@
 
 import inspect
 import math
+import string
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
@@ -63,7 +67,9 @@ BIND_TYPES: tuple[type, ...] = (str, float, int, bool, date)
 """The types a param may have: what a query binds, and a cache key holds."""
 DIALECTS: tuple[Dialect, ...] = ("mssql", "oracle")
 FILES = (".csv", ".parquet")
-"""The files `file` reads, by their suffix."""
+"""The files `file` reads from a folder, by their suffix, besides workbooks."""
+WORKBOOKS = (".xlsx", ".xlsm", ".xlsb", ".xls")
+"""The workbooks `file` reads a sheet of, from a folder, as `basis.core.folders.EXCEL` lists them, with `basis-core[excel]`."""
 
 
 @dataclass(frozen=True, eq=False)
@@ -82,7 +88,20 @@ class Folder:
     name: str
 
 
-type Resource = Database | Folder
+@dataclass(frozen=True, eq=False)
+class Lake:
+    name: str
+
+
+@dataclass(frozen=True, eq=False)
+class Service:
+    name: str
+    deadline_s: float
+    """Seconds each call may take, from the first byte sent to the last byte of the reply."""
+
+
+type Resource = Database | Folder | Lake | Service
+RESOURCES = (Database, Folder, Lake, Service)
 
 
 @dataclass(frozen=True, eq=False, kw_only=True)
@@ -124,9 +143,11 @@ class Query(Dataset):
 @dataclass(frozen=True, eq=False, kw_only=True)
 class File(Dataset):
     kind: ClassVar[str] = "file"
-    folder: Folder
+    folder: Folder | Lake
     path: str
-    """The file's path inside its folder."""
+    """The file's path inside its folder or lake, each `{param}` in it a param's value, a date as ISO text."""
+    sheet: str | None = None
+    """The sheet of a workbook it reads, or None for a CSV or Parquet file."""
     ttl_s: float
     stale_s: float
     reload_s: float | None = None
@@ -135,6 +156,23 @@ class File(Dataset):
     @override
     def resources(self) -> tuple[Resource, ...]:
         return (self.folder,)
+
+
+@dataclass(frozen=True, eq=False, kw_only=True)
+class Fetch(Dataset):
+    kind: ClassVar[str] = "fetch"
+    service: Service
+    path: str
+    """The service's own path, after its base URL; each param is sent in the query, by its name."""
+    rows_at: str | None
+    """The dotted path to the list of rows in the reply, as `result.items`, or None where the reply is the list."""
+    ttl_s: float
+    stale_s: float
+    reload_s: float | None = None
+
+    @override
+    def resources(self) -> tuple[Resource, ...]:
+        return (self.service,)
 
 
 @dataclass(frozen=True, eq=False, kw_only=True)
@@ -207,23 +245,96 @@ def query(
     )
 
 
-def file(name: str, folder: Folder, path: str, row: type[core_rows.Row], *, ttl_s: float | None = None, stale_s: float | None = None, reload_s: float | None = None) -> File:
-    """The CSV or Parquet file at `path` inside `folder`, as `row`'s columns: a CSV's every field read as text, which
-    the row types, so nothing is inferred."""
+def file(
+    name: str,
+    source: Folder | Lake,
+    path: str,
+    row: type[core_rows.Row],
+    *,
+    sheet: str | None = None,
+    binds: Mapping[str, type] | None = None,
+    ttl_s: float | None = None,
+    stale_s: float | None = None,
+    reload_s: float | None = None,
+) -> File:
+    """The file at `path` inside `source`, a folder or a lake, as `row`'s columns: a CSV's every field read as text,
+    which the row types, so nothing is inferred; a Parquet file, or a lake's folder of them, as it is typed; or a
+    workbook's `sheet`, from a folder, each cell as text. Each `{param}` in `path` is one of `binds`, as
+    `marks/{as_of}.csv`."""
     named = _named(name, "file")
-    if not isinstance(folder, Folder):
-        msg = f"file {name} reads from {folder!r}: give the folder it is in, declared with bd.folder(NAME)"
+    if not isinstance(source, Folder | Lake):
+        msg = f"file {name} reads from {source!r}: give the folder or lake it is in, declared with bd.folder(NAME) or bd.lake(NAME)"
         raise DeclarationError(msg)
     try:
-        inside(path, folder.name)
+        inside(path, source.name)
     except OutsideError as error:
         msg = f"file {name}: {error}"
         raise DeclarationError(msg) from error
-    if PurePosixPath(path).suffix.lower() not in FILES:
-        msg = f"file {name} reads {path!r}: give a file it reads, whose name ends {' or '.join(FILES)}"
+    params = _params(name, binds or {})
+    named_in_path = _placeholders(name, path)
+    if named_in_path != set(params):
+        names, bound = ", ".join(sorted(named_in_path)) or "no param", ", ".join(sorted(params)) or "none"
+        msg = f"file {name}'s path names {names}, and it binds {bound}: name each param in its path once, as {{as_of}}, and bind each it names"
+        raise DeclarationError(msg)
+    suffix = PurePosixPath(path).suffix.lower()
+    if isinstance(source, Lake) and suffix not in {".parquet", ""}:
+        msg = f"file {name} reads {path!r} from lake {source.name}: give a Parquet file, or a folder of them"
+        raise DeclarationError(msg)
+    if isinstance(source, Folder) and suffix not in FILES + WORKBOOKS:
+        msg = f"file {name} reads {path!r}: give a file it reads, whose name ends {', '.join(FILES + WORKBOOKS)}"
+        raise DeclarationError(msg)
+    if (suffix in WORKBOOKS) != (sheet is not None):
+        msg = f"file {name} reads {path!r}: name the sheet of a workbook it reads, as sheet='Positions', and no sheet of any other file"
         raise DeclarationError(msg)
     ttl, stale = _freshness(name, ttl_s, stale_s)
-    return File(name=named, row=_row(name, row), params={}, module=_caller(), folder=folder, path=path, ttl_s=ttl, stale_s=stale, reload_s=_reload(name, reload_s))
+    return File(name=named, row=_row(name, row), params=params, module=_caller(), folder=source, path=path, sheet=sheet, ttl_s=ttl, stale_s=stale, reload_s=_reload(name, reload_s))
+
+
+def lake(name: str) -> Lake:
+    """A lake's container, whose settings are basis-core's `BASIS_LAKES__NAME__*`."""
+    return Lake(_named(name, "lake"))
+
+
+def http(name: str, *, deadline_s: float) -> Service:
+    """Another HTTP service that answers in JSON, whose base URL is basis-core's setting `BASIS_HTTP__NAME__URL`, with
+    its login, CA bundle and proxy beside it, each call within `deadline_s`."""
+    named = _named(name, "http")
+    try:
+        seconds = resources.seconds(name, deadline_s)
+    except resources.ResourceError as error:
+        raise DeclarationError(str(error)) from error
+    return Service(named, seconds)
+
+
+def fetch(
+    name: str,
+    service: Service,
+    path: str,
+    row: type[core_rows.Row],
+    *,
+    binds: Mapping[str, type] | None = None,
+    rows_at: str | None = None,
+    ttl_s: float | None = None,
+    stale_s: float | None = None,
+    reload_s: float | None = None,
+) -> Fetch:
+    """The rows `service` answers a GET of `path` with, a JSON list of objects, one per row, each of `row`'s columns
+    by its name, read as text, as a CSV's is, and typed by the row; `rows_at` names the list where the reply is an
+    object that holds it, as `result.items`. Each of `binds` is sent in the query, by its name, a date as ISO text."""
+    named = _named(name, "fetch")
+    if not isinstance(service, Service):
+        msg = f"fetch {name} reads from {service!r}: give the service it calls, declared with bd.http(NAME, deadline_s=...)"
+        raise DeclarationError(msg)
+    if not isinstance(path, str) or not path.startswith("/") or "?" in path or "#" in path or "{" in path:
+        msg = f"fetch {name}'s path is {path!r}: give the service's own path, after its base URL, as /positions, with no query: its params are sent in the query"
+        raise DeclarationError(msg)
+    if rows_at is not None and not all(part.isidentifier() for part in rows_at.split(".")):
+        msg = f"fetch {name}'s rows_at is {rows_at!r}: give the dotted path to the list of rows in the reply, as result.items"
+        raise DeclarationError(msg)
+    ttl, stale = _freshness(name, ttl_s, stale_s)
+    return Fetch(
+        name=named, row=_row(name, row), params=_params(name, binds or {}), module=_caller(), service=service, path=path, rows_at=rows_at, ttl_s=ttl, stale_s=stale, reload_s=_reload(name, reload_s)
+    )
 
 
 def view(name: str, function: Callable[..., object], row: type[core_rows.Row], /, **inputs: Dataset) -> View:
@@ -260,8 +371,8 @@ def check(app_name: str, resources_: Sequence[object]) -> list[Dataset]:
     problems: list[str] = []
     seen: dict[tuple[type, str], int] = {}
     for resource in resources_:
-        if not isinstance(resource, Database | Folder):
-            problems.append(f"app {app_name} lists {resource!r} in its resources: list what it reads, each declared with bd.database or bd.folder")
+        if not isinstance(resource, RESOURCES):
+            problems.append(f"app {app_name} lists {resource!r} in its resources: list what it reads, each declared with bd.database, bd.folder, bd.lake or bd.http")
             continue
         seen[type(resource), resource.name] = seen.get((type(resource), resource.name), 0) + 1
     problems.extend(f"app {app_name} lists more than one {kind.__name__.lower()} named {name}: declare each once" for (kind, name), count in seen.items() if count > 1)
@@ -322,6 +433,19 @@ def _freshness(name: str, ttl_s: float | None, stale_s: float | None) -> tuple[f
             msg = f"{name}'s {what} is {value!r}: give it seconds {least}"
             raise DeclarationError(msg)
     return float(ttl_s), float(stale_s)
+
+
+def _placeholders(name: str, path: str) -> set[str]:
+    try:
+        parts = list(string.Formatter().parse(path))
+    except ValueError as error:
+        msg = f"file {name}'s path {path!r} cannot be read ({error}): name each param as {{as_of}}"
+        raise DeclarationError(msg) from error
+    found = [field for _, field, spec, conversion in parts if field is not None]
+    if any(not field or spec or conversion for _, field, spec, conversion in parts if field is not None) or len(found) != len(set(found)):
+        msg = f"file {name}'s path {path!r} names a param with a format, none, or more than once: name each once, as {{as_of}}"
+        raise DeclarationError(msg)
+    return set(found)
 
 
 def _reload(name: str, reload_s: float | None) -> float | None:

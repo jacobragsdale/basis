@@ -68,7 +68,7 @@ def test_a_dataset_that_does_not_say_how_fresh_it_must_be_is_refused_where_it_is
     with pytest.raises(bd.DeclarationError, match=message):
         bd.query("positions", warehouse, "sql/positions.sql", Position, **freshness)  # ty: ignore[invalid-argument-type] -- each case gives a wrong value on purpose
     with pytest.raises(bd.DeclarationError, match=message):
-        bd.file("positions", bd.folder("desk"), "positions.csv", Position, **freshness)
+        bd.file("positions", bd.folder("desk"), "positions.csv", Position, **freshness)  # ty: ignore[invalid-argument-type] -- each case gives a wrong value on purpose
 
 
 @pytest.mark.parametrize(
@@ -106,7 +106,7 @@ def test_a_file_reads_a_csv_or_parquet_inside_its_folder() -> None:
     assert bd.file("marks", desk, "marks/2026-11.csv", Position, ttl_s=60, stale_s=0).folder is desk
     with pytest.raises(bd.DeclarationError, match="no path inside the folder desk"):
         bd.file("marks", desk, "../marks.csv", Position, ttl_s=60, stale_s=0)
-    with pytest.raises(bd.DeclarationError, match=r"whose name ends \.csv or \.parquet"):
+    with pytest.raises(bd.DeclarationError, match=r"whose name ends \.csv, \.parquet, \.xlsx"):
         bd.file("marks", desk, "marks.json", Position, ttl_s=60, stale_s=0)
 
 

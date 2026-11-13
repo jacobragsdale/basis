@@ -93,6 +93,7 @@ def build(app: App, *, settings: Settings | None = None, environment: str | None
             yield {}
         finally:
             runtime.stop()
+            await runtime.close()
             lifecycle.advance(Stage.STOPPING)
             await asyncio.to_thread(provider.shutdown)  # exports the spans still queued, which blocks
             lifecycle.advance(Stage.STOPPED)

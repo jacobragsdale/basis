@@ -17,21 +17,29 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import anyio
+import httpx2
+import orjson
 import pandas as pd
 import pyarrow as pa
+import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 from opentelemetry.trace import Tracer
 
-from basis.core import frames, traces
+from basis.core import fakes as core_fakes
+from basis.core import frames, opened, traces
 from basis.core.databases import Bind, Statements, open_database
-from basis.core.errors import ServiceError, Timeout
+from basis.core.errors import BadReply, ServiceError, Timeout, Unavailable
 from basis.core.folders import Folder as OpenFolder
 from basis.core.folders import folder as open_folder
+from basis.core.lake import Lake as OpenLake
+from basis.core.lake import lake as open_lake
+from basis.core.opened import HttpClient
+from basis.core.resources import HttpResource
 from basis.core.rows import conform
-from basis.core.settings import MssqlSettings, SettingsError
+from basis.core.settings import MssqlSettings, SettingsError, variable
 from basis.dash import loads
 from basis.dash.cache import Cache, Entry, Key, key
-from basis.dash.declarations import Database, Dataset, File, Folder, Query, View
+from basis.dash.declarations import RESOURCES, Database, Dataset, Fetch, File, Folder, Lake, Query, Service, View
 from basis.dash.errors import DeclarationError
 from basis.dash.loads import LoadError
 from basis.dash.settings import Settings
@@ -66,14 +74,20 @@ class Runtime:
         self.sql = {dataset.name: dataset.sql.read_text(encoding="utf-8") for dataset in datasets if isinstance(dataset, Query)}
         self._databases: dict[int, _Database] = {}
         self._folders: dict[int, OpenFolder] = {}
-        fakes = {key.name if isinstance(key, Database | Folder) else key: fake for key, fake in fakes.items()} if fakes is not None else None
+        self._lakes: dict[int, OpenLake] = {}
+        self._services: dict[int, tuple[HttpClient, httpx2.AsyncClient]] = {}
+        fakes = {key.name if isinstance(key, RESOURCES) else key: fake for key, fake in fakes.items()} if fakes is not None else None
         _check_fakes(app_name, resources, fakes)
         for resource in resources:
-            given = fakes.get(resource.name) if fakes is not None and isinstance(resource, Database | Folder) else None
+            given = fakes.get(resource.name) if fakes is not None and isinstance(resource, RESOURCES) else None
             if isinstance(resource, Database):
                 self._databases[id(resource)] = _Database(resource, _port(resource, given, settings))
             elif isinstance(resource, Folder):
                 self._folders[id(resource)] = _folder(resource, given, settings)
+            elif isinstance(resource, Lake):
+                self._lakes[id(resource)] = _lake(resource, given, settings)
+            elif isinstance(resource, Service):
+                self._services[id(resource)] = _service(resource, given, settings, tracer)
 
     def start(self) -> None:
         """Start: each database's limiter, in the running loop, and this the process's runtime."""
@@ -84,6 +98,11 @@ class Runtime:
     def stop(self) -> None:
         if loads.running is self:
             loads.running = None
+
+    async def close(self) -> None:
+        """Close each service's client, once the app has stopped."""
+        for _, client in self._services.values():
+            await client.aclose()
 
     async def load(self, dataset: Dataset, params: Mapping[str, Hashable]) -> pd.DataFrame:
         return frames.from_arrow((await self.fetch(dataset, params)).table)
@@ -157,11 +176,13 @@ class Runtime:
         if isinstance(dataset, Query):
             table = await self._query(dataset, params)
         elif isinstance(dataset, File):
-            table = await anyio.to_thread.run_sync(self._file, dataset)
+            table = await anyio.to_thread.run_sync(self._file, dataset, params)
+        elif isinstance(dataset, Fetch):
+            table = await self._fetch(dataset, params)
         else:
             msg = f"{dataset.name} is a {dataset.kind}, which no load reads"
             raise LoadError(msg)
-        ttl_s, stale_s = (dataset.ttl_s, dataset.stale_s) if isinstance(dataset, Query | File) else (0.0, 0.0)
+        ttl_s, stale_s = (dataset.ttl_s, dataset.stale_s) if isinstance(dataset, Query | File | Fetch) else (0.0, 0.0)
         return self.cache.put(found, table, loaded_at=loaded_at, ttl_s=ttl_s, stale_s=stale_s)
 
     async def _view(self, dataset: View, params: Mapping[str, Hashable], inputs: Sequence[Entry], found: Key) -> Entry:
@@ -198,15 +219,43 @@ class Runtime:
             msg = f"database {declared.name} did not answer query {dataset.name} within its deadline of {declared.deadline_s:g}s"
             raise Timeout(msg, resource=declared.name) from error
 
-    def _file(self, dataset: File) -> pa.Table:
-        opened = self._folders[id(dataset.folder)]
+    def _file(self, dataset: File, params: Mapping[str, Hashable]) -> pa.Table:
+        path = dataset.path.format(**loads.shown(params))
         with traces.tracing(self.tracer):
-            content = opened.read_bytes(dataset.path)
-        if dataset.path.lower().endswith(".parquet"):
-            frame = frames.from_arrow(pq.read_table(io.BytesIO(content)))
-        else:  # every field as text, which the row types, so nothing is inferred
-            frame = pd.read_csv(io.BytesIO(content), dtype=str, keep_default_na=False, na_filter=False)
+            if isinstance(dataset.folder, Lake):
+                store = self._lakes[id(dataset.folder)]
+                where = f"{store.container}/{path}"
+                try:
+                    frame = frames.from_arrow(pq.read_table(where, filesystem=store.fs))
+                except (OSError, pa.ArrowException) as error:
+                    msg = f"lake {store.name} could not give {store.where(path)}"
+                    raise Unavailable(msg, resource=store.name, reason=" ".join(str(error).split())) from error
+            else:
+                opened = self._folders[id(dataset.folder)]
+                if dataset.sheet is not None:
+                    frame = opened.read_sheet(path, dataset.sheet)
+                else:
+                    content = opened.read_bytes(path)
+                    if path.lower().endswith(".parquet"):
+                        frame = frames.from_arrow(pq.read_table(io.BytesIO(content)))
+                    else:  # every field as text, which the row types, so nothing is inferred
+                        frame = pd.read_csv(io.BytesIO(content), dtype=str, keep_default_na=False, na_filter=False)
         return frames.to_arrow(conform(frame, dataset.row, what=f"file {dataset.name}", naive="in_zone"))
+
+    async def _fetch(self, dataset: Fetch, params: Mapping[str, Hashable]) -> pa.Table:
+        client, _ = self._services[id(dataset.service)]
+        query = loads.shown(params)
+        response = await client.request("GET", dataset.path, query=dict(query) or None, attributes={"basis.dataset": dataset.name})
+
+        def rows() -> pa.Table:
+            try:
+                frame = json_rows(response.content, dataset.rows_at)
+            except ValueError as error:
+                msg = f"{dataset.service.name} answered GET {dataset.path} with a body that is not rows of {dataset.row.__name__}"
+                raise BadReply(msg, resource=dataset.service.name, status=response.status_code, reason=str(error)) from error
+            return frames.to_arrow(conform(frame, dataset.row, what=f"fetch {dataset.name}", naive="in_zone"))
+
+        return await anyio.to_thread.run_sync(rows)
 
 
 def _unversioned(found: Key) -> Key:
@@ -215,11 +264,37 @@ def _unversioned(found: Key) -> Key:
     return name, tuple((param, value) for param, value in params if not param.endswith(" version"))
 
 
+def json_rows(content: bytes, rows_at: str | None) -> pd.DataFrame:
+    """A JSON reply's rows, a list of objects, at the dotted `rows_at` or the reply itself, as a frame of each value's
+    text, as a CSV's arrives, so the row types it; a value that is an object or a list, or a row that is no object, is
+    refused, and a field an object leaves out is null."""
+    found: object = orjson.loads(content)
+    for part in rows_at.split(".") if rows_at is not None else ():
+        found = found.get(part) if isinstance(found, dict) else None
+    if not isinstance(found, list):
+        msg = f"the reply holds no list of rows{f' at {rows_at}' if rows_at is not None else ''}"
+        raise ValueError(msg)  # noqa: TRY004 -- a reply's shape, which the caller makes a BadReply
+    columns: dict[str, list[str | None]] = {}
+    for position, entry in enumerate(found):
+        if not isinstance(entry, dict):
+            msg = f"row {position} is a {type(entry).__name__}, not an object"
+            raise ValueError(msg)  # noqa: TRY004 -- as above
+        for name, value in entry.items():
+            if isinstance(value, dict | list):
+                msg = f"row {position}'s {name} is a JSON {type(value).__name__}, which no column holds"
+                raise ValueError(msg)  # noqa: TRY004 -- as above
+            columns.setdefault(str(name), [None] * position)
+        for name, values in columns.items():
+            value = entry.get(name)
+            values.append(None if value is None else ("true" if value is True else "false" if value is False else str(value)))
+    return frames.from_arrow(pa.table({name: pa.array(values, pa.string()) for name, values in columns.items()}) if columns else pa.table({}))
+
+
 def _check_fakes(app_name: str, resources: Sequence[object], fakes: Mapping[Any, object] | None) -> None:
     """Fakes for every resource or for none, so a fake never meets a real database."""
     if fakes is None:
         return
-    names = {resource.name for resource in resources if isinstance(resource, Database | Folder)}
+    names = {resource.name for resource in resources if isinstance(resource, RESOURCES)}
     if unfaked := sorted(names - set(fakes)):
         msg = f"app {app_name} is given fakes, and none for {', '.join(unfaked)}: give a fake of every resource, since a fake never meets a real one"
         raise DeclarationError(msg)
@@ -253,4 +328,30 @@ def _folder(declared: Folder, fake: object, settings: Settings) -> OpenFolder:
     if isinstance(fake, Path | str):
         return OpenFolder(declared.name, Path(fake))
     msg = f"the fake of folder {declared.name} is a {type(fake).__qualname__}: give the path of a folder of test files"
+    raise DeclarationError(msg)
+
+
+def _lake(declared: Lake, fake: object, settings: Settings) -> OpenLake:
+    if fake is None:
+        return open_lake(declared.name, settings)
+    if isinstance(fake, OpenLake):
+        return fake
+    if isinstance(fake, Path | str):
+        return OpenLake(declared.name, str(Path(fake).resolve()), pafs.LocalFileSystem())
+    msg = f"the fake of lake {declared.name} is a {type(fake).__qualname__}: give the path of a folder that stands in for its container"
+    raise DeclarationError(msg)
+
+
+def _service(declared: Service, fake: object, settings: Settings, tracer: Tracer) -> tuple[HttpClient, httpx2.AsyncClient]:
+    resource = HttpResource(declared.name, declared.deadline_s)
+    if fake is None:
+        if (found := settings.http.get(declared.name)) is None:
+            msg = f"the service {declared.name} is not configured, and the app reads it: set {variable(('http', declared.name, 'url'))}, as .env.example shows"
+            raise SettingsError(msg)
+        client = opened.client(declared.name, found)
+        return HttpClient(resource, client, tracer), client
+    if isinstance(fake, core_fakes.Http):
+        client = fake.client(declared.name)
+        return HttpClient(resource, client, tracer, waits=fake.waits), client
+    msg = f"the fake of service {declared.name} is a {type(fake).__qualname__}: give basis-core's fakes.Http, of an ASGI app that answers as the service does"
     raise DeclarationError(msg)

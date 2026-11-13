@@ -530,6 +530,16 @@ turns a fake run real. `bd.testing.client(app)` builds the app on the fakes it d
 Fakes stand in for every resource or none. `fixtures` is imported as a module, `from basis.dash import fixtures`,
 never through `bd`, since it reaches basis-core's fakes, which an app's own modules never load.
 
+**More sources** (15.7). `bd.http(name, deadline_s=)` is another service, basis-core's `BASIS_HTTP__NAME__*` with
+the logins of step 12.2, reached through basis-core's client, its GETs made again while the deadline allows;
+`bd.fetch(name, SERVICE, path, Row, binds=, rows_at=, ttl_s=, stale_s=)` is the JSON rows it answers a GET with, each
+param in the query, each value read as text and typed by the row, a reply that is not rows a `BadReply`. `bd.lake(name)`
+is a lake's container, basis-core's `BASIS_LAKES__NAME__*`, and `bd.file` reads Parquet from it, a file or a folder of
+them; from a folder, `bd.file` reads a CSV, Parquet or, with `sheet=`, a workbook's sheet as text (`basis-core[excel]`).
+A file's path may name its params, `marks/{as_of}.csv`, each declared in `binds=` and named once. A fake service is
+basis-core's `fakes.Http` of an ASGI app; a lake's is a folder that stands in for its container. Paging, which a job's
+fetch has, waits until an app needs it.
+
 **Refresh** (`basis.dash.refreshing`, 15.6). `bd.refresh(id, every_s=)` is a `dcc.Interval`, at least 5 s, whose
 `n_intervals` a page's callbacks take as an input; each load still answers from the cache while its value is fresh, so
 a timer never reads more often than a dataset's `ttl_s`. `bd.reload(DATASET, **params)`, which a button's callback

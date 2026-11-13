@@ -46,7 +46,7 @@ from basis.core.errors import DATABASE_KINDS, ServiceError
 from basis.core.fakes import Failures
 from basis.core.rows import SchemaError, conform
 from basis.dash.app import App
-from basis.dash.declarations import Database, Folder, Query, datasets
+from basis.dash.declarations import RESOURCES, Database, Query, datasets
 from basis.dash.errors import DeclarationError
 
 FOLDER = "fixtures"
@@ -157,7 +157,8 @@ def database(declared: Database, folder: str | Path = FOLDER) -> FixtureDatabase
 
 
 def folder(path: str | Path) -> Path:
-    """A fake of a folder: the folder `path`, relative to the repo, whose files stand in for the shared folder's."""
+    """A fake of a folder, or of a lake: the folder `path`, relative to the repo, whose files stand in for the shared
+    folder's or the lake container's."""
     return _in_repo(path)
 
 
@@ -192,7 +193,7 @@ def of(app: App) -> dict[str, object]:
 
 
 def _named(key: Hashable, reference: str) -> str:
-    if isinstance(key, Database | Folder):
+    if isinstance(key, RESOURCES):
         return key.name
     if isinstance(key, str):
         return key
