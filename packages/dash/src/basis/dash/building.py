@@ -36,7 +36,7 @@ import dash
 from basis.core import traces
 from basis.core.serving import Lifecycle, Stage
 from basis.core.serving import requests as boundary
-from basis.dash import declarations, errors, internals, shell
+from basis.dash import declarations, errors, internals, shell, states
 from basis.dash.app import App
 from basis.dash.errors import DeclarationError
 from basis.dash.runtime import Runtime
@@ -134,7 +134,7 @@ def build(app: App, *, settings: Settings | None = None, environment: str | None
         enable_mcp=False,
         shared_storage=None,
         add_log_handler=False,
-        on_error=errors.on_error,
+        on_error=states.on_error(errors.on_error),  # the app's handler, then each failed output's mark
         suppress_callback_exceptions=False,
         url_base_pathname=base,
         requests_pathname_prefix=requests,

@@ -35,9 +35,9 @@ from basis.core.calendars import calendar as named_calendar
 from basis.core.display import SYMBOLS, Display, Format
 from basis.core.rows import Row
 from basis.core.tables import Column
-from basis.dash import texts, theme
+from basis.dash import states, texts, theme
 from basis.dash.errors import DeclarationError
-from dash import dcc
+from dash import dcc, html
 
 CONFIG: Final[dcc.Graph.Config] = {
     "displayModeBar": "hover",
@@ -74,9 +74,11 @@ _CELL_LABELS: Final = 200
 type Orientation = Literal["v", "h"]
 
 
-def graph(id: str, *, figure: go.Figure | None = None, height: int = HEIGHT) -> dcc.Graph:  # noqa: A002 -- a component's id, as Dash names it
-    """A graph at `id`, `height` pixels tall, showing `figure`, or an empty state until a callback gives one."""
-    return dcc.Graph(id=id, figure=(figure if figure is not None else empty()).to_plotly_json(), config=CONFIG, style={"height": f"{height}px"}, className="basis-graph")
+def graph(id: str, *, figure: go.Figure | None = None, height: int = HEIGHT, dataset: object = None) -> html.Div:  # noqa: A002 -- a component's id, as Dash names it
+    """A graph at `id`, `height` pixels tall, showing `figure`, or nothing until a callback gives one, with its marks
+    at its top right, stale by `dataset` or not updated (`basis.dash.states`)."""
+    shown = dcc.Graph(id=id, figure=(figure if figure is not None else empty("")).to_plotly_json(), config=CONFIG, style={"height": f"{height}px"}, className="basis-graph")
+    return html.Div([html.Div(states.marks(id, "figure", dataset), className="basis-marks basis-graph-marks"), states.loading(shown, id, ["figure"])], className="basis-graph-frame")
 
 
 def empty(message: str = EMPTY) -> go.Figure:

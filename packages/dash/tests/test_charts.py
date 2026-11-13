@@ -202,12 +202,14 @@ def test_ticks_are_round_values_in_the_column_s_format(low: float, high: float, 
 
 
 def test_the_graph_shows_the_mode_bar_on_hover_alone_and_no_logo() -> None:
-    made = bd.graph("graph-made").to_plotly_json()["props"]
+    frame = json.loads(json.dumps(bd.graph("graph-made"), default=lambda found: found.to_plotly_json()))
+    made = frame["props"]["children"][1]["props"]["children"]["props"]  # the graph, inside its loading state
     assert made["config"]["displayModeBar"] == "hover"
     assert made["config"]["displaylogo"] is False
     assert {"lasso2d", "select2d"} <= set(made["config"]["modeBarButtonsToRemove"])
     assert made["style"] == {"height": f"{charts.HEIGHT}px"}
-    assert made["figure"]["layout"]["annotations"][0]["text"] == charts.EMPTY
+    assert made["id"] == "graph-made"
+    assert made["figure"]["layout"]["xaxis"]["visible"] is False  # nothing, not empty axes, until a callback answers
 
 
 def test_the_template_keeps_a_title_above_the_legend() -> None:

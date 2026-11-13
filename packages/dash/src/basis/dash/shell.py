@@ -14,12 +14,12 @@ from typing import Final
 import dash_mantine_components as dmc
 
 import dash
-from basis.dash import theme
+from basis.dash import states, theme
 from basis.dash.app import App
 from basis.dash.grids import SEARCH
 from basis.dash.icons import icon
 from basis.dash.ids import NOTIFICATIONS, STATUS
-from basis.dash.pages import FRESHNESS, Page
+from basis.dash.pages import FRESHNESS, Layout, Page
 from dash import ALL, MATCH, ClientsideFunction, Input, Output, State, dcc, html
 from dash.development.base_component import Component
 
@@ -69,16 +69,29 @@ def links(pages: Sequence[Page]) -> list[Component]:
 
 def wire(made: dash.Dash, app: App) -> None:
     """basis's own callbacks, on `made` itself, since they are basis's and no module's, each in the browser alone: the
-    switch, every page's freshness line, from the status store, every grid's quick filter, and each filter of `app`'s
-    pages, which writes its value to the URL's query string as it changes."""
+    switch, every page's freshness line and every stale mark, from the status store, each failed mark, cleared by its
+    component's next answer, every grid's quick filter, and each filter of `app`'s pages, which writes its value to the
+    URL's query string as it changes."""
     made.clientside_callback(ClientsideFunction(namespace="basis", function_name="scheme"), Output(SCHEME, "aria-label"), Input(SCHEME, "n_clicks"))
     fresh = {"type": FRESHNESS, "page": ALL, "datasets": ALL}
     made.clientside_callback(ClientsideFunction(namespace="basis", function_name="freshness"), Output(fresh, "children"), Output(fresh, "className"), Output(fresh, "title"), Input(STATUS, "data"))
     remembered = sorted({(found.id, found.prop) for page in app.pages for found in page.filters})
     for name, prop in remembered:
         made.clientside_callback(ClientsideFunction(namespace="basis", function_name="remember"), Output(URL, "data", allow_duplicate=True), Input(name, prop), prevent_initial_call=True)
+    stale = {"type": states.STALE, "of": ALL, "dataset": ALL}
+    made.clientside_callback(ClientsideFunction(namespace="basis", function_name="staleness"), Output(stale, "className"), Input(STATUS, "data"))
+    marked = sorted({(mark["of"], mark["prop"]) for page in app.pages for mark in states.found_marks(_built(page.layout))})
+    for name, prop in marked:
+        made.clientside_callback(
+            ClientsideFunction(namespace="basis", function_name="recovered"), Output({"type": states.FAILED, "of": name, "prop": prop}, "className"), Input(name, prop), prevent_initial_call=True
+        )
     search = {"type": SEARCH, "grid": MATCH}
     made.clientside_callback(ClientsideFunction(namespace="basis", function_name="search"), Output(search, "className"), Input(search, "value"), State(search, "id"), prevent_initial_call=True)
+
+
+def _built(layout: Layout) -> Component:
+    """A page's layout as a component tree: built with no query where it is a function, as Dash's own check builds it."""
+    return layout if isinstance(layout, Component) else layout()
 
 
 def not_found(app: App) -> Component:

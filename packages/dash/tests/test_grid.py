@@ -75,7 +75,16 @@ def _sent(made: object) -> Any:  # noqa: ANN401 -- what Dash sends the browser, 
 
 def _table(made: object) -> Any:  # noqa: ANN401 -- likewise
     """The props of the AG Grid inside a grid."""
-    return next(part["props"] for part in _sent(made)["props"]["children"] if part["type"] == "AgGrid")
+    return _of_type(_sent(made), "AgGrid")[0]["props"]
+
+
+def _of_type(found: Any, kind: str) -> list[Any]:  # noqa: ANN401 -- likewise
+    if isinstance(found, list):
+        return [item for part in found for item in _of_type(part, kind)]
+    if not isinstance(found, dict):
+        return []
+    here = [found] if found.get("type") == kind else []
+    return here + [item for value in found.get("props", {}).values() for item in _of_type(value, kind)]
 
 
 def _columns() -> dict[str, Any]:
@@ -287,7 +296,7 @@ def test_the_grid_tells_the_browser_what_its_totals_are() -> None:
         "noun": "rows",
     }
     assert table["eventListeners"] == {event: ["basisTotals(params)"] for event in ("firstDataRendered", "rowDataUpdated", "modelUpdated", "pinnedRowDataChanged")}
-    count = next(part for part in _sent(GRID)["props"]["children"][0]["props"]["children"] if part["props"].get("className") == "basis-grid-count")
+    count = next(part for part in _of_type(_sent(GRID), "Span") if part["props"].get("className") == "basis-grid-count")
     assert count["props"]["role"] == "status"
 
 

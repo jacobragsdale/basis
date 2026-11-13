@@ -264,6 +264,7 @@
     var state = grids.get(api);
     if (!state) grids.set(api, (state = { mine: null, server: null, busy: false }));
     if (state.busy) return;
+
     var current = api.getGridOption("pinnedBottomRowData");
     if (current !== state.mine) state.server = current;
     var all = 0;
@@ -381,6 +382,37 @@
     var href = url.href.replace(/%2C/g, ","); /* a list reads as one in a link: book=Rates,Credit */
     if (href !== window.location.href) window.history.replaceState(window.history.state, "", href);
     return window.dash_clientside.no_update;
+  };
+
+  /* A component's marks (basis.dash.states): stale while the status store marks its dataset so; not updated from a
+     failed answer until its next one, which this clears. */
+  var MARK_HIDDEN = "basis-mark basis-mark-hidden";
+  basis.staleness = function (data) {
+    var context = window.dash_clientside.callback_context;
+    var outputs = (context && context.outputs_list) || [];
+    var known = data || {};
+    return outputs.map(function (output) {
+      var entry = known[output.id.dataset];
+      return entry && entry.stale ? "basis-mark basis-mark-stale" : MARK_HIDDEN;
+    });
+  };
+  basis.recovered = function () {
+    var context = window.dash_clientside.callback_context;
+    var output = context && context.outputs_list;
+    var grids = window.dash_ag_grid;
+    if (output && output.id && output.id.prop === "rowData" && grids && grids.getApiAsync) {
+      /* a grid's answer, its first among them: from here an empty grid says so, where before it had nothing to say */
+      grids.getApiAsync(output.id.of).then(
+        function (api) {
+          api.setGridOption("suppressNoRowsOverlay", false);
+          if (!api.getDisplayedRowCount() && api.showNoRowsOverlay) api.showNoRowsOverlay();
+        },
+        function () {
+          /* the grid is gone */
+        },
+      );
+    }
+    return MARK_HIDDEN;
   };
 
   basis.totalsOf = totalsOf;

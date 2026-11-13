@@ -25,7 +25,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from basis.core.display import Display
-from basis.dash import texts, theme
+from basis.dash import states, texts, theme
 from basis.dash.errors import DeclarationError
 from basis.dash.icons import icon
 from basis.dash.pages import COLUMNS
@@ -77,9 +77,11 @@ def stat(
     period: str | None = None,
     good: Good = "up",
     span: int = SPAN,
+    dataset: object = None,
 ) -> Stat:
     """A tile at `id`, named `label`, its value in `display`, its change in `change` (by default the value's own
-    format) over `period`, such as "since yesterday", and `good` the way a rise is good."""
+    format) over `period`, such as "since yesterday", and `good` the way a rise is good; its marks say when it is stale,
+    by `dataset`, or not updated. A callback answers its `children` at `id`."""
     if not label.strip():
         msg = f"stat {id} has no label: give it the words a person reads above its number"
         raise DeclarationError(msg)
@@ -93,7 +95,13 @@ def stat(
         msg = f"stat {id} spans 1 to {COLUMNS} columns, not {span!r}: give a whole number in that range"
         raise DeclarationError(msg)
     declared = Declared(label, display, change, period, good)
-    made = Stat(shown(declared, None), id=id, className="basis-card basis-stat", style={"gridColumn": f"span {span}"}, **{"aria-label": label})
+    content = states.loading(html.Div(shown(declared, None), id=id, className="basis-stat-content"), id, ["children"])
+    made = Stat(
+        [html.Div(states.marks(id, "children", dataset), className="basis-marks basis-stat-marks"), content],
+        className="basis-card basis-stat",
+        style={"gridColumn": f"span {span}"},
+        **{"aria-label": label},
+    )
     object.__setattr__(made, "declared", declared)  # beside the component, which Dash never sends
     return made
 

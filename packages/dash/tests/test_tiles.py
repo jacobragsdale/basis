@@ -51,7 +51,8 @@ def _text(found: Any) -> str:  # noqa: ANN401 -- likewise
 
 def test_a_tile_waits_with_its_label_and_a_dash() -> None:
     sent = _sent(MARKET_VALUE)
-    assert sent["props"]["id"] == "tile-mv"
+    [content] = _by_class(sent, "basis-stat-content")
+    assert content["props"]["id"] == "tile-mv"  # what a callback answers
     assert sent["props"]["style"] == {"gridColumn": "span 3"}
     assert sent["props"]["aria-label"] == "Market value"
     assert _text(_by_class(sent, "basis-stat-label")) == "Market value"

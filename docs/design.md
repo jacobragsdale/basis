@@ -703,6 +703,20 @@ year to date (and one month, three months, a year), each starting on its first b
 options from a dataset's column, for a callback to set. The bar's labels are quiet, a multiple select keeps to one
 line, and a weekend is drawn as a closed day, not in Mantine's red.
 
+**States, as built (16.8).** Every grid, graph and stat tile has the same four, and no page writes them
+(`basis.dash.states`). *Loading* is a `dcc.Loading` around the component that shows only once an answer to its data
+props has taken 400 ms, so a cached one never flickers: a 2 px bar along its top in the primary colour, still under
+reduced motion, and the content dimmed in place, never hidden, so nothing moves. *Empty* is the component's own: a grid
+says "No rows for this view" (AG Grid's `localeText`, text and never HTML, which dash-ag-grid rightly refuses to
+evaluate), only once it has had an answer, since before one it has nothing to say; a figure draws its sentence; a tile
+shows a dash. *Failed*: building gives Dash `states.on_error(errors.on_error)`, the data lane's handler and then, for
+each output of the failed callback that has a mark, a side update that shows "Not updated" on that component, with a
+title saying it shows what it showed before; one clientside callback per marked component clears the mark at its
+next answer. *Stale*: a component that names its dataset (`dataset=` on `bd.grid`, `bd.graph` and `bd.stat`) shows
+"Stale" while the status store marks it stale, from one clientside callback over the store. A mark sits at the grid's
+tools, a graph's top right, a tile's label. `bd.graph` is now a frame around the `dcc.Graph`, which keeps the id, and a
+tile's id is its content's, whose `children` a callback answers.
+
 **Two ids every page has.** basis's chrome around every page holds two components whose ids are fixed and exported
 from `basis.dash.ids`, so the data and display lanes build against them: `NOTIFICATIONS`, DMC's
 `NotificationContainer`, whose `sendNotifications` prop takes a list of notifications, each a dict of DMC's

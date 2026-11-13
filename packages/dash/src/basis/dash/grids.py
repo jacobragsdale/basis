@@ -39,7 +39,7 @@ import pandas as pd
 from basis.core.display import Display
 from basis.core.rows import Row
 from basis.core.tables import Column
-from basis.dash import texts, theme
+from basis.dash import states, texts, theme
 from basis.dash.errors import DeclarationError
 from basis.dash.icons import icon
 from dash import Patch, dcc, html
@@ -52,6 +52,8 @@ COUNT: Final = "basis-grid-count"
 """The type of a grid's count's id, `{"type": COUNT, "grid": ID}`, which basis's script writes: "50 of 300 rows"."""
 SEARCH: Final = "basis-grid-search"
 """The type of a grid's quick filter's id, `{"type": SEARCH, "grid": ID}`, which the shell's one callback reads."""
+EMPTY: Final = "No rows for this view"
+"""What a grid with no rows says."""
 HEIGHT: Final = 520
 """A grid's height in pixels, unless the page gives another: a large table scrolls inside it."""
 ACRONYMS: Final = frozenset(
@@ -132,11 +134,13 @@ def grid(
     height: int | None = HEIGHT,
     search: bool = True,
     noun: str = "rows",
+    dataset: object = None,
 ) -> Grid:
     """A grid of `row`'s columns at `id`, its rows known by `key`, with `totals` and `columns`' overrides, `height`
     pixels tall, or as tall as its rows where None, for a short table, and a quick filter unless `search` is False. Its
-    count names its rows `noun`: "300 holdings", or "50 of 300 holdings" while a filter is on. What a page lays out:
-    the grid, under its quick filter and its count."""
+    count names its rows `noun`: "300 holdings", or "50 of 300 holdings" while a filter is on; its marks say when it is
+    stale, by `dataset`, or not updated (`basis.dash.states`). What a page lays out: the grid, under its quick filter,
+    its count and its marks."""
     if not (isinstance(row, type) and issubclass(row, Row)):
         msg = f"grid {id}'s row is {row!r}: give a bd.Row subclass, whose columns the grid shows"
         raise DeclarationError(msg)
@@ -152,6 +156,9 @@ def grid(
         "animateRows": False,
         "suppressDragLeaveHidesColumns": True,
         "autoSizeStrategy": {"type": "fitGridWidth", "defaultMinWidth": 96},
+        "localeText": {"noRowsToShow": EMPTY},  # text, never HTML, which dash-ag-grid rightly refuses to evaluate
+        "loading": False,  # basis's own loading state, shown only once an answer is slow
+        "suppressNoRowsOverlay": True,  # until the first answer, which basis's script then lets say "No rows"
     }
     if height is None:
         options["domLayout"] = "autoHeight"
@@ -159,7 +166,6 @@ def grid(
     options["context"] = {"basis": {"totals": {name: _total_json(total) for name, total in given_totals.items()}, "label": label, "key": key, "count": count, "noun": noun}}
     table = dag.AgGrid(
         id=id,
-        rowData=[],
         columnDefs=[_definition(found, given_columns.get(found.name, ColumnShown())) for found in row.columns],
         defaultColDef={"sortable": True, "resizable": True, "filter": True},
         dashGridOptions=options,
@@ -174,7 +180,8 @@ def grid(
         named = html.Span("Filter the rows", className="basis-visually-hidden")  # the box's name, which the label gives it
         tools.append(html.Label([icon("search"), named, box], className="basis-grid-search"))
     tools.append(html.Span(id=count, className="basis-grid-count", role="status"))
-    shown = Grid([html.Div(tools, className="basis-grid-tools"), table], className="basis-grid")
+    tools.append(html.Span(states.marks(id, "rowData", dataset), className="basis-marks"))
+    shown = Grid([html.Div(tools, className="basis-grid-tools"), states.loading(table, id, ["rowData", "dashGridOptions"])], className="basis-grid")
     object.__setattr__(shown, "declared", Declared(row, key, given_totals, label))  # beside the component, which Dash never sends
     return shown
 

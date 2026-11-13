@@ -38,7 +38,8 @@ Keep this table true in each step's own commit.
 | 16.5 Charts | Done: `bd.graph`; `bd.charts`' line, bar, scatter, curve, waterfall, heatmap and histogram, ticks and hover text in the row's formats, calendar gaps, names at the lines' ends; the template's title above its legend | the commit "Step 16.5" |
 | 16.6 Stat tiles and small parts | Done: `bd.stat` and `show`, `bd.badge`, the freshness line from the status store, `bd.page(datasets=)`; charts' text kept level | the commit "Step 16.6" |
 | 16.7 Filters and the URL | Done: `bd.as_of`, `bd.date_range` with presets, `bd.select`, `bd.search`, read from the query string at build and written back in the browser; `bd.day`, `bd.days`, `bd.options` | the commit "Step 16.7" |
-| 16.8 to 16.9 Display | Not started | |
+| 16.8 States | Done: loading after 400 ms in place, empty only once answered, failed marked on its component until its next answer, stale from the status store; on the grid, graph and tile | the commit "Step 16.8" |
+| 16.9 Exports | Not started | |
 | 17.1 to 17.8 The repo around it | Not started | |
 
 ## What the best Dash app is
