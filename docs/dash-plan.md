@@ -16,7 +16,7 @@ Keep this table true in each step's own commit.
 | Step | State | Commit |
 |---|---|---|
 | 13.1 The portfolio part goes | Done: the code and its wiring, then the docs; history in [the design](design.md#the-packages) | `99aaf2e`, the commit "Step 13.1, part 2" |
-| 14.1 The spike | Not started | |
+| 14.1 The spike | Done: twelve yeses, in [the spike](spikes/dash.md); the steps it changed say so | the commit "Step 14.1: the Dash spike" |
 | 14.2 The design, written down | Not started | |
 | 14.3 Rows in core | Not started | |
 | 14.4 Serving in core | Not started | |
@@ -59,6 +59,7 @@ Versions as of 2026-11-13, installed together on Python 3.14.7 for this plan.
 | dash-mantine-components | 3.0.0 (Mantine 9.7) | The shell, layout, inputs, date pickers, notifications and skeletons: the widest component set in Dash, with light and dark built in |
 | dash-ag-grid | 35.3.0 (AG Grid 35.3.1), Community features only | The grid. `dash_table.DataTable` is deprecated since Dash 3.3 |
 | Plotly | 7.1.0 | Charts, under one basis template |
+| orjson | 3.13.0 | Plotly's encoder, which Dash's answers go through, uses it when installed: a tenth of the time for 10,000 rows ([14.1](spikes/dash.md#11-a-10000-by-20-grid)) |
 
 Nothing else: no dash-bootstrap-components, whose last release was in 2025; no dash-extensions; no dash-iconify,
 which fetches each icon from a public CDN at run time. Icons are a vendored subset, as basis-ui's are.
@@ -76,6 +77,9 @@ Checked while writing this plan, in a scratch app:
   (`dash/backends/_fastapi.py`, `_dispatch`). A blocking query inside one stops the whole server, which is why
   every load is awaited (15.2).
 - Dash's own MCP server is off unless asked for; basis passes `enable_mcp=False` so no variable can turn it on.
+
+Step 14.1's answers, each with its evidence and the exact call, are in [the spike](spikes/dash.md); the steps
+below that it changed say so.
 
 ## The shape of an app
 
@@ -263,17 +267,33 @@ a column's display format, basis-core's `Display`, becomes something a row's fie
 the names it always has, and its surface test passes unchanged. A Dash app's rows are then a job's rows, and a
 third copy never starts.
 
-**14.4 Serving in core.** What both servers need lives once, in `basis.core.serving`, taken from basis-api: the
-`serve` settings, uvicorn's runner with its three-step shutdown, the stages of readiness, `/health/live` and
-`/health/ready`, and the request boundary's ids, log fields and `traceparent`. uvicorn and Starlette come as an
-extra, `basis-core[serve]`, which basis-api and basis-dash take. basis-api's own tests pass unchanged, which is
-the proof. Token verification stays in basis-api until identity (18).
+**14.4 Serving in core.** What both servers need lives once, in `basis.core.serving`, taken from basis-api: the `serve`
+settings, uvicorn's runner with its three-step shutdown, the stages of readiness, `/health/live` and `/health/ready`,
+and the request boundary's ids, log fields and `traceparent`. The health routes take a path prefix, since a Dash app
+behind a proxy that keeps its prefix is asked for them under it (14.1, question 1). uvicorn and Starlette come as an
+extra, `basis-core[serve]`, which basis-api and basis-dash take. basis-api's own tests pass unchanged, which is the
+proof. Token verification stays in basis-api until identity (18).
 
 **14.5 The package and an empty app.** `packages/dash`: the distribution `basis-dash`, the module `basis.dash`, the
-part `dash`. `bd.App`, its settings, `basis serve` and `basis dev` on core's serving, React 19 chosen where 14.1
-found, `enable_mcp=False`, the dev tools in `basis dev` alone. The root's import contracts gain the part: parts
-import core and never each other. A repo that declares `api` and `dash` is refused, in one line. The workspace's
-checks, CI and the Windows leg run its tests.
+part `dash`. `bd.App`, its settings, `basis serve` and `basis dev` on core's serving. From 14.1:
+
+- React 19 is chosen by `dash._dash_renderer._set_react_version("19.2.4")` when `basis.dash` is imported, through
+  `basis.dash.internals`, with a test that the index names `react@19`.
+- `bd.App` passes Dash every setting, so none of its 24 `DASH_*` variables changes one: `enable_mcp=False`,
+  `shared_storage=None`, `compress=False`, `serve_locally=True`. `basis serve` refuses any `DASH_*` variable, and
+  `_DASH_FASTAPI_CONFIG`, from which the FastAPI backend turns the dev tools on with no argument to stop it.
+- One setting, the public path prefix, with whether the proxy strips it. Stripped, it is Dash's
+  `requests_pathname_prefix` with `routes_pathname_prefix="/"`; kept, it is `url_base_pathname`, and basis's
+  health routes move under it too.
+- The dev tools are in `basis dev` alone, with `dev_tools_disable_version_check=True`, since the check calls
+  plotly.com. `basis dev` runs uvicorn with `reload` itself and calls `enable_dev_tools` on the app it builds,
+  rather than through `app.run`.
+- Building the app calls `_setup_server()`, so setup errors such as a streaming callback with no shared storage
+  fail the build, and not the first request.
+- basis-dash depends on orjson.
+
+The root's import contracts gain the part: parts import core and never each other. A repo that declares `api` and `dash`
+is refused, in one line. The workspace's checks, CI and the Windows leg run its tests.
 
 ## Phase 15: data
 
@@ -286,7 +306,9 @@ each dialect, before any environment is read, as step 9.5 did for jobs.
 **15.2 The cache, and `bd.load`.** Off the loop, in the database's bounded pool; one query for callers that ask
 together; a TTL; a ceiling in megabytes with least-recently-used eviction; Arrow kept and a fresh frame handed
 out; the database's `max_rows`; a span and a log record for each load, with its dataset, params, rows,
-milliseconds and whether the cache answered. A load called on the event loop's thread raises, and the message
+milliseconds and whether the cache answered. A load runs in `anyio.to_thread.run_sync` under its database's
+`anyio.CapacityLimiter(max_concurrent)`, never a bare executor, in which `dash.ctx` and `set_props` are lost (14.1,
+question 7). A load called on the event loop's thread raises, and the message
 ends with the fix: make the callback `async` and await it. Start with the failing tests: a 2-second fake query
 must not delay another callback, and fifty callers at once make one query.
 
@@ -310,7 +332,10 @@ each dataset was read.
 **15.7 More sources.** `bd.fetch`, with the logins step 12.2 built; `bd.lake`; an Excel sheet in a folder.
 
 **15.8 Rows to the browser.** `bd.rows(frame)`: JSON-safe rows, fast, with NaN as null and dates as ISO text. Each
-callback's response size is logged, and 17.1 holds it to a budget set from 14.1's measurements.
+callback's response size is logged, and 17.1 holds it to a budget set from 14.1's measurements: 10,000 rows of 20
+columns are 3.9 MB of JSON and about 100 ms on the server, and building the rows is the larger cost with orjson
+(43 ms by `to_dict("records")`; a column-wise build was faster at 100,000 rows). Dash's `compress=True` is
+gzip at level 9, four times the server's time; compression is the ingress's, or basis's own at level 1.
 
 ## Phase 16: display
 
@@ -318,14 +343,27 @@ Lane B.
 
 **16.1 Tokens and theme.** The token table; the CSS variables, the Mantine theme, the AG Grid theme and the
 Plotly templates made from it; the fonts; the drift test against basis-ui's `theme.css`. Load the `dataviz` skill
-before choosing any chart colour.
+before choosing any chart colour. The mechanics, from 14.1 (questions 2 to 4):
+
+- The tokens are CSS variables under `:root[data-mantine-color-scheme="light"]` and `…="dark"`. Mantine's own
+  variables point at them from `html:root[data-mantine-color-scheme]`, and the primary colour also needs a Mantine
+  palette made from the tokens. The switch sets the attribute on `<html>` in a clientside callback.
+- The grid's theme is `themeQuartz.withParams({...})` with `var(--basis-…)` values, given as
+  `dashGridOptions={"theme": {"function": ...}}`.
+- A figure cannot hold a CSS variable. basis's template has transparent backgrounds and holds only what differs
+  (under 0.5 KB a figure, against Plotly's 6.5 KB), and basis's CSS colours Plotly's text, grid lines, hover labels
+  and legend over its inline styles, with `!important`. The colorway reads on both backgrounds.
+- The CSS, the script and the fonts ship through `dash.hooks.stylesheet` and `script`. Each font is registered
+  `dynamic: True` and named in the CSS in Dash's fingerprint form (`inter.vVERSIONmHEX.woff2`), so it is cached
+  as the CSS is.
 
 **16.2 The shell and the page.** `bd.App`'s shell, `bd.page`, `bd.card`, the layout grid, the 404 page, titles.
 
 **16.3 One number, one text.** `bd.text(value, format)` on the server, from `basis.core.display`. For the grid, a
 JavaScript formatter of the same kinds and the same rounding (15 significant digits, half away from zero, then the
 decimals shown), held to `format.json`'s cases by a test that runs it under `node` in CI. A chart's hover text is
-written on the server.
+written on the server. The formatter is added to `window.dashAgGridFunctions`, never replacing it, under a `basis`
+name: basis's script loads after an app's `assets/`, and a name both define is the later one's (14.1, question 3).
 
 **16.4 The grid.** As [Display](#display) says, with a column's overrides: header, width, pin, hide, signed
 colours for a profit or loss, a bar or a heat scale in the cell.
@@ -352,7 +390,8 @@ One agent, once both lanes are on `main`.
 **17.1 The checks.** Each problem is one `ERROR` line with its fix: the layers; every callback's inputs, outputs
 and states name a component and a property the page has; every page builds and every callback runs on the
 fixtures, from the layout's first values, and answers what its outputs take (a valid figure, rows of the grid's
-columns); a callback that holds the event loop longer than a budget; a URL of another origin anywhere in a page;
+columns); a callback that holds the event loop longer than a budget; a URL of another origin anywhere in a page,
+`dash_ag_grid.themes`' CDN links among them;
 a dataset in a `dcc.Store`; `dash_table.DataTable`. The coverage floor applies to `domain.py`.
 
 **17.2 The agent's eyes.** `basis render PAGE [--set ID.PROP=VALUE]`: the page's callbacks run in the process, on
@@ -389,8 +428,11 @@ Not built in this push. Each needs a decision, the firm's environment, or proof 
 - **Identity.** Token verification moves from basis-api to core; a callback asks for the user; a query may bind
   the user, and its cache key carries it. How the firm's sign-in reaches a server-rendered page, a header from
   the gateway or a cookie, is a **(work)** question.
-- **Live updates.** WebSocket or streaming callbacks for values that tick, once 14.1 says they work and the
-  firm's ingress passes them.
+- **Live updates.** WebSocket or streaming callbacks for values that tick. 14.1 found both work on this backend.
+  A stream over HTTP needs Dash's `shared_storage` (one pod's `LocalSharedStorage`, or Redis across pods) and a
+  signing secret every pod shares. A WebSocket callback (`websocket=True`) needs neither, but needs
+  `websocket_allowed_origins`. Whether the firm's ingress passes WebSocket upgrades and long responses is a
+  **(work)** question.
 - **Rows on the server.** AG Grid's infinite row model over a cached dataset, with the sort and filter done in
   pandas, for tables too large to send whole.
 - **Writes from a page**, declared per table, in a transaction.
@@ -406,7 +448,7 @@ Each has the pick this plan builds on. None blocks a step before the one named.
 
 | Decision | Pick | Step |
 |---|---|---|
-| DMC 3 on React 19, which Dash 4.5 calls experimental, or DMC 2.8.1 on React 18, Mantine 8's last line | DMC 3: it rendered clean here, and starting on 2 means a migration in every app within months | 14.1 |
+| DMC 3 on React 19, which Dash 4.5 calls experimental, or DMC 2.8.1 on React 18, Mantine 8's last line | DMC 3: it rendered clean here, and starting on 2 means a migration in every app within months. 14.1 found no open defect that DMC 2 avoids, and DMC 2.x has had no release since 2.8.1 | Settled by 14.1 |
 | Dash on FastAPI and uvicorn with awaited loads, or on Flask with a thread per request | FastAPI: one server for APIs and apps, on Windows too, and the road to live updates. The cost is that loads must be awaited, which basis enforces | 14.5 |
 | AG Grid Community, or Enterprise if the firm holds a licence (row grouping, pivots, range copy, Excel export in the browser) | Community; basis does totals and Excel on the server. An Enterprise key would be a setting, later | 16.4 |
 | May a repo hold an API and a Dash app? | No: one served thing per repo | 14.5 |
