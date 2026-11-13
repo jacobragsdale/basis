@@ -440,6 +440,19 @@ frame holds or a table stores. Its refusals keep the fixes a job has always read
 `basis.core.frames` and `destination` already did: a Dash app's own names for them are step 15.1's to give. An API's
 row models stay pydantic, with `api.format`.
 
+**Serving.** What every server basis builds shares is basis-core's, `basis.core.serving` (step 14.4 of [the Dash
+plan](dash-plan.md)), taken from basis-api, so an API and a Dash app serve the same way: the `serve` settings (`host`,
+`port`, `drain_s`, `shutdown_s`), which a part's settings subclass with their own; uvicorn's runner, with the drain on
+SIGTERM, the graceful shutdown and the second signal that stops at once; the stages of readiness; `/health/live` and
+`/health/ready`, with the commit, under a path prefix where a proxy keeps it (spike 14.1, question 1); and the request
+boundary, its ids, log fields and `traceparent`, and its log of an error nobody expected. A part gives the boundary
+the body of its 500 and the fields it adds to each request's line, and readiness the body of its 503: an API's are
+problems, with the user. The package's own module holds the settings and the stages and imports no server, so a part's
+declarations may use it; the runner and the boundary are its modules `server` and `requests`, which need
+`basis-core[serve]` (uvicorn and Starlette), and an import contract keeps them out of `basis`'s commands and basis-job.
+Routes, problems, strict requests, identity, the outbox, the compute pool and OpenAPI stay basis-api's. A part's
+pin of basis-core may name its extras, as `basis-core[serve]==VERSION`, which the release script keeps.
+
 **Logins to services.** Most of the firm's internal services ask for a login, so a service's settings say how a part
 signs in to it, as `BASIS_HTTP__NAME__LOGIN__KIND`, decided on 2026-11-11 for step 12.2 of [the plan](../PLAN.md) and
 open to the maintainer's review: `bearer`, a fixed token; `header`, a key in a header the service names, such as

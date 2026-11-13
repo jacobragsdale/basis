@@ -16,20 +16,15 @@ from pydantic_settings import SettingsError as SourceError
 
 from basis.api.identity import Identity
 from basis.api.origins import Origin
+from basis.core import serving
 from basis.core import settings as core
 from basis.core.model import Model
 from basis.core.settings import SettingsError, variable
 
 
-class Serve(Model):
-    host: str = "0.0.0.0"  # noqa: S104 -- `basis serve` runs in a container, whose network decides who reaches it
-    port: Annotated[int, Field(ge=1, le=65535)] = 8000
-    drain_s: Annotated[float, Field(ge=0)] = 5
-    """Seconds the server keeps serving after SIGTERM while readiness reports it not ready, so that the cluster stops
-    sending it requests before it stops taking them. Ctrl+C stops without them."""
-    shutdown_s: Annotated[int, Field(ge=1)] = 15
-    """Seconds the requests still in flight then have to finish, before they are cancelled. With `drain_s` and the
-    last export of spans, which `traces.timeout_s` bounds, the defaults fit in Kubernetes' 30-second grace period."""
+class Serve(serving.Serve):
+    """How the API serves: basis-core's `host`, `port`, `drain_s` and `shutdown_s`, and what an API's own server adds."""
+
     docs: bool = False
     """Whether the app serves `/docs`, Swagger UI's page of its document, which loads Swagger UI's script and style
     from a public CDN, at an exact version, into the page of the API's own origin: off unless a developer turns it on,

@@ -34,6 +34,8 @@ def with_(member: Member, *, version: str | None = None, dependencies: tuple[str
         (workspace(BASE, with_(JOB, dependencies=("basis-core==0.3.0",))), ["packages/job/pyproject.toml pins basis-core as `basis-core==0.3.0`"]),
         (workspace(BASE, with_(JOB, dependencies=(f"basis-core>={VERSION}",))), [f"pins basis-core as `basis-core>={VERSION}`"]),
         (workspace(BASE, with_(JOB, dependencies=("pandas>=3.1.1",))), ["pins basis-core as nothing"]),
+        (workspace(BASE, with_(JOB, dependencies=(f"basis-core[serve]=={VERSION}",))), []),
+        (workspace(BASE, with_(JOB, dependencies=("basis-core[serve]==0.3.0",))), ["pins basis-core as `basis-core[serve]==0.3.0`"]),
         (workspace(BASE, JOB, with_(KEPT, publish=None)), ["packages/other/pyproject.toml does not say whether a release publishes other-part"]),
         (workspace(BASE, JOB, locked={CORE: VERSION, "basis-job": "0.3.0"}), ["uv.lock holds basis-job at 0.3.0"]),
         (workspace(BASE, JOB, locked={CORE: VERSION}), ["uv.lock holds basis-job at no version"]),
@@ -54,6 +56,8 @@ def with_(member: Member, *, version: str | None = None, dependencies: tuple[str
         "a-pin-at-another",
         "a-range-not-a-pin",
         "no-pin",
+        "a-pin-with-extras",
+        "a-pin-with-extras-at-another",
         "undeclared",
         "a-stale-lock",
         "unlocked",
@@ -122,10 +126,17 @@ def test_basis_cores_own_name_is_no_requirement_of_it() -> None:
     assert with_version(text, "0.4.0", pin=True) == text.replace('"0.3.0"', '"0.4.0"')
 
 
-@pytest.mark.parametrize("pin", ['"basis-core>=0.3.0"', "\"basis-core==0.3.0; sys_platform == 'linux'\"", '"basis-core[extra]==0.3.0"', '"basis-core == 0.3.0"'])
+@pytest.mark.parametrize("pin", ['"basis-core>=0.3.0"', "\"basis-core==0.3.0; sys_platform == 'linux'\"", '"basis-core == 0.3.0"'])
 def test_any_requirement_of_basis_core_becomes_the_exact_pin(pin: str) -> None:
     text = f'[project]\nname = "basis-job"\nversion = "0.3.0"\ndependencies = [{pin}]\n'
     assert with_version(text, "0.4.0", pin=True) == '[project]\nname = "basis-job"\nversion = "0.4.0"\ndependencies = ["basis-core==0.4.0"]\n'
+
+
+@pytest.mark.parametrize("pin", ['"basis-core[serve]==0.3.0"', '"basis-core[serve,excel]>=0.3.0"'])
+def test_a_requirement_of_basis_core_keeps_its_extras(pin: str) -> None:
+    text = f'[project]\nname = "basis-api"\nversion = "0.3.0"\ndependencies = [{pin}]\n'
+    extras = pin.partition("[")[2].partition("]")[0]
+    assert with_version(text, "0.4.0", pin=True) == f'[project]\nname = "basis-api"\nversion = "0.4.0"\ndependencies = ["basis-core[{extras}]==0.4.0"]\n'
 
 
 @pytest.mark.parametrize(("text", "missing"), [('[tool.other]\nversion = "0.3.0"\n', "no \\[project\\] table"), ('[project]\nname = "basis-job"\n', "gives no version")])

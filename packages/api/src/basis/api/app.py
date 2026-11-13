@@ -23,11 +23,9 @@
 
 import asyncio
 import logging
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from enum import StrEnum
-from typing import Literal
 from uuid import UUID
 
 from fastapi import FastAPI
@@ -43,45 +41,18 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 from basis.api import errors, openapi, opened, origins, planning, routes, tokens, ui
 from basis.api.dependencies import STATE, Runtime
 from basis.api.fakes import Fakes
-from basis.api.requests import HEALTH, REQUEST_ID, Requests
+from basis.api.requests import REQUEST_ID, Requests
 from basis.api.service import DeclarationError, Service
 from basis.api.settings import Settings, read
 from basis.core import traces
 from basis.core.errors import ServiceError
-from basis.core.model import Model
+from basis.core.serving import HEALTH, Health, Lifecycle, Stage
+from basis.core.serving import requests as boundary
 
 log = logging.getLogger(__name__)
 
 
-class Stage(StrEnum):
-    STARTING = "starting"
-    READY = "ready"
-    DRAINING = "draining"
-    """Shutting down, but still serving, so that the cluster stops sending requests before the server stops taking them."""
-    STOPPING = "stopping"
-    STOPPED = "stopped"
-
-
-_ORDER = tuple(Stage)
-
-
-class Lifecycle:
-    """Where an app is between being built and stopping, which its readiness reports. It only moves forward."""
-
-    def __init__(self) -> None:
-        self._stage = Stage.STARTING
-
-    @property
-    def stage(self) -> Stage:
-        return self._stage
-
-    def advance(self, stage: Stage) -> None:
-        if _ORDER.index(stage) > _ORDER.index(self._stage):
-            self._stage = stage
-
-    def drain(self) -> None:
-        """Report not ready from now on, while still serving: the first step of a graceful shutdown."""
-        self.advance(Stage.DRAINING)
+__all__ = ["COMPRESS_FROM", "COMPRESS_LEVEL", "App", "Health", "Lifecycle", "Stage", "build"]
 
 
 @dataclass(frozen=True)
@@ -103,12 +74,6 @@ COMPRESS_LEVEL = 1
 gives 3.28 MB in 290 ms and level 9, Starlette's default, 3.23 MB in 1.76 s; JSON 20.9 MB to 5.00 MB in 82 ms, 4.23 MB
 in 254 ms at 6. Over a slow link the bytes cost more than the CPU at every level but 1, and a body over 128 KiB is
 compressed off the event loop."""
-
-
-class Health(Model):
-    status: Literal["live", "ready"]
-    commit: str | None = None
-    """The commit the app runs, `BASIS_GIT_SHA`, which `basis smoke --commit` checks; None where it is not set."""
 
 
 def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | None = None, environment: str | None = None) -> App:
@@ -187,32 +152,27 @@ def build(service: Service, *, settings: Settings | None = None, fakes: Fakes | 
         },
     )
 
-    async def live() -> Health:
-        return Health(status="live", commit=configured.git_sha)
-
-    async def ready() -> Health:
-        if lifecycle.stage is not Stage.READY:
-            msg = f"the service is {lifecycle.stage}"
-            raise errors.NotReadyError(msg)
-        return Health(status="ready", commit=configured.git_sha)
-
-    _health(app, service, live, ready)
+    _health(app, service, lifecycle, configured.git_sha)
     _routes(app, service, docs=configured.serve.docs)
     return App(service, configured, app, lifecycle, provider)
 
 
-def _health(app: openapi.Application, service: Service, live: Callable[[], Awaitable[Health]], ready: Callable[[], Awaitable[Health]]) -> None:
-    """The health endpoints, and for an app that serves a UI, them and the document under /api too, the base its
-    document's paths are under, where `basis smoke` reaches them."""
+def _health(app: openapi.Application, service: Service, lifecycle: Lifecycle, commit: str | None) -> None:
+    """basis-core's health routes, and for an app that serves a UI, them and the document under /api too, the base its
+    document's paths are under, where `basis smoke` reaches them. Readiness, before and after, is a 503 problem."""
 
     async def document() -> JSONResponse:
         return JSONResponse(app.openapi())
 
     for prefix in ("", routes.API) if service.ui is not None else ("",):
-        app.add_api_route(f"{prefix}{HEALTH}live", live, methods=["GET"], include_in_schema=False)
-        app.add_api_route(f"{prefix}{HEALTH}ready", ready, methods=["GET"], include_in_schema=False)
+        app.router.routes.extend(boundary.health(lifecycle, commit, prefix=prefix, not_ready=_not_ready))
     if service.ui is not None:
         app.add_api_route(f"{routes.API}/openapi.json", document, methods=["GET"], include_in_schema=False)
+
+
+async def _not_ready(_: Request, stage: Stage) -> Response:
+    msg = f"the service is {stage}"
+    raise errors.NotReadyError(msg)
 
 
 SWAGGER_UI = "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.17.14"

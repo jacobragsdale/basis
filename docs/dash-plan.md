@@ -19,7 +19,7 @@ Keep this table true in each step's own commit.
 | 14.1 The spike | Done: twelve yeses, in [the spike](spikes/dash.md); the steps it changed say so | the commit "Step 14.1: the Dash spike" |
 | 14.2 The design, written down | Not started | |
 | 14.3 Rows in core | Done: `basis.core.rows`, a `float`'s `Display`; `basis.job.rows` re-exports | the commit "Step 14.3" |
-| 14.4 Serving in core | Not started | |
+| 14.4 Serving in core | Done: `basis.core.serving`, its `requests` and `server`; `basis-core[serve]` | the commit "Step 14.4" |
 | 14.5 The package and an empty app | Not started | |
 | 15.1 to 15.8 Data | Not started | |
 | 16.1 to 16.9 Display | Not started | |

@@ -80,12 +80,11 @@ name = "basis-api"
 version = "0.1.0"
 source = { editable = "packages/api" }
 dependencies = [
-    { name = "basis-core" },
+    { name = "basis-core", extra = ["serve"] },
     { name = "cryptography" },
     { name = "fastapi" },
     { name = "pyarrow" },
     { name = "pyjwt", extra = ["crypto"] },
-    { name = "uvicorn" },
 ]
 
 [package.optional-dependencies]
@@ -97,15 +96,14 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "basis-core", editable = "packages/core" },
     { name = "basis-core", extras = ["dev"], marker = "extra == 'dev'", editable = "packages/core" },
+    { name = "basis-core", extras = ["serve"], editable = "packages/core" },
     { name = "cryptography", specifier = ">=50.0.2" },
     { name = "fastapi", specifier = ">=0.162.0" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.170.0" },
     { name = "pyarrow", specifier = ">=26.0.1" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.15.1" },
     { name = "schemathesis", marker = "extra == 'dev'", specifier = ">=4.33.1" },
-    { name = "uvicorn", specifier = ">=0.54.0" },
 ]
 provides-extras = ["dev"]
 
@@ -147,6 +145,10 @@ kerberos = [
 mongo = [
     { name = "pymongo" },
 ]
+serve = [
+    { name = "starlette" },
+    { name = "uvicorn" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -169,11 +171,13 @@ requires-dist = [
     { name = "python-calamine", marker = "extra == 'excel'", specifier = ">=0.9.1" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.17.4" },
+    { name = "starlette", marker = "extra == 'serve'", specifier = ">=1.10.0" },
     { name = "ty", marker = "extra == 'dev'", specifier = "==0.0.99" },
     { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2025.2" },
+    { name = "uvicorn", marker = "extra == 'serve'", specifier = ">=0.54.0" },
     { name = "xlsxwriter", marker = "extra == 'excel'", specifier = ">=3.3.1" },
 ]
-provides-extras = ["excel", "dev", "kerberos", "mongo"]
+provides-extras = ["excel", "dev", "kerberos", "serve", "mongo"]
 
 [[package]]
 name = "basis-job"

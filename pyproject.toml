@@ -172,6 +172,19 @@ type = "independence"
 modules = ["basis.job", "basis.api"]
 
 [[tool.importlinter.contracts]]
+name = "basis's command, its checks and basis-job load no server: basis --version and a job repo's commands stay light"
+type = "forbidden"
+source_modules = ["basis.core.command", "basis.core.verbs", "basis.core.check", "basis.core.sync", "basis.core.settings", "basis.job"]
+forbidden_modules = ["basis.core.serving", "uvicorn", "starlette", "fastapi"]
+
+[[tool.importlinter.contracts]]
+name = "basis.core.serving's own module loads no server, so a part's settings and declarations may use it"
+type = "forbidden"
+source_modules = ["basis.core.serving"]
+forbidden_modules = ["basis.core.serving.requests", "basis.core.serving.server", "uvicorn", "starlette", "fastapi"]
+as_packages = false
+
+[[tool.importlinter.contracts]]
 name = "Job code and the checks it runs through do no I/O: the run loop loads, saves and publishes"
 type = "forbidden"
 source_modules = [
@@ -204,7 +217,7 @@ source_modules = [
 forbidden_modules = [
     "basis.api.app", "basis.api.requests", "basis.api.server", "basis.api.cli", "basis.api.sync", "basis.api.opened", "basis.api.planning", "basis.api.sessions", "basis.api.caches",
     "basis.api.fakes", "basis.api.routes", "basis.api.pool", "basis.api.call", "basis.api.dev", "basis.api.tokens", "basis.api.outboxes", "basis.api.relay",
-    "jwt", "cryptography", "uvicorn",
+    "jwt", "cryptography", "uvicorn", "basis.core.serving.server",
     "basis.api.openapi", "basis.api.contract", "basis.api.arrow", "basis.api.layers", "basis.api.fuzz", "grimp", "schemathesis", "hypothesis",
     "basis.core.databases", "basis.core.publish", "basis.core.runs", "basis.core.snapshots", "basis.core.command", "basis.core.check", "basis.core.hooks",
     "basis.core.hygiene", "basis.core.sync", "basis.core.opened", "basis.core.fakes", "basis.core.traces", "basis.core.gates", "basis.core.mutation",

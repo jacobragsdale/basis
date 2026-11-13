@@ -55,6 +55,8 @@ RELEASE_KEY = "x-basis-release"
 """The released document's first key, in place of basis's marker, as basis-api's `basis release-document` writes it."""
 _VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 _NAME = re.compile(r"^\s*([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)")
+_EXTRAS = r"\[[a-z0-9]+(?:,[a-z0-9]+)*\]"
+"""The extras of basis-core a member may take, such as `[serve]`, which its pin keeps."""
 """A PEP 508 requirement's name, at its start."""
 _DISTRIBUTION = re.compile(r"^(?P<name>[^-/]+)-[^-/]+(?:\.tar\.gz|-[^/]+\.whl)$")
 """A wheel's or an sdist's file name, whose name part has `_` for each run of `-`, `_` and `.` (PEP 625, PEP 427)."""
@@ -132,7 +134,7 @@ def _member_problems(member: Member, version: str, locked: str | None) -> list[P
     if member.version != version:
         found.append(Problem(f"{where} gives {member.name} version {member.version}, and the root pyproject.toml gives {version}", setting))
     pins = [dependency for dependency in member.dependencies if name_of(dependency) == CORE]
-    if member.name != CORE and pins != [f"{CORE}=={version}"]:
+    if member.name != CORE and (len(pins) != 1 or re.fullmatch(rf"{CORE}(?:{_EXTRAS})?=={re.escape(version)}", pins[0]) is None):
         said = ", ".join(f"`{pin}`" for pin in pins) if pins else "nothing"
         found.append(Problem(f"{where} pins {CORE} as {said}, and every member depends on it at exactly the workspace's version, `{CORE}=={version}`", setting))
     if member.publish is None:
@@ -214,7 +216,7 @@ def with_version(text: str, version: str, *, pin: bool, where: str = "pyproject.
     if pin and "dependencies" in keys:  # the array runs to the next line that starts outside it
         first = keys["dependencies"]
         last = next((number for number in range(first + 1, len(lines)) if starts[number]), len(lines))
-        array = re.sub(rf'(?m)(^[ \t]*|\[[ \t]*|,[ \t]*)"{CORE}(?=[^A-Za-z0-9._-])[^"]*"', rf'\1"{CORE}=={version}"', "".join(lines[first:last]))
+        array = re.sub(rf'(?m)(^[ \t]*|\[[ \t]*|,[ \t]*)"{CORE}({_EXTRAS})?(?=[^A-Za-z0-9._-])[^"]*"', rf'\1"{CORE}\2=={version}"', "".join(lines[first:last]))
         edited[first:last] = [array]
     result = "".join(edited)
     try:
@@ -265,11 +267,18 @@ def _project(lines: Sequence[str], starts: Sequence[bool], where: str) -> tuple[
     return start, next((number for number in headers if number > start), len(lines))
 
 
+def _extras(requirement: str) -> str:
+    """The extras of basis-core a requirement of it takes, as `[serve]`, or ""."""
+    found = re.match(rf"\s*{CORE}({_EXTRAS})?", requirement)
+    extras = found.group(1) if found is not None else None
+    return extras if isinstance(extras, str) else ""
+
+
 def _expected(document: Mapping[str, object], version: str, *, pin: bool) -> dict[str, object]:
     project = _table(document, "project")
     project["version"] = version
     if pin and isinstance(dependencies := project.get("dependencies"), list):
-        project["dependencies"] = [f"{CORE}=={version}" if isinstance(item, str) and name_of(item) == CORE else item for item in dependencies]
+        project["dependencies"] = [f"{CORE}{_extras(item)}=={version}" if isinstance(item, str) and name_of(item) == CORE else item for item in dependencies]
     return {**document, "project": project}
 
 

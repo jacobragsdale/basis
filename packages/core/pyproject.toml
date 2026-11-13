@@ -36,6 +36,10 @@ dev = [  # the tools `basis check` runs, at the versions basis.core.tools names,
 kerberos = [  # basis.core.logins signs in to a service with Kerberos through it, `negotiate`: a repo that does takes basis-core[kerberos]
     "pyspnego[kerberos]>=0.12.4",  # SSPI on Windows; on Linux and in WSL, GSSAPI through gssapi and krb5
 ]
+serve = [  # basis.core.serving's server and request boundary run on them: a part that serves, basis-api or basis-dash, takes basis-core[serve]
+    "starlette>=1.10.0",
+    "uvicorn>=0.54.0",
+]
 mongo = [  # basis.core.mongo reads and upserts documents through it: a repo that does takes basis-core[mongo]
     "pymongo>=4.19.0",
 ]
