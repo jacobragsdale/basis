@@ -113,6 +113,8 @@ class Query(Dataset):
     """The SQL file, absolute: declared relative to the folder of the module that declared it."""
     ttl_s: float
     stale_s: float
+    reload_s: float | None = None
+    """The fewest seconds between two reloads a person asks for (`bd.reload`), or None where none may be asked for."""
 
     @override
     def resources(self) -> tuple[Resource, ...]:
@@ -127,6 +129,8 @@ class File(Dataset):
     """The file's path inside its folder."""
     ttl_s: float
     stale_s: float
+    reload_s: float | None = None
+    """The fewest seconds between two reloads a person asks for (`bd.reload`), or None where none may be asked for."""
 
     @override
     def resources(self) -> tuple[Resource, ...]:
@@ -176,9 +180,20 @@ def folder(name: str) -> Folder:
     return Folder(_named(name, "folder"))
 
 
-def query(name: str, database: Database, sql: str, row: type[core_rows.Row], *, binds: Mapping[str, type] | None = None, ttl_s: float | None = None, stale_s: float | None = None) -> Query:
+def query(
+    name: str,
+    database: Database,
+    sql: str,
+    row: type[core_rows.Row],
+    *,
+    binds: Mapping[str, type] | None = None,
+    ttl_s: float | None = None,
+    stale_s: float | None = None,
+    reload_s: float | None = None,
+) -> Query:
     """The rows the SQL file `sql`, relative to the folder of the module that declares it, selects from `database`,
-    binding each of `binds`, as `{"as_of": date}`, and nothing else, as `row`'s columns."""
+    binding each of `binds`, as `{"as_of": date}`, and nothing else, as `row`'s columns. `reload_s` lets a person ask
+    for it again (`bd.reload`), at most once in that many seconds."""
     named = _named(name, "query")
     if not isinstance(database, Database):
         msg = f"query {name} reads {database!r}: give the database it reads, declared with bd.database(NAME, ...)"
@@ -187,10 +202,12 @@ def query(name: str, database: Database, sql: str, row: type[core_rows.Row], *, 
         msg = f"query {name} reads {sql!r}: give its SQL file, relative to the module that declares it, as sql/{name}.sql"
         raise DeclarationError(msg)
     ttl, stale = _freshness(name, ttl_s, stale_s)
-    return Query(name=named, row=_row(name, row), params=_params(name, binds or {}), module=_caller(), database=database, sql=_caller_folder() / sql, ttl_s=ttl, stale_s=stale)
+    return Query(
+        name=named, row=_row(name, row), params=_params(name, binds or {}), module=_caller(), database=database, sql=_caller_folder() / sql, ttl_s=ttl, stale_s=stale, reload_s=_reload(name, reload_s)
+    )
 
 
-def file(name: str, folder: Folder, path: str, row: type[core_rows.Row], *, ttl_s: float | None = None, stale_s: float | None = None) -> File:
+def file(name: str, folder: Folder, path: str, row: type[core_rows.Row], *, ttl_s: float | None = None, stale_s: float | None = None, reload_s: float | None = None) -> File:
     """The CSV or Parquet file at `path` inside `folder`, as `row`'s columns: a CSV's every field read as text, which
     the row types, so nothing is inferred."""
     named = _named(name, "file")
@@ -206,7 +223,7 @@ def file(name: str, folder: Folder, path: str, row: type[core_rows.Row], *, ttl_
         msg = f"file {name} reads {path!r}: give a file it reads, whose name ends {' or '.join(FILES)}"
         raise DeclarationError(msg)
     ttl, stale = _freshness(name, ttl_s, stale_s)
-    return File(name=named, row=_row(name, row), params={}, module=_caller(), folder=folder, path=path, ttl_s=ttl, stale_s=stale)
+    return File(name=named, row=_row(name, row), params={}, module=_caller(), folder=folder, path=path, ttl_s=ttl, stale_s=stale, reload_s=_reload(name, reload_s))
 
 
 def view(name: str, function: Callable[..., object], row: type[core_rows.Row], /, **inputs: Dataset) -> View:
@@ -305,6 +322,13 @@ def _freshness(name: str, ttl_s: float | None, stale_s: float | None) -> tuple[f
             msg = f"{name}'s {what} is {value!r}: give it seconds {least}"
             raise DeclarationError(msg)
     return float(ttl_s), float(stale_s)
+
+
+def _reload(name: str, reload_s: float | None) -> float | None:
+    if reload_s is not None and (isinstance(reload_s, bool) or not isinstance(reload_s, int | float) or not math.isfinite(reload_s) or reload_s <= 0):
+        msg = f"{name}'s reload_s is {reload_s!r}: give the fewest seconds between two reloads a person asks for, above 0"
+        raise DeclarationError(msg)
+    return None if reload_s is None else float(reload_s)
 
 
 def _params(name: str, binds: Mapping[str, type]) -> dict[str, type]:

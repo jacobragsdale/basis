@@ -40,6 +40,8 @@ class Entry:
     table: pa.Table
     loaded_at: datetime
     """When it was read, in UTC, as the page shows it."""
+    read_at: float
+    """When it was read, by the cache's clock."""
     version: int
     fresh_until: float
     """The cache's clock past which it is read again."""
@@ -92,7 +94,7 @@ class Cache:
         least recently used values past the ceiling; the entry, kept or not. `replaces` is what the key shares with
         the values it outdates, a view's key without its inputs' versions, whose last value is dropped."""
         now = self.clock()
-        entry = Entry(table, loaded_at, next(self._versions), now + ttl_s, now + ttl_s + stale_s)
+        entry = Entry(table, loaded_at, now, next(self._versions), now + ttl_s, now + ttl_s + stale_s)
         if replaces is not None:
             if (outdated := self._latest.get(replaces)) is not None:
                 self._drop(outdated)

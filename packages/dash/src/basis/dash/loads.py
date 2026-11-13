@@ -37,7 +37,7 @@ import pandas as pd
 import dash
 from basis.core.errors import BasisError
 from basis.dash import internals
-from basis.dash.declarations import Dataset
+from basis.dash.declarations import Dataset, File, Query
 from basis.dash.ids import STATUS
 
 
@@ -60,6 +60,10 @@ class Running(Protocol):
         """The deadline of the database `resource` names, for a failure's sentence."""
         ...
 
+    def reload(self, dataset: Dataset, params: Mapping[str, Hashable]) -> bool: ...
+
+    def loaded(self, dataset: Dataset, params: Mapping[str, Hashable]) -> datetime | None: ...
+
 
 running: Running | None = None
 """The runtime of the app the process serves, from its start to its stop."""
@@ -73,6 +77,32 @@ def load(dataset: Dataset, /, **params: object) -> Awaitable[pd.DataFrame]:
         msg = f"{dataset.name} is loaded while no app is running: load it in a callback of a started app, or in a test inside bd.testing.client(app)"
         raise LoadError(msg)
     return running.load(dataset, checked(running, dataset, params))
+
+
+def reload(dataset: Dataset, /, **params: object) -> bool:
+    """Drop `dataset`'s value for `params`, so the next load reads it, unless it was read less than its `reload_s`
+    ago; whether it was dropped."""
+    if not isinstance(dataset, Query | File):
+        msg = f"{dataset.name} is a {dataset.kind}, which is computed from its inputs: reload each of them"
+        raise LoadError(msg)
+    if dataset.reload_s is None:
+        msg = f"{dataset.name} declares no reload_s, so a person cannot ask for it again: declare reload_s, the fewest seconds between two reloads, as reload_s=60"
+        raise LoadError(msg)
+    app = _app(dataset)
+    return app.reload(dataset, checked(app, dataset, params))
+
+
+def loaded(dataset: Dataset, /, **params: object) -> datetime | None:
+    """When the value of `dataset` a load would answer for `params` was read, in UTC, or None where it has not been."""
+    app = _app(dataset)
+    return app.loaded(dataset, checked(app, dataset, params))
+
+
+def _app(dataset: Dataset) -> Running:
+    if running is None:
+        msg = f"{dataset.name} is asked for while no app is running: ask in a callback of a started app, or in a test inside bd.testing.client(app)"
+        raise LoadError(msg)
+    return running
 
 
 def checked(app: Running, dataset: Dataset, given: Mapping[str, object]) -> dict[str, Hashable]:

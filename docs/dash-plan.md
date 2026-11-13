@@ -27,7 +27,8 @@ Keep this table true in each step's own commit.
 | 15.4 Fixtures and fakes | Done: `fixtures.database` from a CSV per query through its row, failing on demand; `basis dev` on the app's fakes or `--env ENV`, never both; `bd.testing.client` on the app's fakes | the commit "Step 15.4" |
 | 15.8, first part: `bd.rows` | Done, before 15.5 for lane B's grid: `bd.rows` and `bd.Rows`, in `browser.py` | the commit "Step 15.8, part 1" |
 | 15.5 Failure | Done: one sentence per kind in the notifications with the request's id, logged once; a stale value inside `stale_s`, marked in the status store | the commit "Step 15.5" |
-| 15.6 to 15.8 Data | Not started | |
+| 15.6 Refresh | Done: `bd.refresh` (a timer, 5 s at least), `bd.reload` under a dataset's declared `reload_s`, `bd.loaded` | the commit "Step 15.6" |
+| 15.7 and the rest of 15.8 | Not started | |
 | 16.1 Tokens and theme | Done: `basis.dash.theme`, its table held to basis-ui's `theme.css`; the CSS, Mantine, AG Grid and Plotly from it; the fonts | the commit "Step 16.1" |
 | 16.2 The shell and the page | Done: the header (title, environment, navigation, switch), `bd.page`'s body and filters, `bd.card`, the 404 page, tab titles, `bd.icon` | the commit "Step 16.2" |
 | 16.3 One number, one text | Done: `bd.text`; `basisFormat` in `static/basis.js`, held under node to `format.json`'s float cases and to core's text for each display format | the commit "Step 16.3" |

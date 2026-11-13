@@ -116,6 +116,21 @@ class Runtime:
         loads.report(dataset.name, entry.loaded_at, shown, rows=rows, stale=entry.stale)
         return entry
 
+    def reload(self, dataset: Dataset, params: Mapping[str, Hashable]) -> bool:
+        found = key(dataset.name, params)
+        entry = self.cache.kept(found)
+        floor = dataset.reload_s if isinstance(dataset, Query | File) else None
+        if entry is not None and floor is not None and self.cache.clock() - entry.read_at < floor:
+            log.info("kept %s, read %.0f s ago, less than its reload_s", dataset.name, self.cache.clock() - entry.read_at, extra={"dataset": dataset.name, "reload_s": floor})
+            return False
+        self.cache.forget(found)
+        log.info("dropped %s, so the next load reads it", dataset.name, extra={"dataset": dataset.name, "params": loads.shown(params)})
+        return True
+
+    def loaded(self, dataset: Dataset, params: Mapping[str, Hashable]) -> datetime | None:
+        entry = self.cache.kept(key(dataset.name, params)) if not isinstance(dataset, View) else None
+        return entry.loaded_at if entry is not None else None
+
     def deadline(self, resource: str) -> float | None:
         """The deadline of the database `resource` names, or None for another resource."""
         return next((database.declared.deadline_s for database in self._databases.values() if database.declared.name == resource), None)

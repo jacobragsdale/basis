@@ -530,6 +530,13 @@ turns a fake run real. `bd.testing.client(app)` builds the app on the fakes it d
 Fakes stand in for every resource or none. `fixtures` is imported as a module, `from basis.dash import fixtures`,
 never through `bd`, since it reaches basis-core's fakes, which an app's own modules never load.
 
+**Refresh** (`basis.dash.refreshing`, 15.6). `bd.refresh(id, every_s=)` is a `dcc.Interval`, at least 5 s, whose
+`n_intervals` a page's callbacks take as an input; each load still answers from the cache while its value is fresh, so
+a timer never reads more often than a dataset's `ttl_s`. `bd.reload(DATASET, **params)`, which a button's callback
+calls, drops the value so the next load reads it, unless it was read less than the dataset's `reload_s` ago, which a
+query or a file declares (none by default, and then it cannot be reloaded); a view is reloaded through its inputs.
+`bd.loaded(DATASET, **params)` is when the value a load would answer was read, or None, reading nothing.
+
 **Rows to the browser** (`bd.rows`, `basis.dash.browser`, from 15.8). `bd.rows(frame)` gives a frame's rows as AG
 Grid's `rowData` takes them, each a dict of JSON's values: NaN and ±inf `null`, dates ISO text, times ISO text in UTC
 with `Z`, the index left out. It is built a column at a time through Arrow: 19 ms for 10,000 rows of 20 columns and
