@@ -249,9 +249,8 @@ class _Checked:
                         "serve every script, stylesheet and font from the app: put the file in the repo's assets/, and never name a CDN",
                     )
                 )
-        for tag in _STYLESHEET.findall(index):
-            href = next(iter(_ATTRIBUTE.findall(tag)), None)
-            if href is None or _foreign(href):
+        for href in stylesheets(index):
+            if _foreign(href):
                 continue
             answered = self.drive.client.http.get(href)
             for url in _CSS_URL.findall(answered.text if answered.status_code == HTTPStatus.OK else ""):
@@ -337,6 +336,11 @@ _ORIGIN_FIX = "serve the file from the app's assets/, by a path of its own"
 _STORE_FIX = "keep rows out of stores: each callback that needs a dataset asks bd.load for it again, which the cache answers in under a millisecond"
 _LOOP_FIX = "move the work into a view (bd.view), which runs in a worker thread, or narrow what it computes"
 _SIZE_FIX = "send fewer rows or columns: filter in a view, or show a summary and let the person ask for the detail"
+
+
+def stylesheets(index: str) -> list[str]:
+    """The address of each stylesheet an index links, as it names it."""
+    return [href for tag in _STYLESHEET.findall(index) if (href := next(iter(_ATTRIBUTE.findall(tag)), None)) is not None]
 
 
 def _said(error: BaseException) -> str:

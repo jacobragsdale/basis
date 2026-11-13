@@ -132,3 +132,16 @@ def test_an_app_that_reads_and_declares_no_fakes_or_does_not_load_is_one_line(tm
     [(reason, fix)] = checks.problems(repo)
     assert reason == "the repo's Dash app does not load"
     assert fix.startswith("no app named 'desk'")
+
+
+def test_the_svg_namespace_in_basiss_icons_is_no_other_origin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """basis's stylesheet draws each icon from a data URI that names the SVG namespace, which a browser never fetches."""
+    repo, _ = made(tmp_path, monkeypatch, EXTRA="bd.icon('search', label='Search'),")
+    monkeypatch.syspath_prepend(str(repo))
+    from basis.dash.testing import client  # noqa: PLC0415 -- the app as the check builds it, to read what it serves
+
+    with client(loading.load()) as opened:
+        index = opened.index()
+        sheets = [opened.http.get(href).text for href in checks.stylesheets(index)]
+    assert any("http://www.w3.org/2000/svg" in sheet for sheet in sheets)
+    assert checks.problems(repo) == []
