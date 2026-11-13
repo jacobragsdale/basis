@@ -6,6 +6,8 @@ text say a number as the grid says it:
     bd.charts.bar(sectors, Sector, x="sector", y="weight")
     bd.charts.waterfall(attribution, Attribution, x="driver", y="pnl")
 
+- **Text stays level.** A long category name wraps onto two lines, and a narrow axis has fewer ticks, before any is
+  turned.
 - **Axes** have ticks of round values, worked out here and written by `bd.text` in the column's format, with as many
   decimals as tell them apart, an amount in thousands, millions or billions where it is large: "$25M", "4.5%", "120
   bp", "99-16".
@@ -53,6 +55,10 @@ LABELLED: Final = 4
 """The most series a chart names at their lines' ends; more keep a legend."""
 TICKS: Final = 5
 """About how many ticks a value axis has."""
+HISTOGRAM_TICKS: Final = 3
+"""About how many a histogram's has, so its ticks stay level in a narrow card."""
+WRAP: Final = 7
+"""The longest category name a bar's axis writes on one line; a longer one breaks at its middle space or hyphen."""
 FIT: Final = "#7d8796"
 """A fitted line's colour, a grey that reads at 3:1 on both cards."""
 _STEPS: Final = (1.0, 2.0, 2.5, 5.0, 10.0)
@@ -126,7 +132,7 @@ def bar(frame: pd.DataFrame, row: type[Row], *, x: str, y: str, by: str | None =
     across = orientation == "h"
     for name, part, column in series:
         values = part[column].astype("float64")
-        categories = part[x].astype(str)
+        categories = part[x].astype(str) if across else part[x].astype(str).map(wrapped)
         texts_shown = [texts.text(value, display) for value in values]
         shown.add_trace(
             go.Bar(
@@ -147,7 +153,7 @@ def bar(frame: pd.DataFrame, row: type[Row], *, x: str, y: str, by: str | None =
     if across:
         shown.update_layout(xaxis=value_axis | {"showgrid": True, "showline": False, "ticks": ""}, yaxis={"autorange": "reversed", "showgrid": False, "showline": True, "ticks": "outside"})
     else:
-        shown.update_layout(yaxis=value_axis)
+        shown.update_layout(xaxis={"tickangle": 0}, yaxis=value_axis)
     return shown
 
 
@@ -219,7 +225,7 @@ def waterfall(frame: pd.DataFrame, row: type[Row], *, x: str, y: str, total: str
         return empty()
     display = _display(row, y)
     values = given[y].astype("float64").tolist()
-    labels = given[x].astype(str).tolist()
+    labels = [wrapped(name) for name in given[x].astype(str)]
     measures = ["relative"] * len(values)
     if total is not None:
         labels.append(total)
@@ -243,7 +249,7 @@ def waterfall(frame: pd.DataFrame, row: type[Row], *, x: str, y: str, total: str
     )
     running = np.cumsum([value for value, measure in zip(values, measures, strict=True) if measure == "relative"])
     shown.update_traces(textfont={"size": 11}, cliponaxis=False)
-    shown.update_layout(showlegend=False, yaxis=_value_axis(pd.Series([0.0, *running.tolist()]), display, zero=True))
+    shown.update_layout(showlegend=False, xaxis={"tickangle": 0}, yaxis=_value_axis(pd.Series([0.0, *running.tolist()]), display, zero=True))
     return shown
 
 
@@ -295,8 +301,21 @@ def histogram(frame: pd.DataFrame, row: type[Row], *, x: str, bins: int = 20) ->
     centres = (edges[:-1] + edges[1:]) / 2
     hover = [f"{texts.text(low, display)} to {texts.text(high, display)}: {count:,}" for low, high, count in zip(edges[:-1], edges[1:], counts, strict=True)]
     shown = go.Figure(go.Bar(x=centres, y=counts, width=np.diff(edges) * 0.92, hovertext=hover, hovertemplate="%{hovertext}<extra></extra>", name=x))
-    shown.update_layout(showlegend=False, bargap=0, xaxis=_value_axis(pd.Series(edges), display) | {"showgrid": False}, yaxis={"rangemode": "tozero"})
+    across = _value_axis(pd.Series(edges), display, count=HISTOGRAM_TICKS)
+    shown.update_layout(showlegend=False, bargap=0, xaxis=across | {"showgrid": False, "tickangle": 0}, yaxis={"rangemode": "tozero"})
     return shown
+
+
+def wrapped(name: str) -> str:
+    """A category's name on one line, or on two where it is longer than `WRAP` and has a space or hyphen to break at,
+    the one nearest its middle, so names stay level rather than turn."""
+    if len(name) <= WRAP:
+        return name
+    breaks = [index for index, letter in enumerate(name) if letter in " -"]
+    if not breaks:
+        return name
+    at = min(breaks, key=lambda index: abs(index - len(name) / 2))
+    return f"{_escaped(name[: at + 1].rstrip())}<br>{_escaped(name[at + 1 :])}"
 
 
 def years(tenor: object) -> float:
@@ -364,11 +383,11 @@ def _decimals(step: float) -> int:
     return _MOST_DECIMALS
 
 
-def _value_axis(values: pd.Series, display: Display | None, *, zero: bool = False) -> dict[str, object]:
+def _value_axis(values: pd.Series, display: Display | None, *, zero: bool = False, count: int = TICKS) -> dict[str, object]:
     given = values.dropna()
     if given.empty:
         return {}
-    tickvals, ticktext = ticks(float(given.min()), float(given.max()), display, zero=zero)
+    tickvals, ticktext = ticks(float(given.min()), float(given.max()), display, zero=zero, count=count)
     if not tickvals:
         return {}
     return {"tickmode": "array", "tickvals": tickvals, "ticktext": ticktext, "range": [tickvals[0], tickvals[-1]], "zeroline": zero}

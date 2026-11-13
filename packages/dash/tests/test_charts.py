@@ -215,3 +215,23 @@ def test_the_template_keeps_a_title_above_the_legend() -> None:
     assert (layout.title.x, layout.title.yref, layout.title.y, layout.title.automargin) == (0, "container", 1, True)  # at the top left, in the margin it makes room for
     assert (layout.legend.orientation, layout.legend.x, layout.legend.y, layout.legend.yanchor) == ("h", 0, 1, "bottom")  # between the title and the plot
     assert layout.legend.yref in {None, "paper"}
+
+
+def test_names_and_ticks_stay_level_rather_than_turn() -> None:
+    drivers = pd.DataFrame({"driver": ["Carry", "Roll-down", "Curve and spread", "FX"], "pnl": [1.0, 2.0, -1.0, 0.5]})
+    waterfall = charts.waterfall(drivers, Driver, x="driver", y="pnl")
+    assert waterfall.layout.xaxis.tickangle == 0
+    assert list(waterfall.data[0].x) == ["Carry", "Roll-<br>down", "Curve and<br>spread", "FX", "Total"]
+    points = pd.DataFrame({"cusip": list("ABCD"), "duration": [1.0] * 4, "oas": [0.0, 0.01, 0.015, 0.025]})
+    histogram = charts.histogram(points, Point, x="oas")
+    assert histogram.layout.xaxis.tickangle == 0
+    assert len(histogram.layout.xaxis.tickvals) <= 5
+    bars = charts.bar(SECTORS, Sector, x="sector", y="market_value", by="book")
+    assert bars.layout.xaxis.tickangle == 0
+
+
+@pytest.mark.parametrize(
+    ("name", "shown"), [("Carry", "Carry"), ("Roll-down", "Roll-<br>down"), ("Securitized", "Securitized"), ("Curve and spread", "Curve and<br>spread"), ("Investment-grade", "Investment-<br>grade")]
+)
+def test_a_long_name_breaks_at_the_space_nearest_its_middle(name: str, shown: str) -> None:
+    assert charts.wrapped(name) == shown

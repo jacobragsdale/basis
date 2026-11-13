@@ -19,8 +19,8 @@ from basis.dash.app import App
 from basis.dash.grids import SEARCH
 from basis.dash.icons import icon
 from basis.dash.ids import NOTIFICATIONS, STATUS
-from basis.dash.pages import Page
-from dash import MATCH, ClientsideFunction, Input, Output, State, dcc, html
+from basis.dash.pages import FRESHNESS, Page
+from dash import ALL, MATCH, ClientsideFunction, Input, Output, State, dcc, html
 from dash.development.base_component import Component
 
 SCHEME: Final = "basis-scheme"
@@ -67,8 +67,10 @@ def links(pages: Sequence[Page]) -> list[Component]:
 
 def wire(made: dash.Dash) -> None:
     """basis's own callbacks, on `made` itself, since they are basis's and no module's, each in the browser alone: the
-    switch, and every grid's quick filter."""
+    switch, every page's freshness line, from the status store, and every grid's quick filter."""
     made.clientside_callback(ClientsideFunction(namespace="basis", function_name="scheme"), Output(SCHEME, "aria-label"), Input(SCHEME, "n_clicks"))
+    fresh = {"type": FRESHNESS, "page": ALL, "datasets": ALL}
+    made.clientside_callback(ClientsideFunction(namespace="basis", function_name="freshness"), Output(fresh, "children"), Output(fresh, "className"), Output(fresh, "title"), Input(STATUS, "data"))
     search = {"type": SEARCH, "grid": MATCH}
     made.clientside_callback(ClientsideFunction(namespace="basis", function_name="search"), Output(search, "className"), Input(search, "value"), State(search, "id"), prevent_initial_call=True)
 

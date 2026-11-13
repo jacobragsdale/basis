@@ -438,3 +438,99 @@ html:root body {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+/* A page's freshness line: quiet while the data is fresh, the warning's colour, with its mark, while any is stale. */
+.basis-freshness.basis-stale {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--basis-spacing) * 1.5);
+  padding: 0 calc(var(--basis-spacing) * 2);
+  border-radius: calc(var(--basis-radius) * 0.6);
+  background: var(--basis-warning-subtle);
+  color: var(--basis-warning);
+  font-weight: 550;
+}
+.basis-freshness.basis-stale::before {
+  content: "";
+  width: 0.875em;
+  height: 0.875em;
+  background-color: currentColor;
+  -webkit-mask: var(--basis-icon-triangle-exclamation-point) center / contain no-repeat;
+  mask: var(--basis-icon-triangle-exclamation-point) center / contain no-repeat;
+}
+
+/* Badges (basis.dash.tiles): a word in a tone, basis-ui's subtle fill and its strong text. */
+.basis-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--basis-spacing) * 1);
+  height: 1.25rem;
+  padding: 0 calc(var(--basis-spacing) * 2);
+  border-radius: calc(var(--basis-radius) * 0.6);
+  font-size: var(--basis-text-xs);
+  font-weight: 550;
+  line-height: 1;
+  white-space: nowrap;
+}
+.basis-badge-neutral {
+  background: var(--basis-secondary);
+  color: var(--basis-secondary-foreground);
+}
+.basis-badge-info {
+  background: var(--basis-info-subtle);
+  color: var(--basis-info);
+}
+.basis-badge-success {
+  background: var(--basis-success-subtle);
+  color: var(--basis-success);
+}
+.basis-badge-warning {
+  background: var(--basis-warning-subtle);
+  color: var(--basis-warning);
+}
+.basis-badge-danger {
+  background: var(--basis-destructive-subtle);
+  color: var(--basis-destructive);
+}
+
+/* A stat tile: its label, its number large in tabular figures, its change in the gain or loss colour, a sparkline. */
+.basis-stat {
+  gap: calc(var(--basis-spacing) * 1);
+  padding: calc(var(--basis-spacing) * 3) calc(var(--basis-spacing) * 4) calc(var(--basis-spacing) * 3);
+  min-height: 6.5rem;
+}
+.basis-stat-label {
+  color: var(--basis-muted-foreground);
+  font-size: var(--basis-text-xs);
+  font-weight: 550;
+}
+.basis-stat-value {
+  color: var(--basis-card-foreground);
+  font-family: var(--basis-font-num);
+  font-size: var(--basis-text-2xl);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+}
+.basis-stat-change {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--basis-spacing) * 1.5);
+  min-height: 1.125rem;
+  color: var(--basis-muted-foreground);
+  font-size: var(--basis-text-xs);
+  font-weight: 550;
+}
+.basis-stat-change.basis-gain {
+  color: var(--basis-gain);
+}
+.basis-stat-change.basis-loss {
+  color: var(--basis-loss);
+}
+.basis-stat-period {
+  color: var(--basis-muted-foreground);
+  font-weight: 400;
+}
+.basis-stat-spark {
+  margin-top: auto;
+}

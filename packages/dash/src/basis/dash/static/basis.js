@@ -298,6 +298,60 @@
     }
   }
 
+  /* A page's freshness line, from the status store: when its data was read, the oldest of its datasets, in the desk's
+     zone, with the date where it is not today's; or which of them is stale, a last good value a failed reload left. Its
+     title lists each dataset. An absolute time, so the line never ticks. */
+  var ZONE = "America/New_York"; /* basis.core.display.DEFAULT_ZONE */
+  var clock = new Intl.DateTimeFormat("en-US", { timeZone: ZONE, hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23", timeZoneName: "short" });
+  var calendarDay = new Intl.DateTimeFormat("en-CA", { timeZone: ZONE, year: "numeric", month: "2-digit", day: "2-digit" });
+  function when(iso, now) {
+    var moment = new Date(iso);
+    if (Number.isNaN(moment.getTime())) return "";
+    var day = calendarDay.format(moment);
+    return (day === calendarDay.format(now) ? "" : day + " ") + clock.format(moment);
+  }
+
+  basis.freshness = function (data, now) {
+    var context = window.dash_clientside.callback_context;
+    var outputs = (context && context.outputs_list && context.outputs_list[0]) || [];
+    var today = now ? new Date(now) : new Date();
+    var known = data || {};
+    var texts = [];
+    var classes = [];
+    var titles = [];
+    outputs.forEach(function (output) {
+      var names = output.id.datasets ? output.id.datasets.split(",") : Object.keys(known).sort();
+      var found = names.filter(function (name) {
+        return known[name] && known[name].loaded_at;
+      });
+      if (!found.length) {
+        texts.push("");
+        classes.push("basis-freshness");
+        titles.push("");
+        return;
+      }
+      var oldest = found.reduce(function (first, name) {
+        return known[name].loaded_at < known[first].loaded_at ? name : first;
+      }, found[0]);
+      var stale = found.filter(function (name) {
+        return known[name].stale;
+      });
+      var title = found.map(function (name) {
+        var entry = known[name];
+        return name + ": " + format(entry.rows, { decimals: 0 }) + " rows, read " + when(entry.loaded_at, today) + (entry.stale ? ", stale" : "");
+      });
+      if (stale.length) {
+        texts.push("Stale: " + stale.join(", ") + ", as read " + when(known[stale[0]].loaded_at, today));
+        classes.push("basis-freshness basis-stale");
+      } else {
+        texts.push("Data as of " + when(known[oldest].loaded_at, today));
+        classes.push("basis-freshness");
+      }
+      titles.push(title.join("\n"));
+    });
+    return [texts, classes, titles];
+  };
+
   basis.totalsOf = totalsOf;
   basis.format = format;
   var grid = (window.dashAgGridFunctions = window.dashAgGridFunctions || {});

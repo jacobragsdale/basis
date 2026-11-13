@@ -670,6 +670,23 @@ legend. An empty frame draws a sentence where the plot would be. The template pu
 margin it makes room for (`yref` the container, `automargin`) and the legend between the title and the plot, so they
 never meet at any width; the template is 504 bytes. Text Plotly draws outside a mark takes the card's muted colour in
 basis's CSS; text inside one keeps Plotly's choice against the mark.
+A category's name longer than seven letters wraps at its middle space or hyphen, and a histogram has three ticks or so,
+so no chart turns its text; a test holds each builder's tick angle at level.
+
+**Tiles, badges and the freshness line, as built (16.6).** `bd.stat(id, label, display, change=, period=, good=,
+span=)` is a card of the body's grid, three columns by default, which waits with its label and a dash, and a callback
+fills with `STAT.show(value, change=, history=)`: the value written by `bd.text` in its format, large in tabular
+figures; a change with its sign, written as the grid writes a number, an arrow, and the gain or loss colour, turned
+about by `good="down"` for a number that should fall, and neither sign nor colour where it rounds to nothing; and a
+sparkline of its history, a static Plotly figure, thinned evenly to 400 points. `bd.badge(text, tone, icon_name=)`
+is a word in `neutral`, `info`, `success`, `warning` or `danger`, each basis-ui's subtle fill under its strong text,
+held to 4.5:1 in both schemes. Every page's freshness line is one clientside callback of the shell's, which reads the
+status store as 15.2 writes it: "Data as of 14:05:03 EST", the oldest load of the datasets the page names
+(`bd.page(datasets=[...])`, or every one the store holds), in the desk's zone (basis-core's display zone, the
+script's too, which a test holds equal), with the date where it is not today's; or "Stale: curve, as read 16:30:00
+EST" in the warning's colour and mark, where any is stale. Its title lists each dataset, its rows and when it was read.
+It is an absolute time, so the line never ticks. Each icon is a variable on the root, `--basis-icon-NAME`, which
+basis's own CSS masks with too.
 
 **Two ids every page has.** basis's chrome around every page holds two components whose ids are fixed and exported
 from `basis.dash.ids`, so the data and display lanes build against them: `NOTIFICATIONS`, DMC's

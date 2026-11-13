@@ -86,7 +86,8 @@ def svg(name: str) -> str:
 
 
 def stylesheet() -> str:
-    """The icons' CSS, `static/icons.css`: one mask for each."""
+    """The icons' CSS, `static/icons.css`: each icon once, as `--basis-icon-NAME` on the root, which CSS of basis's own
+    can mask with too, and a class for each."""
     lines = [
         "/* Written by `python -m basis.dash.icons` from basis.dash.icons' table, lucide's shapes; do not edit it by hand. */",
         "",
@@ -102,8 +103,10 @@ def stylesheet() -> str:
         "}",
         "",
     ]
-    for name in NAMES:
-        lines += [f".basis-icon-{name} {{", f'  --basis-icon: url("data:image/svg+xml,{quote(svg(name), safe=" =:/,.-")}");', "}"]
+    lines.append(":root {")
+    lines += [f'  --basis-icon-{name}: url("data:image/svg+xml,{quote(svg(name), safe=" =:/,.-")}");' for name in NAMES]
+    lines += ["}", ""]
+    lines += [f".basis-icon-{name} {{\n  --basis-icon: var(--basis-icon-{name});\n}}" for name in NAMES]
     return "\n".join([*lines, ""])
 
 

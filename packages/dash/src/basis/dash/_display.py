@@ -8,5 +8,6 @@ from basis.dash.grids import Grid, column, grid, weighted
 from basis.dash.icons import icon
 from basis.dash.pages import card
 from basis.dash.texts import text
+from basis.dash.tiles import Shown, Stat, badge, stat
 
-__all__: list[str] = ["Grid", "card", "charts", "column", "graph", "grid", "icon", "text", "weighted"]
+__all__: list[str] = ["Grid", "Shown", "Stat", "badge", "card", "charts", "column", "graph", "grid", "icon", "stat", "text", "weighted"]

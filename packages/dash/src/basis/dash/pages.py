@@ -32,6 +32,9 @@ type Layout = Component | Callable[..., Component]
 _PATH = re.compile(r"^/(?:[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*)?$")
 COLUMNS: Final = 12
 """The columns of a page's body, which a card's `span` counts."""
+FRESHNESS: Final = "basis-freshness"
+"""The type of a page's freshness line's id, `{"type": FRESHNESS, "page": PATH, "datasets": NAMES}`, which the
+shell's one callback writes from the status store: NAMES the datasets it reports, by commas, or empty for all."""
 
 
 @dataclass(frozen=True)
@@ -46,9 +49,12 @@ class Page:
     callbacks."""
 
 
-def page(path: str, title: str, *, body: Sequence[Component] | None = None, filters: Sequence[Component] = (), description: str | None = None, layout: Layout | None = None) -> Page:
+def page(
+    path: str, title: str, *, body: Sequence[Component] | None = None, filters: Sequence[Component] = (), description: str | None = None, datasets: Sequence[object] = (), layout: Layout | None = None
+) -> Page:
     """A page at `path`, titled `title`, showing `body` under its `filters`, or `layout` where the page lays itself out,
-    declared in the module that calls it."""
+    declared in the module that calls it. Its freshness line reports `datasets`, each a dataset or its name, or every
+    dataset the page's callbacks loaded where it names none."""
     if not _PATH.match(path):
         msg = f"a page's path is / or /NAME, each part letters, digits, dots, dashes, underscores or tildes, with no slash at its end, not {path!r}: give one, as /positions"
         raise DeclarationError(msg)
@@ -61,20 +67,32 @@ def page(path: str, title: str, *, body: Sequence[Component] | None = None, filt
     if layout is not None and not (isinstance(layout, Component) or callable(layout)):
         msg = f"the page at {path}'s layout is a {type(layout).__qualname__}: give a Dash component, or a function that returns one"
         raise DeclarationError(msg)
-    if layout is not None and (filters or description is not None):
-        msg = f"the page at {path} has a layout of its own, so it takes no filters or description: put them in its layout, or give it a body"
+    if layout is not None and (filters or description is not None or datasets):
+        msg = f"the page at {path} has a layout of its own, so it takes no filters, description or datasets: put them in its layout, or give it a body"
         raise DeclarationError(msg)
     if layout is None:
         if body is None:
             msg = f"the page at {path} gives neither a body nor a layout: give its body, a list of bd.card(...), or a layout of its own"
             raise DeclarationError(msg)
-        layout = _composed(path, title, list(body), list(filters), description)
+        layout = _composed(path, title, list(body), list(filters), description=description, datasets=_names(path, datasets))
     frame = inspect.currentframe()
     caller = frame.f_back.f_globals.get("__name__") if frame is not None and frame.f_back is not None else None
     return Page(path, title, layout, caller if isinstance(caller, str) else "__main__")
 
 
-def _composed(path: str, title: str, body: list[Component], filters: list[Component], description: str | None) -> Callable[..., Component]:
+def _names(path: str, datasets: Sequence[object]) -> str:
+    """The datasets a page's freshness line reports, by name, joined by commas."""
+    names = []
+    for given in datasets:
+        name = given if isinstance(given, str) else getattr(given, "name", None)
+        if not isinstance(name, str) or not name or "," in name:
+            msg = f"the page at {path} reports {given!r}: give a dataset, or its name"
+            raise DeclarationError(msg)
+        names.append(name)
+    return ",".join(names)
+
+
+def _composed(path: str, title: str, body: list[Component], filters: list[Component], *, description: str | None, datasets: str) -> Callable[..., Component]:
     for index, part in enumerate([*body, *filters]):
         if not isinstance(part, Component):
             msg = f"the page at {path}'s body and filters are Dash components, not a {type(part).__qualname__} (item {index + 1}): give bd.card(...), or a component"
@@ -84,7 +102,7 @@ def _composed(path: str, title: str, body: list[Component], filters: list[Compon
         head: list[Component] = [html.H1(title, className="basis-page-title")]
         if description is not None:
             head.append(html.P(description, className="basis-page-description"))
-        head.append(html.Div(className="basis-freshness"))
+        head.append(html.Div(id={"type": FRESHNESS, "page": path, "datasets": datasets}, className="basis-freshness", role="status"))
         shown: list[Component] = [html.Div(head, className="basis-page-head")]
         if filters:
             shown.append(html.Div(filters, className="basis-filters", role="search", **{"aria-label": "Filters"}))
