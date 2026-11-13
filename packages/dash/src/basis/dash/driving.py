@@ -163,15 +163,15 @@ class Drive:
 
 
 @contextmanager
-def driving(app: App, *, settings: Settings | None = None, environment: str | None = None) -> Generator[Drive]:
+def driving(app: App, *, settings: Settings | None = None, environment: str | None = None, fakes: Mapping[Any, object] | None = None) -> Generator[Drive]:
     """`app`, built and started, driven: on its fakes, or with `settings`, an environment's, named `environment`, on
-    that environment's resources. Every log record is kept on the `Drive`, not written."""
+    that environment's resources, or `fakes`, a test's. Every log record is kept on the `Drive`, not written."""
     with _captured() as records:
         if settings is None:
-            with client(app) as opened:
+            with client(app, fakes=fakes) as opened:
                 yield from _watched(app, opened, records)
         else:
-            built = build(app, settings=settings, environment=environment)
+            built = build(app, settings=settings, environment=environment, fakes=fakes)
             with TestClient(built.asgi) as http:
                 yield from _watched(app, Client(built, http), records)
 

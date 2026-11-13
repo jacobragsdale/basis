@@ -101,6 +101,9 @@ class Service:
 
 
 type Resource = Database | Folder | Lake | Service
+type Example = Mapping[str, object] | Callable[[], Mapping[str, object]]
+"""A dataset's smoke example: the params `basis smoke --env ENV` loads it with, or a function that gives them, as
+`lambda: {"as_of": bd.day("previous")}`, for a date that moves."""
 RESOURCES = (Database, Folder, Lake, Service)
 
 
@@ -115,6 +118,8 @@ class Dataset:
     """Each param a load gives, by name, with its type."""
     module: str = field(compare=False)
     """The module that declared it."""
+    smoke: Example | None = field(default=None, compare=False)
+    """The params `basis smoke --env ENV` loads it with, in that environment, or None where it loads it not at all."""
 
     def __post_init__(self) -> None:
         _declared.append(self)
@@ -228,10 +233,12 @@ def query(
     ttl_s: float | None = None,
     stale_s: float | None = None,
     reload_s: float | None = None,
+    smoke: Example | None = None,
 ) -> Query:
     """The rows the SQL file `sql`, relative to the folder of the module that declares it, selects from `database`,
     binding each of `binds`, as `{"as_of": date}`, and nothing else, as `row`'s columns. `reload_s` lets a person ask
-    for it again (`bd.reload`), at most once in that many seconds."""
+    for it again (`bd.reload`), at most once in that many seconds. `smoke` is the params `basis smoke --env ENV` loads
+    it with."""
     named = _named(name, "query")
     if not isinstance(database, Database):
         msg = f"query {name} reads {database!r}: give the database it reads, declared with bd.database(NAME, ...)"
@@ -240,8 +247,18 @@ def query(
         msg = f"query {name} reads {sql!r}: give its SQL file, relative to the module that declares it, as sql/{name}.sql"
         raise DeclarationError(msg)
     ttl, stale = _freshness(name, ttl_s, stale_s)
+    params = _params(name, binds or {})
     return Query(
-        name=named, row=_row(name, row), params=_params(name, binds or {}), module=_caller(), database=database, sql=_caller_folder() / sql, ttl_s=ttl, stale_s=stale, reload_s=_reload(name, reload_s)
+        name=named,
+        row=_row(name, row),
+        params=params,
+        module=_caller(),
+        smoke=_smoke(name, params, smoke),
+        database=database,
+        sql=_caller_folder() / sql,
+        ttl_s=ttl,
+        stale_s=stale,
+        reload_s=_reload(name, reload_s),
     )
 
 
@@ -256,6 +273,7 @@ def file(
     ttl_s: float | None = None,
     stale_s: float | None = None,
     reload_s: float | None = None,
+    smoke: Example | None = None,
 ) -> File:
     """The file at `path` inside `source`, a folder or a lake, as `row`'s columns: a CSV's every field read as text,
     which the row types, so nothing is inferred; a Parquet file, or a lake's folder of them, as it is typed; or a
@@ -287,7 +305,19 @@ def file(
         msg = f"file {name} reads {path!r}: name the sheet of a workbook it reads, as sheet='Positions', and no sheet of any other file"
         raise DeclarationError(msg)
     ttl, stale = _freshness(name, ttl_s, stale_s)
-    return File(name=named, row=_row(name, row), params=params, module=_caller(), folder=source, path=path, sheet=sheet, ttl_s=ttl, stale_s=stale, reload_s=_reload(name, reload_s))
+    return File(
+        name=named,
+        row=_row(name, row),
+        params=params,
+        module=_caller(),
+        smoke=_smoke(name, params, smoke),
+        folder=source,
+        path=path,
+        sheet=sheet,
+        ttl_s=ttl,
+        stale_s=stale,
+        reload_s=_reload(name, reload_s),
+    )
 
 
 def lake(name: str) -> Lake:
@@ -317,6 +347,7 @@ def fetch(
     ttl_s: float | None = None,
     stale_s: float | None = None,
     reload_s: float | None = None,
+    smoke: Example | None = None,
 ) -> Fetch:
     """The rows `service` answers a GET of `path` with, a JSON list of objects, one per row, each of `row`'s columns
     by its name, read as text, as a CSV's is, and typed by the row; `rows_at` names the list where the reply is an
@@ -332,8 +363,19 @@ def fetch(
         msg = f"fetch {name}'s rows_at is {rows_at!r}: give the dotted path to the list of rows in the reply, as result.items"
         raise DeclarationError(msg)
     ttl, stale = _freshness(name, ttl_s, stale_s)
+    params = _params(name, binds or {})
     return Fetch(
-        name=named, row=_row(name, row), params=_params(name, binds or {}), module=_caller(), service=service, path=path, rows_at=rows_at, ttl_s=ttl, stale_s=stale, reload_s=_reload(name, reload_s)
+        name=named,
+        row=_row(name, row),
+        params=params,
+        module=_caller(),
+        smoke=_smoke(name, params, smoke),
+        service=service,
+        path=path,
+        rows_at=rows_at,
+        ttl_s=ttl,
+        stale_s=stale,
+        reload_s=_reload(name, reload_s),
     )
 
 
@@ -446,6 +488,18 @@ def _placeholders(name: str, path: str) -> set[str]:
         msg = f"file {name}'s path {path!r} names a param with a format, none, or more than once: name each once, as {{as_of}}"
         raise DeclarationError(msg)
     return set(found)
+
+
+def _smoke(name: str, params: Mapping[str, type], smoke: object) -> Example | None:
+    """A dataset's smoke example, which names each of its params, and no other; or a function that gives them, which
+    `basis smoke` calls."""
+    if smoke is None or callable(smoke):
+        return smoke  # ty: ignore[invalid-return-type] -- a function of no arguments, which basis smoke calls and checks what it gives
+    if not isinstance(smoke, Mapping) or set(smoke) != set(params):
+        wanted = ", ".join(f"{param}=..." for param in params) or "nothing"
+        msg = f"{name}'s smoke example is {smoke!r}: give the params basis smoke loads it with, each of its own and no other, as smoke={{{wanted}}}, or a function that returns them"
+        raise DeclarationError(msg)
+    return {str(param): value for param, value in smoke.items()}
 
 
 def _reload(name: str, reload_s: float | None) -> float | None:

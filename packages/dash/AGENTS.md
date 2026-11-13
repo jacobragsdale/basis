@@ -21,7 +21,7 @@ and phase 16 (display), each in modules of its own, so they never edit one file.
 | `_data.py`, `_display.py` | Each lane's names: it imports each from the module that defines it and lists it in `__all__`. Only its lane edits it. | Data, display |
 | `app.py` | `App`, the declaration, checked when it is made, and the module that declared it. | Foundations |
 | `pages.py` | `Page` and `bd.page(path, title, layout=...)`, and the module that declared it, whose callbacks are the page's; 16.2 adds its filters and body. | Display, from 16.2 |
-| `settings.py` | `Settings`, basis-core's, with `serve`: core's `serving.Serve` and the path prefix, `prefix` and `prefix_stripped`; `Settings.given`, for tests; `unreadable`. | Foundations |
+| `settings.py` | `Settings`, basis-core's, with `serve`: core's `serving.Serve` and the path prefix, `prefix` and `prefix_stripped`; `smoke`, where `basis smoke` reaches the deployed app; `Settings.given`, for tests; `unreadable`. | Foundations |
 | `ids.py` | The fixed ids of the chrome both lanes build against: `NOTIFICATIONS`, DMC's notification container, and `STATUS`, a store of what is known of each dataset's last load. Its docstring says what each prop holds. | Foundations |
 | `errors.py` | `DeclarationError`, and `on_error`, the one handler of every callback's error, which logs it once, keeps each output as it was, and shows its sentence in the notifications. | Data, from 15.5 |
 | `assets.py`, `static/` | The one place basis registers its CSS, fonts and scripts with Dash's hooks, and the files themselves; 16.1 and 16.3 add theirs. | Display |
@@ -32,6 +32,7 @@ and phase 16 (display), each in modules of its own, so they never edit one file.
 | `cli.py` | `part`: `basis serve [APP] --env ENV`, `basis dev [APP] [--env ENV]`, `basis render PAGE [--set ID.PROP=VALUE]... [--env ENV]` and `basis load DATASET [--param NAME=VALUE]... [--env ENV]`, and the part's checks. | Foundations; 17.x adds verbs |
 | `driving.py` | An app driven as a browser drives it, in the process: a page's components inside the chrome, its first values, the callbacks its load calls in the browser's order, each call's answer, failures and hold on the loop; `checks` and `render` share it. | The repo's, from 17.2 |
 | `render.py` | `basis render` and `basis load`: what a page shows, and what a dataset holds, as JSON. Its docstring is the reference. | The repo's, from 17.2 |
+| `smoke.py` | `basis smoke --env ENV`, the part's `smoke`: the app at `BASIS_SMOKE__URL` ready, at the commit, every page answering, and each dataset's `smoke=` example loaded through the environment's settings. Its docstring is the reference. | The repo's, from 17.4 |
 | `checks.py` | `basis check`'s checks of a Dash repo, the part's `checks`: the layers, the callbacks' modules and `async`, and the app driven on its fakes through `bd.testing`. Its docstring is the reference. | The repo's, from 17.1 |
 | `loading.py` | `load`, an app by entry point (`basis.dash_apps`) or module; `bd.load` is a dataset's (`loads.py`). | Foundations |
 | `testing.py` | `client`: an app built in the process, driven through FastAPI's `TestClient`, with `index`, `layout`, `dependencies`, `page` and `fire`, on the fakes the app declares or a test's. | Foundations; data from 15.4 |

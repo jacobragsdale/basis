@@ -6,6 +6,7 @@ stops it there, with one line that names the variable to set."""
 
 import re
 from contextvars import ContextVar
+from pathlib import Path
 from typing import Annotated, Self, override
 
 from pydantic import AfterValidator, Field, ValidationError
@@ -14,6 +15,7 @@ from pydantic_settings import SettingsError as SourceError
 
 from basis.core import serving
 from basis.core import settings as core
+from basis.core.model import Model
 from basis.core.settings import SettingsError, variable
 
 _PREFIX = re.compile(r"^/(?:[A-Za-z0-9._~-]+/)*$")
@@ -37,8 +39,19 @@ class Serve(serving.Serve):
     for everything under the prefix. Where it keeps the prefix, the server answers under it, its health routes too."""
 
 
+class Smoke(Model):
+    """Where `basis smoke --env ENV` reaches the app as that environment serves it."""
+
+    url: str
+    """The app's address there, as a browser opens it, its prefix included: `https://qa.example.com/apps/positions/`."""
+    ca_bundle: Path | None = None
+    """The certificates its TLS is checked against, where they are not the system's."""
+
+
 class Settings(core.Settings):
     serve: Serve = Field(default_factory=Serve)
+    smoke: Smoke | None = None
+    """Where `basis smoke` reaches the deployed app, in an environment's settings: `BASIS_SMOKE__URL`."""
     cache_mb: Annotated[int, Field(ge=1)] = 512
     """The most megabytes of datasets the process keeps, `BASIS_CACHE_MB`, as their Arrow tables count them: past it,
     the least recently used are evicted first (`basis.dash.cache`)."""

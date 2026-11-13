@@ -7,7 +7,8 @@
 - `basis render PAGE [--set ID.PROP=VALUE]... [--env ENV]` and `basis load DATASET [--param NAME=VALUE]... [--env ENV]`
   print what a page shows and what a dataset holds, as JSON, on the app's fakes unless an environment is named
   (`basis.dash.render`);
-- `basis check` runs the part's checks of the repo's code (`basis.dash.checks`).
+- `basis check` runs the part's checks of the repo's code (`basis.dash.checks`), and `basis smoke --env ENV` its checks
+  of the app as that environment serves it (`basis.dash.smoke`).
 
 `serve` reads the settings of the environment `--env` or `BASIS_ENV` names (`basis.core.environments`). A repo serves
 one thing, so it declares `dash` or `api`, never both: each adds `serve` and `dev`, and `basis` refuses two declared
@@ -73,7 +74,14 @@ def part() -> Part:
             ),
         ),
         checks=_checks,
+        smoke=_smoke,
     )
+
+
+def _smoke(repo: Path, env: str, commit: str | None) -> list[Problem]:
+    from basis.dash import smoke  # noqa: PLC0415 -- the client and the app load when the verb runs
+
+    return smoke.smoke(repo, env, commit=commit)
 
 
 def _checks(repo: Path) -> list[Problem]:

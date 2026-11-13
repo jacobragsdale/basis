@@ -807,6 +807,16 @@ callback sent; and each callback that failed, with why, which fails the command 
 declared type, and prints its rows, its columns, its first ten rows as text and each load's milliseconds and cache, so
 the second shows the hit. Both read an environment through its settings as `basis serve` does, read-only as ever.
 
+**Smoke, as built (17.4).** `basis smoke --env ENV [--commit SHA]` reaches the app at `BASIS_SMOKE__URL`, its
+address in that environment as a browser opens it, its prefix included, and checks, each failure one `ERROR` line:
+`health/ready` answers 200 with JSON, and with `--commit` names that commit; then every page's URL answers Dash's index,
+and Dash Pages' router answers each page's layout, through the one POST a browser makes for it, which changes nothing.
+Then every dataset that declares a smoke example, `smoke={"as_of": date(...)}` on `bd.query`, `bd.file` or `bd.fetch`,
+or a function of no arguments that returns one, for a date that moves, is loaded with it in the smoke's own process,
+through the environment's settings, as `basis load --env` would, so a database, a login or a SQL file that the
+environment refuses is named. An example names each of its dataset's params and no other, checked where it is
+declared; a view has none, since its inputs' examples load what it reads.
+
 **The package is laid out for two lanes.** The foundations' modules build, serve and test an app; the data lane's
 (declarations, the cache, loads, views, fixtures) and the display lane's (theme, shell, page, grid, charts, states,
 exports and `static/`) are their own, and each lane adds its names to `bd` through a module only it edits

@@ -52,3 +52,8 @@ def test_basis_check_runs_the_parts_checks_of_the_repos_app(tmp_path: Path) -> N
     part = cli.part()
     assert part.checks is not None
     assert part.checks(_repo(tmp_path, '["dash"]')) == checks.problems(tmp_path) == []  # a repo with no package has no app to check
+
+
+def test_basis_lists_smoke_in_a_repo_with_a_dash_app(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert basis(_repo(tmp_path, '["dash"]'), "--help") == 0
+    assert re.search(r"^  smoke ", capsys.readouterr().out, re.MULTILINE)
