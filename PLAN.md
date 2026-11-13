@@ -5,6 +5,8 @@ MVP, done on 2026-11-09 against commit `95e6794`, and the work that follows from
 still holds the decisions and [the roadmap](docs/roadmap.md) phases 0 to 5; this page adds phases 6 to 12, whose step
 ids continue the roadmap's, so a branch is named as `AGENTS.md` says, such as `7.1-publish-state`.
 
+Phases 13 to 18, optim's removal and Dash apps, are [a plan of their own](docs/dash-plan.md).
+
 ## Status
 
 As of 2026-11-11. Each step lands on `main` as one commit or more; this table names each step's commits, and a

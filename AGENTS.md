@@ -4,7 +4,8 @@ This repo is basis (a placeholder name): the Python packages that give a firm's 
 optimizers one shape. UIs live in its TypeScript sibling, [basis-ui](https://github.com/jacobragsdale/basis-ui), and
 meet basis at the contract in [docs/design.md](docs/design.md#what-a-ui-can-rely-on). [docs/design.md](docs/design.md)
 holds the decisions and their reasons, and [docs/roadmap.md](docs/roadmap.md) the phases, their steps, and the lanes
-that run at the same time, and [PLAN.md](PLAN.md) the review after the MVP and its phases 6 to 12. The code is in
+that run at the same time, [PLAN.md](PLAN.md) the review after the MVP and its phases 6 to 12, and
+[docs/dash-plan.md](docs/dash-plan.md) phases 13 to 18: optim's removal, and Dash apps. The code is in
 `packages/`: basis-core, basis-job, basis-api, and optim, whose design is provisional.
 
 ## Working here
