@@ -36,6 +36,7 @@ A row is a subclass of `etl.Row` with one annotated attribute per column, in col
 | `date` | Arrow's `date32[day]` | |
 | `Annotated[datetime, etl.Zone(NAME)]` | Arrow's `timestamp[us, tz=UTC]` | an IANA zone name |
 | `Annotated[str, etl.Json()]` | Arrow's `string` | each value JSON text, an object or an array, as SQL Server's `json` type holds it; never a key or a `ReplaceWhere(matching=...)` column |
+| `Annotated[float, Display(kind=KIND, ...)]` | numpy's `float64` | basis-core's `basis.core.display.Display`: how people read the column, which changes nothing a frame holds or a table stores |
 
 Every number is a `float`, an amount or a count alike, numpy's float64 in a frame, with NaN where it is missing; an
 `int` or a `Decimal` column is refused, with the fix. An identifier, such as an id or an account number, is a `str`,

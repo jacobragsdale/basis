@@ -432,6 +432,14 @@ a job reaches another service; a `Clock` or `Ids` gives the transform values tha
 replay is given them again. basis-api keeps what is a request's own, a route's deadline, which caps its calls, its
 transaction, the outbox, the compute pool and identity, and the cache.
 
+**Rows.** A frame's row, `Row`, with `conform` and its annotations, is basis-core's (`basis.core.rows`, step 14.3 of
+[the Dash plan](dash-plan.md)), so a job's tables and a Dash app's datasets declare their columns one way; `basis.job`
+exports the names it always has. A `float` column may declare its display format, `Annotated[float,
+Display(kind="money", currency="USD")]`, which its `Column` carries for whatever shows it and which changes nothing a
+frame holds or a table stores. Its refusals keep the fixes a job has always read, such as `etl.Zone('UTC')`, as
+`basis.core.frames` and `destination` already did: a Dash app's own names for them are step 15.1's to give. An API's
+row models stay pydantic, with `api.format`.
+
 **Logins to services.** Most of the firm's internal services ask for a login, so a service's settings say how a part
 signs in to it, as `BASIS_HTTP__NAME__LOGIN__KIND`, decided on 2026-11-11 for step 12.2 of [the plan](../PLAN.md) and
 open to the maintainer's review: `bearer`, a fixed token; `header`, a key in a header the service names, such as

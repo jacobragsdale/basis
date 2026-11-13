@@ -18,7 +18,7 @@ Keep this table true in each step's own commit.
 | 13.1 The portfolio part goes | Done: the code and its wiring, then the docs; history in [the design](design.md#the-packages) | `99aaf2e`, the commit "Step 13.1, part 2" |
 | 14.1 The spike | Done: twelve yeses, in [the spike](spikes/dash.md); the steps it changed say so | the commit "Step 14.1: the Dash spike" |
 | 14.2 The design, written down | Not started | |
-| 14.3 Rows in core | Not started | |
+| 14.3 Rows in core | Done: `basis.core.rows`, a `float`'s `Display`; `basis.job.rows` re-exports | the commit "Step 14.3" |
 | 14.4 Serving in core | Not started | |
 | 14.5 The package and an empty app | Not started | |
 | 15.1 to 15.8 Data | Not started | |

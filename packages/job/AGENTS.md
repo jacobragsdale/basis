@@ -20,7 +20,7 @@ A run flows top to bottom through this table. Paths are under `src/basis/job/`, 
 | `cli.py` | basis-job's part of the `basis` command: `part()`, which its `basis.verbs` entry point names, with its verbs (`run`, `resume`, `describe`, `ddl`) and what core's verbs do with its jobs; and `scaffold()`, the `basis-job` command that makes a repo. One handler per verb, its arguments as a frozen dataclass. |
 | core `settings.py` | `BASIS_*` variables: the snapshot root, each named database, with an optional `WRITE` block, each other service a fetch names (`http`), where spans go (`traces`), and the image's commit (`git_sha`). |
 | `job.py` | Finding a job by entry point or module path, and reading its contract. |
-| `rows.py` | `Row`, its column types and annotations, and `conform`, the boundary every frame passes through. |
+| core `rows.py` | `Row`, its column types and annotations, a `float`'s display format among them, and `conform`, the boundary every frame passes through; a Dash app's datasets share it. `rows.py` here re-exports its names. |
 | core `frames.py` | The one table of each kind of column's type in a pandas frame: numpy's float64 for a number, and Arrow's (`pd.ArrowDtype`) for the rest; `convert`, a column's values to it without loss, which `conform` uses; and a frame to Arrow and back, as the databases and the run store take it. The one module of basis's pure code that imports pyarrow, which the import check discounts (core `testing.TYPES`). |
 | core `tables.py` | What a run writes, in the terms every part shares: `Column`, `IDENTIFIER`, `Changes`, `Delete`, `Range`, and the `Target` protocol that `outputs.Target` meets. |
 | `params.py`, core `model.py` | `Params` (strict), and the lax base model for records. |

@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Literal, Protocol
 if TYPE_CHECKING:  # frames are only annotated here: `basis --version` and the hooks import this module, never pandas
     import pandas as pd
 
+    from basis.core.display import Display
+
 IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,127}$")
 """A column name: lower-case, so it reads the same unquoted in SQL Server and Oracle, and never needs quoting."""
 
@@ -40,6 +42,8 @@ class Column:
     """How a `datetime` column reads a naive source time its zone shows twice."""
     nonexistent: Fold = "raise"
     """How a `datetime` column reads a naive source time its zone never shows."""
+    display: Display | None = None
+    """How people read a `float` column's values, where its row declares it; nothing a table stores depends on it."""
 
 
 @dataclass(frozen=True)
