@@ -483,10 +483,10 @@ Each has the pick this plan builds on. None blocks a step before the one named.
 
 ## Found while building
 
-- **`basis serve` ends a SIGTERM shutdown with an `ERROR` line and exit 143**, an API's and a Dash app's alike:
-  uvicorn raises the signal again once it has shut down, into the command's own handler, which reports a stop by
-  signal. The drain and the shutdown are whole before it, so a pod is unharmed, but the last line misleads. Left as it
-  is in 14.5, since basis-api's tests hold the re-raise; a fix is core's runner or command's (found in 14.5).
+- **`basis serve` ended a SIGTERM shutdown with an `ERROR` line and exit 143**, an API's and a Dash app's alike:
+  uvicorn raised the signal again once it had shut down, into the command's own handler. Fixed in core's runner (17,
+  the commit "A drained stop exits 0"): the first signal starts a shutdown without uvicorn keeping it, so a drain that
+  finishes exits 0 with no `ERROR` line, and only a second signal, which cuts requests off, is raised again, a failure.
 - **Dash ships a pytest plugin, `dash`**, which drives a browser and fails pytest 9's deprecation warnings. The
   workspace turns it off (`-p no:dash`); the pytest settings `basis sync` writes for a Dash repo must too (17.3).
 - **`basis --help` in a Dash repo imports Dash**, about 0.2 s, since the part's module imports `basis.dash`; uvicorn

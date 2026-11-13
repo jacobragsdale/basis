@@ -4,8 +4,9 @@ A graceful shutdown, on SIGTERM as Kubernetes sends it, goes in three steps. Fir
 503 while the server keeps serving, for `serve.drain_s` seconds, so that the cluster takes the pod out of its endpoints
 before the server stops taking requests. Then uvicorn closes its sockets and gives the requests in flight
 `serve.shutdown_s` seconds to finish. Then the app's lifespan shuts down, which flushes its spans. Ctrl+C skips the
-drain, as a desktop has no load balancer to wait for. A second signal, of either kind, stops at once: requests in
-flight are cut off, and the lifespan's shutdown is skipped."""
+drain, as a desktop has no load balancer to wait for. A shutdown that finished is the stop that was asked for, so
+`run` returns. A second signal, of either kind, stops at once: requests in flight are cut off, the lifespan's shutdown
+is skipped, and uvicorn raises that signal again once it has stopped, so the process ends as one a signal stopped."""
 
 import asyncio
 import logging
@@ -39,20 +40,22 @@ def run(asgi: ASGIApp, serve: Serve, lifecycle: Lifecycle, *, host: str | None =
     )
     try:
         Server(config, lifecycle, drain_s=serve.drain_s).run()
-    except KeyboardInterrupt:  # Ctrl+C, which uvicorn raises again once it has shut down: the stop that was asked for
+    except KeyboardInterrupt:  # a second Ctrl+C, which uvicorn raises again once it has stopped: a desktop's, stopped as asked
         return
 
 
 class Server(uvicorn.Server):
     """uvicorn's server, which drains first on SIGTERM, and stops at once on a second signal. A signal handler only
     sets attributes and hands work to the loop; the loop's tick, which uvicorn runs ten times a second, does the rest,
-    since logging from a signal handler can deadlock."""
+    since logging from a signal handler can deadlock. Only a second signal goes through uvicorn's own `handle_exit`,
+    which keeps it to raise again once the server has stopped: the first starts a shutdown that finishes, and is not
+    raised again, so a drained stop ends the command as it should, with no failure."""
 
     def __init__(self, config: uvicorn.Config, lifecycle: Lifecycle, *, drain_s: float) -> None:
         super().__init__(config)
         self._lifecycle = lifecycle
         self._drain_s = drain_s
-        self._drain: tuple[int, FrameType | None, float] | None = None  # the signal, its frame and when the drain ends
+        self._drain_ends: float | None = None  # when the drain a SIGTERM began ends
         self._signalled = False
         self._logged = False
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -73,18 +76,18 @@ class Server(uvicorn.Server):
             return
         self._signalled = True
         if sig == signal.SIGTERM and self._drain_s > 0:
-            self._drain = (sig, frame, time.monotonic() + self._drain_s)
+            self._drain_ends = time.monotonic() + self._drain_s
             return
-        super().handle_exit(sig, frame)  # Ctrl+C, or no drain: uvicorn's graceful shutdown, now
+        self.should_exit = True  # Ctrl+C, or no drain: uvicorn's graceful shutdown, now
 
     @override
     async def on_tick(self, counter: int) -> bool:
-        if (drain := self._drain) is not None and not self.should_exit:
+        if (ends := self._drain_ends) is not None and not self.should_exit:
             if not self._logged:
                 self._logged = True
                 log.info("draining for %ss: readiness reports 503 while requests are still served", self._drain_s, extra={"drain_s": self._drain_s})
-            if time.monotonic() >= drain[2]:
-                super().handle_exit(drain[0], drain[1])
+            if time.monotonic() >= ends:
+                self.should_exit = True  # the graceful shutdown, once the drain is over
         return await super().on_tick(counter)
 
     def _cut_off(self) -> None:

@@ -160,7 +160,7 @@ def test_run_serves_any_asgi_app_and_drains_it_on_sigterm() -> None:
             process.kill()
             process.communicate()
     assert (draining.status_code, slow.text) == (HTTPStatus.SERVICE_UNAVAILABLE, "slept")
-    assert process.returncode == -signal.SIGTERM  # uvicorn raises the signal again once it has shut down, as it was asked to
+    assert process.returncode == 0  # a drain that finished is the stop that was asked for
     messages = [json.loads(line)["message"] for line in errors.splitlines()]
     assert "draining for 1.0s: readiness reports 503 while requests are still served" in messages
     assert "GET /apps/pos/slow: 200" in messages

@@ -759,7 +759,8 @@ row models stay pydantic, with `api.format`.
 **Serving.** What every server basis builds shares is basis-core's, `basis.core.serving` (step 14.4 of [the Dash
 plan](dash-plan.md)), taken from basis-api, so an API and a Dash app serve the same way: the `serve` settings (`host`,
 `port`, `drain_s`, `shutdown_s`), which a part's settings subclass with their own; uvicorn's runner, with the drain on
-SIGTERM, the graceful shutdown and the second signal that stops at once; the stages of readiness; `/health/live` and
+SIGTERM, the graceful shutdown, after which the command exits 0 with no `ERROR` line, since a drain that finished is
+the stop that was asked for, and the second signal that stops at once, cutting requests off, a failure; the stages of readiness; `/health/live` and
 `/health/ready`, with the commit, under a path prefix where a proxy keeps it (spike 14.1, question 1); and the request
 boundary, its ids, log fields and `traceparent`, and its log of an error nobody expected. A part gives the boundary
 the body of its 500 and the fields it adds to each request's line, and readiness the body of its 503: an API's are

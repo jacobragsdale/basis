@@ -52,7 +52,7 @@ def test_sigterm_drains_then_lets_the_request_in_flight_finish() -> None:
         assert (draining.status_code, draining.json()["detail"]) == (HTTPStatus.SERVICE_UNAVAILABLE, "the service is draining")
         assert in_flight.result().json() == {"slept": "2"}
         records = _records(server.process)
-    assert server.process.returncode == -signal.SIGTERM  # uvicorn raises the signal again once it has shut down, as it was asked to
+    assert server.process.returncode == 0  # a drain that finished is the stop that was asked for
     assert _messages(records) == [
         f"serving slow on 127.0.0.1:{server.port}",
         "slow is ready",
@@ -78,7 +78,7 @@ def test_a_second_signal_stops_at_once() -> None:
         with pytest.raises(httpx2.TransportError):
             in_flight.result()
     assert stopped_after < 3  # not the 10 seconds of drain, nor the 8 the request in flight still needed
-    assert server.process.returncode == -signal.SIGTERM
+    assert server.process.returncode == -signal.SIGTERM  # a second signal cuts requests off, so uvicorn raises it again: a failure
     assert "slow stopped" not in _messages(records)  # a forced stop skips the lifespan's shutdown
 
 

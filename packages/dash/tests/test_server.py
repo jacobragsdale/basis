@@ -52,14 +52,14 @@ def test_serve_serves_the_app_under_its_prefix_and_drains_on_sigterm(tmp_path: P
             process.communicate()
     assert (index.status_code, "Served" in index.text) == (HTTPStatus.OK, True)
     assert draining.status_code == HTTPStatus.SERVICE_UNAVAILABLE
-    assert process.returncode == 128 + signal.SIGTERM  # as a shell reports a stop by SIGTERM
+    assert process.returncode == 0  # a drain that finished is the stop that was asked for
     lines = errors.splitlines()
-    assert lines[-1] == "ERROR: basis serve was stopped by a signal before it finished: run it again, and let it finish"  # as an API's: uvicorn raises the signal again once it has shut down
-    records = [json.loads(line) for line in lines[:-1]]
+    assert not any(line.startswith("ERROR") for line in lines)
+    records = [json.loads(line) for line in lines]
     messages = [str(record["message"]) for record in records if not str(record["message"]).startswith("GET /apps/served/health/ready")]
     assert messages[:2] == [f"serving served on 127.0.0.1:{port}/apps/served", "served is ready"]
     assert "draining for 1.0s: readiness reports 503 while requests are still served" in messages
-    assert "served stopped" in messages
+    assert messages[-2:] == ["served stopped", "finished serve"]
     assert "GET /apps/served/: 200" in messages
     assert all(record.get("service") == "served" for record in records[1:])
 
