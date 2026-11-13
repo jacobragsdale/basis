@@ -2,4 +2,7 @@
 such as `basis.dash.theme` or `basis.dash.grid`, and listed in `__all__`, which `basis.dash` extends its own with. Only
 phase 16 edits this file."""
 
-__all__: list[str] = []
+from basis.dash.icons import icon
+from basis.dash.pages import card
+
+__all__: list[str] = ["card", "icon"]

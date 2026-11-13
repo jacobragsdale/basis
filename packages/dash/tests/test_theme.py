@@ -169,7 +169,7 @@ def test_an_app_serves_the_theme_and_its_fonts_from_its_own_origin() -> None:
         index = client.index()
         links = re.findall(r'href="([^"]+\.css)"', index)
         named = [link for link in links if "/basis.dash/" in link]
-        assert [Path(link).name.split(".")[0] for link in named] == ["theme", "basis"]
+        assert [Path(link).name.split(".")[0] for link in named] == ["theme", "icons", "basis"]
         assert not [link for link in links if link.startswith(("http:", "https:", "//"))]
         served = client.http.get(named[0])
         assert served.status_code == HTTPStatus.OK

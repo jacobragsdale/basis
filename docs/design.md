@@ -523,6 +523,21 @@ legend, grid and axis lines, hover labels and mode bar over Plotly's inline styl
 a mark to Plotly. A test holds every text token on the surface it shows on to 4.5:1, and the focus ring and an input's
 edge to 3:1, in both schemes.
 
+**The shell and the page, as built (16.2).** Every page shows inside one header, 44 px: the app's title, linking to
+its first page; a badge naming the environment the app serves in, in basis-ui's `env-dev`, `env-qa` or `env-prod`, or
+`LOCAL` where none is named, as under `basis dev`; the pages, as links that mark the page shown, where the app has more
+than one; and the light and dark switch. The switch is a clientside callback on the Dash app itself, since it is
+basis's and no module's, calling a function in basis's own script (`static/basis.js`), so the page carries no inline
+script: it flips the attribute and keeps the choice where Mantine's provider reads it when a page loads, and the
+provider starts from the operating system's scheme (`auto`). Notifications sit at the bottom right, clear of the
+filters. `bd.page(path, title, body=[...], filters=[...], description=...)` builds the page: its title, its freshness
+line beside it, its filter bar, then its body, cards on twelve columns, each `bd.card(title, content, span=,
+actions=, flush=)` as wide as its span until the page is narrower than 64em, when each takes the page's width. A page
+may still give `layout=` instead, and keeps the shell. A path that names no page shows basis's page, which links to the
+first, registered as Dash Pages finds one (a module named `not_found_404`); the tab reads "Page · App". Icons are a
+vendored set of 31 of lucide's, each a CSS mask over a data URI, coloured and sized by the text around it, since
+Dash's `html` has no SVG elements (`bd.icon(name, label=)`).
+
 **Two ids every page has.** basis's chrome around every page holds two components whose ids are fixed and exported
 from `basis.dash.ids`, so the data and display lanes build against them: `NOTIFICATIONS`, DMC's
 `NotificationContainer`, whose `sendNotifications` prop takes a list of notifications, each a dict of DMC's

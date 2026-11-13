@@ -24,7 +24,8 @@ Keep this table true in each step's own commit.
 | 15.1 Declarations | Done: `bd.database`, `bd.folder`, `bd.query`, `bd.file`, `bd.view`, `bd.Row`, `bd.format`; SQL binds checked at build; core's row refusals in the declaring part's words | the commit "Step 15.1" |
 | 15.2 to 15.8 Data | Not started | |
 | 16.1 Tokens and theme | Done: `basis.dash.theme`, its table held to basis-ui's `theme.css`; the CSS, Mantine, AG Grid and Plotly from it; the fonts | the commit "Step 16.1" |
-| 16.2 to 16.9 Display | Not started | |
+| 16.2 The shell and the page | Done: the header (title, environment, navigation, switch), `bd.page`'s body and filters, `bd.card`, the 404 page, tab titles, `bd.icon` | the commit "Step 16.2" |
+| 16.3 to 16.9 Display | Not started | |
 | 17.1 to 17.8 The repo around it | Not started | |
 
 ## What the best Dash app is
@@ -478,6 +479,8 @@ Each has the pick this plan builds on. None blocks a step before the one named.
   workspace turns it off (`-p no:dash`); the pytest settings `basis sync` writes for a Dash repo must too (17.3).
 - **`basis --help` in a Dash repo imports Dash**, about 0.2 s, since the part's module imports `basis.dash`; uvicorn
   and FastAPI load only when a verb serves.
+- **An icon's CSS holds the SVG namespace's URL**, `http://www.w3.org/2000/svg`, inside each data URI, which a browser
+  needs to draw it and never fetches. 17.1's check of URLs of another origin must pass it (found in 16.2).
 
 ## Rules for this work
 
