@@ -1,7 +1,5 @@
 # The basis workspace: every basis package is a member under packages/, and this root is not a package itself. The tool
-# settings here apply to every member, but for the settings a member keeps in its own pyproject.toml, such as its own
-# ruff settings or import contracts. Nothing here may need a member that basis does not release: CI's without-optim
-# leg removes it and runs every check.
+# settings here apply to every member.
 
 [project]
 name = "basis-workspace"
@@ -127,14 +125,13 @@ error-on-warning = true
 [tool.pytest.ini_options]
 # importlib mode: members' tests share file names (spike 0.2), which pytest's default mode cannot collect. The
 # templates are a generated repo's files, whose tests run in that repo. pytester runs pytest itself, in the throwaway
-# repos a member's tests make; a conftest below the root cannot load it. A part's pytest plugin, which its package
-# registers for the repos it makes, stays out of this session (`-p no:NAME`), so one part's code never runs in
-# another's tests; pytester's own sessions still load it. So does basis-core's, `basis`, which keeps a repo's unit tests
-# off sockets: this workspace's own tests serve and reach real servers on sockets, by design, and the example's run
-# under it as a repo's do, in the tests of basis-api's checks.
-addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration' --ignore-glob=packages/*/src/*/templates -p pytester -p no:optim -p no:basis"
-testpaths = ["packages/*/tests", "packages/*/src/*/example", "packages/*/src/basis/*/example", "scripts/tests", "evals/tests"]  # every member's tests, its example's, the release script's, and the eval's runner's
-pythonpath = ["packages/job/tests", "packages/optim/tests", "scripts", "evals"]  # each member's shared test modules, such as basis-job's `builders`, scripts/release.py, and the eval's package; a missing path adds nothing
+# repos a member's tests make; a conftest below the root cannot load it. basis-core's pytest plugin, `basis`, which keeps
+# a repo's unit tests off sockets, stays out of this session (`-p no:basis`): this workspace's own tests serve and reach
+# real servers on sockets, by design. pytester's own sessions still load it, and the example's tests run under it as a
+# repo's do, in the tests of basis-api's checks.
+addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration' --ignore-glob=packages/*/src/*/templates -p pytester -p no:basis"
+testpaths = ["packages/*/tests", "packages/*/src/basis/*/example", "scripts/tests", "evals/tests"]  # every member's tests, its example's, the release script's, and the eval's runner's
+pythonpath = ["packages/job/tests", "scripts", "evals"]  # each member's shared test modules, such as basis-job's `builders`, scripts/release.py, and the eval's package; a missing path adds nothing
 xfail_strict = true  # An xfail that starts passing is a failure, not a silent pass.
 filterwarnings = [
     "error",  # A warning is a defect until someone decides otherwise.
@@ -147,7 +144,7 @@ markers = [
 
 [tool.coverage.run]
 branch = true  # Statement coverage hides the untaken half of every condition.
-source = ["packages/core/src/basis", "packages/job/src/basis", "packages/api/src/basis", "packages/optim/src/optim"]  # each package's code, not its tests
+source = ["packages/core/src/basis", "packages/job/src/basis", "packages/api/src/basis"]  # each package's code, not its tests
 omit = ["**/templates/**", "*/example/tests/*"]  # a generated repo's files, which run in that repo, and the example's tests, which are not code under test; coverage's `*` stops at a `/`
 relative_files = true  # so CI can combine the unit and integration jobs' data, each measured in its own checkout
 
@@ -157,8 +154,7 @@ skip_covered = true
 exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "@overload"]
 fail_under = 85  # basis's own floor, which CI holds on the unit and integration runs together; generated repos are held to 90
 
-# The import contracts of basis-core, basis-job and basis-api. A member with contracts of its own keeps them in its
-# pyproject.toml, which the commit hook gives `lint-imports --config`, so these hold without it.
+# The import contracts of basis-core, basis-job and basis-api.
 [tool.importlinter]
 root_packages = ["basis.core", "basis.job", "basis.api"]  # portions of one namespace, each named (spike 0.2)
 include_external_packages = true  # so a contract can forbid a database driver
@@ -174,12 +170,6 @@ forbidden_modules = ["basis.job", "basis.api"]
 name = "Parts import basis-core and never each other, so a change to one cannot break another"
 type = "independence"
 modules = ["basis.job", "basis.api"]
-
-[[tool.importlinter.contracts]]
-name = "basis-core, basis-job and basis-api import no optim, which may change or go"
-type = "forbidden"
-source_modules = ["basis.core", "basis.job", "basis.api"]
-forbidden_modules = ["optim"]  # no root package, so an external one when installed, and a contract that holds when it is not
 
 [[tool.importlinter.contracts]]
 name = "Job code and the checks it runs through do no I/O: the run loop loads, saves and publishes"

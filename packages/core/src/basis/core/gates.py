@@ -50,8 +50,8 @@ MOCKS = frozenset({"unittest.mock", "mock", "pytest_mock"})
 MOCKERS = frozenset({"mocker", "class_mocker", "module_mocker", "package_mocker", "session_mocker"})
 """pytest-mock's fixtures, which a test asks for by its parameter's name."""
 OMITTED = ("**/tests/**", "**/test_*.py", "**/*_test.py", "**/conftest.py", f"**/{REPOSITORY}.py", f"**/{REPOSITORY}/**", "**/.venv/**", "**/main.py")
-"""What coverage leaves out: the tests, repository modules, which the integration tier covers, and a job's or a
-model's `main.py`, which runs it from an editor and which no test imports."""
+"""What coverage leaves out: the tests, repository modules, which the integration tier covers, and a job's `main.py`,
+which runs it from an editor and which no test imports."""
 EXCLUDED = ("if TYPE_CHECKING:", "raise NotImplementedError", "@overload", "if __name__ == .__main__.:")
 PLUGIN_OPTION = "--basis-gates"
 """What `basis check` gives pytest, with a file, for basis's plugin to write what it found in."""

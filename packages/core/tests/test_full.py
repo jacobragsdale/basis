@@ -164,11 +164,11 @@ def test_a_part_that_gives_no_regressions_is_skipped_by_name_and_the_others_stil
     (repo.parent / "store").mkdir()
     monkeypatch.setenv("BASIS_SNAPSHOT_ROOT", str(repo.parent / "store"))
     asked, runs = regressing(SAME)
-    models = Runs("model", lambda: {"income": "models.income"}, verbs={"regress": Shared("replay a model's recent runs", lambda _: 0)})
-    code = full.full(repo, [], {"alpha": Part(runs=runs), "beta": Part(runs=models)}, run=passing, report=command.reported, folder=repo, clock=lambda: AT)
+    reports = Runs("report", lambda: {"daily": "reports.daily"}, verbs={"regress": Shared("replay a report's recent runs", lambda _: 0)})
+    code = full.full(repo, [], {"alpha": Part(runs=runs), "beta": Part(runs=reports)}, run=passing, report=command.reported, folder=repo, clock=lambda: AT)
     assert code == 0
     assert lines(capsys)[:2] == [
-        "SKIPPED: regress of the beta part: it gives `basis check --full` no regressions to record: `uv run basis regress` replays its models",
+        "SKIPPED: regress of the beta part: it gives `basis check --full` no regressions to record: `uv run basis regress` replays its reports",
         f"basis check --full: regress replayed 1 published run from {repo.parent / 'store'}: none differs",
     ]
     assert len(asked) == 1

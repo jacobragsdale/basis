@@ -33,17 +33,6 @@ jobs:
           path: .coverage.unit
           include-hidden-files: true
 
-  without-optim:
-    # scripts/without_optim.py: nothing outside packages/optim may need it, and its docstring says how this checks.
-    timeout-minutes: 30
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
-        with:
-          version: "0.13.7"
-      - run: uv run scripts/without_optim.py
-
   windows:
     # Where the firm's developers work: the unit tests, the hooks' tests among them, which Git for Windows' sh runs,
     # and a generated repo's commit and push through its hooks. Every other job is Linux.

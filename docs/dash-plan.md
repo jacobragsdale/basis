@@ -15,7 +15,7 @@ Keep this table true in each step's own commit.
 
 | Step | State | Commit |
 |---|---|---|
-| 13.1 optim goes | Not started | |
+| 13.1 optim goes | In progress: the code and its wiring are gone; the docs remain | |
 | 14.1 The spike | Not started | |
 | 14.2 The design, written down | Not started | |
 | 14.3 Rows in core | Not started | |
