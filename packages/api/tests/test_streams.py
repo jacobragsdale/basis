@@ -166,13 +166,18 @@ def test_a_stream_with_nothing_new_sends_a_heartbeat(warehouse: tuple[fakes.Data
 
 
 def test_a_stream_ends_when_its_token_expires(warehouse: tuple[fakes.Database, Feed]) -> None:
+    """The token's `exp` has passed, within the identity's leeway, so it verifies however long the runner takes to
+    send the request, and the stream, which ends at `exp` and gives no leeway, ends at once, after its first answer."""
     database, _ = warehouse
+    identity = IDENTITY | {"leeway_s": 300}
     now = datetime.now(UTC)
-    token = tokens.sign(Identity.model_validate(IDENTITY), "trader-1", issued=now, expires=now + timedelta(seconds=1))
-    app = api.build(_service(every_s=0.1, user=api.User), settings=_settings(stream_s=30, identity=IDENTITY), fakes={WAREHOUSE: database})
+    token = tokens.sign(Identity.model_validate(identity), "trader-1", issued=now - timedelta(seconds=2), expires=now - timedelta(seconds=1))
+    app = api.build(_service(every_s=0.1, user=api.User), settings=_settings(stream_s=30, identity=identity), fakes={WAREHOUSE: database})
     with TestClient(app.asgi) as client:
         response = client.get("/prices/US0001", headers={"authorization": f"Bearer {token}"})
-    assert _events(response.text)[-1] == ("end", {"reason": "expired"})
+    found = _events(response.text)
+    assert found[-1] == ("end", {"reason": "expired"})
+    assert (None, {"security": "US0001", "clean": 101.25}) in found
 
 
 def test_a_stream_ends_when_the_app_drains(warehouse: tuple[fakes.Database, Feed]) -> None:
