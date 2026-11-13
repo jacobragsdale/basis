@@ -756,8 +756,11 @@ traceback, since it is no defect, and anything else with its traceback; and the 
 notifications, with the request's id to quote: `warehouse did not answer within 30 s.` and `This shows what it showed
 before: try again in a moment.` for a `Timeout`, `could not be reached` for `Unavailable`, `refused this app` for
 `Denied`, `failed to answer` for any other kind, and `Something went wrong.` for a defect. A notification is DMC's
-`Notification` props: `id` `basis-error-REQUEST`, `title`, `message`, `color` `red`, `autoClose` false and
-`withCloseButton` true. A dataset past its TTL and inside its `stale_s` whose read fails answers its last good value
+`Notification` props: `id`, `title`, `message`, `color` `red`, `autoClose` false and `withCloseButton` true. A
+resource's failure takes its id from its kind and resource, `basis-error-Unavailable-warehouse`, and is sent to be
+shown and then updated, so one cause that fails several callbacks of a page, a database that is down, shows once and
+quotes the latest request's id rather than stacking; a defect's id is `basis-error-REQUEST`, one for each request,
+since each id matters to support. A dataset past its TTL and inside its `stale_s` whose read fails answers its last good value
 instead, marked `stale` in the status store, with one warning logged and no notification; a view of a stale input is
 stale too. Past `stale_s`, a failure is a failure.
 

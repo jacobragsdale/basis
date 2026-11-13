@@ -53,11 +53,14 @@ def test_a_failure_is_a_sentence_in_the_notifications_and_logged_once(app: bd.Ap
     with testing.client(app, fakes={"warehouse": warehouse}) as client:
         answered = client.fire("fixture-par.children", DAY)
     assert "fixture-par" not in answered  # the output keeps what it showed
-    (shown,) = answered[NOTIFICATIONS]["sendNotifications"]  # ty: ignore[not-iterable] -- a list, as on_error sends it
+    sent: Any = answered[NOTIFICATIONS]["sendNotifications"]  # a list of DMC's notifications, as on_error sends it
+    assert isinstance(sent, list)
+    assert [one["action"] for one in sent] == ["show", "update"]  # once, however many callbacks the cause fails
+    shown = sent[-1]
     assert shown["title"] == title
     request = re.fullmatch(rf"{re.escape(then)} Request ([0-9a-f-]{{36}})\.", shown["message"])
     assert request is not None, shown["message"]
-    assert shown["id"] == f"basis-error-{request.group(1)}"
+    assert {one["id"] for one in sent} == {f"basis-error-{kind.__name__}-warehouse"}
     assert (shown["color"], shown["autoClose"], shown["withCloseButton"]) == ("red", False, True)
     failed = [record for record in caplog.records if record.levelno >= logging.ERROR]
     assert len(failed) == 1
@@ -95,3 +98,25 @@ def _status(answered: dict[str, dict[str, object]]) -> dict[str, Any]:
     patch: Any = answered[STATUS]["data"]
     (operation,) = patch["operations"]
     return operation["params"]["value"]
+
+
+def test_one_resource_s_failure_shows_once_however_many_callbacks_it_fails() -> None:
+    from basis.dash import errors  # noqa: PLC0415 -- the handler's own sentences
+
+    first, second = (errors.notifications(Unavailable("down", resource="warehouse"), request) for request in ("req-1", "req-2"))
+    assert [shown["action"] for shown in first] == ["show", "update"]  # shown where it is not, its text renewed where it is
+    assert {shown["id"] for shown in first} == {shown["id"] for shown in second} == {"basis-error-Unavailable-warehouse"}
+    assert str(first[1]["message"]).endswith("Request req-1.")
+    assert str(second[1]["message"]).endswith("Request req-2.")  # the latest request's id, to quote
+    other = errors.notifications(Unavailable("down", resource="ledger"), "req-3")
+    assert {shown["id"] for shown in other} == {"basis-error-Unavailable-ledger"}  # another resource, another notification
+    timed_out = errors.notifications(Timeout("slow", resource="warehouse"), "req-4")
+    assert {shown["id"] for shown in timed_out} == {"basis-error-Timeout-warehouse"}
+
+
+def test_a_defect_shows_once_per_request_since_each_id_matters_to_support() -> None:
+    from basis.dash import errors  # noqa: PLC0415 -- likewise
+
+    first, second = (errors.notifications(RuntimeError("bug"), request) for request in ("req-1", "req-2"))
+    assert [(shown["action"], shown["id"]) for shown in first] == [("show", "basis-error-req-1")]
+    assert [(shown["action"], shown["id"]) for shown in second] == [("show", "basis-error-req-2")]

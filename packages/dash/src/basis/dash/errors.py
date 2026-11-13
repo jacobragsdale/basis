@@ -16,11 +16,15 @@ exception nobody caught passes through it, and no page writes a handler of its o
 | Any other kind | `warehouse failed to answer.` Tell the app's support team. |
 | Anything else | `Something went wrong.` Tell the app's support team. |
 
-A notification is a dict of DMC's `Notification` props: `id` (`basis-error-` and the request's id), `title`, `message`
-(the sentence, what to do, and `Request ID.`), `color` `red`, `autoClose` false and `withCloseButton` true. A dataset
+A notification is a dict of DMC's `Notification` props: `id`, `title`, `message` (the sentence, what to do, and
+`Request ID.`), `color` `red`, `autoClose` false and `withCloseButton` true. A resource's failure takes its id from its
+kind and resource, `basis-error-Unavailable-warehouse`, and is sent to be shown and then updated, so one cause that
+fails several callbacks of a page shows once, quoting the latest request, rather than stacking; a defect's id is
+`basis-error-` and the request's id, one for each request, since each matters to support. A dataset
 inside its `stale_s` never gets here: its load answers its last good value, marked stale (`basis.dash.runtime`)."""
 
 import logging
+import re
 import uuid
 
 import dash
@@ -49,7 +53,22 @@ def on_error(error: Exception) -> None:
     else:
         log.error("a callback failed: %s: %s", type(error).__qualname__, error, exc_info=error)
     if internals.in_callback():
-        dash.set_props(NOTIFICATIONS, {"sendNotifications": [notification(error, None if request is None else str(request))]})
+        dash.set_props(NOTIFICATIONS, {"sendNotifications": notifications(error, None if request is None else str(request))})
+
+
+def notifications(error: Exception, request: str | None) -> list[dict[str, object]]:
+    """What the page's notification container is sent for `error`: a resource's failure under one id for its kind and
+    resource, shown where it is not and renewed where it is, so one cause that fails several callbacks shows once,
+    quoting the latest request; a defect once for each request, since each id matters to support."""
+    shown = notification(error, request)
+    if not isinstance(error, ServiceError):
+        return [shown | {"action": "show"}]
+    one = shown | {"id": f"basis-error-{type(error).__name__}-{_slug(error.resource)}"}
+    return [one | {"action": "show"}, one | {"action": "update"}]
+
+
+def _slug(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-") or "resource"
 
 
 def notification(error: Exception, request: str | None) -> dict[str, object]:
