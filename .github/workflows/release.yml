@@ -123,10 +123,12 @@ jobs:
             uv pip install --quiet --python "env-$kind" "$DIST"/*."$kind"
             "env-$kind/bin/basis" --version 2> /dev/null | tee "versions-$kind"
             for name in $PACKAGES; do grep --quiet "$name $VERSION" "versions-$kind"; done
-            # a repo that declares every part installed, by its basis.verbs entry point, so --help loads each one
-            parts=$("env-$kind/bin/python" -c 'from importlib.metadata import entry_points; print(", ".join(sorted(repr(e.name) for e in entry_points(group="basis.verbs"))))')
-            mkdir "parts-$kind" && printf '[project]\nname = "parts"\n\n[tool.basis]\nparts = [%s]\n' "$parts" > "parts-$kind/pyproject.toml"
-            (cd "parts-$kind" && "../env-$kind/bin/basis" --help)
+            # a repo for each part installed, by its basis.verbs entry point, so --help loads each one; one repo each, since a
+            # repo cannot declare two parts that serve
+            for part in $("env-$kind/bin/python" -c 'from importlib.metadata import entry_points; print(" ".join(sorted(e.name for e in entry_points(group="basis.verbs"))))'); do
+              mkdir -p "parts-$kind/$part" && printf '[project]\nname = "parts"\n\n[tool.basis]\nparts = ["%s"]\n' "$part" > "parts-$kind/$part/pyproject.toml"
+              (cd "parts-$kind/$part" && "../../env-$kind/bin/basis" --help)
+            done
           done
       - name: Serve the files as a feed that proxies PyPI, as the firm's does
         run: |
