@@ -9,7 +9,7 @@ import signal
 import sys
 import textwrap
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from http import HTTPStatus
 from pathlib import Path
@@ -127,7 +127,7 @@ def _declared(workloads: ModuleType, name: str) -> api.ComputeFunction[..., obje
     return api.compute(function)
 
 
-def _service(workloads: ModuleType, *, deadline_s: float = 5) -> tuple[api.Service, dict[str, api.ComputeFunction[..., object]]]:
+def _service(workloads: ModuleType, *, deadline_s: float = 5, deadlines: Mapping[str, float] | None = None) -> tuple[api.Service, dict[str, api.ComputeFunction[..., object]]]:
     """A service that runs each workload by a route of its name, and answers `/now` without computing."""
     declared = {name: _declared(workloads, name) for name in ("spin", "tell", "die", "identity", "mark", "pid", "hold")}
     spin, tell, die, identity, mark, pid, hold = (declared[name] for name in ("spin", "tell", "die", "identity", "mark", "pid", "hold"))
@@ -159,21 +159,22 @@ def _service(workloads: ModuleType, *, deadline_s: float = 5) -> tuple[api.Servi
     def now() -> dict[str, float]:
         return {"at": time.monotonic()}
 
+    given = deadlines or {}
     routes = [
-        api.get("/spin", spun, deadline_s=deadline_s, response=dict[str, int], errors=[]),
-        api.get("/tell", told, deadline_s=deadline_s, response=dict[str, int], errors=[]),
-        api.get("/die", died, deadline_s=deadline_s, response=dict[str, int], errors=[]),
-        api.get("/lock", lock, deadline_s=deadline_s, response=dict[str, str], errors=[]),
-        api.get("/mark", marked, deadline_s=deadline_s, response=dict[str, int], errors=[]),
-        api.get("/pid", which, deadline_s=deadline_s, response=dict[str, int], errors=[]),
-        api.get("/hold", held, deadline_s=deadline_s, response=dict[str, int], errors=[]),
-        api.get("/now", now, deadline_s=deadline_s, response=dict[str, float], errors=[]),
+        api.get("/spin", spun, deadline_s=given.get("/spin", deadline_s), response=dict[str, int], errors=[]),
+        api.get("/tell", told, deadline_s=given.get("/tell", deadline_s), response=dict[str, int], errors=[]),
+        api.get("/die", died, deadline_s=given.get("/die", deadline_s), response=dict[str, int], errors=[]),
+        api.get("/lock", lock, deadline_s=given.get("/lock", deadline_s), response=dict[str, str], errors=[]),
+        api.get("/mark", marked, deadline_s=given.get("/mark", deadline_s), response=dict[str, int], errors=[]),
+        api.get("/pid", which, deadline_s=given.get("/pid", deadline_s), response=dict[str, int], errors=[]),
+        api.get("/hold", held, deadline_s=given.get("/hold", deadline_s), response=dict[str, int], errors=[]),
+        api.get("/now", now, deadline_s=given.get("/now", deadline_s), response=dict[str, float], errors=[]),
     ]
     return api.Service(name="workloads", settings=api.Settings, routes=routes), declared
 
 
-def _pooled(workloads: ModuleType, *, workers: int = 1, deadline_s: float = 5) -> api.App:
-    service, _ = _service(workloads, deadline_s=deadline_s)
+def _pooled(workloads: ModuleType, *, workers: int = 1, deadline_s: float = 5, deadlines: Mapping[str, float] | None = None) -> api.App:
+    service, _ = _service(workloads, deadline_s=deadline_s, deadlines=deadlines)
     return api.build(service, settings=api.Settings.given(compute={"workers": workers}))
 
 
@@ -385,9 +386,12 @@ def test_a_fake_answers_an_exception_as_the_pool_does(workloads: ModuleType) -> 
 
 
 def test_calls_past_their_deadlines_never_starve_the_pool(workloads: ModuleType, tmp_path: Path, logged: Callable[[], list[dict[str, object]]]) -> None:
-    """A call that never ends holds the pool's one process past its deadline: the pool starts a new one for the next."""
+    """A call that never ends holds the pool's one process past its deadline: the pool starts a new one for the next.
+    The stuck call's deadline is a second, which it outlasts however fast the runner; each call after it has the time a
+    new process needs to start, which on a slow Windows runner is more than a second, and could answer only from a new
+    process, since the pool's one is held: a pool that starved would run out that deadline too, and answer 504."""
     started, release = tmp_path / "started", tmp_path / "release"
-    with TestClient(_pooled(workloads, deadline_s=1).asgi) as client:
+    with TestClient(_pooled(workloads, deadline_s=1, deadlines={"/pid": 60}).asgi) as client:
         stuck = client.get("/hold", params={"started": str(started), "release": str(release)})
         then = [client.get("/pid").status_code for _ in range(3)]
         ready = client.get("/health/ready").status_code
