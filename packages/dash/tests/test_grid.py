@@ -22,6 +22,13 @@ from basis.dash.grids import SEARCH
 from basis.dash.theme import STATIC
 
 
+def test_the_totals_label_is_in_the_first_text_column_the_grid_shows() -> None:
+    hidden = bd.grid("grid-hidden-label", Position, key="cusip", totals={"par": "sum"}, columns={"cusip": bd.column(hide=True)})
+    [found] = grids.totals(FRAME, hidden.declared)
+    assert found["sector"] == "Total"  # the CUSIP, hidden, would hold it out of sight
+    assert hidden.declared.label == "sector"
+
+
 class Settings(bd.Settings):
     pass
 

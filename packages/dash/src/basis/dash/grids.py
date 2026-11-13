@@ -181,7 +181,8 @@ def grid(
     given_totals = dict(totals or {})
     given_columns = dict(columns or {})
     _check(id, row, by_name, key, given_totals=given_totals, given_columns=given_columns)
-    label = next((found.name for found in row.columns if found.kind == "str" and found.name not in given_totals), None)
+    shown_columns = [found for found in row.columns if not given_columns.get(found.name, ColumnShown()).hide]
+    label = next((found.name for found in shown_columns if found.kind == "str" and found.name not in given_totals), None)  # a hidden column would hold it out of sight
     options: dict[str, object] = {
         "theme": theme.GRID,
         "enableCellTextSelection": True,
