@@ -4,5 +4,6 @@ phase 16 edits this file."""
 
 from basis.dash.icons import icon
 from basis.dash.pages import card
+from basis.dash.texts import text
 
-__all__: list[str] = ["card", "icon"]
+__all__: list[str] = ["card", "icon", "text"]

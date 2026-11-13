@@ -561,6 +561,18 @@ first, registered as Dash Pages finds one (a module named `not_found_404`); the 
 vendored set of 31 of lucide's, each a CSS mask over a data URI, coloured and sized by the text around it, since
 Dash's `html` has no SVG elements (`bd.icon(name, label=)`).
 
+**One number, one text, in the browser too (16.3).** `bd.text(value, display)` is basis-core's text on the server.
+The grid's cells are formatted in the browser by `basisFormat`, basis-core's formatter ported to basis's script: a
+double's exact decimal value, through `BigInt`, rounded to 15 significant digits half away from zero, scaled exactly,
+then rounded once to the decimals shown, and a price in 32nds from a double's shortest digits, as the server does it. A
+column's `valueFormatter` is `basisFormat(params.value, SPEC)`, whose spec `basis.dash.texts.spec` writes from the
+column's display format with every default resolved on the server, a currency's minor units and symbol among them, so
+the script holds no currency table. A test runs it under node on every float case of basis-core's `format.json`, 3,000
+and more in 22 formats, and on each display format a column declares, against basis-core's own text; it is skipped on a
+machine without node, and required where `CI` is set. The function joins `window.dashAgGridFunctions` and the shell's
+joins `window.dash_clientside.basis`, each added to what is there, never replacing it. The module is `texts`, since
+`bd.text` is the function's name.
+
 **Two ids every page has.** basis's chrome around every page holds two components whose ids are fixed and exported
 from `basis.dash.ids`, so the data and display lanes build against them: `NOTIFICATIONS`, DMC's
 `NotificationContainer`, whose `sendNotifications` prop takes a list of notifications, each a dict of DMC's
