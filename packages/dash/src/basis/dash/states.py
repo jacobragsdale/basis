@@ -7,7 +7,9 @@
   tile's dash.
 - **Failed**: when a callback that answers a component fails, the app's `on_error` tells the person in the
   notifications, the component keeps what it showed, and its mark, "Not updated", says so on it until its next answer
-  arrives. `on_error(handler)` wraps the app's handler to do it, from the failed callback's outputs.
+  arrives. `on_error(handler)` wraps the app's handler to do it, from the failed callback's outputs. A component that
+  fails before it has shown any answer has nothing to keep, so its body says "Could not load this view" in the
+  failure's colour, where the empty state's sentence would be.
 - **Stale**: a component that names its dataset (`dataset=`) shows "Stale" while the status store marks that dataset
   stale, a last good value a failed reload left.
 
@@ -24,6 +26,9 @@ from dash.development.base_component import Component
 
 FAILED: Final = "basis-failed"
 """The type of a component's failed mark's id."""
+FAILED_BODY: Final = "basis-failed-body"
+"""The type of the id of what a component shows in its body when it fails with nothing to keep showing."""
+COULD_NOT_LOAD: Final = "Could not load this view"
 STALE: Final = "basis-stale"
 """The type of a component's stale mark's id."""
 DELAY: Final = 400
@@ -56,6 +61,14 @@ def marks(of: str, prop: str, dataset: object = None) -> list[Component]:
     if (name := name_of(dataset)) is not None:
         shown.insert(0, html.Span(STALE_TEXT, id={"type": STALE, "of": of, "dataset": name}, className=HIDDEN, title=f"{name} is stale: a reload failed, so this is its last good value."))
     return shown
+
+
+def failed_body(of: str, prop: str, *, shown: bool = False) -> html.Div:
+    """What component `of` shows in its body, where the empty state's sentence would be, when its callback fails
+    before it has shown an answer: hidden until then, and for good once it has; `shown` where it starts with content
+    of its own, such as a figure given when it is declared."""
+    hidden = "basis-failed-body basis-failed-body-hidden" + (" basis-shown" if shown else "")
+    return html.Div(COULD_NOT_LOAD, id={"type": FAILED_BODY, "of": of, "prop": prop}, className=hidden, role="status")
 
 
 def loading(child: Component, of: str, props: Sequence[str]) -> dcc.Loading:

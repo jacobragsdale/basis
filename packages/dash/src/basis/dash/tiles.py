@@ -95,7 +95,7 @@ def stat(
         msg = f"stat {id} spans 1 to {COLUMNS} columns, not {span!r}: give a whole number in that range"
         raise DeclarationError(msg)
     declared = Declared(label, display, change, period, good)
-    content = states.loading(html.Div(shown(declared, None), id=id, className="basis-stat-content"), id, ["children"])
+    content = html.Div([states.loading(html.Div(shown(declared, None), id=id, className="basis-stat-content"), id, ["children"]), states.failed_body(id, "children")], className="basis-state-frame")
     made = Stat(
         [html.Div(states.marks(id, "children", dataset), className="basis-marks basis-stat-marks"), content],
         className="basis-card basis-stat",

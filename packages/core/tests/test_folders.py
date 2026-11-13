@@ -1,6 +1,7 @@
 """Shared folders: a path inside one never leaves it, a sheet reads as text for its row to type, and a workbook is
 written whole, through a temporary file renamed into place, so a reader never sees half of one."""
 
+import io
 import sys
 import zipfile
 from collections.abc import Callable
@@ -12,7 +13,7 @@ import pyarrow as pa
 import pytest
 from pydantic import ValidationError
 
-from basis.core.folders import TEMPORARY, Folder, FolderError, cell_text, folder
+from basis.core.folders import TEMPORARY, Folder, FolderError, cell_text, folder, workbook
 from basis.core.settings import GivenSettings, SettingsError
 
 
@@ -128,3 +129,15 @@ def test_text_longer_than_a_cell_holds_is_refused_rather_than_cut(shared: Folder
     with pytest.raises(FolderError, match=r"notes.xlsx: Notes's note holds text of 32768 characters, and an Excel cell holds 32767: shorten it in the transform"):
         shared.write_workbook("notes.xlsx", {"Notes": frame})
     assert not (shared.root / "notes.xlsx").exists()
+
+
+def test_a_workbook_gives_each_column_its_number_format_and_refuses_one_it_lacks() -> None:
+    frame = pd.DataFrame({"cusip": ["912828X1"], "par": [1_000_000.0], "ytw": [0.0525]})
+    made = workbook({"Positions": frame}, formats={"Positions": {"par": '"$"#,##0', "ytw": "0.00%"}})
+    styles = zipfile.ZipFile(io.BytesIO(made)).read("xl/styles.xml").decode()
+    assert 'formatCode="&quot;$&quot;#,##0"' in styles
+    assert 'formatCode="0.00%"' in styles
+    with pytest.raises(FolderError, match="Positions has no column oas to format"):
+        workbook({"Positions": frame}, formats={"Positions": {"oas": "0"}})
+    with pytest.raises(FolderError, match="at least one sheet"):
+        workbook({})

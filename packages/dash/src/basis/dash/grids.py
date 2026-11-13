@@ -30,19 +30,24 @@ The grid is `dag.AgGrid` itself, with its declaration kept beside it, so a page 
 import math
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Final, Literal
 
 import dash_ag_grid as dag
+import dash_mantine_components as dmc
 import pandas as pd
 
+import dash
 from basis.core.display import Display
 from basis.core.rows import Row
 from basis.core.tables import Column
-from basis.dash import states, texts, theme
+from basis.dash import exports as exports_module
+from basis.dash import internals, states, texts, theme
 from basis.dash.errors import DeclarationError
+from basis.dash.exports import DOWNLOAD, EXPORT
 from basis.dash.icons import icon
-from dash import Patch, dcc, html
+from dash import ALL, Patch, dcc, html
 from dash.development.base_component import Component
 
 type Total = Literal["sum", "mean", "min", "max", "count"] | Weighted
@@ -108,6 +113,9 @@ class Declared:
     totals: Mapping[str, Total]
     label: str | None
     """The text column the totals row's label sits in."""
+    id: str = ""
+    headers: Mapping[str, str] = field(default_factory=dict)
+    """Each column's header, as the grid shows it, which an export writes too."""
 
 
 class Grid(html.Div):
@@ -123,6 +131,30 @@ class Grid(html.Div):
         patched["pinnedBottomRowData"] = totals(frame, self.declared)
         return patched
 
+    @property
+    def download(self) -> dict[str, str]:
+        """The id of the grid's download, which an export callback outputs `data` to."""
+        return {"type": DOWNLOAD, "grid": self.declared.id}
+
+    @property
+    def export(self) -> dict[str, object]:
+        """The ids of the grid's export buttons, which an export callback takes `n_clicks` from."""
+        return {"type": EXPORT, "grid": self.declared.id, "kind": ALL}
+
+    def exported(self, frame: pd.DataFrame, *, asked: Mapping[str, object] | None = None, loaded_at: datetime | None = None, name: str | None = None, title: str | None = None) -> dict[str, object]:
+        """`frame` as the file the pressed button asks for, Excel or CSV, for the grid's download: named `name`, by
+        default the grid's id and the day, with `title`, `asked` and `loaded_at` in an Excel export's About sheet."""
+        pressed = dash.ctx.triggered_id if internals.in_callback() else None
+        kind = pressed.get("kind") if isinstance(pressed, Mapping) else None
+        if kind not in exports_module.KINDS:
+            msg = f"grid {self.declared.id} exports from its own buttons, so call exported in a callback whose input is its export, not {pressed!r}"
+            raise DeclarationError(msg)
+        named = name or f"{self.declared.id}-{datetime.now(UTC).astimezone().date().isoformat()}"
+        if kind == "csv":
+            return exports_module.downloaded("csv", exports_module.csv(frame, self.declared.row, headers=self.declared.headers), named)
+        made = exports_module.excel(frame, self.declared.row, headers=self.declared.headers, title=title or self.declared.id, asked=asked, loaded_at=loaded_at)
+        return exports_module.downloaded("xlsx", made, named)
+
 
 def grid(
     id: str,  # noqa: A002 -- a component's id, as Dash names it
@@ -135,6 +167,7 @@ def grid(
     search: bool = True,
     noun: str = "rows",
     dataset: object = None,
+    exports: bool = False,
 ) -> Grid:
     """A grid of `row`'s columns at `id`, its rows known by `key`, with `totals` and `columns`' overrides, `height`
     pixels tall, or as tall as its rows where None, for a short table, and a quick filter unless `search` is False. Its
@@ -180,10 +213,28 @@ def grid(
         named = html.Span("Filter the rows", className="basis-visually-hidden")  # the box's name, which the label gives it
         tools.append(html.Label([icon("search"), named, box], className="basis-grid-search"))
     tools.append(html.Span(id=count, className="basis-grid-count", role="status"))
+    tools.append(html.Span(className="basis-grid-gap"))
     tools.append(html.Span(states.marks(id, "rowData", dataset), className="basis-marks"))
-    shown = Grid([html.Div(tools, className="basis-grid-tools"), states.loading(table, id, ["rowData", "dashGridOptions"])], className="basis-grid")
-    object.__setattr__(shown, "declared", Declared(row, key, given_totals, label))  # beside the component, which Dash never sends
+    if exports:
+        tools.append(html.Span([_export_button(id, kind) for kind in ("csv", "xlsx")], className="basis-grid-exports"))
+        tools.append(dcc.Download(id={"type": DOWNLOAD, "grid": id}))
+    body = html.Div([states.loading(table, id, ["rowData", "dashGridOptions"]), states.failed_body(id, "rowData")], className="basis-state-frame")
+    shown = Grid([html.Div(tools, className="basis-grid-tools"), body], className="basis-grid")
+    headers = {found.name: given_columns.get(found.name, ColumnShown()).header or header(found.name) for found in row.columns}
+    object.__setattr__(shown, "declared", Declared(row, key, given_totals, label, id, headers))  # beside the component, which Dash never sends
     return shown
+
+
+def _export_button(id: str, kind: str) -> Component:  # noqa: A002 -- the grid's id
+    return dmc.Button(
+        "Excel" if kind == "xlsx" else "CSV",
+        id={"type": EXPORT, "grid": id, "kind": kind},
+        leftSection=icon("download"),
+        variant="default",
+        size="compact-xs",
+        className="basis-export",
+        **{"aria-label": f"Export the rows as {'an Excel workbook' if kind == 'xlsx' else 'CSV'}"},
+    )
 
 
 def _total_json(total: Total) -> object:

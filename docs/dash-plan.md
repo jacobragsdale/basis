@@ -39,7 +39,7 @@ Keep this table true in each step's own commit.
 | 16.6 Stat tiles and small parts | Done: `bd.stat` and `show`, `bd.badge`, the freshness line from the status store, `bd.page(datasets=)`; charts' text kept level | the commit "Step 16.6" |
 | 16.7 Filters and the URL | Done: `bd.as_of`, `bd.date_range` with presets, `bd.select`, `bd.search`, read from the query string at build and written back in the browser; `bd.day`, `bd.days`, `bd.options` | the commit "Step 16.7" |
 | 16.8 States | Done: loading after 400 ms in place, empty only once answered, failed marked on its component until its next answer, stale from the status store; on the grid, graph and tile | the commit "Step 16.8" |
-| 16.9 Exports | Not started | |
+| 16.9 Exports | Done: `bd.grid(exports=True)`, `GRID.exported`, Excel with each column's number format and the About sheet through core's `folders.workbook`, CSV guarded against formula injection; a failure with nothing to keep says so | the commit "Step 16.9" |
 | 17.1 The checks | Done: `basis.dash.checks`, the part's `checks`: the layers and the domain's purity, a view's function's too; callbacks outside the app's and its pages' modules, and ones that load without `async`; every page built, every id and property, every callback called on the fakes, its failure, its size, its hold on the loop, its figure, a grid's rows and a store's; DataTable; other origins | the commit "Step 17.1" |
 | 17.2 The agent's eyes | Done: `basis render PAGE [--set ID.PROP=VALUE]` and `basis load DATASET [--param NAME=VALUE]`, each `[--env ENV]`, JSON on stdout; a grid's rows through its columns' formats; `basis.dash.driving`, shared with 17.1's check | the commit "Step 17.2" |
 | 17.3 to 17.8 The repo around it | Not started | |

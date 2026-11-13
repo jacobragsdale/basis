@@ -125,32 +125,15 @@ class Folder:
         frame.columns = pd.Index([str(name) if name is not None else "" for name in rows.iloc[0]] if len(rows) else [], dtype=object)
         return frame.astype("string[pyarrow]")
 
-    def write_workbook(self, relative: str, sheets: Mapping[str, pd.DataFrame], *, zones: Mapping[str, str] | None = None) -> Written:
+    def write_workbook(self, relative: str, sheets: Mapping[str, pd.DataFrame], *, zones: Mapping[str, str] | None = None, formats: Mapping[str, Mapping[str, str]] | None = None) -> Written:
         """Write `sheets`, each a frame by its sheet's name, as the workbook at `relative`, atomically, as the module's
-        docstring says; `zones` names the zone each datetime column is written in, by column, UTC where it names none."""
+        docstring says; `zones` names the zone each datetime column is written in, by column, UTC where it names none,
+        and `formats` each column's Excel number format, by sheet and column (`workbook`)."""
         path = self.at(relative)
         if path.suffix.lower() != WRITTEN:
             msg = f"{relative}: basis writes workbooks as {WRITTEN}: name it so"
             raise FolderError(msg)
-        if not sheets:
-            msg = f"{relative}: a workbook has at least one sheet: give one"
-            raise FolderError(msg)
-        _engines("xlsxwriter")
-        for sheet, frame in sheets.items():
-            for name in frame.columns:
-                dtype = frame[name].dtype
-                if not pd.api.types.is_object_dtype(dtype) and not (isinstance(dtype, pd.ArrowDtype) and pa.types.is_string(dtype.pyarrow_dtype)):
-                    continue
-                if (longest := int(frame[name].dropna().astype(str).str.len().max() or 0)) > CELL_CHARACTERS:
-                    msg = f"{relative}: {sheet}'s {name} holds text of {longest} characters, and an Excel cell holds {CELL_CHARACTERS}: shorten it in the transform"
-                    raise FolderError(msg)
-        content = io.BytesIO()
-        # every text is a cell's text: never a formula, as `=...` would be, nor a link, which Excel would run or follow
-        options = {"strings_to_formulas": False, "strings_to_urls": False, "strings_to_numbers": False}
-        with pd.ExcelWriter(content, engine="xlsxwriter", engine_kwargs={"options": options}) as writer:
-            for sheet, frame in sheets.items():
-                plain(frame, zones or {}).to_excel(writer, sheet_name=sheet, index=False)
-        return self.write_bytes(relative, content.getvalue())
+        return self.write_bytes(relative, workbook(sheets, zones=zones, formats=formats, what=relative))
 
     def write_bytes(self, relative: str, content: bytes) -> Written:
         """Write `content` as the file at `relative`, through a temporary file beside it, then renamed into place: a
@@ -182,6 +165,45 @@ class Folder:
 def _span(folder: str, operation: str, relative: str) -> AbstractContextManager[Span]:
     """The span of one read or write of a shared folder's file. A file system's call takes no timeout, so it has none."""
     return traces.tracer().start_as_current_span(f"{folder} {operation}", kind=SpanKind.CLIENT, attributes={"basis.resource": folder, "basis.file": relative})
+
+
+def workbook(sheets: Mapping[str, pd.DataFrame], *, zones: Mapping[str, str] | None = None, formats: Mapping[str, Mapping[str, str]] | None = None, what: str = "the workbook") -> bytes:
+    """`sheets`, each a frame by its sheet's name, as an `.xlsx` workbook's bytes, for a folder or a download: every
+    text a cell's text, never a formula or a link; each datetime column's wall clock in its zone of `zones`, UTC where
+    it names none; and each column of `formats`, by sheet and column, in that Excel number format, such as
+    `#,##0.00` or `0.00%`, its width fitted to its header. A text longer than a cell holds is refused, naming it."""
+    if not sheets:
+        msg = f"{what}: a workbook has at least one sheet: give one"
+        raise FolderError(msg)
+    _engines("xlsxwriter")
+    for sheet, frame in sheets.items():
+        for name in frame.columns:
+            dtype = frame[name].dtype
+            if not pd.api.types.is_object_dtype(dtype) and not (isinstance(dtype, pd.ArrowDtype) and pa.types.is_string(dtype.pyarrow_dtype)):
+                continue
+            if (longest := int(frame[name].dropna().astype(str).str.len().max() or 0)) > CELL_CHARACTERS:
+                msg = f"{what}: {sheet}'s {name} holds text of {longest} characters, and an Excel cell holds {CELL_CHARACTERS}: shorten it in the transform"
+                raise FolderError(msg)
+    content = io.BytesIO()
+    # every text is a cell's text: never a formula, as `=...` would be, nor a link, which Excel would run or follow
+    options = {"strings_to_formulas": False, "strings_to_urls": False, "strings_to_numbers": False}
+    with pd.ExcelWriter(content, engine="xlsxwriter", engine_kwargs={"options": options}) as writer:
+        for sheet, frame in sheets.items():
+            plain(frame, zones or {}).to_excel(writer, sheet_name=sheet, index=False)
+            given = (formats or {}).get(sheet, {})
+            if unknown := sorted(set(given) - {str(name) for name in frame.columns}):
+                msg = f"{what}: {sheet} has no column {', '.join(unknown)} to format: format one of {', '.join(map(str, frame.columns))}"
+                raise FolderError(msg)
+            book, page = writer.book, writer.sheets[sheet]
+            for index, name in enumerate(frame.columns):
+                shown = given.get(str(name))
+                width = max(len(str(name)) + 2, _WIDTH)
+                page.set_column(index, index, width, book.add_format({"num_format": shown}) if shown is not None else None)
+    return content.getvalue()
+
+
+_WIDTH = 12
+"""The least width of a workbook's column, in characters."""
 
 
 CELL_CHARACTERS = 32_767

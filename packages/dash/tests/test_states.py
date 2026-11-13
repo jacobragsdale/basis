@@ -132,7 +132,7 @@ def test_a_grid_says_it_has_no_rows_only_once_it_has_an_answer() -> None:
     const SCRIPT = require("fs").readFileSync(process.argv[1], "utf8");
     const options = {suppressNoRowsOverlay: true};
     let shown = 0;
-    const api = {setGridOption: (name, value) => { options[name] = value; }, getDisplayedRowCount: () => 0, showNoRowsOverlay: () => { shown += 1; }};
+    const api = {getGridOption: (name) => options[name], setGridOption: (name, value) => { options[name] = value; }, getDisplayedRowCount: () => 0, showNoRowsOverlay: () => { shown += 1; }};
     globalThis.window = {dash_clientside: {}, dash_ag_grid: {getApiAsync: (id) => id === "g" ? Promise.resolve(api) : Promise.reject(new Error(id))}};
     eval(SCRIPT);
     window.dash_clientside.callback_context = {outputs_list: {id: {type: "f", of: "g", prop: "rowData"}, property: "className"}};
@@ -141,3 +141,42 @@ def test_a_grid_says_it_has_no_rows_only_once_it_has_an_answer() -> None:
     """
     ran = subprocess.run(["node", "-e", probe, str(STATIC / "basis.js")], capture_output=True, text=True, encoding="utf-8", check=True, timeout=30)  # noqa: S607 -- node, on the path
     assert json.loads(ran.stdout) == {"answered": states.HIDDEN, "options": {"suppressNoRowsOverlay": False}, "shown": 1}
+
+
+@pytest.mark.skipif(shutil.which("node") is None and "CI" not in os.environ, reason="the browser script runs under node, which this machine lacks; CI has it")
+def test_a_failure_with_nothing_to_keep_says_so_and_one_with_an_answer_keeps_it() -> None:
+    probe = """
+    const SCRIPT = require("fs").readFileSync(process.argv[1], "utf8");
+    globalThis.window = {dash_clientside: {}};
+    eval(SCRIPT);
+    const basis = window.dash_clientside.basis;
+    const at = (of, prop) => { window.dash_clientside.callback_context = {outputs_list: {id: {type: "x", of, prop}, property: "className"}}; };
+    const FAILED = "basis-mark basis-mark-failed", HIDDEN = "basis-mark basis-mark-hidden", BODY = "basis-failed-body basis-failed-body-hidden";
+    at("never", "figure"); const never = basis.failedBody(FAILED, BODY);
+    at("seen", "rowData"); basis.recovered([{a: 1}]); at("seen", "rowData"); const seen = basis.failedBody(FAILED, BODY);
+    at("given", "figure"); const given = basis.failedBody(FAILED, BODY + " basis-shown");
+    at("never", "figure"); basis.recovered({}); at("never", "figure"); const later = basis.failedBody(HIDDEN, "basis-failed-body");
+    console.log(JSON.stringify({never, seen, given, later}));
+    """
+    ran = subprocess.run(["node", "-e", probe, str(STATIC / "basis.js")], capture_output=True, text=True, encoding="utf-8", check=True, timeout=30)  # noqa: S607 -- node, on the path
+    assert json.loads(ran.stdout) == {
+        "never": "basis-failed-body",  # nothing to keep: the body says it could not load
+        "seen": "basis-failed-body basis-shown basis-failed-body-hidden",  # an answer shown: it keeps it, under the mark
+        "given": "basis-failed-body basis-shown basis-failed-body-hidden",  # content of its own from the start
+        "later": "basis-failed-body basis-shown basis-failed-body-hidden",  # its next answer clears it
+    }
+
+
+def test_each_wrapper_has_a_body_for_a_failure_with_nothing_to_keep() -> None:
+    for made, of, prop in ((GRID, "state-grid", "rowData"), (GRAPH, "state-graph", "figure"), (TILE, "state-tile", "children")):
+        [body] = _of(_sent(made), lambda found: isinstance(found["props"].get("id"), dict) and found["props"]["id"].get("type") == states.FAILED_BODY)
+        assert body["props"]["id"] == {"type": states.FAILED_BODY, "of": of, "prop": prop}
+        assert body["props"]["children"] == states.COULD_NOT_LOAD
+        assert body["props"]["className"] == "basis-failed-body basis-failed-body-hidden"
+    given = _sent(bd.graph("state-given", figure=bd.charts.empty()))
+    [body] = _of(given, lambda found: isinstance(found["props"].get("id"), dict) and found["props"]["id"].get("type") == states.FAILED_BODY)
+    assert "basis-shown" in body["props"]["className"]
+    with testing.client(APP) as client:
+        [follows] = [entry for entry in json.loads(json.dumps(client.dependencies())) if "failedBody" in json.dumps(entry.get("clientside_function"))]
+    [mark] = follows["inputs"]
+    assert (mark["property"], json.loads(mark["id"])["type"]) == ("className", states.FAILED)  # it follows the failed mark

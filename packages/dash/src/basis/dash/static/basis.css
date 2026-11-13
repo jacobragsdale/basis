@@ -654,3 +654,51 @@ html:root body {
   color: var(--basis-muted-foreground);
   font-size: var(--basis-text-sm);
 }
+/* A component that failed with no answer to keep says so where its content would be, in the failure's colour. */
+.basis-state-frame {
+  position: relative;
+  min-width: 0;
+}
+.basis-failed-body {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--basis-spacing) * 2);
+  padding: calc(var(--basis-spacing) * 4);
+  color: var(--basis-destructive);
+  font-size: var(--basis-text-sm);
+  font-weight: 550;
+  text-align: center;
+  background: var(--basis-card);
+  pointer-events: none;
+  z-index: 1;
+}
+.basis-stat .basis-failed-body {
+  inset: 1.25rem 0 0 0;
+  justify-content: flex-start;
+  padding: 0;
+}
+.basis-failed-body::before {
+  content: "";
+  width: 1em;
+  height: 1em;
+  flex: none;
+  background-color: currentColor;
+  -webkit-mask: var(--basis-icon-circle-x) center / contain no-repeat;
+  mask: var(--basis-icon-circle-x) center / contain no-repeat;
+}
+.basis-failed-body-hidden {
+  display: none;
+}
+.basis-grid-gap {
+  flex: 1;
+}
+.basis-grid-tools .basis-marks {
+  margin-left: 0;
+}
+.basis-grid-exports {
+  display: inline-flex;
+  gap: calc(var(--basis-spacing) * 1.5);
+}

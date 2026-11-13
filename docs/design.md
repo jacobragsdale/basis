@@ -716,6 +716,25 @@ next answer. *Stale*: a component that names its dataset (`dataset=` on `bd.grid
 "Stale" while the status store marks it stale, from one clientside callback over the store. A mark sits at the grid's
 tools, a graph's top right, a tile's label. `bd.graph` is now a frame around the `dcc.Graph`, which keeps the id, and a
 tile's id is its content's, whose `children` a callback answers.
+A component that fails before it has shown any answer has nothing to keep, so its body says "Could not load this
+view" in the failure's colour, where the empty state's sentence would be, under its mark; one that has an answer keeps
+it under the mark. Only the browser knows which: the shell's clearing callback records each component's answers, and
+one pattern-matching clientside callback follows each failed mark. A component declared with content of its own, such
+as a figure, counts as answered.
+
+**Exports, as built (16.9).** `bd.grid(..., exports=True)` adds CSV and Excel buttons and a `dcc.Download` to the
+grid's tools, which a callback of the page's answers: `Output(GRID.download, "data")`, `Input(GRID.export,
+"n_clicks")`, returning `GRID.exported(frame, asked=, loaded_at=bd.loaded(...), title=)`, which reads the pressed
+button from Dash's context. Excel goes through basis-core's workbook writer, `basis.core.folders.workbook`, which gives
+a workbook's bytes for a folder or a download and, since this step, each column's Excel number format by sheet and
+column (`Folder.write_workbook` takes `formats=` too, so a job's workbook can carry them). A number stays a value and
+shows as the grid shows it, in Excel's own format: `"$"#,##0;-"$"#,##0`, `0.000%`, `# ??/32` for 32nds, `yyyy-mm-dd`;
+basis points, for which Excel has no format, are written as basis points under a header that says so ("OAS (bp)"),
+rather than shown wrong. Every text is a cell's text, never a formula. The workbook's second sheet, About, names the
+view, when it was exported and when its data was read, in the desk's zone, its rows, and each thing asked. CSV is
+UTF-8 with a byte-order mark, which Excel reads as UTF-8, numbers at full precision and dates as ISO text, and a text
+that would start a formula (`=`, `+`, `-`, `@`, a tab or a return) starts with an apostrophe, as OWASP's guard for CSV
+injection has it.
 
 **Two ids every page has.** basis's chrome around every page holds two components whose ids are fixed and exported
 from `basis.dash.ids`, so the data and display lanes build against them: `NOTIFICATIONS`, DMC's

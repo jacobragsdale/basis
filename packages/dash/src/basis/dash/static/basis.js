@@ -396,9 +396,18 @@
       return entry && entry.stale ? "basis-mark basis-mark-stale" : MARK_HIDDEN;
     });
   };
+  var answered = {}; /* each component that has shown an answer, by id */
+  basis.failedBody = function (mark, body) {
+    var context = window.dash_clientside.callback_context;
+    var output = context && context.outputs_list;
+    var shown = String(body || "").indexOf("basis-shown") >= 0 || Boolean(output && output.id && answered[output.id.of]);
+    var failed = String(mark || "").indexOf("basis-mark-failed") >= 0;
+    return "basis-failed-body" + (shown ? " basis-shown" : "") + (failed && !shown ? "" : " basis-failed-body-hidden");
+  };
   basis.recovered = function () {
     var context = window.dash_clientside.callback_context;
     var output = context && context.outputs_list;
+    if (output && output.id) answered[output.id.of] = true;
     var grids = window.dash_ag_grid;
     if (output && output.id && output.id.prop === "rowData" && grids && grids.getApiAsync) {
       /* a grid's answer, its first among them: from here an empty grid says so, where before it had nothing to say */
@@ -406,6 +415,10 @@
         function (api) {
           api.setGridOption("suppressNoRowsOverlay", false);
           if (!api.getDisplayedRowCount() && api.showNoRowsOverlay) api.showNoRowsOverlay();
+          /* and its totals and count, once it holds the rows: an answer can land before the grid's listeners do */
+          setTimeout(function () {
+            totals({ api: api, type: "answered" });
+          }, 0);
         },
         function () {
           /* the grid is gone */

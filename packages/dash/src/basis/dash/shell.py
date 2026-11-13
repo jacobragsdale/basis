@@ -85,6 +85,10 @@ def wire(made: dash.Dash, app: App) -> None:
         made.clientside_callback(
             ClientsideFunction(namespace="basis", function_name="recovered"), Output({"type": states.FAILED, "of": name, "prop": prop}, "className"), Input(name, prop), prevent_initial_call=True
         )
+    mark, body = {"type": states.FAILED, "of": MATCH, "prop": MATCH}, {"type": states.FAILED_BODY, "of": MATCH, "prop": MATCH}
+    made.clientside_callback(
+        ClientsideFunction(namespace="basis", function_name="failedBody"), Output(body, "className"), Input(mark, "className"), State(body, "className"), prevent_initial_call=True
+    )
     search = {"type": SEARCH, "grid": MATCH}
     made.clientside_callback(ClientsideFunction(namespace="basis", function_name="search"), Output(search, "className"), Input(search, "value"), State(search, "id"), prevent_initial_call=True)
 

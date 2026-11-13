@@ -78,7 +78,8 @@ def graph(id: str, *, figure: go.Figure | None = None, height: int = HEIGHT, dat
     """A graph at `id`, `height` pixels tall, showing `figure`, or nothing until a callback gives one, with its marks
     at its top right, stale by `dataset` or not updated (`basis.dash.states`)."""
     shown = dcc.Graph(id=id, figure=(figure if figure is not None else empty("")).to_plotly_json(), config=CONFIG, style={"height": f"{height}px"}, className="basis-graph")
-    return html.Div([html.Div(states.marks(id, "figure", dataset), className="basis-marks basis-graph-marks"), states.loading(shown, id, ["figure"])], className="basis-graph-frame")
+    marks = html.Div(states.marks(id, "figure", dataset), className="basis-marks basis-graph-marks")
+    return html.Div([marks, states.loading(shown, id, ["figure"]), states.failed_body(id, "figure", shown=figure is not None)], className="basis-graph-frame basis-state-frame")
 
 
 def empty(message: str = EMPTY) -> go.Figure:

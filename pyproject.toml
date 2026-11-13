@@ -249,6 +249,9 @@ forbidden_modules = [
     "uvicorn", "fastapi", "starlette", "basis.core.databases", "basis.core.opened", "basis.core.fakes", "basis.core.traces", "mssql_python", "oracledb", "httpx", "httpx2",
 ]
 as_packages = false  # `bd.build`, `bd.serve` and `bd.testing` load on first use, which an app's modules never make
+ignore_imports = [
+    "basis.dash.exports -> basis.core.folders",  # the workbook writer loads inside an export's callback, as it runs, never when an app is declared
+]
 
 [[tool.importlinter.contracts]]
 name = "Compute modules do no I/O and reach no resource: the process pool gives each function values, and it returns one"
