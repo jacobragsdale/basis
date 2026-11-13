@@ -17,6 +17,12 @@ repos:
 
   - repo: local
     hooks:
+      - id: untracked   # --all-files checks what git tracks alone: a new file not yet added would pass it, and fail the commit
+        name: untracked files
+        entry: uv run python scripts/untracked.py
+        language: system
+        files: ^\.pre-commit-config\.yaml$   # always among --all-files' files, and a commit's only when it changes the hooks
+        pass_filenames: false
       - id: ruff-check   # the workspace's ruff, which its dev group pins, rather than a mirror's second pin of it
         name: ruff check
         entry: uv run ruff check --fix

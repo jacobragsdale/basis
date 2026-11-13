@@ -34,7 +34,7 @@ to 18: one part's removal, and Dash apps. The code is in `packages/`: basis-core
 ```sh
 uv sync --all-packages              # every member, as CI installs them
 uv run pre-commit install           # once per clone: the commit hook runs the checks below
-uv run pre-commit run --all-files   # ruff, ty with every rule an error, dead code, the lockfile, the import contracts, file hygiene
+uv run pre-commit run --all-files   # ruff, ty with every rule an error, dead code, the lockfile, the import contracts, file hygiene; a file git does not track yet fails it, since it would check only what git tracks
 uv run pytest -n auto               # every package's unit tests, and scripts/tests and evals/tests, from the root
 uv run scripts/release.py check     # every member at the root's one version, pinning basis-core at it (docs/releasing.md)
 uv run pytest -m integration        # real SQL Server and Oracle, every package's: packages/job/tests/integration/README.md

@@ -487,6 +487,11 @@ Each has the pick this plan builds on. None blocks a step before the one named.
   uvicorn raised the signal again once it had shut down, into the command's own handler. Fixed in core's runner (17,
   the commit "A drained stop exits 0"): the first signal starts a shutdown without uvicorn keeping it, so a drain that
   finishes exits 0 with no `ERROR` line, and only a second signal, which cuts requests off, is raised again, a failure.
+- **The commit hook's ruff flagged what `pre-commit run --all-files` had passed** (found in 15): `--all-files` checks
+  the files git tracks alone, so a new file not yet added passed it and was checked first by the commit. A hook,
+  `untracked` (`scripts/untracked.py`), now fails `--all-files` while any file is neither tracked nor ignored, with
+  the fix; it runs where `.pre-commit-config.yaml` is among the files, so a commit beside files not yet added is never
+  stopped by them. Ruff itself flags the same rules in both.
 - **Dash ships a pytest plugin, `dash`**, which drives a browser and fails pytest 9's deprecation warnings. The
   workspace turns it off (`-p no:dash`); the pytest settings `basis sync` writes for a Dash repo must too (17.3).
 - **`basis --help` in a Dash repo imports Dash**, about 0.2 s, since the part's module imports `basis.dash`; uvicorn
