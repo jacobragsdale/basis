@@ -433,5 +433,10 @@
   var grid = (window.dashAgGridFunctions = window.dashAgGridFunctions || {});
   grid.basisTotals = totals;
   grid.basisFormat = format;
+  /* A true value's quiet check mark, and nothing for a false or missing one: a bool column reads, and never looks
+     editable as AG Grid's checkbox does. */
+  grid.basisCheck = function (value) {
+    return value === true ? "\u2713" : "";
+  };
   grid.basisScale = scale;
 })();

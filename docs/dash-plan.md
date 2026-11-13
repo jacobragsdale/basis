@@ -508,6 +508,20 @@ Each has the pick this plan builds on. None blocks a step before the one named.
 - **An icon's CSS holds the SVG namespace's URL**, `http://www.w3.org/2000/svg`, inside each data URI, which a browser
   needs to draw it and never fetches. 17.1's check of URLs of another origin must pass it (found in 16.2).
 
+## For the maintainer's look
+
+What lane B (phase 16) would still change about the look, from its report, less the two it did after (a bool column's
+check mark, and a heatmap scale for both schemes):
+
+- **The tile's sparkline** has no hover; a tooltip of the last value and its date would help.
+- **The heat scale behind a grid's cells caps at 24%** of its poles to keep gain and loss text at 4.5:1, which makes it
+  subtle; a heat column could drop the signed colours and go stronger.
+- **Mantine's date picker** still shows its own month header and day styles; a pass over its Styles API would bring it
+  fully into the tokens.
+- **A grid wider than its card scrolls sideways** at its least widths; a page with many columns would want pinned
+  identifiers by default.
+- **The legend above a plot** takes vertical room in short graphs; a builder could move it to the line ends more often.
+
 ## Rules for this work
 
 - The maintainer's working mode stands: commit to `main` and push after every step, no pull requests, no agent

@@ -152,7 +152,22 @@ def test_a_heatmap_takes_the_diverging_scale_about_zero_where_values_have_both_s
     assert trace["text"] == [["1.0\N{NO-BREAK SPACE}bp", "-2.0\N{NO-BREAK SPACE}bp"], ["3.0\N{NO-BREAK SPACE}bp", ""]]
     one_sign = _sent(charts.heatmap(cells.assign(change=[1e-4, 2e-4, 3e-4, 4e-4]), Cell, x="rating", y="sector", z="change"))["data"][0]
     assert "zmid" not in one_sign
-    assert one_sign["colorscale"][0][1] == theme.srgb("seq-1", "light")
+    assert [stop for stop, _ in one_sign["colorscale"]] == [0.0, 1.0]
+    assert trace["colorscale"][1][1].endswith(", 0)")  # the middle is transparent: a value near zero takes the card's colour
+    assert trace["textfont"]["color"] == theme.srgb("foreground", "light")
+
+
+@pytest.mark.parametrize("scheme", theme.SCHEMES)
+@pytest.mark.parametrize("pole", sorted(theme.HEAT_POLES))
+def test_the_heat_poles_read_on_both_cards(scheme: theme.Scheme, pole: str) -> None:
+    card = theme.rgba(theme.value("card", scheme))
+    colour = theme.rgba(theme.HEAT_POLES[pole])
+    over = [theme.HEAT_OPACITY * mark + (1 - theme.HEAT_OPACITY) * under for mark, under in zip(colour[:3], card[:3], strict=False)]
+    shown = "#{:02x}{:02x}{:02x}".format(*(round(channel * 255) for channel in over))
+    assert theme.contrast(theme.value("foreground", scheme), shown) >= 4.5
+    assert theme.contrast(shown, theme.value("card", scheme)) >= 3
+    lightness = _lightness(shown)
+    assert (0.43 <= lightness <= 0.77) if scheme == "light" else (0.48 <= lightness <= 0.67)
 
 
 def test_a_histogram_counts_each_bin_and_names_its_range() -> None:
@@ -237,3 +252,13 @@ def test_names_and_ticks_stay_level_rather_than_turn() -> None:
 )
 def test_a_long_name_breaks_at_the_space_nearest_its_middle(name: str, shown: str) -> None:
     assert charts.wrapped(name) == shown
+
+
+def _lightness(colour: str) -> float:
+    """An sRGB colour's OKLCH lightness, by Björn Ottosson's matrices."""
+    red, green, blue, _ = theme.rgba(colour)
+    linear = [channel / 12.92 if channel <= 0.04045 else math.pow((channel + 0.055) / 1.055, 2.4) for channel in (red, green, blue)]
+    long = math.cbrt(0.4122214708 * linear[0] + 0.5363325363 * linear[1] + 0.0514459929 * linear[2])
+    medium = math.cbrt(0.2119034982 * linear[0] + 0.6806995451 * linear[1] + 0.1073969566 * linear[2])
+    short = math.cbrt(0.0883024619 * linear[0] + 0.2817188376 * linear[1] + 0.6299787005 * linear[2])
+    return 0.2104542553 * long + 0.7936177850 * medium - 0.0040720468 * short

@@ -122,7 +122,7 @@ def test_the_script_adds_to_the_grid_s_functions_and_never_replaces_them() -> No
     console.log(JSON.stringify({grid: Object.keys(window.dashAgGridFunctions).sort(), clientside: Object.keys(window.dash_clientside).sort()}));
     """
     ran = subprocess.run([str(NODE), "-e", probe, str(STATIC / "basis.js")], capture_output=True, text=True, encoding="utf-8", check=True, timeout=30)
-    assert json.loads(ran.stdout) == {"grid": ["appUpper", "basisFormat", "basisScale", "basisTotals"], "clientside": ["app", "basis"]}
+    assert json.loads(ran.stdout) == {"grid": ["appUpper", "basisCheck", "basisFormat", "basisScale", "basisTotals"], "clientside": ["app", "basis"]}
 
 
 def test_a_spec_resolves_every_default_the_browser_would_need() -> None:
@@ -146,3 +146,15 @@ def test_the_server_writes_a_value_as_basis_core_does() -> None:
     assert bd.text(0.0525, bd.format.bps(0)) == "525\N{NO-BREAK SPACE}bp"
     assert bd.text(float("nan"), bd.format.pct()) == ""
     assert bd.text(None) == ""
+
+
+@needs_node
+def test_a_bool_is_a_quiet_check_mark_for_true_and_nothing_else() -> None:
+    probe = """
+    const SCRIPT = require("fs").readFileSync(process.argv[1], "utf8");
+    globalThis.window = {};
+    eval(SCRIPT);
+    console.log(JSON.stringify([true, false, null, undefined, "true"].map(window.dashAgGridFunctions.basisCheck)));
+    """
+    ran = subprocess.run([str(NODE), "-e", probe, str(STATIC / "basis.js")], capture_output=True, text=True, encoding="utf-8", check=True, timeout=30)
+    assert json.loads(ran.stdout) == ["\N{CHECK MARK}", "", "", "", ""]

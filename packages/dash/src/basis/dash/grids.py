@@ -292,6 +292,8 @@ def _total(values: pd.Series, frame: pd.DataFrame, total: Total) -> float | None
 
 def _definition(found: Column, shown: ColumnShown) -> dict[str, object]:
     defined: dict[str, object] = {"field": found.name, "headerName": shown.header or header(found.name), "cellDataType": _KINDS[found.kind], "filter": _FILTERS[found.kind]}
+    if found.kind == "bool":
+        defined |= {"cellDataType": False, "valueFormatter": {"function": "basisCheck(params.value)"}, "cellClass": "basis-check"}  # a mark, never AG Grid's checkbox, which reads as editable
     if found.kind == "float":
         display = found.display if found.display is not None else Display(kind="number")
         defined |= {

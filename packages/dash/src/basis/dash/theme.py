@@ -180,6 +180,27 @@ vision. Its one warning is the fourth and fifth, amber and green, 7.0 apart to p
 second encoding, as basis's charts label series at the line's end and keep a legend. A test holds the measurable
 checks."""
 
+HEAT_POLES: Final[dict[str, str]] = {"low": "oklch(0.58 0.17 25)", "high": "oklch(0.58 0.14 245)"}
+"""A heatmap's poles, red below zero and blue above, chosen for both schemes, since Plotly cannot switch a scale: drawn
+at `HEAT_OPACITY` over a card, each composites inside the `dataviz` validator's band for that card, at 3:1 against it,
+the two apart to every kind of vision, and under the foreground's text at 4.5:1. The scale's middle is transparent, so a
+value near zero takes the card's own colour, in either scheme."""
+HEAT_OPACITY: Final = 0.85
+
+
+def heat_scale(*, signed: bool) -> list[list[object]]:
+    """A heatmap's colour scale: from the low pole, through nothing, to the high one where values have both signs; from
+    nearly nothing to the high pole where they have one."""
+
+    def colour(pole: str, alpha: float) -> str:
+        red, green, blue, _ = rgba(HEAT_POLES[pole])
+        return f"rgba({round(red * 255)}, {round(green * 255)}, {round(blue * 255)}, {alpha:g})"
+
+    if not signed:
+        return [[0.0, colour("high", 0.06)], [1.0, colour("high", HEAT_OPACITY)]]
+    return [[0.0, colour("low", HEAT_OPACITY)], [0.4999, colour("low", 0.0)], [0.5001, colour("high", 0.0)], [1.0, colour("high", HEAT_OPACITY)]]
+
+
 FONTS: Final[tuple[tuple[str, str, str], ...]] = (("Inter Variable", "inter", ""), ("Inter Tabular", "inter", '  font-feature-settings: "tnum";\n'), ("JetBrains Mono Variable", "jetbrains-mono", ""))
 """Each font face: its family, its file in `static/fonts/`, and what it adds to the face. Inter's Latin file serves
 twice, the second time as `Inter Tabular`, with tabular figures on, which `--basis-font-num` names first, so digits

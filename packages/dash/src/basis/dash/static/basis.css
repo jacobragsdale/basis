@@ -702,3 +702,12 @@ html:root body {
   display: inline-flex;
   gap: calc(var(--basis-spacing) * 1.5);
 }
+.ag-cell.basis-check {
+  color: var(--basis-muted-foreground);
+  font-weight: 600;
+  text-align: center;
+}
+.js-plotly-plot .main-svg .heatmaplayer text,
+.js-plotly-plot .main-svg .hm text {
+  fill: var(--basis-foreground) !important;
+}

@@ -736,6 +736,13 @@ UTF-8 with a byte-order mark, which Excel reads as UTF-8, numbers at full precis
 that would start a formula (`=`, `+`, `-`, `@`, a tab or a return) starts with an apostrophe, as OWASP's guard for CSV
 injection has it.
 
+**Two refinements of the look.** A bool column shows a quiet check mark for true and nothing for false (`basisCheck`),
+never AG Grid's checkbox, which reads as editable. A heatmap's scale is one for both schemes (`theme.heat_scale`): its
+middle is transparent, so a value near zero takes the card's own colour in either scheme, and its poles, red below zero
+and blue above, at OKLCH lightness 0.58 drawn at 85% over the card, each composite inside the `dataviz` validator's band
+for that card at 3:1 against it, apart to every kind of vision, under the foreground's text at 4.5:1, which a test
+holds; the cells' text takes the foreground from basis's CSS.
+
 **Two ids every page has.** basis's chrome around every page holds two components whose ids are fixed and exported
 from `basis.dash.ids`, so the data and display lanes build against them: `NOTIFICATIONS`, DMC's
 `NotificationContainer`, whose `sendNotifications` prop takes a list of notifications, each a dict of DMC's

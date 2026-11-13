@@ -110,13 +110,14 @@ def test_each_column_comes_from_the_row() -> None:
         "sector": ("text", "agTextColumnFilter"),
         "maturity": ("dateString", "agDateColumnFilter"),
         "par": ("number", "agNumberColumnFilter"),
-        "callable": ("boolean", "agTextColumnFilter"),
+        "callable": (False, "agTextColumnFilter"),
     }
     par = columns["par"]
     assert (par["type"], par["cellClass"]) == ("rightAligned", ["ag-right-aligned-cell", "basis-num"])
     assert par["valueFormatter"] == {"function": 'basisFormat(params.value, {"decimals":0,"symbol":"$"})'}
     assert columns["quantity"]["valueFormatter"] == {"function": 'basisFormat(params.value, {"decimals":2})'}  # a number with no format: the formatter's default
     assert "valueFormatter" not in columns["sector"]
+    assert columns["callable"]["valueFormatter"] == {"function": "basisCheck(params.value)"}  # a check mark, never an editable-looking checkbox
 
 
 def test_a_column_is_never_narrower_than_its_widest_value_or_its_header() -> None:

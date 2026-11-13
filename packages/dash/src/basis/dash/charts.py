@@ -258,7 +258,8 @@ def waterfall(frame: pd.DataFrame, row: type[Row], *, x: str, y: str, total: str
 
 def heatmap(frame: pd.DataFrame, row: type[Row], *, x: str, y: str, z: str) -> go.Figure:
     """A heatmap of `z` by `x` across and `y` down, in the frame's order: the diverging scale about zero where `z` has
-    both signs, else the sequential one, with each cell's value written in it where there are few."""
+    both signs, else the sequential one, each one scale for both schemes (`theme.heat_scale`), with each cell's value
+    written in it, in the foreground's colour, where there are few."""
     _columns(row, x, y, z)
     given = frame.dropna(subset=[z])
     if given.empty:
@@ -268,8 +269,7 @@ def heatmap(frame: pd.DataFrame, row: type[Row], *, x: str, y: str, z: str) -> g
     cells = table.to_numpy(dtype="float64")
     written = [[texts.text(value, display) for value in line] for line in cells]
     signed = bool(np.nanmin(cells) < 0 < np.nanmax(cells))
-    ramp = [theme.srgb(f"div-{step}", "light") for step in range(11, 0, -1)] if signed else [theme.srgb(f"seq-{step}", "light") for step in range(1, 10)]  # a loss red, a gain blue
-    scale = [[index / (len(ramp) - 1), colour] for index, colour in enumerate(ramp)]
+    scale = theme.heat_scale(signed=signed)
     largest = float(np.nanmax(np.abs(cells)))
     shown = go.Figure(
         go.Heatmap(
@@ -282,6 +282,7 @@ def heatmap(frame: pd.DataFrame, row: type[Row], *, x: str, y: str, z: str) -> g
             zmax=largest if signed else None,
             text=written,
             texttemplate="%{text}" if cells.size <= _CELL_LABELS else None,
+            textfont={"color": theme.srgb("foreground", "light")},  # basis's CSS gives it the scheme's foreground
             customdata=written,
             hovertemplate="%{y} \N{MIDDLE DOT} %{x}: %{customdata}<extra></extra>",
             xgap=2,
