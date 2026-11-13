@@ -170,3 +170,15 @@ def test_the_freshness_line_says_when_the_data_was_read_or_what_is_stale() -> No
     assert classes == ["basis-freshness", "basis-freshness basis-stale"]
     assert titles[0] == "positions: 1,234 rows, read 14:05:03 EST\nsectors: 5 rows, read 14:10:00 EST"
     assert (empty_texts, empty_classes) == (["", ""], ["basis-freshness", "basis-freshness"])
+
+
+def test_a_caption_is_plain_text_where_a_change_would_be_with_no_sign_arrow_or_colour() -> None:
+    sent = _sent(RISK.show(307_158.0, caption="8% of the day"))
+    [caption] = _by_class(sent, "basis-stat-caption")
+    assert _text(caption) == "8% of the day"
+    assert _by_class(sent, "basis-stat-change") == []
+    assert "basis-gain" not in json.dumps(sent)
+    assert "basis-icon" not in json.dumps(caption)
+    both = _sent(YIELD.show(0.0512, change=0.00031, caption="weighted by market value"))
+    assert [_text(found) for found in _by_class(both, "basis-stat-caption")] == ["weighted by market value"]
+    assert len(_by_class(both, "basis-stat-change")) == 1  # the change, and the caption beside it

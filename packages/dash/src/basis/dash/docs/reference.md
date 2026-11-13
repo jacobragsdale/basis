@@ -60,7 +60,7 @@ returns them.
 | `GRID.totals(frame)`, `GRID.exported(frame, asked=, loaded_at=, name=, title=)`, `GRID.export`, `GRID.download` | The totals row, as a callback's answer to the grid's `dashGridOptions`; an export's file, and the ids its callback takes and answers |
 | `bd.graph(id, figure=, height=, dataset=)` | A graph with basis's config, whose `figure` a callback answers |
 | `bd.charts.line`, `bar`, `scatter`, `curve`, `waterfall`, `heatmap`, `histogram` | Figures from a frame and its row, their ticks and hover text in the row's formats |
-| `bd.stat(id, label, display, change=, period=, good=, span=, dataset=)`, `TILE.show(value, change=, history=)` | A stat tile, and its `children` |
+| `bd.stat(id, label, display, change=, period=, good=, span=, dataset=)`, `TILE.show(value, change=, caption=, history=)` | A stat tile, and its `children`: a change signed in its colour with its arrow, or a caption, plain muted text, for what is no change, such as a share of a total |
 | `bd.badge(text, tone, icon_name=)`, `bd.icon(name, label=)`, `bd.text(value, display)` | A badge, an icon of basis's set, and a value as people read it |
 | `bd.refresh(id, every_s=)` | A timer, at least 5 s, whose `n_intervals` a callback takes |
 

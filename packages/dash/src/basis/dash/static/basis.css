@@ -531,6 +531,11 @@ html:root body {
   color: var(--basis-muted-foreground);
   font-weight: 400;
 }
+.basis-stat-caption {
+  min-height: 1.125rem;
+  color: var(--basis-muted-foreground);
+  font-size: var(--basis-text-xs);
+}
 .basis-stat-spark {
   margin-top: auto;
 }

@@ -7,9 +7,9 @@ from dash import Input, Output, callback
 from basis.dash.example.data import BOOKS, EXPLAINED, MOVERS, SECTORS, SUMMARY, Factor, Position, Sector
 
 PNL = bd.stat(PNL_ID := "pnl-total", "Day's P&L", bd.format.money("USD", 0), change=bd.format.pct(2), period="on the book", span=3, dataset=SUMMARY)
-CARRY = bd.stat(CARRY_ID := "pnl-carry", "Carry", bd.format.money("USD", 0), change=bd.format.pct(0), period="of the day", span=3, dataset=SUMMARY)
-RATES = bd.stat(RATES_ID := "pnl-rates", "Rates", bd.format.money("USD", 0), change=bd.format.pct(0), period="of the day", span=3, dataset=SUMMARY)
-SPREAD = bd.stat(SPREAD_ID := "pnl-spread", "Spread", bd.format.money("USD", 0), change=bd.format.pct(0), period="of the day", span=3, dataset=SUMMARY)
+CARRY = bd.stat(CARRY_ID := "pnl-carry", "Carry", bd.format.money("USD", 0), span=3, dataset=SUMMARY)
+RATES = bd.stat(RATES_ID := "pnl-rates", "Rates", bd.format.money("USD", 0), span=3, dataset=SUMMARY)
+SPREAD = bd.stat(SPREAD_ID := "pnl-spread", "Spread", bd.format.money("USD", 0), span=3, dataset=SUMMARY)
 SHOWN_COLUMNS = ("cusip", "book", "issuer", "par", "price", "prior_price", "pnl", "carry", "rates", "spread", "residual")
 MOVER_GRID = bd.grid(
     MOVERS_ID := "pnl-movers",
@@ -68,14 +68,15 @@ async def show(as_of: str, book: str | None) -> tuple[object, ...]:
     total = summary.iloc[0]
     day, prior = float(total["pnl"]), float(total["prior_market_value"])
 
-    def share(factor: str) -> float | None:
-        return float(total[factor]) / day if day else None
+    def share(factor: str) -> str | None:
+        """A factor's share of the day, which is no change, so a caption, with no sign or arrow."""
+        return f"{bd.text(abs(float(total[factor]) / day), bd.format.pct(0))} of the day" if day else None
 
     return (
         PNL.show(day, change=day / prior if prior else None),
-        CARRY.show(total["carry"], change=share("carry")),
-        RATES.show(total["rates"], change=share("rates")),
-        SPREAD.show(total["spread"], change=share("spread")),
+        CARRY.show(total["carry"], caption=share("carry")),
+        RATES.show(total["rates"], caption=share("rates")),
+        SPREAD.show(total["spread"], caption=share("spread")),
         bd.charts.waterfall(explained, Factor, x="factor", y="pnl", total="Day's P&L"),
         bd.charts.bar(sectors, Sector, x="sector", y="pnl"),
         bd.rows(movers),

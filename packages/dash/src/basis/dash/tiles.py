@@ -62,10 +62,11 @@ class Stat(html.Section):
 
     declared: Declared
 
-    def show(self, value: float | None, *, change: float | None = None, history: Sequence[float] | pd.Series | None = None) -> Shown:
-        """The tile's `children`: its label, `value` in its format, `change` signed in its colour, and a sparkline of
-        `history`, oldest first. A missing value shows a dash."""
-        return shown(self.declared, value, change=change, history=history)
+    def show(self, value: float | None, *, change: float | None = None, caption: str | None = None, history: Sequence[float] | pd.Series | None = None) -> Shown:
+        """The tile's `children`: its label, `value` in its format, `change` signed in its colour, `caption` as plain
+        muted text, with no sign, arrow or colour, for what is no change, such as a share of a total, and a sparkline
+        of `history`, oldest first. A missing value shows a dash."""
+        return shown(self.declared, value, change=change, caption=caption, history=history)
 
 
 def stat(
@@ -106,16 +107,20 @@ def stat(
     return made
 
 
-def shown(declared: Declared, value: float | None, *, change: float | None = None, history: Sequence[float] | pd.Series | None = None) -> Shown:
-    """A tile's children, for `value`, `change` and `history`."""
+def shown(declared: Declared, value: float | None, *, change: float | None = None, caption: str | None = None, history: Sequence[float] | pd.Series | None = None) -> Shown:
+    """A tile's children, for `value`, `change`, `caption` and `history`."""
     missing = value is None or (isinstance(value, float) and math.isnan(value))
     parts: list[Component] = [html.Div(declared.label, className="basis-stat-label"), html.Div(WAITING if missing else texts.text(value, declared.display), className="basis-stat-value basis-num")]
     if change is not None and not math.isnan(change):
         parts.append(_change(declared, change))
+    elif caption is not None:
+        pass  # the caption takes the change's place
     elif not missing:
         parts.append(html.Div(declared.period or "", className="basis-stat-change"))
     else:
         parts.append(html.Div(className="basis-stat-change"))
+    if caption is not None:
+        parts.append(html.Div(caption, className="basis-stat-caption"))
     if history is not None and (points := _points(history)):
         parts.append(dcc.Graph(figure=sparkline(points).to_plotly_json(), config=SPARK, className="basis-stat-spark", style={"height": f"{SPARK_HEIGHT}px"}))  # ty: ignore[invalid-argument-type] -- Plotly's config, whose keys Dash's type does not list
     return parts
