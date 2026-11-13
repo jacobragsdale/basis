@@ -57,6 +57,8 @@ class Cache:
         self._entries: OrderedDict[Key, Entry] = OrderedDict()
         self._bytes: int = 0
         self._flights: dict[Key, asyncio.Task[Entry]] = {}
+        self._latest: dict[Key, Key] = {}
+        """A view's last key, by the key without its inputs' versions."""
         self._versions = itertools.count(1)
 
     @property
@@ -83,11 +85,16 @@ class Cache:
         self._entries.move_to_end(found)
         return entry
 
-    def put(self, found: Key, table: pa.Table, *, loaded_at: datetime, ttl_s: float, stale_s: float) -> Entry:
+    def put(self, found: Key, table: pa.Table, *, loaded_at: datetime, ttl_s: float, stale_s: float, replaces: Key | None = None) -> Entry:
         """Keep `table` at `found`, loaded at `loaded_at`, fresh for `ttl_s` and kept `stale_s` past that, evicting the
-        least recently used values past the ceiling; the entry, kept or not."""
+        least recently used values past the ceiling; the entry, kept or not. `replaces` is what the key shares with
+        the values it outdates, a view's key without its inputs' versions, whose last value is dropped."""
         now = self.clock()
         entry = Entry(table, loaded_at, next(self._versions), now + ttl_s, now + ttl_s + stale_s)
+        if replaces is not None:
+            if (outdated := self._latest.get(replaces)) is not None:
+                self._drop(outdated)
+            self._latest[replaces] = found
         self._drop(found)
         if table.nbytes > self.max_bytes:
             log.warning(

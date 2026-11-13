@@ -139,6 +139,8 @@ class View(Dataset):
     function: Callable[..., object]
     inputs: Mapping[str, Dataset]
     """Each input, by the name of the function's parameter that takes its frame."""
+    arguments: tuple[str, ...]
+    """The params the function takes, by name: every parameter of its that is no input."""
 
     @override
     def resources(self) -> tuple[Resource, ...]:
@@ -221,9 +223,10 @@ def view(name: str, function: Callable[..., object], row: type[core_rows.Row], /
     for given in inputs.values():
         for param, kind in given.params.items():
             _one_type(name, param, params.setdefault(param, kind), kind)
-    for param, kind in _own_params(name, function, set(inputs)).items():
+    own = _own_params(name, function, set(inputs))
+    for param, kind in own.items():
         _one_type(name, param, params.setdefault(param, kind), kind)
-    return View(name=named, row=_row(name, row), params=params, module=_caller(), function=function, inputs=dict(inputs))
+    return View(name=named, row=_row(name, row), params=params, module=_caller(), function=function, inputs=dict(inputs), arguments=tuple(own))
 
 
 def datasets(resources_: Sequence[object]) -> list[Dataset]:

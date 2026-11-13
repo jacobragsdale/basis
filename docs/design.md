@@ -511,6 +511,13 @@ which stand in for every resource or none; a database's settings must be of its 
 statements through its read login alone, so an app cannot write. The app loader, `basis.dash.loading.load`, is no
 longer `bd.load`.
 
+**A view** (15.3) loads each input with the params it declares, as `bd.load` would, together, then runs its function
+in a worker thread on fresh frames of them and its own params, and conforms the frame to its row, refusing naive
+datetimes. Its key is its params and each input's version, so it is computed again when an input is read again and never
+otherwise, and its last value for those params is dropped when a new one is kept. Its value is as old as its oldest
+input, which its status says. Purity is the import check's (17.1): the function is the domain's, which imports no Dash
+and does no I/O.
+
 **What the status store holds.** Inside a callback, each load sets `STATUS`'s `data[DATASET]` to
 `{"loaded_at": "2026-11-13T14:05:00.123456Z", "rows": 1234, "stale": false, "params": {"as_of": "2026-11-13"}}`: when
 it was read from its source, in UTC, so a value the cache answered keeps its first time; its rows; whether it is a

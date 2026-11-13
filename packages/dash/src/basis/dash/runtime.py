@@ -7,6 +7,7 @@ never meets a real database. `loads.py`'s docstring says what a load does."""
 import asyncio
 import io
 import logging
+import math
 import time
 from collections.abc import Hashable, Mapping, Sequence
 from contextlib import AbstractContextManager
@@ -30,7 +31,7 @@ from basis.core.rows import conform
 from basis.core.settings import MssqlSettings, SettingsError
 from basis.dash import loads
 from basis.dash.cache import Cache, Entry, Key, key
-from basis.dash.declarations import Database, Dataset, File, Folder, Query
+from basis.dash.declarations import Database, Dataset, File, Folder, Query, View
 from basis.dash.errors import DeclarationError
 from basis.dash.loads import LoadError
 from basis.dash.settings import Settings
@@ -84,21 +85,31 @@ class Runtime:
             loads.running = None
 
     async def load(self, dataset: Dataset, params: Mapping[str, Hashable]) -> pd.DataFrame:
+        return frames.from_arrow((await self.fetch(dataset, params)).table)
+
+    async def fetch(self, dataset: Dataset, params: Mapping[str, Hashable]) -> Entry:
+        """`dataset`'s value for `params`, fresh from the cache or read: one span, one log record, and its status."""
         started = time.perf_counter()
-        found = key(dataset.name, params)
         shown = loads.shown(params)
         with self.tracer.start_as_current_span(f"load {dataset.name}", attributes={"basis.dataset": dataset.name, **{f"basis.param.{name}": str(value) for name, value in shown.items()}}) as span:
+            if isinstance(dataset, View):
+                inputs = await asyncio.gather(*(self.fetch(given, {name: params[name] for name in given.params}) for given in dataset.inputs.values()))
+                found = key(dataset.name, {**params, **{f"{name} version": entry.version for name, entry in zip(dataset.inputs, inputs, strict=True)}})
+                read = lambda: self._view(dataset, params, inputs, found)  # noqa: E731 -- the read the flight starts
+            else:
+                found = key(dataset.name, params)
+                read = lambda: self._read(dataset, params, found)  # noqa: E731 -- the read the flight starts
             entry, how = self.cache.fresh(found), "hit"
             if entry is None:
                 loop = asyncio.get_running_loop()
-                task, joined = self.cache.flight(found, lambda: loop.create_task(self._read(dataset, params, found)))
+                task, joined = self.cache.flight(found, lambda: loop.create_task(read()))
                 entry, how = await asyncio.shield(task), "shared" if joined else "miss"
-            frame = frames.from_arrow(entry.table)
-            span.set_attributes({"basis.rows": len(frame), "basis.cache": how})
+            rows = entry.table.num_rows
+            span.set_attributes({"basis.rows": rows, "basis.cache": how})
         ms = round((time.perf_counter() - started) * 1000, 3)
-        log.info("loaded %s", dataset.name, extra={"dataset": dataset.name, "params": shown, "rows": len(frame), "ms": ms, "cache": how})
-        loads.report(dataset.name, entry.loaded_at, shown, rows=len(frame))
-        return frame
+        log.info("loaded %s", dataset.name, extra={"dataset": dataset.name, "params": shown, "rows": rows, "ms": ms, "cache": how})
+        loads.report(dataset.name, entry.loaded_at, shown, rows=rows)
+        return entry
 
     async def _read(self, dataset: Dataset, params: Mapping[str, Hashable], found: Key) -> Entry:
         loaded_at = datetime.now(UTC)
@@ -107,10 +118,26 @@ class Runtime:
         elif isinstance(dataset, File):
             table = await anyio.to_thread.run_sync(self._file, dataset)
         else:
-            msg = f"{dataset.name} is a {dataset.kind}, which no load reads yet"
+            msg = f"{dataset.name} is a {dataset.kind}, which no load reads"
             raise LoadError(msg)
         ttl_s, stale_s = (dataset.ttl_s, dataset.stale_s) if isinstance(dataset, Query | File) else (0.0, 0.0)
         return self.cache.put(found, table, loaded_at=loaded_at, ttl_s=ttl_s, stale_s=stale_s)
+
+    async def _view(self, dataset: View, params: Mapping[str, Hashable], inputs: Sequence[Entry], found: Key) -> Entry:
+        """`dataset`'s function of its inputs' frames and its own params, in a worker thread, its frame conformed to its
+        row; kept while its inputs are the versions it was computed from, as old as its oldest input."""
+        given = {name: params[name] for name in dataset.arguments}
+
+        def compute() -> pa.Table:
+            made = dataset.function(**{name: frames.from_arrow(entry.table) for name, entry in zip(dataset.inputs, inputs, strict=True)}, **given)
+            if not isinstance(made, pd.DataFrame):
+                msg = f"view {dataset.name}'s function returned a {type(made).__qualname__}: return a pandas frame of its row's columns"
+                raise TypeError(msg)
+            return frames.to_arrow(conform(made, dataset.row, what=f"view {dataset.name}", naive="reject"))
+
+        with traces.tracing(self.tracer):
+            table = await anyio.to_thread.run_sync(compute)
+        return self.cache.put(found, table, loaded_at=min(entry.loaded_at for entry in inputs), ttl_s=math.inf, stale_s=0.0, replaces=_unversioned(found))
 
     async def _query(self, dataset: Query, params: Mapping[str, Hashable]) -> pa.Table:
         database = self._databases[id(dataset.database)]
@@ -139,6 +166,12 @@ class Runtime:
         else:  # every field as text, which the row types, so nothing is inferred
             frame = pd.read_csv(io.BytesIO(content), dtype=str, keep_default_na=False, na_filter=False)
         return frames.to_arrow(conform(frame, dataset.row, what=f"file {dataset.name}", naive="in_zone"))
+
+
+def _unversioned(found: Key) -> Key:
+    """A view's key without its inputs' versions: what each of its values for its params shares."""
+    name, params = found
+    return name, tuple((param, value) for param, value in params if not param.endswith(" version"))
 
 
 def _check_fakes(app_name: str, resources: Sequence[object], fakes: Mapping[str, object] | None) -> None:
