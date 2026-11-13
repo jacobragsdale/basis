@@ -1,7 +1,8 @@
 """`basis serve` and `basis dev`: run an app with uvicorn, logging JSON lines through basis-core, until it is told to
 stop. `basis serve` runs it on basis-core's runner (`basis.core.serving.server`), whose SIGTERM drains first; `basis
 dev` runs it for this machine alone, on 127.0.0.1, with uvicorn's reloader and Dash's dev tools and hot reload, which
-`basis serve` never has.
+`basis serve` never has, on the app's fakes (`basis.dash.fixtures`), or with `--env ENV` on that environment's
+resources, and never on both.
 
 Dash reads 24 `DASH_*` variables, and its FastAPI backend turns its dev tools on from `_DASH_FASTAPI_CONFIG` on its
 first request, whatever the app was built with. basis passes Dash every setting itself, and both verbs refuse to start
@@ -14,21 +15,26 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
+from pydantic import ValidationError
+from pydantic_settings import SettingsError as SourceError
 
-from basis.core import logs
+from basis.core import environments, logs
 from basis.core.serving import LOCAL
 from basis.core.serving.server import run
 from basis.core.settings import SettingsError
-from basis.dash import internals
+from basis.dash import fixtures, internals
 from basis.dash.app import App
 from basis.dash.building import build
 from basis.dash.loading import load
-from basis.dash.settings import Settings
+from basis.dash.settings import Settings, unreadable
 
 log = logging.getLogger(__name__)
 
 DEV_APP = "_BASIS_DASH_DEV_APP"
 """The app `basis dev` serves, as its reference, for the process uvicorn's reloader starts, which builds it again."""
+DEV_ENV = "_BASIS_DASH_DEV_ENV"
+"""The environment `basis dev --env ENV` serves the app in, for the process uvicorn's reloader starts; unset, the app
+runs on its fakes."""
 
 
 def serve(app: App | str | None = None, *, settings: Settings | None = None, host: str | None = None, environment: str | None = None) -> None:
@@ -46,14 +52,21 @@ def serve(app: App | str | None = None, *, settings: Settings | None = None, hos
     run(built.asgi, serving, built.lifecycle, host=host)
 
 
-def dev(reference: str | None, *, repo: Path) -> None:
+def dev(reference: str | None, *, repo: Path, env: str | None = None) -> None:
     """Serve the app `reference` names, as `serve` finds it, on this machine alone, with Dash's dev tools, until
-    Ctrl+C; uvicorn starts it again when a file under `repo` changes."""
+    Ctrl+C: on its fakes, or, with `env`, on that environment's resources, as its settings there configure them, and
+    never on both. uvicorn starts it again when a file under `repo` changes."""
     logs.setup()
     refuse_dash_variables(os.environ)
     found = load(reference)
-    serving = found.settings().serve
+    if env is None:
+        fixtures.of(found)  # the fakes it runs on, checked before the server starts
+    serving = _dev_settings(found, env).serve
     os.environ[DEV_APP] = reference if reference is not None else f"{found.module}:app"
+    if env is not None:
+        os.environ[DEV_ENV] = env
+    else:
+        os.environ.pop(DEV_ENV, None)
     log.info("serving %s on %s:%s%s, until Ctrl+C", found.name, LOCAL, serving.port, serving.prefix.rstrip("/"), extra={"host": LOCAL, "port": serving.port, "prefix": serving.prefix})
     uvicorn.run(
         "basis.dash.server:dev_app",
@@ -74,7 +87,21 @@ def dev_app() -> FastAPI:
     logs.setup()
     found = load(os.environ[DEV_APP])
     logs.bind(service=found.name)
-    return build(found, dev_tools=True).asgi
+    env = os.environ.get(DEV_ENV)
+    if env is None:
+        return build(found, settings=_dev_settings(found, None), dev_tools=True, fakes=fixtures.of(found)).asgi
+    return build(found, settings=_dev_settings(found, env), environment=env, dev_tools=True).asgi
+
+
+def _dev_settings(app: App, env: str | None) -> Settings:
+    """The settings `basis dev` serves `app` with: on its fakes, its settings' defaults, which no variable changes; in
+    `env`, that environment's."""
+    if env is None:
+        return app.settings.given()
+    try:
+        return environments.load(env, app.settings).settings
+    except (ValidationError, SourceError) as error:
+        raise unreadable(error, app.settings) from None
 
 
 def refuse_dash_variables(environ: Mapping[str, str]) -> None:

@@ -14,7 +14,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import anyio
 import pandas as pd
@@ -58,7 +58,7 @@ class Runtime:
     runs, and the cache. Opening connects to nothing; the app's lifespan starts it, and `bd.load` finds the one the
     process runs."""
 
-    def __init__(self, app_name: str, *, datasets: Sequence[Dataset], resources: Sequence[object], settings: Settings, tracer: Tracer, fakes: Mapping[str, object] | None) -> None:
+    def __init__(self, app_name: str, *, datasets: Sequence[Dataset], resources: Sequence[object], settings: Settings, tracer: Tracer, fakes: Mapping[Any, object] | None) -> None:
         self.app = app_name
         self.datasets = {id(dataset): dataset for dataset in datasets}
         self.tracer = tracer
@@ -66,6 +66,7 @@ class Runtime:
         self.sql = {dataset.name: dataset.sql.read_text(encoding="utf-8") for dataset in datasets if isinstance(dataset, Query)}
         self._databases: dict[int, _Database] = {}
         self._folders: dict[int, OpenFolder] = {}
+        fakes = {key.name if isinstance(key, Database | Folder) else key: fake for key, fake in fakes.items()} if fakes is not None else None
         _check_fakes(app_name, resources, fakes)
         for resource in resources:
             given = fakes.get(resource.name) if fakes is not None and isinstance(resource, Database | Folder) else None
@@ -174,7 +175,7 @@ def _unversioned(found: Key) -> Key:
     return name, tuple((param, value) for param, value in params if not param.endswith(" version"))
 
 
-def _check_fakes(app_name: str, resources: Sequence[object], fakes: Mapping[str, object] | None) -> None:
+def _check_fakes(app_name: str, resources: Sequence[object], fakes: Mapping[Any, object] | None) -> None:
     """Fakes for every resource or for none, so a fake never meets a real database."""
     if fakes is None:
         return

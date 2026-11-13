@@ -518,6 +518,18 @@ otherwise, and its last value for those params is dropped when a new one is kept
 input, which its status says. Purity is the import check's (17.1): the function is the domain's, which imports no Dash
 and does no I/O.
 
+**Fixtures and fakes** (`basis.dash.fixtures`, 15.4). An app declares `fakes="positions.dev:fakes"`, a function of
+its own returning a fake of each resource, keyed by the declaration, as an API's do: `fixtures.database(WAREHOUSE)`
+answers each query from `fixtures/QUERY.csv`, a path relative to the repo, read as text through the query's row, so a
+fixture that does not match fails as a real answer would, when the fake is made; a query's answer is the fixture's
+rows filtered by each bind that names a column, as `as_of`; and it fails on demand, `fails(Unavailable,
+query="positions", times=1)`, with the kind and detail a real driver's error becomes. A folder's fake is a folder of
+files, `fixtures.folder(PATH)`. `basis dev` serves the app on them, its settings their defaults; `basis dev --env dev`
+serves it on that environment's resources, read-only as ever, and never reads `BASIS_ENV`, so a shell's variable never
+turns a fake run real. `bd.testing.client(app)` builds the app on the fakes it declares unless a test gives its own.
+Fakes stand in for every resource or none. `fixtures` is imported as a module, `from basis.dash import fixtures`,
+never through `bd`, since it reaches basis-core's fakes, which an app's own modules never load.
+
 **What the status store holds.** Inside a callback, each load sets `STATUS`'s `data[DATASET]` to
 `{"loaded_at": "2026-11-13T14:05:00.123456Z", "rows": 1234, "stale": false, "params": {"as_of": "2026-11-13"}}`: when
 it was read from its source, in UTC, so a value the cache answered keeps its first time; its rows; whether it is a

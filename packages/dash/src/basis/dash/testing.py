@@ -7,17 +7,19 @@ of an app and of basis-dash does:
         answered = client.fire("total.children", {"as-of.value": "2026-11-13"})  # a callback, through Dash's own route
 
 `client` builds the app with `Settings.given(...)`, so the developer's environment never changes what a test checks.
-Phase 15 adds the fakes an app runs on; phase 17 builds `basis check`'s and `basis render`'s drives on this one."""
+It runs on the fakes the app declares (`basis.dash.fixtures`), or a test's own; phase 17 builds `basis check`'s and
+`basis render`'s drives on this one."""
 
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from http import HTTPStatus
+from typing import Any
 
 from fastapi.testclient import TestClient
 from httpx2 import Response
 
-from basis.dash import internals
+from basis.dash import fixtures, internals
 from basis.dash.app import App
 from basis.dash.building import Built, build
 from basis.dash.settings import Settings
@@ -93,9 +95,11 @@ class Client:
 
 
 @contextmanager
-def client(app: App, *, settings: Settings | None = None, fakes: Mapping[str, object] | None = None) -> Generator[Client]:
-    """`app`, built with `settings`, or its settings' defaults alone, on `fakes`, by resource name, and started, as a
-    `Client`."""
+def client(app: App, *, settings: Settings | None = None, fakes: Mapping[Any, object] | None = None) -> Generator[Client]:
+    """`app`, built with `settings`, or its settings' defaults alone, on `fakes`, by resource or its name, or the fakes
+    the app declares (`basis.dash.fixtures.of`), and started, as a `Client`."""
+    if fakes is None and app.fakes is not None:
+        fakes = dict(fixtures.of(app))
     built = build(app, settings=settings if settings is not None else app.settings.given(), fakes=fakes)
     with TestClient(built.asgi) as http:
         yield Client(built, http)

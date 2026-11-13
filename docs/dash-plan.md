@@ -24,7 +24,8 @@ Keep this table true in each step's own commit.
 | 15.1 Declarations | Done: `bd.database`, `bd.folder`, `bd.query`, `bd.file`, `bd.view`, `bd.Row`, `bd.format`; SQL binds checked at build; core's row refusals in the declaring part's words | the commit "Step 15.1" |
 | 15.2 The cache, and `bd.load` | Done: off the loop under each database's limiter and deadline, one query for callers at once, TTL, a ceiling in MB, Arrow kept; the status store's shape in [the design](design.md#dash-apps-basisdash) | the commit "Step 15.2" |
 | 15.3 Views | Done: inputs loaded together, the function in a worker thread on fresh frames, conformed, keyed by its inputs' versions | the commit "Step 15.3" |
-| 15.4 to 15.8 Data | Not started | |
+| 15.4 Fixtures and fakes | Done: `fixtures.database` from a CSV per query through its row, failing on demand; `basis dev` on the app's fakes or `--env ENV`, never both; `bd.testing.client` on the app's fakes | the commit "Step 15.4" |
+| 15.5 to 15.8 Data | Not started | |
 | 16.1 Tokens and theme | Done: `basis.dash.theme`, its table held to basis-ui's `theme.css`; the CSS, Mantine, AG Grid and Plotly from it; the fonts | the commit "Step 16.1" |
 | 16.2 The shell and the page | Done: the header (title, environment, navigation, switch), `bd.page`'s body and filters, `bd.card`, the 404 page, tab titles, `bd.icon` | the commit "Step 16.2" |
 | 16.3 One number, one text | Done: `bd.text`; `basisFormat` in `static/basis.js`, held under node to `format.json`'s float cases and to core's text for each display format | the commit "Step 16.3" |

@@ -2,7 +2,8 @@
 
 - `basis serve [APP] --env ENV` runs the repo's Dash app as `bd.serve` does, until SIGTERM, and is its image's
   command; it never touches git;
-- `basis dev [APP]` runs it on this machine alone, with Dash's dev tools and hot reload, until Ctrl+C.
+- `basis dev [APP] [--env ENV]` runs it on this machine alone, with Dash's dev tools and hot reload, until Ctrl+C:
+  on the app's fakes, or with `--env` on that environment's resources, never on both.
 
 `serve` reads the settings of the environment `--env` or `BASIS_ENV` names (`basis.core.environments`). A repo serves
 one thing, so it declares `dash` or `api`, never both: each adds `serve` and `dev`, and `basis` refuses two declared
@@ -33,6 +34,9 @@ class DevArgs:
     app: str | None
     repo: Path
     """The repo's root, as `basis` found it."""
+    env: str | None = None
+    """The environment whose resources it serves the app on, or None for its fakes: never `BASIS_ENV`'s, so a shell's
+    variable never turns a fake run real."""
 
 
 def part() -> Part:
@@ -40,13 +44,24 @@ def part() -> Part:
     return Part(
         verbs=(
             Verb("serve", "serve the Dash app with uvicorn until SIGTERM, which drains it first", _reaching, lambda n: _serve(ServeArgs(n.app, n.env))),
-            Verb("dev", "serve the Dash app on this machine alone, with Dash's dev tools and hot reload, until Ctrl+C", _app_argument, lambda n: _dev(DevArgs(n.app, Path(n.repo_root)))),
+            Verb(
+                "dev",
+                "serve the Dash app on this machine alone, on its fakes or with --env ENV on that environment's, with Dash's dev tools and hot reload, until Ctrl+C",
+                _dev_arguments,
+                lambda n: _dev(DevArgs(n.app, Path(n.repo_root), n.env)),
+            ),
         )
     )
 
 
 def _app_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("app", nargs="?", help="the app's name in the basis.dash_apps entry points, or its module path, as positions.app; by default the one the repo lists")
+
+
+def _dev_arguments(parser: argparse.ArgumentParser) -> None:
+    _app_argument(parser)
+    names = ", ".join(environments.NAMES)
+    parser.add_argument("--env", metavar="ENV", choices=environments.NAMES, help=f"{names}: serve on that environment's resources, read-only, rather than the app's fakes")
 
 
 def _reaching(parser: argparse.ArgumentParser) -> None:
@@ -70,5 +85,5 @@ def _dev(args: DevArgs) -> int:
     from basis.dash.server import dev  # noqa: PLC0415 -- Dash and the server load when the verb runs
 
     hooks.ensure(args.repo)
-    dev(args.app, repo=args.repo)
+    dev(args.app, repo=args.repo, env=args.env)
     return 0

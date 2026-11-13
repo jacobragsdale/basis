@@ -25,6 +25,7 @@ import logging
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import Any
 
 from fastapi import FastAPI
 from opentelemetry.sdk.trace import TracerProvider
@@ -63,10 +64,10 @@ class Built:
     """What the app opened for its datasets, and their cache."""
 
 
-def build(app: App, *, settings: Settings | None = None, environment: str | None = None, dev_tools: bool = False, fakes: Mapping[str, object] | None = None) -> Built:
+def build(app: App, *, settings: Settings | None = None, environment: str | None = None, dev_tools: bool = False, fakes: Mapping[Any, object] | None = None) -> Built:
     """`app`, built, with `settings`, or its settings read from the environment. `environment` names the environment
     the settings are of, which its spans carry. `dev_tools` turns on Dash's dev tools and hot reload, which `basis dev`
-    alone asks for. `fakes`, by resource name, stand in for every resource the app lists, or none. An app starts once.
+    alone asks for. `fakes`, by resource or its name, stand in for every resource the app lists, or none. An app starts once.
     Its resources and datasets are checked first, every SQL file opened, before any environment is read."""
     datasets = declarations.check(app.name, app.resources)
     configured = _settings(app, settings)
