@@ -25,6 +25,8 @@ from dash.development.base_component import Component
 
 SCHEME: Final = "basis-scheme"
 """The light and dark switch."""
+URL: Final = "basis-url"
+"""A store the filters' callbacks name as their output, since a callback needs one; they write the URL itself."""
 HEADER_HEIGHT: Final = 44
 NOT_FOUND: Final = "/_basis/not-found"
 """Where the page Dash Pages shows for an unknown path is registered; Dash Pages finds it by its module's name."""
@@ -40,7 +42,7 @@ def chrome(app: App, *, environment: str | None = None) -> Component:
     return dmc.MantineProvider(
         theme=theme.mantine(),  # ty: ignore[invalid-argument-type] -- DMC types `theme` as a sequence, where Mantine's theme is an object
         defaultColorScheme="auto",
-        children=[dmc.NotificationContainer(id=NOTIFICATIONS, position="bottom-right", limit=4, className="basis-notifications"), dcc.Store(id=STATUS, data={}), shell],
+        children=[dmc.NotificationContainer(id=NOTIFICATIONS, position="bottom-right", limit=4, className="basis-notifications"), dcc.Store(id=STATUS, data={}), dcc.Store(id=URL), shell],
     )
 
 
@@ -65,12 +67,16 @@ def links(pages: Sequence[Page]) -> list[Component]:
     return [dmc.NavLink(label=page.title, href=dash.get_relative_path(page.path), active="exact", className="basis-nav-link") for page in pages]
 
 
-def wire(made: dash.Dash) -> None:
+def wire(made: dash.Dash, app: App) -> None:
     """basis's own callbacks, on `made` itself, since they are basis's and no module's, each in the browser alone: the
-    switch, every page's freshness line, from the status store, and every grid's quick filter."""
+    switch, every page's freshness line, from the status store, every grid's quick filter, and each filter of `app`'s
+    pages, which writes its value to the URL's query string as it changes."""
     made.clientside_callback(ClientsideFunction(namespace="basis", function_name="scheme"), Output(SCHEME, "aria-label"), Input(SCHEME, "n_clicks"))
     fresh = {"type": FRESHNESS, "page": ALL, "datasets": ALL}
     made.clientside_callback(ClientsideFunction(namespace="basis", function_name="freshness"), Output(fresh, "children"), Output(fresh, "className"), Output(fresh, "title"), Input(STATUS, "data"))
+    remembered = sorted({(found.id, found.prop) for page in app.pages for found in page.filters})
+    for name, prop in remembered:
+        made.clientside_callback(ClientsideFunction(namespace="basis", function_name="remember"), Output(URL, "data", allow_duplicate=True), Input(name, prop), prevent_initial_call=True)
     search = {"type": SEARCH, "grid": MATCH}
     made.clientside_callback(ClientsideFunction(namespace="basis", function_name="search"), Output(search, "className"), Input(search, "value"), State(search, "id"), prevent_initial_call=True)
 

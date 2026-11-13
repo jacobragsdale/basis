@@ -352,6 +352,37 @@
     return [texts, classes, titles];
   };
 
+  /* A filter's value, written to the URL's query string as it changes, in place, so the page does not navigate, no
+     request leaves it, and a link reproduces the view: a list joined by commas, a range's two days by "..", and an
+     empty value taken out. Its key is the filter's id (basis.dash.filters). */
+  function queryText(value) {
+    if (value === null || value === undefined || value === "") return null;
+    if (Array.isArray(value)) {
+      var given = value.filter(function (part) {
+        return part !== null && part !== undefined && part !== "";
+      });
+      if (!given.length) return null;
+      return value.length === 2 && /^\d{4}-\d{2}-\d{2}/.test(String(given[0])) ? given.length === 2 ? given[0].slice(0, 10) + ".." + given[1].slice(0, 10) : undefined : given.join(",");
+    }
+    return String(value);
+  }
+
+  basis.remember = function () {
+    var context = window.dash_clientside.callback_context;
+    var url = new URL(window.location.href);
+    (context.triggered || []).forEach(function (changed) {
+      var at = changed.prop_id.lastIndexOf(".");
+      var key = changed.prop_id.slice(0, at);
+      var text = queryText(changed.value);
+      if (text === undefined) return; /* a range half chosen: wait for its last day */
+      if (text === null) url.searchParams.delete(key);
+      else url.searchParams.set(key, text);
+    });
+    var href = url.href.replace(/%2C/g, ","); /* a list reads as one in a link: book=Rates,Credit */
+    if (href !== window.location.href) window.history.replaceState(window.history.state, "", href);
+    return window.dash_clientside.no_update;
+  };
+
   basis.totalsOf = totalsOf;
   basis.format = format;
   var grid = (window.dashAgGridFunctions = window.dashAgGridFunctions || {});

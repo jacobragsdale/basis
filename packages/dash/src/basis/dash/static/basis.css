@@ -534,3 +534,30 @@ html:root body {
 .basis-stat-spark {
   margin-top: auto;
 }
+
+/* The filter bar (basis.dash.filters): quiet labels over controls as dense as the grid. */
+.basis-filters .mantine-InputWrapper-label {
+  margin-bottom: 2px;
+  color: var(--basis-muted-foreground);
+  font-size: var(--basis-text-xs);
+  font-weight: 550;
+}
+.basis-filters .mantine-Input-input {
+  font-variant-numeric: tabular-nums;
+}
+/* A multiple select stays one line in the bar: its pills scroll rather than wrap, and its placeholder hides once one is
+   chosen. Weekends are a calendar's closed days, drawn as the other closed days are, not in Mantine's red. */
+.basis-filters .mantine-MultiSelect-pillsList {
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+.basis-filters .mantine-MultiSelect-pillsList:has(.mantine-MultiSelect-pill) .mantine-MultiSelect-inputField {
+  flex: 1 0 1ch;
+  min-width: 1ch;
+}
+.basis-filters .mantine-MultiSelect-pillsList:has(.mantine-MultiSelect-pill) .mantine-MultiSelect-inputField::placeholder {
+  color: transparent;
+}
+.mantine-Day-day[data-weekend]:not([data-selected]):not([data-in-range]) {
+  color: var(--basis-muted-foreground);
+}

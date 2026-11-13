@@ -37,7 +37,8 @@ Keep this table true in each step's own commit.
 | 16.4 The grid | Done: `bd.grid` from the row, `bd.column` overrides, totals with `bd.weighted` (the server's, and the browser's over the rows a filter keeps), the count, the quick filter in the browser, Dash's own variables on the tokens | the commit "Step 16.4", and "A grid's totals and count are of the rows shown" |
 | 16.5 Charts | Done: `bd.graph`; `bd.charts`' line, bar, scatter, curve, waterfall, heatmap and histogram, ticks and hover text in the row's formats, calendar gaps, names at the lines' ends; the template's title above its legend | the commit "Step 16.5" |
 | 16.6 Stat tiles and small parts | Done: `bd.stat` and `show`, `bd.badge`, the freshness line from the status store, `bd.page(datasets=)`; charts' text kept level | the commit "Step 16.6" |
-| 16.7 to 16.9 Display | Not started | |
+| 16.7 Filters and the URL | Done: `bd.as_of`, `bd.date_range` with presets, `bd.select`, `bd.search`, read from the query string at build and written back in the browser; `bd.day`, `bd.days`, `bd.options` | the commit "Step 16.7" |
+| 16.8 to 16.9 Display | Not started | |
 | 17.1 to 17.8 The repo around it | Not started | |
 
 ## What the best Dash app is

@@ -688,6 +688,21 @@ EST" in the warning's colour and mark, where any is stale. Its title lists each 
 It is an absolute time, so the line never ticks. Each icon is a variable on the root, `--basis-icon-NAME`, which
 basis's own CSS masks with too.
 
+**Filters and the URL, as built (16.7).** A filter is a declaration, `bd.as_of(id, calendar=)`, `bd.date_range(id,
+presets=, default=, calendar=)`, `bd.select(id, label, options=, multiple=, default=)` or `bd.search(id)`, which
+`bd.page(filters=[...])` builds into its component each time the page is built, from the page's query string, as Dash
+Pages hands a layout its query; a value the URL gives that the filter cannot take, a closed day, a range backwards or
+before the picker's two years, an option it does not offer, is dropped for its default, never shown. Its key is its id,
+`?as-of=2026-11-12&book=Rates,Credit&dates=2026-10-01..2026-11-12`. As a filter changes, one clientside callback for
+each distinct filter of the app's pages writes its value back with `history.replaceState`, so the page neither
+navigates nor sends a request of its own; they name a store of the shell's, `basis-url`, as their output, since a
+callback needs one. `bd.as_of` starts on the calendar's previous business day, today's excluded, and closes every
+other day in the picker (`disabledDates`), the calendar's coverage bounding it; the range offers month, quarter and
+year to date (and one month, three months, a year), each starting on its first business day, and closes the same days.
+`bd.day(value)` and `bd.days(value)` read them in a callback, and `bd.options(frame, column)` gives a select its
+options from a dataset's column, for a callback to set. The bar's labels are quiet, a multiple select keeps to one
+line, and a weekend is drawn as a closed day, not in Mantine's red.
+
 **Two ids every page has.** basis's chrome around every page holds two components whose ids are fixed and exported
 from `basis.dash.ids`, so the data and display lanes build against them: `NOTIFICATIONS`, DMC's
 `NotificationContainer`, whose `sendNotifications` prop takes a list of notifications, each a dict of DMC's

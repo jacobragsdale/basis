@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Final
 
 from basis.dash.errors import DeclarationError
+from basis.dash.filters import Filter, filter_of
 from dash import html
 from dash.development.base_component import Component
 
@@ -45,12 +46,21 @@ class Page:
     """The page's title, in the browser's tab, the navigation and the page's own heading."""
     layout: Layout
     module: str = field(default="__main__", compare=False)
+    filters: tuple[Filter, ...] = field(default=(), compare=False)
+    """The page's filters, whose values the URL keeps: the shell writes each back to the query string as it changes."""
     """The module that declared the page, whose callbacks are the page's: a page's module holds its layout and its
     callbacks."""
 
 
 def page(
-    path: str, title: str, *, body: Sequence[Component] | None = None, filters: Sequence[Component] = (), description: str | None = None, datasets: Sequence[object] = (), layout: Layout | None = None
+    path: str,
+    title: str,
+    *,
+    body: Sequence[Component] | None = None,
+    filters: Sequence[Filter | Component] = (),
+    description: str | None = None,
+    datasets: Sequence[object] = (),
+    layout: Layout | None = None,
 ) -> Page:
     """A page at `path`, titled `title`, showing `body` under its `filters`, or `layout` where the page lays itself out,
     declared in the module that calls it. Its freshness line reports `datasets`, each a dataset or its name, or every
@@ -77,7 +87,8 @@ def page(
         layout = _composed(path, title, list(body), list(filters), description=description, datasets=_names(path, datasets))
     frame = inspect.currentframe()
     caller = frame.f_back.f_globals.get("__name__") if frame is not None and frame.f_back is not None else None
-    return Page(path, title, layout, caller if isinstance(caller, str) else "__main__")
+    declared = tuple(found for found in map(filter_of, filters) if found is not None)
+    return Page(path, title, layout, caller if isinstance(caller, str) else "__main__", declared)
 
 
 def _names(path: str, datasets: Sequence[object]) -> str:
@@ -92,20 +103,27 @@ def _names(path: str, datasets: Sequence[object]) -> str:
     return ",".join(names)
 
 
-def _composed(path: str, title: str, body: list[Component], filters: list[Component], *, description: str | None, datasets: str) -> Callable[..., Component]:
+def _composed(path: str, title: str, body: list[Component], filters: list[Filter | Component], *, description: str | None, datasets: str) -> Callable[..., Component]:
     for index, part in enumerate([*body, *filters]):
-        if not isinstance(part, Component):
-            msg = f"the page at {path}'s body and filters are Dash components, not a {type(part).__qualname__} (item {index + 1}): give bd.card(...), or a component"
+        if not isinstance(part, Component) and filter_of(part) is None:
+            msg = f"the page at {path}'s body and filters are Dash components, not a {type(part).__qualname__} (item {index + 1}): give bd.card(...), a filter, or a component"
             raise DeclarationError(msg)
 
-    def layout(**_: object) -> Component:
+    def layout(**query: object) -> Component:
         head: list[Component] = [html.H1(title, className="basis-page-title")]
         if description is not None:
             head.append(html.P(description, className="basis-page-description"))
         head.append(html.Div(id={"type": FRESHNESS, "page": path, "datasets": datasets}, className="basis-freshness", role="status"))
         shown: list[Component] = [html.Div(head, className="basis-page-head")]
         if filters:
-            shown.append(html.Div(filters, className="basis-filters", role="search", **{"aria-label": "Filters"}))
+            parts: list[Component] = []
+            for part in filters:
+                made = filter_of(part)
+                if made is not None:
+                    parts.append(made.component(query))
+                elif isinstance(part, Component):
+                    parts.append(part)
+            shown.append(html.Div(parts, className="basis-filters", role="search", **{"aria-label": "Filters"}))
         shown.append(html.Div(body, className="basis-body"))
         return html.Div(shown, className="basis-page")
 

@@ -148,7 +148,7 @@ def build(app: App, *, settings: Settings | None = None, environment: str | None
         dash.register_page(f"{app.name}.page{index}", path=page.path, title=f"{page.title} \N{MIDDLE DOT} {app.title}", name=page.title, order=index, layout=page.layout)
     dash.register_page(f"{app.name}.not_found_404", path=shell.NOT_FOUND, title=f"Not found \N{MIDDLE DOT} {app.title}", name="Not found", layout=shell.not_found(app))
     made.layout = shell.chrome(app, environment=environment)
-    shell.wire(made)
+    shell.wire(made, app)
     internals.own_callbacks(made, {app.module, *(page.module for page in app.pages)})
     internals.set_up(made)
     server.add_middleware(Sizes, path=f"{made.config.routes_pathname_prefix}{internals.UPDATE}")  # inside the boundary, so its record carries the request's id
