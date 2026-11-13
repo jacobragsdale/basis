@@ -6,6 +6,7 @@ and dark switch, the navigation from the declared pages, and the place errors sh
 import dash_mantine_components as dmc
 
 import dash
+from basis.dash import theme
 from basis.dash.app import App
 from basis.dash.ids import NOTIFICATIONS, STATUS
 from dash import dcc
@@ -14,4 +15,4 @@ from dash.development.base_component import Component
 
 def chrome(app: App) -> Component:  # noqa: ARG001 -- 16.2's shell reads the app's title and pages
     """The layout every page of `app` shows inside."""
-    return dmc.MantineProvider([dmc.NotificationContainer(id=NOTIFICATIONS), dcc.Store(id=STATUS, data={}), dash.page_container])
+    return dmc.MantineProvider(theme=theme.mantine(), children=[dmc.NotificationContainer(id=NOTIFICATIONS), dcc.Store(id=STATUS, data={}), dash.page_container])  # ty: ignore[invalid-argument-type] -- DMC types `theme` as a sequence, where Mantine's theme is an object

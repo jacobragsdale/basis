@@ -1,4 +1,113 @@
-/* basis's own styles for every Dash app, served from the app's origin (basis.dash.assets). Step 16.1 writes the theme here. */
+/* basis's own styles for every Dash app, served from the app's origin (basis.dash.assets), after the tokens in
+   theme.css. Every colour here is a token, so a page switches scheme in the browser alone. */
+
 :root {
-  color-scheme: light dark;
+  font-family: var(--basis-font-sans);
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Mantine's body colour is a card's, which its papers, inputs and menus take, so the page's own is set here, over
+   Mantine's rule for the body. */
+html:root body {
+  margin: 0;
+  background: var(--basis-background);
+  color: var(--basis-foreground);
+  font-size: var(--basis-text-sm);
+  line-height: 1.43;
+}
+
+::selection {
+  background: var(--basis-selection);
+}
+
+/* Numbers: tabular figures, so digits of one width line up in a column. */
+.basis-num {
+  font-family: var(--basis-font-num);
+  font-variant-numeric: tabular-nums;
+}
+
+/* One focus ring for every control, Mantine's and AG Grid's among them, shown for the keyboard alone, as basis-ui's:
+   an outline, which Windows' forced colours keep. */
+:focus-visible {
+  outline: var(--basis-focus-width) solid var(--basis-ring);
+  outline-offset: var(--basis-focus-offset);
+}
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Plotly writes its colours inline, and reads no CSS variable, so these rules colour a figure's text, lines, hover
+   labels and mode bar over them, in either scheme, with no new figure (spike 14.1, question 4). A trace's own colours,
+   and text Plotly draws inside a mark, are the figure's. */
+.js-plotly-plot .main-svg .xtick text,
+.js-plotly-plot .main-svg .ytick text,
+.js-plotly-plot .main-svg .g-xtitle text,
+.js-plotly-plot .main-svg .g-ytitle text,
+.js-plotly-plot .main-svg .xtitle,
+.js-plotly-plot .main-svg .ytitle,
+.js-plotly-plot .main-svg .gtitle,
+.js-plotly-plot .main-svg .legendtext,
+.js-plotly-plot .main-svg .legendtitletext,
+.js-plotly-plot .main-svg .annotation-text,
+.js-plotly-plot .main-svg .cbtitle text,
+.js-plotly-plot .main-svg .cbaxis text {
+  fill: var(--basis-muted-foreground) !important;
+}
+.js-plotly-plot .main-svg .legendtext,
+.js-plotly-plot .main-svg .annotation-text,
+.js-plotly-plot .main-svg .gtitle {
+  fill: var(--basis-foreground) !important;
+}
+.js-plotly-plot .main-svg .gridlayer path,
+.js-plotly-plot .main-svg .zerolinelayer path {
+  stroke: var(--basis-edge) !important;
+}
+.js-plotly-plot .main-svg .xlines-above,
+.js-plotly-plot .main-svg .ylines-above,
+.js-plotly-plot .main-svg .xlines-below,
+.js-plotly-plot .main-svg .ylines-below,
+.js-plotly-plot .main-svg path.ticks {
+  stroke: var(--basis-border) !important;
+}
+.js-plotly-plot .main-svg .legend .bg {
+  fill: transparent !important;
+}
+.js-plotly-plot .hoverlayer .hovertext path,
+.js-plotly-plot .hoverlayer .legend .bg {
+  fill: var(--basis-popover) !important;
+  stroke: var(--basis-border) !important;
+}
+.js-plotly-plot .hoverlayer .hovertext text,
+.js-plotly-plot .hoverlayer .legend text,
+.js-plotly-plot .hoverlayer .axistext text {
+  fill: var(--basis-popover-foreground) !important;
+}
+.js-plotly-plot .hoverlayer .axistext path {
+  fill: var(--basis-foreground) !important;
+  stroke: var(--basis-foreground) !important;
+}
+.js-plotly-plot .hoverlayer .axistext text {
+  fill: var(--basis-background) !important;
+}
+.js-plotly-plot .plotly .modebar,
+.js-plotly-plot .plotly .modebar-group {
+  background: transparent !important;
+}
+.js-plotly-plot .plotly .modebar-btn path {
+  fill: var(--basis-muted-foreground) !important;
+}
+.js-plotly-plot .plotly .modebar-btn:hover path,
+.js-plotly-plot .plotly .modebar-btn.active path {
+  fill: var(--basis-foreground) !important;
+}
+
+/* AG Grid: its theme's parameters are the tokens (basis.dash.theme.GRID); these rules are what no parameter sets. */
+.ag-root-wrapper {
+  font-variant-numeric: tabular-nums;
+}
+.ag-cell-focus:not(.ag-cell-range-selected):focus-within {
+  outline: var(--basis-focus-width) solid var(--basis-ring);
+  outline-offset: calc(var(--basis-focus-width) * -1);
 }

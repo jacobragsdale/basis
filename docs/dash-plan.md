@@ -23,7 +23,8 @@ Keep this table true in each step's own commit.
 | 14.5 The package and an empty app | Done: `packages/dash`, an empty app served, health and drain, a callback in the process; modules by lane in its AGENTS.md | the commit "Step 14.5" |
 | 15.1 Declarations | Done: `bd.database`, `bd.folder`, `bd.query`, `bd.file`, `bd.view`, `bd.Row`, `bd.format`; SQL binds checked at build; core's row refusals in the declaring part's words | the commit "Step 15.1" |
 | 15.2 to 15.8 Data | Not started | |
-| 16.1 to 16.9 Display | Not started | |
+| 16.1 Tokens and theme | Done: `basis.dash.theme`, its table held to basis-ui's `theme.css`; the CSS, Mantine, AG Grid and Plotly from it; the fonts | the commit "Step 16.1" |
+| 16.2 to 16.9 Display | Not started | |
 | 17.1 to 17.8 The repo around it | Not started | |
 
 ## What the best Dash app is

@@ -505,6 +505,24 @@ package's, served by Dash fingerprinted (`dash.hooks.stylesheet` and `script`, a
 `assets/`; basis's grid functions join `window.dashAgGridFunctions` under `basis` names and never replace it. Nothing
 is fetched from another origin. Phase 16 builds it, in modules of the display lane's own.
 
+**The tokens, as built (16.1).** `basis.dash.theme.TOKENS` is basis-ui's default theme, every custom property of its
+`:root` and `.dark`, and a test holds it to a pinned copy of basis-ui's `theme.css`, with the commit it came from, so a
+change there fails here until the table follows. From it, `static/theme.css` (written by `python -m
+basis.dash.theme`, and held to the table by a test) sets each as `--basis-NAME` in each scheme, and points Mantine's
+variables at them. Mantine's body colour is a card's, since its papers, inputs and menus take it, and basis's CSS
+gives the page its background. Mantine's primary palette, `basis`, is ten sRGB shades at the primary's hue, the
+light primary its seventh and the dark its fifth (`primaryShade`), since Mantine computes some colours in JavaScript.
+The fonts are basis-ui's, vendored with their licences: Inter's Latin file, a second time as `Inter Tabular` with
+tabular figures on, and JetBrains Mono's, from the `@fontsource-variable` 5.3.0 packages basis-ui installs; each is
+named in the CSS as `fonts/NAME.v0mHASH.woff2`, Dash's fingerprint form with the file's own hash, so it is cached
+for a year and a new file is a new URL. A figure's series are one palette for both schemes, since Plotly cannot
+switch them: basis-ui's dark `--chart-1` to `--chart-8`, the seventh and eighth darkened into the dark band, which the
+`dataviz` validator passes on both cards (its one warning, amber beside green for protanopia, is legal with the
+labels and legend basis's charts keep). The template is 490 bytes. basis's CSS colours a figure's axis text, titles,
+legend, grid and axis lines, hover labels and mode bar over Plotly's inline styles, and leaves text Plotly draws inside
+a mark to Plotly. A test holds every text token on the surface it shows on to 4.5:1, and the focus ring and an input's
+edge to 3:1, in both schemes.
+
 **Two ids every page has.** basis's chrome around every page holds two components whose ids are fixed and exported
 from `basis.dash.ids`, so the data and display lanes build against them: `NOTIFICATIONS`, DMC's
 `NotificationContainer`, whose `sendNotifications` prop takes a list of notifications, each a dict of DMC's

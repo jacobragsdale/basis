@@ -239,7 +239,7 @@ name = "A Dash app's declarations load no server: basis builds the app, serves i
 type = "forbidden"
 source_modules = [
     "basis.dash", "basis.dash.app", "basis.dash.pages", "basis.dash.settings", "basis.dash.ids", "basis.dash.errors", "basis.dash.loading",
-    "basis.dash.assets", "basis.dash.internals", "basis.dash.shell", "basis.dash._data", "basis.dash._display", "basis.dash.version",
+    "basis.dash.assets", "basis.dash.internals", "basis.dash.shell", "basis.dash._data", "basis.dash._display", "basis.dash.version", "basis.dash.theme",
 ]
 forbidden_modules = [
     "basis.dash.building", "basis.dash.server", "basis.dash.testing", "basis.dash.cli", "basis.core.serving.server", "basis.core.serving.requests",
