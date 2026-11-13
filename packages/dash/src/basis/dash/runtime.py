@@ -11,7 +11,7 @@ import math
 import time
 from collections.abc import Hashable, Mapping, Sequence
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -24,7 +24,7 @@ from opentelemetry.trace import Tracer
 
 from basis.core import frames, traces
 from basis.core.databases import Bind, Statements, open_database
-from basis.core.errors import Timeout
+from basis.core.errors import ServiceError, Timeout
 from basis.core.folders import Folder as OpenFolder
 from basis.core.folders import folder as open_folder
 from basis.core.rows import conform
@@ -93,24 +93,49 @@ class Runtime:
         started = time.perf_counter()
         shown = loads.shown(params)
         with self.tracer.start_as_current_span(f"load {dataset.name}", attributes={"basis.dataset": dataset.name, **{f"basis.param.{name}": str(value) for name, value in shown.items()}}) as span:
+            stale = False
             if isinstance(dataset, View):
                 inputs = await asyncio.gather(*(self.fetch(given, {name: params[name] for name in given.params}) for given in dataset.inputs.values()))
+                stale = any(entry.stale for entry in inputs)
                 found = key(dataset.name, {**params, **{f"{name} version": entry.version for name, entry in zip(dataset.inputs, inputs, strict=True)}})
                 read = lambda: self._view(dataset, params, inputs, found)  # noqa: E731 -- the read the flight starts
             else:
                 found = key(dataset.name, params)
-                read = lambda: self._read(dataset, params, found)  # noqa: E731 -- the read the flight starts
+                read = lambda: self._read_or_stale(dataset, params, found)  # noqa: E731 -- the read the flight starts
             entry, how = self.cache.fresh(found), "hit"
             if entry is None:
                 loop = asyncio.get_running_loop()
                 task, joined = self.cache.flight(found, lambda: loop.create_task(read()))
                 entry, how = await asyncio.shield(task), "shared" if joined else "miss"
+            if stale and not entry.stale:
+                entry = replace(entry, stale=True)  # a view of a stale input is stale
             rows = entry.table.num_rows
-            span.set_attributes({"basis.rows": rows, "basis.cache": how})
+            span.set_attributes({"basis.rows": rows, "basis.cache": how, "basis.stale": entry.stale})
         ms = round((time.perf_counter() - started) * 1000, 3)
-        log.info("loaded %s", dataset.name, extra={"dataset": dataset.name, "params": shown, "rows": rows, "ms": ms, "cache": how})
-        loads.report(dataset.name, entry.loaded_at, shown, rows=rows)
+        log.info("loaded %s", dataset.name, extra={"dataset": dataset.name, "params": shown, "rows": rows, "ms": ms, "cache": how, "stale": entry.stale})
+        loads.report(dataset.name, entry.loaded_at, shown, rows=rows, stale=entry.stale)
         return entry
+
+    def deadline(self, resource: str) -> float | None:
+        """The deadline of the database `resource` names, or None for another resource."""
+        return next((database.declared.deadline_s for database in self._databases.values() if database.declared.name == resource), None)
+
+    async def _read_or_stale(self, dataset: Dataset, params: Mapping[str, Hashable], found: Key) -> Entry:
+        """`_read`, or, where it fails with a resource's failure inside the dataset's `stale_s`, the last good value,
+        marked stale."""
+        try:
+            return await self._read(dataset, params, found)
+        except ServiceError as error:
+            if (kept := self.cache.kept(found)) is None:
+                raise
+            log.warning(
+                "%s could not be read again (%s), so its last good value answers, read at %s",
+                dataset.name,
+                error.detail,
+                kept.loaded_at.isoformat(),
+                extra={"dataset": dataset.name, "kind": type(error).__name__, "resource": error.resource, "reason": error.reason},
+            )
+            return replace(kept, stale=True)
 
     async def _read(self, dataset: Dataset, params: Mapping[str, Hashable], found: Key) -> Entry:
         loaded_at = datetime.now(UTC)

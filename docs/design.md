@@ -631,8 +631,16 @@ holds its pages alone, and it gets the callbacks of its own modules, its declara
 app's, so tests can build one app after another. A page's module holds its layout and its callbacks.
 
 **Errors go through one handler.** basis gives Dash one `on_error` for the whole app (`basis.dash.errors`): a
-callback's exception is logged once, with its traceback, and each output keeps what it showed. Step 15.5 makes it a
-sentence a person can act on, in the notifications. A page writes no handler of its own.
+callback's exception is logged once, and each output keeps what it showed. A page writes no handler of its own. Since
+15.5 a resource's failure, one of basis-core's `ServiceError` kinds, is logged with its kind, resource and reason and no
+traceback, since it is no defect, and anything else with its traceback; and the person reads one sentence in the
+notifications, with the request's id to quote: `warehouse did not answer within 30 s.` and `This shows what it showed
+before: try again in a moment.` for a `Timeout`, `could not be reached` for `Unavailable`, `refused this app` for
+`Denied`, `failed to answer` for any other kind, and `Something went wrong.` for a defect. A notification is DMC's
+`Notification` props: `id` `basis-error-REQUEST`, `title`, `message`, `color` `red`, `autoClose` false and
+`withCloseButton` true. A dataset past its TTL and inside its `stale_s` whose read fails answers its last good value
+instead, marked `stale` in the status store, with one warning logged and no notification; a view of a stale input is
+stale too. Past `stale_s`, a failure is a failure.
 
 **The package is laid out for two lanes.** The foundations' modules build, serve and test an app; the data lane's
 (declarations, the cache, loads, views, fixtures) and the display lane's (theme, shell, page, grid, charts, states,

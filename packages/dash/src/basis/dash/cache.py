@@ -45,6 +45,8 @@ class Entry:
     """The cache's clock past which it is read again."""
     kept_until: float
     """The cache's clock past which it is dropped, even where a reload fails."""
+    stale: bool = False
+    """Whether it is a value past its TTL that a load answered because reading it again failed: never kept so."""
 
 
 class Cache:

@@ -23,7 +23,7 @@ and phase 16 (display), each in modules of its own, so they never edit one file.
 | `pages.py` | `Page` and `bd.page(path, title, layout=...)`, and the module that declared it, whose callbacks are the page's; 16.2 adds its filters and body. | Display, from 16.2 |
 | `settings.py` | `Settings`, basis-core's, with `serve`: core's `serving.Serve` and the path prefix, `prefix` and `prefix_stripped`; `Settings.given`, for tests; `unreadable`. | Foundations |
 | `ids.py` | The fixed ids of the chrome both lanes build against: `NOTIFICATIONS`, DMC's notification container, and `STATUS`, a store of what is known of each dataset's last load. Its docstring says what each prop holds. | Foundations |
-| `errors.py` | `DeclarationError`, and `on_error`, the one handler of every callback's error, which logs it once and keeps each output as it was; 15.5 makes it show a notification. | Data, from 15.5 |
+| `errors.py` | `DeclarationError`, and `on_error`, the one handler of every callback's error, which logs it once, keeps each output as it was, and shows its sentence in the notifications. | Data, from 15.5 |
 | `assets.py`, `static/` | The one place basis registers its CSS, fonts and scripts with Dash's hooks, and the files themselves; 16.1 and 16.3 add theirs. | Display |
 | `shell.py` | `chrome`, what every page shows inside: Mantine's provider, the two fixed ids, Dash Pages' container; 16.2 builds the shell here. | Display |
 | `building.py` | `build`: the Dash app from its declaration, its settings, every setting Dash would read from a variable given, its prefixes, its pages and callbacks, core's health routes, request boundary and telemetry, and its lifespan. | Foundations; data adds its resources' opening in 15.2 |

@@ -235,7 +235,10 @@ def _declared(source: str, name: str, monkeypatch: pytest.MonkeyPatch) -> bd.App
 def test_a_callbacks_error_is_logged_once_and_its_outputs_keep_what_they_showed(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO)
     with testing.client(_declared(FAILING, "failing_app", monkeypatch)) as client:
-        assert client.fire("failing-shown.children", {"failing-go.n_clicks": 1}) == {}
+        answered = client.fire("failing-shown.children", {"failing-go.n_clicks": 1})
+    assert "failing-shown" not in answered  # the output keeps what it showed
+    (shown,) = answered[NOTIFICATIONS]["sendNotifications"]  # ty: ignore[not-iterable] -- a list, as on_error sends it
+    assert (shown["title"], shown["color"]) == ("Something went wrong.", "red")
     failed = [record for record in caplog.records if record.levelno >= logging.ERROR]
     assert [record.getMessage() for record in failed] == ["a callback failed: RuntimeError: the warehouse did not answer"]
     assert failed[0].exc_info is not None

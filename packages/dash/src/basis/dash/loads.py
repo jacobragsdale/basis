@@ -56,6 +56,10 @@ class Running(Protocol):
 
     def load(self, dataset: Dataset, params: Mapping[str, Hashable]) -> Awaitable[pd.DataFrame]: ...
 
+    def deadline(self, resource: str) -> float | None:
+        """The deadline of the database `resource` names, for a failure's sentence."""
+        ...
+
 
 running: Running | None = None
 """The runtime of the app the process serves, from its start to its stop."""
