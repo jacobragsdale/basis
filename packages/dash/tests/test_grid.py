@@ -238,11 +238,11 @@ def test_the_scale_is_drawn_against_the_column_s_largest_magnitude() -> None:
     const at = (value, pinned) => scale({value, api, colDef: {field: "par"}, node: {rowPinned: pinned}}, process.argv[2]);
     console.log(JSON.stringify([at(2), at(-4), at(0), at(null), at(9, "bottom")]));
     """
-    bars = json.loads(subprocess.run(["node", "-e", probe, str(STATIC / "basis.js"), "bar"], capture_output=True, text=True, check=True, timeout=30).stdout)  # noqa: S607 -- node, on the path
+    bars = json.loads(subprocess.run(["node", "-e", probe, str(STATIC / "basis.js"), "bar"], capture_output=True, text=True, encoding="utf-8", check=True, timeout=30).stdout)  # noqa: S607 -- node, on the path
     assert "var(--basis-primary) 20%, transparent) 50.00%" in bars[0]["backgroundImage"]
     assert "var(--basis-loss) 20%, transparent) 100.00%" in bars[1]["backgroundImage"]
     assert bars[2:] == [None, None, None]
-    heat = json.loads(subprocess.run(["node", "-e", probe, str(STATIC / "basis.js"), "heat"], capture_output=True, text=True, check=True, timeout=30).stdout)  # noqa: S607 -- likewise
+    heat = json.loads(subprocess.run(["node", "-e", probe, str(STATIC / "basis.js"), "heat"], capture_output=True, text=True, encoding="utf-8", check=True, timeout=30).stdout)  # noqa: S607 -- likewise
     assert heat[0] == {"backgroundColor": "color-mix(in oklch, var(--basis-div-2) 12.0%, transparent)"}
     assert heat[1] == {"backgroundColor": "color-mix(in oklch, var(--basis-div-10) 24.0%, transparent)"}
 

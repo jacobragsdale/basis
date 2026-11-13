@@ -61,7 +61,7 @@ VALUES = (0.0, -0.0, 2.675, -2.675, 1.005, 0.125, 0.045, 999.995, 1234567.891, -
 def run(cases: Sequence[tuple[object, dict[str, object]]]) -> list[str]:
     """Each case's text, as the browser's formatter writes it."""
     encoded = json.dumps([[_encoded(value), spec] for value, spec in cases])
-    ran = subprocess.run([str(NODE), "-e", RUNNER, str(STATIC / "basis.js")], input=encoded, capture_output=True, text=True, check=True, timeout=60)
+    ran = subprocess.run([str(NODE), "-e", RUNNER, str(STATIC / "basis.js")], input=encoded, capture_output=True, text=True, encoding="utf-8", check=True, timeout=60)
     found: object = json.loads(ran.stdout)
     assert isinstance(found, list)
     return [str(shown) for shown in found]
@@ -121,7 +121,7 @@ def test_the_script_adds_to_the_grid_s_functions_and_never_replaces_them() -> No
     eval(SCRIPT);
     console.log(JSON.stringify({grid: Object.keys(window.dashAgGridFunctions).sort(), clientside: Object.keys(window.dash_clientside).sort()}));
     """
-    ran = subprocess.run([str(NODE), "-e", probe, str(STATIC / "basis.js")], capture_output=True, text=True, check=True, timeout=30)
+    ran = subprocess.run([str(NODE), "-e", probe, str(STATIC / "basis.js")], capture_output=True, text=True, encoding="utf-8", check=True, timeout=30)
     assert json.loads(ran.stdout) == {"grid": ["appUpper", "basisFormat", "basisScale"], "clientside": ["app", "basis"]}
 
 

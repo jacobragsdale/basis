@@ -167,7 +167,7 @@ def test_the_switch_flips_the_scheme_and_keeps_the_choice() -> None:
     const flipped = window.dash_clientside.basis.scheme(1);
     console.log(JSON.stringify({first, flipped, scheme: attributes["data-mantine-color-scheme"], kept}));
     """.replace("SCRIPT", json.dumps(script))
-    ran = subprocess.run(["node", "-e", probe], capture_output=True, text=True, check=True, timeout=30)  # noqa: S607 -- node, on the path
+    ran = subprocess.run(["node", "-e", probe], capture_output=True, text=True, encoding="utf-8", check=True, timeout=30)  # noqa: S607 -- node, on the path
     assert json.loads(ran.stdout) == {"first": "Switch to the dark scheme", "flipped": "Switch to the light scheme", "scheme": "dark", "kept": {"mantine-color-scheme-value": "dark"}}
 
 
