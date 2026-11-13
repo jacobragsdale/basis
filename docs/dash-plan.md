@@ -44,7 +44,8 @@ Keep this table true in each step's own commit.
 | 17.2 The agent's eyes | Done: `basis render PAGE [--set ID.PROP=VALUE]` and `basis load DATASET [--param NAME=VALUE]`, each `[--env ENV]`, JSON on stdout; a grid's rows through its columns' formats; `basis.dash.driving`, shared with 17.1's check | the commit "Step 17.2" |
 | 17.3 New repos and their files | Done: `basis-dash new app NAME`, from the packaged example's positions page on synthetic fixtures; `basis new page NAME`; `basis sync`'s block of `AGENTS.md`, three skills, the Dockerfile line, the `bd` alias and `-p no:dash` (core's `Tools` gains `aliases` and `plugins_off`); the tutorial, how-to and reference; a generated repo checked, committed through its hook, and served by `basis dev` under its reloader, a page changed and the change served | the commit "Step 17.3" |
 | 17.4 Smoke | Done: `basis smoke --env ENV [--commit SHA]` for a Dash app: readiness and the commit, every page's index and layout through Dash Pages' router, every dataset's `smoke=` example loaded through the environment's settings; `BASIS_SMOKE__URL` | the commit "Step 17.4" |
-| 17.5 to 17.8 The repo around it | Not started | |
+| 17.5 The example | Done: `basis.dash.example`, a fixed income desk's holdings on 320 synthetic bonds and a Treasury curve: Overview (tiles with the day's changes, sector, rating and maturity, issuers), Positions (the grid, filters, totals, exports), Curve (four closes, moves, the book against the curve, DV01 by maturity) and P&L (carry, rates, spread and residual, by sector, the largest moves), every number reconciled across pages by a test; `new app` keeps its positions page | the commit "Step 17.5" |
+| 17.6 to 17.8 The repo around it | Not started | |
 
 ## What the best Dash app is
 

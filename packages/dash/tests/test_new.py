@@ -21,6 +21,8 @@ def test_a_new_app_is_the_example_in_its_layers_on_its_fixtures(tmp_path: Path) 
     repo = _repo(tmp_path)
     package = repo / "desk_app"
     assert sorted(path.relative_to(package).as_posix() for path in package.rglob("*") if path.is_file()) == sorted([*new.EXAMPLE_FILES, "tests/__init__.py"])
+    assert "pages=[positions.page]" in (package / "app.py").read_text(encoding="utf-8")
+    assert '    "/",\n' in (package / "pages" / "positions.py").read_text(encoding="utf-8")  # the starter's one page, its first
     assert (repo / "fixtures" / "holdings.csv").read_bytes() == (new.EXAMPLE / "fixtures" / "holdings.csv").read_bytes()
     assert 'name="desk-app", title="Desk App"' in (package / "app.py").read_text(encoding="utf-8")
     assert "basis.dash.example" not in "".join(path.read_text(encoding="utf-8") for path in package.rglob("*.py"))
@@ -37,13 +39,14 @@ def test_a_name_that_is_no_apps_is_refused(tmp_path: Path) -> None:
 
 def test_a_new_page_is_written_tested_and_listed_in_the_apps_pages(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
+    new.page(repo, "pnl")
     made = new.page(repo, "risk_limits")
     assert made == repo / "desk_app" / "pages" / "risk_limits.py"
     assert 'bd.page("/risk-limits", "Risk limits"' in made.read_text(encoding="utf-8")
     assert (repo / "desk_app" / "tests" / "test_risk_limits.py").is_file()
     declared = (repo / "desk_app" / "app.py").read_text(encoding="utf-8")
-    assert "from desk_app.pages import positions, risk_limits\n" in declared
-    assert "pages=[positions.page, risk_limits.page]" in declared
+    assert "from desk_app.pages import pnl, positions, risk_limits\n" in declared  # sorted, as ruff sorts them
+    assert "pages=[positions.page, pnl.page, risk_limits.page]" in declared  # each after the others
     with pytest.raises(new.NewError, match=r"desk_app/pages/risk_limits.py exists already"):
         new.page(repo, "risk_limits")
     with pytest.raises(new.NewError, match=r"'Risk' is no page's name"):

@@ -1,7 +1,7 @@
 # Tutorial: your first page
 
 In this tutorial, we will make a Dash app's repo, serve it on its synthetic data, and add a page of our own that shows
-the book's holdings by rating, with its tests passing. It takes about twenty minutes. Every command runs from the
+the desk's market value by book, with its tests passing. It takes about twenty minutes. Every command runs from the
 repo's root.
 
 ## 1. Make the repo
@@ -41,82 +41,83 @@ uv run basis render / --set book.value=Municipals
 ```
 
 The output is JSON: each output of the page's callbacks, as a person sees it. Notice that the grid's first rows are
-written as the grid writes them, `"$2,500,000"` and `"3.000%"`, and that the market value tile and the grid's total
+written as the grid writes them, `"$500,000"` and `"1.750%"`, and that the market value tile and the grid's total
 are the same number.
 
 ## 4. Add a dataset
 
-Open `desk/data.py`. Every dataset is declared once, by name: one query of the warehouse, `holdings`, and views of it,
-each a pure function in `desk/domain.py`. Add a row and a view for the book by rating, at the end of `data.py`:
+Open `desk/data.py`. Every dataset is declared once, by name: two queries of the warehouse, `holdings` and `curve`,
+and views of them, each a pure function in `desk/domain.py`. Add a row and a view for the desk by book, at the end of
+`data.py`:
 
 ```python
-class Rating(bd.Row):
-    rating: str
+class Book(bd.Row):
+    book: str
     market_value: Annotated[float, bd.format.money("USD", 0)]
     weight: Annotated[float, bd.format.pct(1)]
 
 
-RATINGS = bd.view("ratings", domain.by_rating, Rating, positions=SHOWN)
+BOOK_TOTALS = bd.view("books", domain.by_book, Book, positions=POSITIONS)
 ```
 
 and its function, at the end of `domain.py`:
 
 ```python
-def by_rating(positions: pd.DataFrame) -> pd.DataFrame:
-    """Each rating's market value and its weight."""
-    ratings = positions.groupby("rating", as_index=False).agg(market_value=("market_value", "sum"))
-    return pd.DataFrame({"rating": ratings["rating"], "market_value": ratings["market_value"], "weight": ratings["market_value"] / ratings["market_value"].sum()})
+def by_book(positions: pd.DataFrame) -> pd.DataFrame:
+    """Each book's market value and its weight of the desk's."""
+    books = positions.groupby("book", as_index=False).agg(market_value=("market_value", "sum"))
+    return pd.DataFrame({"book": books["book"], "market_value": books["market_value"], "weight": books["market_value"] / books["market_value"].sum()})
 ```
 
 Check it loads:
 
 ```sh
-uv run basis load ratings --param as_of=2026-11-12 --param book= --param search=
+uv run basis load books --param as_of=2026-11-12
 ```
 
-You should see five ratings, `A`, `AA`, `AAA`, `BB` and `BBB`, and two loads: the first a `miss`, the second a `hit`, since the
-cache keeps the value.
+You should see four books, `Core Rates`, `Credit`, `Liquidity` and `Municipals`, and two loads: the first a `miss`,
+the second a `hit`, since the cache keeps the value.
 
 ## 5. Add the page
 
 ```sh
-uv run basis new page ratings
+uv run basis new page books
 ```
 
-This writes `desk/pages/ratings.py` and `desk/tests/test_ratings.py`, and adds the page to `app.py`. Open
-`desk/pages/ratings.py`, and make it show the new dataset:
+This writes `desk/pages/books.py` and `desk/tests/test_books.py`, and adds the page to `app.py`. Open
+`desk/pages/books.py`, and make it show the new dataset:
 
 ```python
 import basis.dash as bd
 from dash import Input, Output, callback
 
-from desk.data import RATINGS, Rating
+from desk.data import BOOK_TOTALS, Book
 
 page = bd.page(
-    "/ratings",
-    "Ratings",
-    filters=[bd.as_of("ratings-as-of", calendar="sifma-us")],
-    body=[bd.card("By rating", bd.graph("ratings-chart"), span=6), bd.card("Ratings", bd.grid("ratings-grid", Rating, key="rating", height=None, search=False), span=6, flush=True)],
+    "/books",
+    "Books",
+    filters=[bd.as_of("books-as-of", calendar="sifma-us")],
+    body=[bd.card("By book", bd.graph("books-chart"), span=6), bd.card("Books", bd.grid("books-grid", Book, key="book", height=None, search=False), span=6, flush=True)],
 )
 
 
-@callback(Output("ratings-chart", "figure"), Output("ratings-grid", "rowData"), Input("ratings-as-of", "value"))
+@callback(Output("books-chart", "figure"), Output("books-grid", "rowData"), Input("books-as-of", "value"))
 async def show(as_of: str) -> tuple[object, bd.Rows]:
-    ratings = await bd.load(RATINGS, as_of=bd.day(as_of), book="", search="")
-    return bd.charts.bar(ratings, Rating, x="rating", y="market_value"), bd.rows(ratings)
+    books = await bd.load(BOOK_TOTALS, as_of=bd.day(as_of))
+    return bd.charts.bar(books, Book, x="book", y="market_value"), bd.rows(books)
 ```
 
-The browser now shows a second link in the header, "Ratings". Open it: a chart and a grid of five ratings.
+The browser now shows a second link in the header, "Books". Open it: a chart and a grid of four books.
 
 ## 6. Test it
 
-Make the test the generator wrote fire the new callback, in `desk/tests/test_ratings.py`:
+Make the test the generator wrote fire the new callback, in `desk/tests/test_books.py`:
 
 ```python
-def test_the_ratings_page_shows_its_rows() -> None:
+def test_the_books_page_shows_its_rows() -> None:
     with bd.testing.client(app) as client:
-        answered = client.fire("..ratings-chart.figure...ratings-grid.rowData..", {"ratings-as-of.value": "2026-11-12"})
-    assert [row["rating"] for row in answered["ratings-grid"]["rowData"]] == ["A", "AA", "AAA", "BB", "BBB"]
+        answered = client.fire("..books-chart.figure...books-grid.rowData..", {"books-as-of.value": "2026-11-12"})
+    assert [row["book"] for row in answered["books-grid"]["rowData"]] == ["Core Rates", "Credit", "Liquidity", "Municipals"]
 ```
 
 Then run the checks:

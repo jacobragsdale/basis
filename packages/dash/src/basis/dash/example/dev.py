@@ -1,5 +1,5 @@
-"""The fakes `basis dev` and the tests run the app on: the warehouse, answered from `fixtures/`, synthetic holdings
-that `packages/dash/tests/example_fixtures.py` makes."""
+"""The fakes `basis dev` and the tests run the app on: the warehouse, answered from `fixtures/`, synthetic holdings and a
+Treasury curve that `packages/dash/tests/example_fixtures.py` makes."""
 
 from pathlib import Path
 

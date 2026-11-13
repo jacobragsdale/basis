@@ -1,10 +1,11 @@
-"""The app's pages on its fakes, through `bd.testing`, with no browser: what each callback answers, and that the
-numbers on a page reconcile with each other."""
+"""The positions page on the app's fakes, through `bd.testing`, with no browser: what its callback answers, and that its
+numbers reconcile with each other."""
 
 import basis.dash as bd
 import pytest
 
 from basis.dash.example.app import app
+from basis.dash.example.pages import positions
 
 AS_OF = {"as-of.value": "2026-11-12", "book.value": None, "search.value": ""}
 OUTPUTS = ("grid.rowData", "grid.dashGridOptions", "market-value.children", "dv01.children", "yield.children", "duration.children", "sectors.figure", "scatter.figure")
@@ -14,7 +15,7 @@ SHOW = "...".join(f"positions-{output}" for output in OUTPUTS).join(("..", "..")
 
 def test_the_positions_page_builds_inside_the_shell() -> None:
     with bd.testing.client(app) as client:
-        assert "Positions" in str(client.page("/"))
+        assert "Every holding, priced at the close" in str(client.page(positions.page.path))
 
 
 def test_the_grid_holds_every_holding_and_its_total_is_the_tiles() -> None:

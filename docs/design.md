@@ -841,6 +841,19 @@ byte. `basis docs` lists a tutorial, how-to guides and a reference as `dash/PAGE
 `basis dev` was run for real on a generated repo under uvicorn's reloader on Linux: a page's module changed, WatchFiles
 restarted the app within a second, and the router served the change.
 
+**The example, as built (17.5).** `basis.dash.example` is a fixed income desk's holdings app, four pages on two queries
+of one warehouse, the holdings and the Treasury curve, every other dataset a view of them in `domain.py`, so a day's
+pages share two queries and show one set of numbers, which a test reconciles across pages for the whole book and for
+each book alone. Each bond in the fixture carries its prior close and the curve's move at its tenor, so a day's P&L is
+explained as a desk reads it: carry, a day's coupon; rates, the curve's move times duration; spread, the rest of its
+yield's move times duration; and the residual, roll-down and convexity, the four summing to the P&L exactly. Overview
+shows the book's size, DV01, yield and day's P&L, each with its change, its allocation by sector, rating and maturity,
+and its issuers; Positions every holding, filtered by book and by a CUSIP or issuer, with its totals and exports;
+Curve the Treasury curve at four closes, its moves by tenor, the book's yields against it and its DV01 by maturity;
+P&L the day explained, by sector, and its 25 largest moves. A fixture with no date column answers every day, so the
+app shows the same book whatever day the as-of filter starts on. `new app` keeps every dataset and the positions page,
+at `/`.
+
 **The package is laid out for two lanes.** The foundations' modules build, serve and test an app; the data lane's
 (declarations, the cache, loads, views, fixtures) and the display lane's (theme, shell, page, grid, charts, states,
 exports and `static/`) are their own, and each lane adds its names to `bd` through a module only it edits

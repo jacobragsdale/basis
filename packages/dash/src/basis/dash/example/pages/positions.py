@@ -6,10 +6,12 @@ from dash import Input, Output, State, callback
 
 from basis.dash.example.data import BOOKS, SECTORS, SHOWN, SUMMARY, Position, Sector
 
-MARKET_VALUE = bd.stat(MARKET_VALUE_ID := "positions-market-value", "Market value", bd.format.money("USD", 0), span=3, dataset=SUMMARY)
+MARKET_VALUE = bd.stat(MARKET_VALUE_ID := "positions-market-value", "Market value", bd.format.money("USD", 0), period="since the prior close", span=3, dataset=SUMMARY)
 DV01 = bd.stat(DV01_ID := "positions-dv01", "DV01", bd.format.money("USD", 0), span=3, dataset=SUMMARY)
-YIELD = bd.stat(YIELD_ID := "positions-yield", "Yield to worst", bd.format.pct(2), span=3, dataset=SUMMARY)
+YIELD = bd.stat(YIELD_ID := "positions-yield", "Yield to worst", bd.format.pct(2), change=bd.format.bps(1), period="on the day", good="down", span=3, dataset=SUMMARY)
 DURATION = bd.stat(DURATION_ID := "positions-duration", "Duration", bd.format.number(2), span=3, dataset=SUMMARY)
+HIDDEN = ("years", "prior_price", "prior_ytw", "curve_change", "carry", "rates", "spread", "residual")
+"""The columns the grid leaves out, which the P&L page explains and the export still holds."""
 GRID = bd.grid(
     GRID_ID := "positions-grid",
     Position,
@@ -20,6 +22,7 @@ GRID = bd.grid(
         "market_value": "sum",
         "weight": "sum",
         "dv01": "sum",
+        "pnl": "sum",
         "price": bd.weighted("par"),
         "ytw": bd.weighted("market_value"),
         "duration": bd.weighted("market_value"),
@@ -27,17 +30,20 @@ GRID = bd.grid(
     },
     columns={
         "cusip": bd.column(header="CUSIP", pin="left", width=118),
+        "issuer": bd.column(width=190),
         "ytw": bd.column(header="YTW"),
         "dv01": bd.column(header="DV01"),
         "oas": bd.column(header="OAS", heat=True),
         "market_value": bd.column(bar=True),
+        "pnl": bd.column(header="Day P&L", signed=True),
+        **{name: bd.column(hide=True) for name in HIDDEN},
     },
     exports=True,
     dataset=SHOWN,
 )
 
 page = bd.page(
-    "/",
+    "/positions",
     "Positions",
     description="Every holding, priced at the close",
     filters=[bd.as_of("as-of", calendar="sifma-us"), bd.select("book", "Book", options=BOOKS), bd.search("search")],
@@ -74,9 +80,9 @@ async def show(as_of: str, book: str | None, search: str | None) -> tuple[object
     return (
         bd.rows(shown),
         GRID.totals(shown),
-        MARKET_VALUE.show(total["market_value"]),
+        MARKET_VALUE.show(total["market_value"], change=total["market_value"] - total["prior_market_value"]),
         DV01.show(total["dv01"]),
-        YIELD.show(total["ytw"]),
+        YIELD.show(total["ytw"], change=total["ytw"] - total["prior_ytw"]),
         DURATION.show(total["duration"]),
         bd.charts.bar(sectors, Sector, x="sector", y="market_value"),
         bd.charts.scatter(shown, Position, x="duration", y="ytw", label="cusip", by="sector", fit=False),

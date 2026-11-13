@@ -19,11 +19,16 @@ _FOLDERS = {"basis-dash": "packages/dash"}
 """The package's folder in a checkout of basis."""
 NAME = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 PAGE = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
-EXAMPLE_FILES = ("__init__.py", "app.py", "data.py", "domain.py", "dev.py", "pages/__init__.py", "pages/positions.py", "sql/holdings.sql", "tests/test_domain.py", "tests/test_pages.py")
-"""What a new app copies of the example, by name, so a cache or a stray file in a checkout's example is never copied.
-Left out: its `ruff.toml`, which a repo's `basis sync` writes at its root instead, and its fixtures, which go to the
-repo's `fixtures/`."""
-FIXTURES = ("holdings.csv",)
+EXAMPLE_FILES = (
+    "__init__.py", "app.py", "data.py", "domain.py", "dev.py", "pages/__init__.py", "pages/positions.py", "sql/holdings.sql", "sql/curve.sql",
+    "tests/test_domain.py", "tests/test_positions.py",
+)  # fmt: skip
+"""What a new app copies of the example, by name, so a cache or a stray file in a checkout's example is never copied:
+every dataset and rule, and its positions page alone, at `/`. Left out: its other pages and their test, its `ruff.toml`,
+which a repo's `basis sync` writes at its root instead, and its fixtures, which go to the repo's `fixtures/`."""
+FIXTURES = ("holdings.csv", "curve.csv")
+STARTER_PAGES = "from {package}.pages import positions\n"
+"""The starter's one page, as its `app.py` imports it."""
 
 
 class NewError(core_new.NewError):
@@ -55,7 +60,12 @@ def _copy_example(repo: Path, package: str, name: str) -> None:
     for relative in EXAMPLE_FILES:
         text = (EXAMPLE / relative).read_text(encoding="utf-8").replace("basis.dash.example", package)
         if relative == "app.py":
+            text = re.sub(r"^from \S+\.pages import .+\n", STARTER_PAGES.format(package=package), text, flags=re.MULTILINE)
+            text = re.sub(r"pages=\[[^\]]*\]", "pages=[positions.page]", text)
             text = text.replace('name="holdings", title="Fixed Income Holdings"', f'name="{name}", title="{title}"')
+            text = re.sub(r"app = bd\.App\(\n\s+(.+)\n\)", r"app = bd.App(\1)", text)  # one line, as the formatter writes what fits
+        if relative == "pages/positions.py":
+            text = text.replace('    "/positions",\n', '    "/",\n')
         if relative == "dev.py":
             text = (
                 text.replace("from pathlib import Path\n\n", "")
@@ -116,7 +126,8 @@ def page(repo: Path, name: str) -> Path:
     if imports is None or listed is None:
         msg = f"{declared.relative_to(repo).as_posix()} has no `from {package}.pages import ...` line or no `pages=[...]`, where basis adds the page: add them, or write the page by hand"
         raise NewError(msg)
-    text = text[: imports.end("names")] + f", {name}" + text[imports.end("names") :]
+    names = sorted({*(found.strip() for found in imports.group("names").split(",")), name})  # as ruff sorts them
+    text = text[: imports.start("names")] + ", ".join(names) + text[imports.end("names") :]
     listed = re.search(r"pages=\[(?P<pages>[^\]]*)\]", text)
     if listed is None:  # the import's line holds no `]`, so the list is where it was
         raise AssertionError(text)
