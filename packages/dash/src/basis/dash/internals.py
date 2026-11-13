@@ -3,7 +3,7 @@ one fails `tests/test_internals.py`, and nowhere else: spike 14.1, question 8. N
 
 - `choose_react`: React 19, through `dash._dash_renderer._set_react_version`, which Dash reads each time it renders
   the index, so the choice holds for every app in the process.
-- `own_callbacks`: what `dash.callback` registers, which Dash keeps in `dash._callback.GLOBAL_CALLBACK_MAP` and
+- `own_callbacks` and `functions_of`: what `dash.callback` registers, which Dash keeps in `dash._callback.GLOBAL_CALLBACK_MAP` and
   `GLOBAL_CALLBACK_LIST` until the first app's `_setup_server` takes them all. basis keeps every one it has seen, and
   gives each app built the callbacks of its own modules, its declaration's and its pages', so a second app built in one process, as tests build them,
   still has its callbacks, and an app never has another's.
@@ -47,7 +47,10 @@ def own_callbacks(app: dash.Dash, modules: Iterable[str]) -> None:
     global_map, global_list = _callback.GLOBAL_CALLBACK_MAP, _callback.GLOBAL_CALLBACK_LIST
     _seen.update(global_map)
     known = {id(entry) for entry in _seen_list}
-    _seen_list.extend(entry for entry in global_list if id(entry) not in known)
+    for entry in global_list:
+        if id(entry) not in known:  # a module imported again, as a check imports a repo's, registers its callbacks again
+            _seen_list[:] = [seen for seen in _seen_list if seen.get("output") != entry.get("output")]
+            _seen_list.append(entry)
     global_map.clear()
     global_list.clear()
     owned = frozenset(modules)
@@ -56,6 +59,20 @@ def own_callbacks(app: dash.Dash, modules: Iterable[str]) -> None:
             app.callback_map[key] = entry
     outputs = set(app.callback_map)
     app._callback_list.extend(entry for entry in _seen_list if entry.get("output") in outputs)  # noqa: SLF001 -- Dash's list of the callbacks it sends the page
+
+
+def functions_of(modules: Iterable[str]) -> list[Callable[..., object]]:
+    """The function of every server callback `dash.callback` registered from one of `modules`, as the module wrote it,
+    whether or not an app has been built since."""
+    owned = frozenset(modules)
+    entries = {**_seen, **_callback.GLOBAL_CALLBACK_MAP}
+    found: list[Callable[..., object]] = []
+    for entry in entries.values():
+        function = entry.get("callback")
+        function = getattr(function, "__wrapped__", function)
+        if callable(function) and _module(entry) in owned:
+            found.append(function)
+    return found
 
 
 def _module(entry: Mapping[str, object]) -> str | None:

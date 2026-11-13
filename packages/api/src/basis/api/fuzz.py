@@ -37,7 +37,7 @@ from urllib.parse import urlsplit
 from fastapi.testclient import TestClient
 from pydantic import JsonValue, ValidationError
 
-from basis.api import call, dev, fakes, layers
+from basis.api import call, dev, fakes
 from basis.api.app import App, build
 from basis.api.compute import ComputeFunction
 from basis.api.identity import User
@@ -47,6 +47,7 @@ from basis.api.service import Service
 from basis.api.settings import Settings
 from basis.core.errors import BasisError
 from basis.core.sync import Problem
+from basis.core.testing import importable, repo_packages
 
 if TYPE_CHECKING:
     from hypothesis.strategies import SearchStrategy
@@ -72,7 +73,7 @@ def built(repo: Path) -> list[Problem]:
     """Each way the repo's one service, as the repo at `repo` holds its code, fails to build or start on its fakes:
     `basis check`'s. Its code is imported from the repo's folder, never the installed package, which in the push hook's
     worktree is the clone's own checkout. A service that does not load is `openapi.json`'s line already."""
-    with layers.importable(repo, layers.packages(repo)):
+    with importable(repo, repo_packages(repo)):
         try:
             service = load()
         except Exception:  # noqa: BLE001 -- basis sync's openapi.json says why, as its one line
@@ -83,7 +84,7 @@ def built(repo: Path) -> list[Problem]:
 def fuzzed(repo: Path) -> list[Problem]:
     """Each request Schemathesis finds the repo's one service answers as its document does not say: `basis check
     --full`'s, with its code imported as `built` imports it."""
-    with layers.importable(repo, layers.packages(repo)):
+    with importable(repo, repo_packages(repo)):
         try:
             service = load()
         except Exception:  # noqa: BLE001 -- basis sync's openapi.json says why, as its one line

@@ -44,3 +44,11 @@ def test_serve_names_the_app_it_cannot_find(tmp_path: Path, capsys: pytest.Captu
     monkeypatch.setenv("BASIS_ENV", "dev")
     assert basis(_repo(tmp_path, '["dash"]'), "serve", "nowhere.app") == 1
     assert capsys.readouterr().err.splitlines()[-1].startswith("ERROR: no app named 'nowhere.app'")
+
+
+def test_basis_check_runs_the_parts_checks_of_the_repos_app(tmp_path: Path) -> None:
+    from basis.dash import checks, cli  # noqa: PLC0415 -- the part as basis check calls it
+
+    part = cli.part()
+    assert part.checks is not None
+    assert part.checks(_repo(tmp_path, '["dash"]')) == checks.problems(tmp_path) == []  # a repo with no package has no app to check

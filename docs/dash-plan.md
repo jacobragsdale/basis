@@ -40,7 +40,8 @@ Keep this table true in each step's own commit.
 | 16.7 Filters and the URL | Done: `bd.as_of`, `bd.date_range` with presets, `bd.select`, `bd.search`, read from the query string at build and written back in the browser; `bd.day`, `bd.days`, `bd.options` | the commit "Step 16.7" |
 | 16.8 States | Done: loading after 400 ms in place, empty only once answered, failed marked on its component until its next answer, stale from the status store; on the grid, graph and tile | the commit "Step 16.8" |
 | 16.9 Exports | Not started | |
-| 17.1 to 17.8 The repo around it | Not started | |
+| 17.1 The checks | Done: `basis.dash.checks`, the part's `checks`: the layers and the domain's purity, a view's function's too; callbacks outside the app's and its pages' modules, and ones that load without `async`; every page built, every id and property, every callback called on the fakes, its failure, its size, its hold on the loop, its figure, a grid's rows and a store's; DataTable; other origins | the commit "Step 17.1" |
+| 17.2 to 17.8 The repo around it | Not started | |
 
 ## What the best Dash app is
 
@@ -479,6 +480,9 @@ Each has the pick this plan builds on. None blocks a step before the one named.
 | Does `bd.database` name its dialect? | Yes: a SQL file's binds are checked before any environment says the database's kind, and opening it refuses settings of another kind (15.2) | 15.1 |
 | Which datasets are an app's? | Those every resource of which the app lists, by identity: no list of datasets to keep beside the resources | 15.1 |
 | Where does the Dash app's path prefix come from? | Two settings, `serve.prefix` and `serve.prefix_stripped`, mapped to Dash's two prefixes; the health routes answer at the root too, for the cluster's probes, which reach the pod past the proxy | 14.5 |
+| How long may a callback hold the event loop, in 17.1's check? | 250 ms, measured on the fakes, a call past it made once more; 17.6's numbers revisit it | 17.1 |
+| Does 17.1's check of other origins refuse a link to the firm's wiki? | No: an `href` is navigation and fetches nothing, so it passes on any component but `html.Link`, a stylesheet's | 17.1 |
+| Which callbacks does 17.1 call? | Those a page's load calls: server callbacks of the app's and its pages' modules, with no pattern-matching id and no `prevent_initial_call`, in the browser's order; the rest by their ids alone | 17.1 |
 | Which callbacks are an app's? | Those of the modules that declared it and its pages, since Dash's registry is the process's and tests build several apps | 14.5 |
 | Where do the lanes add their names to `bd`? | Each in a module of its own, `_data.py` or `_display.py`, whose `__all__` the package's extends | 14.5 |
 | PLAN.md's findings and figures about the removed part | Kept as history, naming it "the third part"; its full text is PLAN.md at `4a69721` | 13.1 |

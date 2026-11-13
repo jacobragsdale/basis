@@ -1,10 +1,17 @@
 """What every part's contract tests share: the check that code cannot reach I/O through its imports. Each part's own
-`testing` module builds its contract tests on it. Whether a repo's agent files match the installed parts is
+`testing` module builds its contract tests on it, and each part's checks of a repo's code import that code from the
+repo's own folder (`importable`, `repo_packages`). Whether a repo's agent files match the installed parts is
 `basis check`'s to say."""
 
-from collections.abc import Iterable
+import os
+import sys
+from collections.abc import Generator, Iterable, Sequence
+from contextlib import contextmanager
+from pathlib import Path
 
 import grimp
+
+from basis.core.sync import UNREAD
 
 FORBIDDEN = (
     "basis.core.check", "basis.core.clone", "basis.core.command", "basis.core.databases", "basis.core.documented", "basis.core.doctor", "basis.core.fakes", "basis.core.full", "basis.core.gates",
@@ -55,3 +62,36 @@ def package_of(module: str) -> str:
     such as `basis.job`, since the namespace is no package of its own."""
     top, _, rest = module.partition(".")
     return f"{top}.{rest.partition('.')[0]}" if top == "basis" and rest else top
+
+
+def repo_packages(repo: Path) -> list[str]:
+    """The repo's packages: each folder at its root with an `__init__.py`, but those basis never reads and a clone's."""
+    return sorted(
+        entry.name
+        for entry in os.scandir(repo)
+        if entry.is_dir()
+        and entry.name not in UNREAD
+        and not entry.name.startswith(".")
+        and entry.name.isidentifier()
+        and (Path(entry.path) / "__init__.py").is_file()
+        and not (Path(entry.path) / ".git").exists()
+    )
+
+
+@contextmanager
+def importable(repo: Path, packages: Sequence[str]) -> Generator[None]:
+    """The repo's packages imported from its root, whatever the process imported before, as a check of the repo's code
+    must, since the installed package may be another checkout's, as it is in the push hook's worktree: the root goes
+    first on the path, a module of the same name imported from elsewhere is set aside, and what the block imported of
+    them is forgotten after, when the set-aside modules come back."""
+    held = {name: module for name, module in sys.modules.items() if name.partition(".")[0] in packages}
+    for name in held:
+        del sys.modules[name]
+    sys.path.insert(0, str(repo))
+    try:
+        yield
+    finally:
+        sys.path.remove(str(repo))
+        for name in [name for name in sys.modules if name.partition(".")[0] in packages]:
+            del sys.modules[name]
+        sys.modules.update(held)

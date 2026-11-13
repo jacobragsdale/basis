@@ -750,6 +750,32 @@ without touching the database, so the page's notification says what the last rea
 does not cut the back-off short. Each failure logs the seconds of its back-off, `backoff_s`, and a load the back-off
 answered has `cache` `backoff`. The back-off is the process's, as the cache is: each pod backs off on its own.
 
+**The checks, as built (17.1).** `basis check` holds a Dash repo with basis-dash's `Part.checks`
+(`basis.dash.checks`), each problem one `ERROR` line with its fix, on the repo's code as its folder holds it. The layers
+are modules basis knows by name, as an API's are: `app`, then `pages` (a module or a package of them), then `data`, then
+`domain`, each importing only those below it; a test's module, `dev.py` and `jobs/` are no layer. A domain module, and
+the module of every view's function wherever it is, imports no Dash, Plotly or web server, nothing of `basis.dash`, none
+of basis-core's I/O (`basis.core.testing.FORBIDDEN`) and none of the standard library's sockets, processes or databases:
+one line for each of its own imports, however much that import reaches. A callback declared in a module that is neither
+the app's nor a page's is refused, since basis leaves it out of the app, and so is one that is not `async` and calls
+`bd.load` or `bd.reload`, read from its source. Then the app is built on the fakes it declares, through `bd.testing`'s
+client, with every log record kept for the check: an app that lists resources must declare fakes. Every page builds
+inside the chrome; every id a callback names is a component of its page (its module's page, or any page for the app's
+own module and basis's), and every property one its type has, by the type's constructor, `data-*` and `aria-*` by
+Dash's own list; and every callback of the app's and its pages' modules that a page's load calls is called in the order
+the browser would, each from the values the layout and the callbacks before it give, with no input marked changed. A
+call fails the check when the app's `on_error` logged a failure, when its answer is past `sizes.BUDGET_BYTES` (4 MB),
+when it held the event loop past `LOOP_BUDGET_MS`, 250 ms, measured by a task on the app's loop that wakes every 5 ms
+(a call past it is made once more, so a module's first import is not counted, and 17.6's numbers revisit the budget),
+when a figure is one Plotly's `Figure` refuses, when a grid's rows hold none of a column's field, or when a store, but
+basis's status store, is given rows (records, a frame's columns or its JSON). A callback with a pattern-matching id, a
+clientside one and one with `prevent_initial_call` is checked by its ids alone. No page holds `dash_table.DataTable`,
+and nothing names a URL of another origin the browser would fetch: the index's `src` and `href`, every stylesheet it
+links, the app's own `assets/` among them, a layout and a callback's answer. A link's `href` is navigation, which fetches
+nothing, so it passes on any component but `html.Link`; an XML namespace, `http://www.w3.org/...`, is a name. The
+repo's code is imported from its folder by basis-core's `testing.importable` and `repo_packages`, which basis-api's
+checks use too.
+
 **The package is laid out for two lanes.** The foundations' modules build, serve and test an app; the data lane's
 (declarations, the cache, loads, views, fixtures) and the display lane's (theme, shell, page, grid, charts, states,
 exports and `static/`) are their own, and each lane adds its names to `bd` through a module only it edits

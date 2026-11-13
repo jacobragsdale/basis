@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from pydantic_settings import SettingsError as SourceError
 
 from basis.core import command, environments, hooks
+from basis.core.sync import Problem
 from basis.core.verbs import Part, Verb
 from basis.dash.loading import load
 from basis.dash.settings import unreadable
@@ -50,8 +51,15 @@ def part() -> Part:
                 _dev_arguments,
                 lambda n: _dev(DevArgs(n.app, Path(n.repo_root), n.env)),
             ),
-        )
+        ),
+        checks=_checks,
     )
+
+
+def _checks(repo: Path) -> list[Problem]:
+    from basis.dash import checks  # noqa: PLC0415 -- grimp, Dash's app and FastAPI's test client load when the check runs
+
+    return checks.problems(repo)
 
 
 def _app_argument(parser: argparse.ArgumentParser) -> None:

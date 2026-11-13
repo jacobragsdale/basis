@@ -61,3 +61,16 @@ def test_a_callbacks_context_holds_what_set_props_set() -> None:
         assert internals.updated("basis-status", "data") == {"a": 1}
     finally:
         _callback_context.context_value.reset(token)
+
+
+def test_the_functions_of_a_modules_callbacks_are_found_before_and_after_an_app_takes_them() -> None:
+    @dash.callback(dash.Output("internals-functions", "children"), dash.Input("internals-given", "value"))
+    def given(value: str) -> str:
+        return value
+
+    try:
+        assert given in internals.functions_of({__name__})
+        assert given not in internals.functions_of({"elsewhere"})
+    finally:
+        _callback.GLOBAL_CALLBACK_MAP.pop("internals-functions.children")
+        _callback.GLOBAL_CALLBACK_LIST[:] = [found for found in _callback.GLOBAL_CALLBACK_LIST if found.get("output") != "internals-functions.children"]

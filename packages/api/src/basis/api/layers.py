@@ -35,19 +35,15 @@ grimp builds the graph of the repo's packages, each folder at its root with an `
 no folder appears in the repo; an import under `TYPE_CHECKING` is no import."""
 
 import ast
-import os
-import sys
-from collections.abc import Generator, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import grimp
 import grimp.exceptions
 
-from basis.core.sync import UNREAD as _UNREAD
 from basis.core.sync import Problem
-from basis.core.testing import FORBIDDEN
+from basis.core.testing import FORBIDDEN, importable, repo_packages
 
 RANKS: Mapping[str, int] = {"service": 4, "handlers": 3, "repository": 2, "resources": 1, "errors": 1, "domain": 0}
 """Each layer, by its module's name, and its height: a module imports only those of its height or below."""
@@ -126,7 +122,7 @@ def layer(module: str) -> str | None:
 
 def problems(repo: Path) -> list[Problem]:
     """Each way the repo's code breaks its layers, with the fix."""
-    packages = sorted(_packages(repo))
+    packages = repo_packages(repo)
     if not packages:
         return []
     try:
@@ -371,46 +367,8 @@ def _method_of(called: ast.expr, given: frozenset[str]) -> tuple[str, str] | Non
     return None
 
 
-def _packages(repo: Path) -> Iterator[str]:
-    """The repo's packages: each folder at its root with an `__init__.py`, but those basis never reads."""
-    for entry in sorted(os.scandir(repo), key=lambda found: found.name):
-        if (
-            entry.is_dir()
-            and entry.name not in _UNREAD
-            and not entry.name.startswith(".")
-            and entry.name.isidentifier()
-            and (Path(entry.path) / "__init__.py").is_file()
-            and not (Path(entry.path) / ".git").exists()
-        ):
-            yield entry.name
-
-
 def _graph(repo: Path, packages: Sequence[str]) -> _Graph:
     with importable(repo, packages):
         graph = grimp.build_graph(*packages, include_external_packages=True, exclude_type_checking_imports=True, cache_dir=None)
     internal = frozenset(module for module in graph.modules if module.partition(".")[0] in packages)
     return _Graph(graph, repo, internal, frozenset(packages))
-
-
-def packages(repo: Path) -> list[str]:
-    """The repo's packages, each a folder at its root with an `__init__.py`."""
-    return sorted(_packages(repo))
-
-
-@contextmanager
-def importable(repo: Path, packages: Sequence[str]) -> Generator[None]:
-    """The repo's packages imported from its root, whatever the process imported before, as a check of the repo's code
-    must, since the installed package may be another checkout's, as it is in the push hook's worktree: the root goes
-    first on the path, a module of the same name imported from elsewhere is set aside, and what the block imported of
-    them is forgotten after, when the set-aside modules come back."""
-    held = {name: module for name, module in sys.modules.items() if name.partition(".")[0] in packages}
-    for name in held:
-        del sys.modules[name]
-    sys.path.insert(0, str(repo))
-    try:
-        yield
-    finally:
-        sys.path.remove(str(repo))
-        for name in [name for name in sys.modules if name.partition(".")[0] in packages]:
-            del sys.modules[name]
-        sys.modules.update(held)
