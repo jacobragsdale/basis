@@ -53,6 +53,11 @@ jobs:
           uv run basis-job new repo pricing-etl --dir "$RUNNER_TEMP" --framework-path .
           cd "$RUNNER_TEMP/pricing-etl"
           uv run basis check
+      - name: Make a Dash app's repo from this checkout and run its checks, its pages on its fakes among them
+        run: |
+          uv run basis-dash new app desk --dir "$RUNNER_TEMP" --framework-path .
+          cd "$RUNNER_TEMP/desk"
+          uv run basis check
       - name: Commit through its hooks, which refuse a lint error, and push through its hook from a changed tree
         working-directory: ${{ runner.temp }}/pricing-etl
         run: |
@@ -258,6 +263,107 @@ jobs:
           git add --all && git commit --quiet --message "First commit"
           docker build --tag loads --build-arg GIT_SHA="$(git rev-parse HEAD)" .
           docker run --rm loads call conventions --fake | python3 -c 'import json, sys; assert {row["convention"] for row in json.load(sys.stdin)} >= {"30/360", "ACT/360"}'
+
+  dash-generated-repo:
+    # A Dash app's repo, as api-generated-repo is for an API's: made from this checkout, its checks, a commit through
+    # its hooks, a new page and what it shows; then made with uvx from this commit on GitHub, its image built and served
+    # behind a path prefix on SQL Server, filled from the example's fixtures, and smoked as a deploy is.
+    timeout-minutes: 40
+    runs-on: ubuntu-latest
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: Etl-test-1234
+        ports: ["1433:1433"]
+    env:
+      COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+      SERVER: Server=127.0.0.1,1433;UID=sa;PWD=Etl-test-1234;Encrypt=yes;TrustServerCertificate=yes
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
+        with:
+          version: "0.13.7"
+      - run: uv sync --locked
+      - name: Make a Dash app's repo from this checkout and run its checks
+        run: |
+          uv run basis-dash new app desk --dir "$RUNNER_TEMP" --framework-path .
+          cd "$RUNNER_TEMP/desk"
+          uv run basis --help
+          uv run basis check
+      - name: Commit through its hooks, add a page, and see what it shows
+        working-directory: ${{ runner.temp }}/desk
+        run: |
+          test "$(git config core.hooksPath)" = .githooks
+          git config user.name ci && git config user.email ci@example.com
+          git add --all && git commit --quiet --message "First commit"
+          uv run basis sync && test -z "$(git status --porcelain)"
+          uv run basis new page risk
+          git add --all && git commit --quiet --message "A page"
+          uv run basis render /risk | python3 -c 'import json, sys; shown = json.load(sys.stdin); assert shown["failed"] == [] and shown["outputs"]["risk-grid.rowData"]["rows"] == 1, shown'
+          uv run basis load holdings --param as_of=2026-11-12 | python3 -c 'import json, sys; shown = json.load(sys.stdin); assert shown["rows"] == 320 and [load["cache"] for load in shown["loads"]] == ["miss", "hit"], shown'
+      - name: Make one with uvx from this commit, and build its image
+        run: |
+          cd "$RUNNER_TEMP"
+          uvx --from "git+https://github.com/${{ github.repository }}@$COMMIT#subdirectory=packages/dash" basis-dash new app loads
+          cd loads
+          grep --quiet "rev = \"$COMMIT\"" pyproject.toml
+          git config user.name ci && git config user.email ci@example.com
+          git add --all && git commit --quiet --message "First commit"
+          docker build --tag loads --build-arg GIT_SHA="$(git rev-parse HEAD)" .
+      - name: Make the warehouse, filled from the example's fixtures at the day smoke loads
+        working-directory: ${{ runner.temp }}/loads
+        run: |
+          uv run python - <<'PY'
+          import csv, os, time
+          from datetime import datetime, timedelta
+          from zoneinfo import ZoneInfo
+          import mssql_python
+          for attempt in range(60):
+              try:
+                  connection = mssql_python.connect(os.environ["SERVER"] + ";Database=master", autocommit=True)
+                  break
+              except mssql_python.Error:
+                  time.sleep(2)
+          else:
+              raise SystemExit("SQL Server did not start")
+          connection.cursor().execute("CREATE DATABASE warehouse")
+          cursor = mssql_python.connect(os.environ["SERVER"] + ";Database=warehouse", autocommit=True).cursor()
+          cursor.execute("CREATE TABLE holdings (as_of date NOT NULL, book varchar(40) NOT NULL, cusip char(9) NOT NULL, par float NOT NULL)")
+          cursor.execute("CREATE TABLE securities (cusip char(9) PRIMARY KEY, issuer varchar(80) NOT NULL, sector varchar(40) NOT NULL, rating varchar(8) NOT NULL, coupon float NOT NULL, maturity date NOT NULL)")
+          cursor.execute("CREATE TABLE prices (cusip char(9) NOT NULL, as_of date NOT NULL, prior_as_of date NULL, price float NOT NULL, ytw float NOT NULL, curve_change float NULL, duration float NULL, oas float NULL)")
+          cursor.execute("CREATE TABLE treasury_curve (as_of date NOT NULL, close_name varchar(40) NOT NULL, tenor varchar(8) NOT NULL, ytw float NOT NULL)")
+          day = datetime.now(ZoneInfo("America/New_York")).date() - timedelta(days=1)  # what the starter's smoke example loads
+          prior = day - timedelta(days=1)
+          with open("fixtures/holdings.csv", encoding="utf-8") as file:
+              for row in csv.DictReader(file):
+                  cursor.execute("INSERT INTO holdings VALUES (%(d)s, %(b)s, %(c)s, %(p)s)", {"d": day, "b": row["book"], "c": row["cusip"], "p": float(row["par"])})
+                  cursor.execute("INSERT INTO securities VALUES (%(c)s, %(i)s, %(s)s, %(r)s, %(k)s, %(m)s)", {"c": row["cusip"], "i": row["issuer"], "s": row["sector"], "r": row["rating"], "k": float(row["coupon"]), "m": row["maturity"]})
+                  oas = float(row["oas"]) if row["oas"] else None
+                  cursor.execute(
+                      "INSERT INTO prices VALUES (%(c)s, %(d)s, %(q)s, %(p)s, %(y)s, %(g)s, %(u)s, %(o)s)",
+                      {"c": row["cusip"], "d": day, "q": prior, "p": float(row["price"]), "y": float(row["ytw"]), "g": float(row["curve_change"]), "u": float(row["duration"]), "o": oas},
+                  )
+                  cursor.execute("INSERT INTO prices VALUES (%(c)s, %(d)s, NULL, %(p)s, %(y)s, NULL, NULL, NULL)", {"c": row["cusip"], "d": prior, "p": float(row["prior_price"]), "y": float(row["prior_ytw"])})
+          with open("fixtures/curve.csv", encoding="utf-8") as file:
+              for row in csv.DictReader(file):
+                  cursor.execute("INSERT INTO treasury_curve VALUES (%(d)s, %(n)s, %(t)s, %(y)s)", {"d": day, "n": row["close"], "t": row["tenor"], "y": float(row["ytw"])})
+          PY
+      - name: Serve its image behind a path prefix the proxy keeps, and smoke it as a deploy is
+        working-directory: ${{ runner.temp }}/loads
+        run: |
+          warehouse=(--env BASIS_DATABASES__WAREHOUSE__KIND=mssql --env "BASIS_DATABASES__WAREHOUSE__CONNECTION_STRING=$SERVER;Database=warehouse"
+            --env BASIS_DATABASES__WAREHOUSE__ISOLATION=read_committed --env BASIS_DATABASES__WAREHOUSE__TIMEOUT_S=30 --env BASIS_DATABASES__WAREHOUSE__MAX_ROWS=100000)
+          docker run --detach --name loads --network host --env BASIS_ENV=qa --env BASIS_SERVE__PREFIX=/apps/loads/ "${warehouse[@]}" loads serve
+          for attempt in $(seq 60); do curl --silent --fail http://127.0.0.1:8000/apps/loads/health/ready > /dev/null && break; sleep 1; done
+          export BASIS_ENV=qa BASIS_SMOKE__URL=http://127.0.0.1:8000/apps/loads/ BASIS_DATABASES__WAREHOUSE__KIND=mssql "BASIS_DATABASES__WAREHOUSE__CONNECTION_STRING=$SERVER;Database=warehouse"
+          export BASIS_DATABASES__WAREHOUSE__ISOLATION=read_committed BASIS_DATABASES__WAREHOUSE__TIMEOUT_S=30 BASIS_DATABASES__WAREHOUSE__MAX_ROWS=100000
+          uv run basis smoke --env qa --commit "$(git rev-parse HEAD)"
+          uv run basis load holdings --env qa --param "as_of=$(TZ=America/New_York date -d yesterday +%F)" | python3 -c 'import json, sys; shown = json.load(sys.stdin); assert shown["rows"] == 320, shown'
+          docker stop --time 30 loads
+          docker logs loads 2>&1 | tail -n 3
+          test "$(docker inspect --format '{{.State.ExitCode}}' loads)" = 0  # a drained stop is no failure
 
   job-gates:
     # The desktop gates in a generated repo: its push hook runs regress against a local run store, and the QA tier

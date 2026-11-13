@@ -284,3 +284,61 @@ Then in a pod, with `BASIS_VAULT__VIA=workload_identity` in its deployment. In t
 **Send back:** `basis doctor`'s lines, the `ERROR` line of a run with a name the vault lacks, whether the firm's feed
 gives each file's upload time (without it, `exclude-newer` cannot hold a package back), and whether this machine
 reaches `https://api.osv.dev/`, which `uv audit` asks, or what the firm uses in its place.
+
+## 8. A Dash app behind the firm's proxy, its hot reload, its sign-in and AG Grid's licence (17.7)
+
+Phase 17 makes, checks, serves and smokes a Dash app's repo in CI: served from its image behind a path prefix the
+proxy keeps, on SQL Server, and smoked as a deploy is. What only the firm's environment answers is below. First, in a
+scratch folder on the desktop:
+
+```sh
+uvx --from basis-dash basis-dash new app pilot-desk   # from the firm's feed, as a developer would
+cd pilot-desk
+uv run basis check
+```
+
+### The path prefix behind the firm's proxy
+
+Deploy the app's image as a cluster's app, with `BASIS_SERVE__PREFIX=/apps/pilot-desk/`, and
+`BASIS_SERVE__PREFIX_STRIPPED=true` if the ingress strips the prefix before it forwards a request, `false` if it keeps
+it. Then, from a desktop, with `BASIS_SMOKE__URL=https://HOST/apps/pilot-desk/` in `qa.env`:
+
+```sh
+uv run basis smoke --env qa
+```
+
+Open the address in Edge, and click through the header's pages and back.
+
+**Send back:** `basis smoke`'s last line; whether the ingress strips the prefix; whether each page, its fonts and its
+icons draw, with the browser's console and its network tab's first failing request, if any; and the cluster's
+readiness probe's path, `/health/ready` at the pod's root or under the prefix.
+
+### Hot reload in WSL and on Windows
+
+`basis dev` restarts the app when a file changes, which was proved on Linux alone. In WSL, with the repo in the Linux
+file system (`~/`), and again on Windows itself in a `cmd` or PowerShell window:
+
+```sh
+uv run basis dev
+# open http://127.0.0.1:8000, then change the page's description in pilot_desk/pages/positions.py and save it
+```
+
+**Send back:** for each, whether the log shows `WatchFiles detected changes` and the browser shows the change on its
+own, how long it took, and, in WSL, whether a repo under `/mnt/c/...` reloads too (WatchFiles polls there).
+
+### How the firm's sign-in reaches a page
+
+A Dash app reads no token yet (phase 18). Deploy the app behind the gateway the firm's browser apps sign in through,
+and from a desktop open the page with the browser's developer tools on the network tab.
+
+**Send back:** what reaches the app's request for `/_dash-update-component`: a header the gateway sets (its name, such
+as `X-Forwarded-User` or an `Authorization` bearer), a cookie, or nothing; and whether the gateway passes WebSocket
+upgrades and responses that stay open longer than a minute, which live updates would need.
+
+### AG Grid Enterprise
+
+basis's grid is AG Grid Community, and its totals and Excel exports are the server's. Enterprise would add row
+grouping, pivots, range selection and Excel export in the browser.
+
+**Send back:** whether the firm holds an AG Grid Enterprise licence, and if it does, its terms for internal apps and
+where its key would be kept, as a setting from the vault, never in a repo.

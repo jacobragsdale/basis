@@ -47,7 +47,8 @@ Keep this table true in each step's own commit.
 | 17.5 The example | Done: `basis.dash.example`, a fixed income desk's holdings on 320 synthetic bonds and a Treasury curve: Overview (tiles with the day's changes, sector, rating and maturity, issuers), Positions (the grid, filters, totals, exports), Curve (four closes, moves, the book against the curve, DV01 by maturity) and P&L (carry, rates, spread and residual, by sector, the largest moves), every number reconciled across pages by a test; `new app` keeps its positions page | the commit "Step 17.5" |
 | 17.6 Measure | Done: `packages/dash/tests/bench_dash.py`, through `heavy`: grids of 1,000 to 100,000 rows (time read and cached, the loop's hold, JSON and gzip bytes, the cache's and the process's memory) and fifty sessions beside a 2 s query; the numbers in [the design](design.md#dash-apps-basisdash), which keep 17.1's budgets, 4 MB and 250 ms | the commit "Step 17.6" |
 | 17.6, the follow-up: where the time goes | Done: a cached 10,000-row answer profiled (Dash's JSON writer walked every value, since a `Patch` made orjson refuse); basis's own writer, the same bytes; `bd.load_rows` and `GRID.load_totals`, written once per value and kept with it; gzip already off the loop in Starlette. Held 212 ms, now about 1 | the commits "basis writes a callback's answer with orjson" and "Rows and totals written once" |
-| 17.7 to 17.8 The repo around it | Not started | |
+| 17.7 CI | Done: `dash-generated-repo`: a repo from this checkout checked, committed through its hooks, a page added and rendered, a dataset loaded; one from this commit with uvx, its image built, served behind a kept prefix on SQL Server filled from the fixtures, smoked with `--commit`, stopped with exit 0; the Windows leg makes and checks one too; the firm's part in [the pilot](pilot.md), section 8 | the commit "Step 17.7" |
+| 17.8 Release, prepared | Not started | |
 
 ## What the best Dash app is
 
