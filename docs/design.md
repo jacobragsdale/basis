@@ -1,13 +1,13 @@
 # The basis design
 
-basis is a set of Python packages that give the firm's APIs, batch jobs and portfolio optimizers one shape, so that the
-agents that now write nearly all of their code produce the same kind of repo every time, and checks, rather than people
-reading diffs, decide whether a change is right. Web UIs are built with
-[basis-ui](https://github.com/jacobragsdale/basis-ui), a separate TypeScript project that talks to basis APIs through
-the contract in [What a UI can rely on](#what-a-ui-can-rely-on). "basis" and "basis-ui" are placeholder names. The
-design was agreed on 2026-11-06 in a brainstorm that built on
-[portfolio-optim](https://github.com/jacobragsdale/portfolio-optim) and
-[etl-framework](https://github.com/jacobragsdale/etl-framework). This page records the decisions and their reasons; [the
+basis is a set of Python packages that give the firm's APIs, batch jobs and, once phase 14 of [the Dash
+plan](dash-plan.md) builds them, Dash apps one shape, so that the agents that now write nearly all of their code produce
+the same kind of repo every time, and checks, rather than people reading diffs, decide whether a change is right. Web
+UIs are built with [basis-ui](https://github.com/jacobragsdale/basis-ui), a separate TypeScript project that talks to
+basis APIs through the contract in [What a UI can rely on](#what-a-ui-can-rely-on). "basis" and "basis-ui" are
+placeholder names. The design was agreed on 2026-11-06 in a brainstorm that built on
+[etl-framework](https://github.com/jacobragsdale/etl-framework) and on the repo that is now
+[trellis](https://github.com/jacobragsdale/trellis). This page records the decisions and their reasons; [the
 roadmap](roadmap.md) gives the build order, and which steps can run at once.
 
 ## The problem
@@ -32,10 +32,10 @@ treat basis as a black box, and nothing about it should make them wonder.
 
 ## The idea: the core owns the loop, and the checks are the review
 
-optim and etl-framework showed that a framework that owns the run loop can keep the code it runs pure. The core loads,
-the model or job computes, the core checks and saves, and every run replays from its snapshot. basis applies that idea
-to every kind of Python the firm writes, and adds one rule for a codebase nobody reads: every rule is a check, and every
-check's failure says how to fix it.
+etl-framework, and the repo that is now trellis, showed that a framework that owns the run loop can keep the code it
+runs pure. The core loads, the job computes, the core checks and saves, and every run replays from its snapshot. basis
+applies that idea to every kind of Python the firm writes, and adds one rule for a codebase nobody reads: every rule is
+a check, and every check's failure says how to fix it.
 
 A rule that lives only in a doc is a rule an agent eventually breaks. The teams that publish on agent-written code
 converge on this. OpenAI's harness-engineering team enforced its architecture with custom linters whose error messages
@@ -54,11 +54,11 @@ apart from their APIs.
 
 ## What a developer sees
 
-Every basis repo has one command, `basis`, whatever it holds, and the same verbs mean the same thing in an API repo, a
-jobs repo and an optimizer repo. A verb that belongs to one kind of part exists only in repos that have that part, and
-`basis --help` lists exactly the verbs of the repo it runs in. People move between their product's repos all day, and
-one command with one set of verbs lets them do it without thinking about which repo they are in. A basis-ui repo has the
-same verbs (`check`, `dev`, `test`, `sync`, `doctor`, `docs`) through Vite+'s own `vp` command.
+Every basis repo has one command, `basis`, whatever it holds, and the same verbs mean the same thing in an API repo and
+a jobs repo. A verb that belongs to one kind of part exists only in repos that have that part, and `basis --help` lists
+exactly the verbs of the repo it runs in. People move between their product's repos all day, and one command with one
+set of verbs lets them do it without thinking about which repo they are in. A basis-ui repo has the same verbs (`check`,
+`dev`, `test`, `sync`, `doctor`, `docs`) through Vite+'s own `vp` command.
 
 | Verb | What it does | In repos with |
 |---|---|---|
@@ -67,15 +67,14 @@ same verbs (`check`, `dev`, `test`, `sync`, `doctor`, `docs`) through Vite+'s ow
 | `basis review` | Writes a pull request's summary: what `regress` changed, the API contract's diff, the mutation report, the versions, and the commit that was checked | Every part |
 | `basis smoke --env ENV` | Checks a deployed environment: the API's contract and readiness, each route's read-only example, and a dry run of a job | An API or jobs |
 | `basis replay RUN`, `basis regress` | Rerun one saved run or recorded request with today's code; rerun recent ones and list what changed | Every part |
-| `basis new PART NAME` | Adds an API, a job or, provisionally, a model to the repo | Every part |
+| `basis new PART NAME` | Adds an API or a job to the repo | Every part |
 | `basis sync`, `basis upgrade` | Rewrite the framework's files from the installed version; relock basis, sync, check and regress in one step | Every part |
 | `basis doctor`, `basis docs` | Check the desktop's setup and print the fix for each problem; print the docs for the installed version | Every part |
 | `basis dev`, `basis serve`, `basis call ROUTE` | Run the API on fakes; run the API; run one route in-process and print its response | An API |
 | `basis records export` | Write chosen recorded requests and responses as JSON, for a UI's fixture mode | An API |
-| `basis run NAME`, `basis resume RUN`, `basis describe NAME` | Run a job, and with `--publish` write its outputs; finish a publish that failed partway; print its params, inputs and outputs | Jobs, and models (provisional) |
+| `basis run NAME`, `basis resume RUN`, `basis describe NAME` | Run a job, and with `--publish` write its outputs; finish a publish that failed partway; print its params, inputs and outputs | Jobs |
 | `basis runs [NAME]` | List the run store's recent runs, newest first, with each one's status, interval, error and trace id | Jobs |
-| `basis ddl NAME` | Print a job's `CREATE TABLE` statements | Jobs, and models (provisional) |
-| `basis sweep RUN DIR` | Decide a model's saved run once per params file | Models (provisional) |
+| `basis ddl NAME` | Print a job's `CREATE TABLE` statements | Jobs |
 
 The rest of the black box is how basis fails. Every file `basis sync` writes opens with a line saying that basis manages
 it, and the drift check fails when someone edits one, so the fix for a framework file is a framework release. Every
@@ -90,44 +89,46 @@ the fix for each problem it finds.
 | `basis-core` | Internal: database sources for Oracle and SQL Server, the resources jobs and APIs share, settings and environments, JSON logs, storage, the run store, snapshots, publishing with a ledger, the machinery of `replay`, `regress`, `new` and `sync`, contract-test helpers, and the `basis` command | Nothing |
 | `basis-job` | Batch jobs: etl-framework's job contract | `basis-core` |
 | `basis-api` | HTTP APIs on FastAPI | `basis-core` |
-| `optim` | Portfolio optimizers: portfolio-optim's model contract and engine. Provisional, and not yet released | `basis-core` |
 
-Every package but optim is published to the internal PyPI feed; optim stays in this repo, built and tested with the rest,
-and is not published until its design is settled. `basis-core` is internal: no repo depends on it by name, no user
+Every package is published to the internal PyPI feed. `basis-core` is internal: no repo depends on it by name, no user
 code imports it, and no user doc mentions it. It arrives as a dependency of the packages a repo does depend on, and
 brings the `basis` command with it. Each kind of part adds its own verbs to that command through entry points, so a job
 author's docs, skills and commands are complete without a word about the core underneath.
 
 The packages import as `basis.job` and `basis.api`, with the core as `basis.core`, one namespace that each distribution
 adds to. An import contract in this repo's checks keeps the layers apart: `basis.core` imports none of the others, and
-`basis.job`, `basis.api` and `optim` import `basis.core` and never each other. optim's side of it is in its own
-`pyproject.toml`, so the rest holds without it.
+`basis.job` and `basis.api` import `basis.core` and never each other.
 
 `basis.core` is the one place basis shares code rather than only formats, and the reason is the code itself. Jobs and
 APIs both read and write Oracle and SQL Server, read settings, log, and keep what they did; etl-framework carries all of
-that, and an API framework would have been a second copy. Copies drift: portfolio-optim carries a third, and while
-building etl-framework, a defect was found and fixed in how its SQL Server reads begin a snapshot transaction, which
-portfolio-optim's `sources/mssql.py` likely has still. The packages above `basis.core` share nothing with each other, so
-a change to jobs cannot break an API or an optimizer.
+that, and an API framework would have been a second copy. Copies drift: the repo that is now trellis carried a third,
+and while building etl-framework, a defect was found and fixed in how its SQL Server reads begin a snapshot transaction,
+which that third copy's `sources/mssql.py` likely has still. The packages above `basis.core` share nothing with each
+other, so a change to jobs cannot break an API.
 
-**Provisional until the maintainer meets the firm's quant team.** optim stays separate in its code: its own package, with its own model repos, generator, skills and docs, because
-optimizers are a distinct kind of code with its own workflow (sweeps, trials, research from an IDE) and quants as its
-main authors. It gives its plumbing to `basis.core` and keeps its contract, its engine, `optim.cvxpy`, rounding and
-acceptance, `reserve` and `order`, `sweep` and `trial`, the shared holdings and securities datasets, and pandas. Its
-verbs come under `basis` like every other part's, and `optim` stays as an alias for the same command. Its orders are
-written through `basis.core`'s publishing, with a ledger row in the same transaction, so a failed or retried run never
-writes an order twice and `resume` finishes one that stopped partway. No repo depends on optim yet, so it moves with
-nothing to migrate. Its own design is in [packages/optim/docs/design.md](../packages/optim/docs/design.md), and is
-provisional too.
+Core names no part, and parts import core and never each other. Core finds each part through its `basis.verbs` entry
+point, relocks each installed part's package, and owns a skill by the marker in its front matter, not by its name. A
+mechanism in core that only one part uses must be one a job could use as it stands, so that a part can change, or go,
+and core, the other parts, their release and the contract a UI relies on stay as they are. The import contracts check
+what core and each part import; the rest is review's.
 
-optim's design may change after that meeting, or optim may go, so nothing outside `packages/optim` depends on it:
-basis-core, basis-job and basis-api, their release, and the contract a UI relies on stay as they are whatever optim
-does. A mechanism in core that only one part uses must be one a job could use as it stands, and core names no part: it
-finds each through its `basis.verbs` entry point, relocks each installed part's package, and owns a skill by the marker
-in its front matter, not by its name. `scripts/without_optim.py` checks the rest on every pull request: it lists each
-line outside `packages/optim` that names optim, but a few that must, then removes `packages/optim`, relocks, fails when
-a remaining package's version moves, and runs every hook and unit test. What it cannot see is a mechanism shaped by
-optim, which the rule above leaves to review.
+**optim, which went.** From step 3.2 to step 13.1, this repo held a third part, optim, for portfolio optimizers: the
+repo that is now trellis, moved into `packages/optim` with its history, provisional until the maintainer met the firm's
+quant team. On 2026-11-13 the maintainer had it removed, and it lives on as
+[trellis](https://github.com/jacobragsdale/trellis). Its last state here is `packages/optim` at `4a69721`. These commits
+changed behaviour or fixed a defect in this copy alone, so trellis can take them from this repo's history: step 7.14's
+nine, `3594ded` (it checks every constraint at the solution, and the example's caps are in currency), `635ff55`
+(prepare_market and decide get copies of the run's frames), `4a0eb55` (acceptance's tolerance stops growing with the
+portfolio, and cash sold is no proceeds), `c532033` (`--again` guards each portfolio, and needs `--portfolios`),
+`4e2cc46` (a model's runs are known by its repo and name), `f1e6192` (a dataset says whether it may be empty, and a run
+on files never publishes), `9bb5362` (a portfolio that kills its worker rejects itself alone; one entry per security;
+options keep the gap), `117981b` (ddl, sweep and warm read the environment `--env` names, and check --full replays
+models) and `700bd7e` (its docs give every command that reaches the firm's systems its `--env`); `c504f54` (HiGHS 1.16's
+banner goes to stderr, not ahead of the JSON on stdout); `e122079`, in part (its CSV tables end their lines in LF on
+Windows); and two from the review of its move, which reach into basis-core's plumbing as well: `2747314` (a replay takes
+a model's current name, fix lines name the model, regress prints JSON without one, and a pre-release version makes a
+repo that depends on it) and `e133aff` (settings it cannot read at one moment or write orders with are refused, the
+cache streams, and reads have a default). The other commits that touched it there followed changes to basis-core.
 
 ## One repo, one version
 
@@ -137,20 +138,17 @@ and Oracle service containers for the integration tests, and runs only the jobs 
 
 basis-core, basis-job and basis-api are released together, under one version and one tag, such as `v0.7.0`. Each
 package depends on `basis-core` at exactly its own version, so a repo's lock can only hold basis packages from a single
-release, and an owner never has to work out which versions go together. optim keeps that version in this repo, and
-depends on `basis-core` at exactly it, so it builds and tests with every release, but it is not published until its
-design is settled. Some releases change nothing in some packages; their notes say
-so. basis stays at 0.x until a real repo runs it in production, as portfolio-optim's own policy was.
+release, and an owner never has to work out which versions go together. Some releases change nothing in some packages;
+their notes say so. basis stays at 0.x until a real repo runs it in production.
 
 A developer starts a repo with `uvx`, which fetches a package from the internal feed and runs its command from a cached
-environment, installing nothing into a project: `uvx basis-api new app positions`, `uvx basis-job new repo
-nightly-loads`, or, once optim is released, `uvx optim new repo sma income` (the repo and its first model). uv installs per user, with no admin
-rights. Each developer's user-level `uv.toml` names the internal feed as the default index, not an extra one: under uv's
-default first-index strategy, a name the feed holds is then never looked up on public PyPI, where a package of the same
-name can be another's entirely, as public PyPI's `optim` is. The feed proxies public PyPI for everything else.
-A generator takes the feed's URL as `--index`, and writes it as the new repo's default index: uv does not record which
-index a package came from, so a part installed from one and given no `--index` refuses, with that fix, rather than take
-basis from public GitHub.
+environment, installing nothing into a project: `uvx basis-api new app positions` or `uvx basis-job new repo
+nightly-loads`. uv installs per user, with no admin rights. Each developer's user-level `uv.toml` names the internal
+feed as the default index, not an extra one: under uv's default first-index strategy, a name the feed holds is then
+never looked up on public PyPI, where a package of the same name can be another's entirely. The feed proxies public PyPI
+for everything else. A generator takes the feed's URL as `--index`, and writes it as the new repo's default index: uv
+does not record which index a package came from, so a part installed from one and given no `--index` refuses, with that
+fix, rather than take basis from public GitHub.
 
 Repos pull new versions; nothing pushes them. `basis upgrade` relocks basis-core and each installed part's package with
 uv, runs `basis sync`,
@@ -159,15 +157,14 @@ repo still behaves the same.
 
 ## Repos and products
 
-A repo declares its parts in its `pyproject.toml`: an API, jobs and models, in any combination, and basis never infers a
-part from which folders exist. The declaration is `[tool.basis] parts = ["api", "job"]`, naming each part the repo
+A repo declares its parts in its `pyproject.toml`: an API, jobs, or both, and basis never infers a part from which
+folders exist. The declaration is `[tool.basis] parts = ["api", "job"]`, naming each part the repo
 has. A product can span several repos, and its UI is always one of its own.
 
 | Path | Holds, when the repo has that part |
 |---|---|
 | `api/` | The API, on `basis-api` |
 | `jobs/JOB/` | One folder per job, on `basis-job` |
-| `models/MODEL/` | One folder per optimizer model, on `optim` (provisional) |
 | `openapi.json` | The API's OpenAPI document, committed |
 | `fixtures/` | Synthetic data and its manifests, which the tests read |
 | `Dockerfile`, `azure-pipelines.yml` | One image for the repo, and the deploy pipeline that calls the maintainer's team's templates |
@@ -175,7 +172,7 @@ has. A product can span several repos, and its UI is always one of its own.
 | `.githooks/`, `.gitattributes` | The commit and push hooks, and LF line endings on Windows and in WSL alike |
 
 The image has an entry point per part, under `tini`: `basis serve` runs the API, and `basis run NAME --publish` runs a
-job or a model. Whatever schedules a job runs the container with that command, so basis assumes no scheduler.
+job. Whatever schedules a job runs the container with that command, so basis assumes no scheduler.
 
 ## What a UI can rely on
 
@@ -411,12 +408,12 @@ A job keeps its declarative shape, which has an API's layers already: its `Input
 API's handlers and its jobs' transforms alike, under the same purity check.
 
 `basis.core` and `basis.job` hand job code its frames as pandas DataFrames, decided on 2026-11-07 in place of polars.
-Every number in them is a float64, as [Numbers](#numbers) has it, and strings, dates and times take pandas' nullable
-and Arrow-backed dtypes from the job's declared row type, so a time keeps its zone. polars leaves the lock, and
-pyarrow stays the I/O layer, for Parquet, the run store, Arrow responses and the lake. The firm's team, its Excel
-habits, optim and the code to port are all pandas, and polars' gains matter little here: frame work was about 5% of a
-measured optim run, and bulk movement goes through pyarrow. A job with a huge in-memory transform can convert to
-polars itself.
+Every number in them is a float64, as [Numbers](#numbers) has it, and strings, dates and times take pandas' nullable and
+Arrow-backed dtypes from the job's declared row type, so a time keeps its zone. polars leaves the lock, and pyarrow
+stays the I/O layer, for Parquet, the run store, Arrow responses and the lake. The firm's team, its Excel habits and the
+code to port are all pandas, and polars' gains matter little here: frame work was about 5% of a measured run of the
+portfolio models that then lived here, and bulk movement goes through pyarrow. A job with a huge in-memory transform can
+convert to polars itself.
 
 ## What jobs and APIs share
 
@@ -663,8 +660,8 @@ Every package writes its run data in one format. A run, a request or a decision 
 `runs/PACKAGE/NAME/RUN_ID.json`, that names the run's datasets by the hash of their content, and each dataset is one
 Parquet file at `objects/HASH.parquet`. A reference table that each of a day's hourly runs of a job loads unchanged is
 then stored once.
-There is one store per environment, a path or URL read through `pyarrow.fs` as optim's and etl-framework's snapshot
-roots are, and DuckDB reads the manifests and the Parquet directly when someone wants to query across runs.
+There is one store per environment, a path or URL read through `pyarrow.fs` as etl-framework's snapshot
+root was, and DuckDB reads the manifests and the Parquet directly when someone wants to query across runs.
 
 A dataset's hash is the SHA-256 of its object, the Parquet file itself, which is written once with fixed settings
 (zstd, statistics, the Arrow schema kept, and no dictionaries) and hashed as it is written, so storing a dataset
@@ -690,7 +687,7 @@ Client data never goes in git. A test that needs real data names a run by id and
 and basis has no tool for scrubbing client data out of a snapshot, because a generic scrubber is where leaks come from.
 
 pyarrow is the I/O layer, for Parquet, the run store, Arrow responses and the lake. Job code works in pandas, as
-[Jobs](#jobs-basisjob) says, and optim, provisionally, in pandas too. `basis.api` works in pydantic models, and in
+[Jobs](#jobs-basisjob) says. `basis.api` works in pydantic models, and in
 pyarrow for its Arrow responses and its `api.Table` datasets.
 
 ## Agents
@@ -736,11 +733,11 @@ files, and `basis check` refuses a `[tool.ruff]`, `[tool.ty]` or `[tool.pytest]`
 sit beside them; a repo that ignored whole rule families, turned ty off and lowered its floor to 10 passed every check
 before. The tools arrive pinned through each part's `dev` extra, as `basis-job[dev]`, so `basis upgrade` moves them with
 basis. A repo takes an exception only as one rule at one path with its reason, `[tool.basis] exceptions`, and a coverage
-floor under 90 only as such an exception too; `basis review` lists every one. A part whose design is provisional, as
-optim's, gives no share, and a repo of it keeps its own settings until it does.
+floor under 90 only as such an exception too; `basis review` lists every one. A part that gives no share leaves
+a repo of it with its own settings.
 
-The QA tier runs a repo's parts against the QA databases from the desktop, with the safeguards of optim's and
-etl-framework's end-to-end suites: it refuses to run unless every configured source carries the QA marker, and writes
+The QA tier runs a repo's parts against the QA databases from the desktop, with the safeguards of the end-to-end
+suites basis grew from: it refuses to run unless every configured source carries the QA marker, and writes
 only to an allowlist of QA tables and the QA store. With no Docker on the desktops, it is also the only place a repo's
 code meets a real database before production. All of it is declared in the repo's `pyproject.toml`, as
 `[tool.basis.qa]`, and nothing is inferred: the one settings file the tier reads, never the process's environment, so a
@@ -839,7 +836,7 @@ merits, as the checks and tests verify it.
 
 ## Versions
 
-Python is 3.14, as optim and etl-framework require, set up with uv only.
+Python is 3.14, as etl-framework required, set up with uv only.
 
 ## Decided against
 
@@ -855,8 +852,7 @@ Python is 3.14, as optim and etl-framework require, set up with uv only.
 | Pushing upgrades to repos | Owners relock when they choose; `basis upgrade` makes that one command. |
 | Docker on the desktops | Not available. The QA tier reaches real databases instead. |
 | MCP servers | Every agent reads MCP settings from a different file. |
-| Shared datasets across packages | They matter to optim, so they stay optim's. |
-| Code shared between `basis.job`, `basis.api` and `optim` | Each depends on `basis.core` only, so one cannot break another. |
+| Code shared between `basis.job` and `basis.api` | Each depends on `basis.core` only, so one cannot break another. |
 | Core code shaped by one part | A part's design can change, or the part can go, and core's must not change with it; a mechanism only one part uses is one a job could use as it stands. |
 | Lint and format rules in prose | An agent eventually breaks a rule nobody checks. |
 | DVC or Git LFS for run data | Each adds a tool and storage credentials to every desktop, and the packages already own their storage. |
@@ -869,7 +865,7 @@ Each fact was checked on 2026-11-06 against the source named, unless it says sec
 
 | Fact | Source |
 |---|---|
-| A SQL Server snapshot-isolation defect fixed in etl-framework is likely still in portfolio-optim's `sources/mssql.py` | etl-framework's design page |
+| A SQL Server snapshot-isolation defect fixed in etl-framework is likely still in the `sources/mssql.py` of the repo that is now trellis | etl-framework's design page |
 | Claude Code reads `.claude/skills/` only, and `AGENTS.md` only when no `CLAUDE.md` exists; Cursor, Copilot, Codex and opencode read `.agents/skills/` | each tool's docs |
 | No two of Cursor, VS Code's Copilot, the Copilot CLI, opencode, Claude Code and Codex read the same MCP configuration file | each tool's docs |
 | On SWE-Sharp-Bench, agents resolved about 40% of C# tasks, against about 70% of Python tasks on SWE-bench Verified, on different task sets | arXiv 2511.02352 |

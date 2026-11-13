@@ -5,7 +5,7 @@ MVP, done on 2026-11-09 against commit `95e6794`, and the work that follows from
 still holds the decisions and [the roadmap](docs/roadmap.md) phases 0 to 5; this page adds phases 6 to 12, whose step
 ids continue the roadmap's, so a branch is named as `AGENTS.md` says, such as `7.1-publish-state`.
 
-Phases 13 to 18, optim's removal and Dash apps, are [a plan of their own](docs/dash-plan.md).
+Phases 13 to 18, the third part's removal and Dash apps, are [a plan of their own](docs/dash-plan.md).
 
 ## Status
 
@@ -43,11 +43,11 @@ step's own commit keeps it true.
 | 12.7 Incremental loads | Done: `etl.Query(..., watermark=etl.Watermark(column, initial=))`, bound as `watermark`; the manifest's input records what it bound and the highest value read (`WatermarkRecord`), and the next run starts from the newest written run's (`basis.job.watermarks`); readers take extra binds (`given`) | the commit "Step 12.7" |
 | 12.9 Secrets and the supply chain | Done: a secret setting may be `keyvault:NAME`, fetched as the settings load (`basis.core.vault`, REST, no SDK), on a fake held to Key Vault's documented replies, no real vault; new repos get `exclude-newer = "7 days"`, basis's own closure exempt, and `check --full` checks it and runs `uv audit` (`basis.core.supply`), both confirmed against uv 0.13.6's own help. [The pilot](docs/pilot.md#7-azure-key-vault-and-the-supply-chain-129), **(work)** | `51c717a`, the commit "Step 12.9: the supply chain" |
 
-Phases 6 to 8 first reached GitHub's CI on 2026-11-11; what it found is fixed in commits of their own, named
-"CI: ...": `c504f54` (HiGHS 1.16's banner on stdout broke optim's JSON), `73889f6` (core named optim), and the
-Windows leg's first full run, 101 failures, in `2eb8b24`, `e122079` and the commit after it, each fixed from the log
-alone. A few Windows tests are skipped with their reason: a refused local connection, which Windows retries for two
-seconds, and serving's POSIX signals.
+Phases 6 to 8 first reached GitHub's CI on 2026-11-11; what it found is fixed in commits of their own, named "CI: ...":
+`c504f54` (a solver's banner on stdout broke the third part's JSON), `73889f6` (core named that part), and the Windows
+leg's first full run, 101 failures, in `2eb8b24`, `e122079` and the commit after it, each fixed from the log alone. A
+few Windows tests are skipped with their reason: a refused local connection, which Windows retries for two seconds, and
+serving's POSIX signals.
 
 The review read the source of all four packages (about 29,000 lines) and a sample of their tests, ran the unit tests
 and coverage, drove the `basis` command in generated job and API repos as an agent would, and probed the pure parts
@@ -62,9 +62,10 @@ is:
 The repro scripts were written to a temporary folder and are not in the repo. Every step that fixes a finding starts
 by writing the failing test.
 
-Paths are short: `core/x.py`, `job/x.py` and `api/x.py` are `packages/NAME/src/basis/NAME/x.py`, `optim/x.py` is
-`packages/optim/src/optim/x.py`, and `NAME/tests/x.py` is `packages/NAME/tests/x.py`. Line numbers are as of
-`95e6794`.
+Paths are short: `core/x.py`, `job/x.py` and `api/x.py` are `packages/NAME/src/basis/NAME/x.py`, and `NAME/tests/x.py`
+is `packages/NAME/tests/x.py`. Line numbers are as of `95e6794`. The third part is the portfolio part this repo held
+from step 3.2 until step 13.1 removed it; it lives on as [trellis](https://github.com/jacobragsdale/trellis), and [the
+design](docs/design.md#the-packages) has its history. This page's findings about it are in its text at `4a69721`.
 
 ## Verdict
 
@@ -106,7 +107,7 @@ Measured on the development host:
 |---|---|
 | Unit tests | 2,335 pass in about 100 s, and in about 40 s under `pytest-xdist -n 4` with nothing to change |
 | Left out of the default run | 178 integration tests and 9 `heavy` ones, which pass in 11 s |
-| Branch coverage | core 86%, job 86%, api 90%, optim 88%; 89% together |
+| Branch coverage | core 86%, job 86%, api 90%, the third part 88%; 89% together |
 | `basis check`, generated job repo | 3.0 s; a commit through its hook, 4.2 s |
 | `basis check`, generated API repo | 5.0 s warm; with `BASIS_FUZZ=1`, 9 s |
 | `basis --version` | 0.6 s and 168 MB, of which pandas is half |
@@ -121,7 +122,7 @@ The maintainer decided these on 2026-11-09. Each changes [the design](docs/desig
 | The rounding gate goes: it is not needed, and its exemption was never settled | 8.7 |
 | The firm's CI is months away or unknown, so the desktop gates are strengthened, and the pipeline stage stays ready | 8.9 |
 | basis APIs push live updates to UIs; this is what the firm needs WebSockets for | 12.1 |
-| optim stays provisional: only bugs with money consequences are fixed, and nothing new is built on it | 7.14 |
+| The third part stays provisional: only bugs with money consequences are fixed, and nothing new is built on it; it went in step 13.1 | 7.14 |
 | Order submission and what an order-management system needs are real, and deferred | [Deferred](#deferred) |
 | A port is proven equivalent to its legacy system per system, by its owner; basis builds no comparison tool | [Deferred](#deferred) |
 | There is no deadline; the work goes in the order that makes the most sense | [The order](#the-order) |
@@ -139,11 +140,11 @@ The maintainer decided these on 2026-11-09. Each changes [the design](docs/desig
 | 11 | Structure for change | Refactors, safe once phases 6 and 7 pin the behaviour, and due before more kinds are added |
 | 12 | New capability | Built on phase 11's seams rather than the fifteen-place pattern |
 
-The roadmap's rules for working in parallel stand, rule 2 above all: changes to `basis-core` land one pull request at
-a time. Phase 7 has three lanes (A core and jobs, B APIs, C optim) that run at once; phase 8 is core's and follows
-7's core steps through the same queue; phase 9 can start as soon as 7.4 settles the types the docs describe. The
-maintainer decided on 2026-11-09 that the work keeps going straight to `main`, one commit or more per step, each
-passing the checks in `AGENTS.md` before it lands.
+The roadmap's rules for working in parallel stand, rule 2 above all: changes to `basis-core` land one pull request at a
+time. Phase 7 has three lanes (A core and jobs, B APIs, C the third part) that run at once; phase 8 is core's and
+follows 7's core steps through the same queue; phase 9 can start as soon as 7.4 settles the types the docs describe. The
+maintainer decided on 2026-11-09 that the work keeps going straight to `main`, one commit or more per step, each passing
+the checks in `AGENTS.md` before it lands.
 
 ## Phase 6: the safety net
 
@@ -184,8 +185,8 @@ passing the checks in `AGENTS.md` before it lands.
    Done when the job is green and each refused name fails in one `ERROR` line with nothing written.
 5. **6.5 One shipped database double, held to the real writers.** Six tests carry their own double of a database's
    writer and ledger, each a little different (`core/tests/test_publish.py:49`, `core/tests/test_qa.py:169`,
-   `core/tests/test_messages.py:114`, `job/tests/test_lake.py:64`, `job/tests/test_messages.py:61`,
-   `optim/tests/fakes.py:136`), and no unit test publishes an `etl.Table` through `runs.run`: publish, partial and
+   `core/tests/test_messages.py:114`, `job/tests/test_lake.py:64`, `job/tests/test_messages.py:61`, and
+   one in the third part's tests), and no unit test publishes an `etl.Table` through `runs.run`: publish, partial and
    resume are tested only against containers the desktops lack. Ship `basis.core.fakes.Database` (reader, writer,
    ledger), with a contract suite parametrised over the fake, SQL Server and Oracle, as
    `core/tests/test_http_contract.py` is for HTTP, and move the six onto it. The design promises a contract suite per
@@ -375,28 +376,10 @@ passing the checks in `AGENTS.md` before it lands.
 
     Done, for lane B, when each case has a test, the example's write is signed in, and basis-ui has the new sample.
 
-### Lane C: optim, money only
+### Lane C: the third part, money only
 
-14. **7.14 optim's bugs with money consequences.** Its design stays provisional, so these fix what is wrong and add
-    nothing.
-    - HiGHS drops matrix entries at or below 1e-9, so the example's weight caps vanish for a large portfolio: at
-      $1.1bn it returns `optimal`, is accepted, and puts 100% in one bond
-      (`optim/example/optimizer/constraints.py:50,64`, `optim/cvxpy.py:76-88`). Write caps in currency in the
-      example and docs, and have `optim.cvxpy` check every constraint at the values returned. **[repro]**
-    - `prepare_market` gets the run's own frames, so an edit in place corrupts acceptance and the snapshot
-      (`optim/runs.py:176,197`). **[repro]**
-    - Acceptance's tolerance grows with portfolio value: selling 5,600 of a 5,000 holding passes at $2bn, and a sale
-      of cash counts as proceeds (`optim/acceptance.py:54-75`). **[repro]**
-    - `--again` removes the duplicate-order guard for every portfolio, and the refusal's own fix offers it
-      (`optim/orders.py:147-168`). Guard per portfolio, and require `--portfolios` with `--again`. **[read]**
-    - Two repos' models of one name share a ledger identity and a store folder (`optim/runs.py:167,200`). **[read]**
-    - An empty feed publishes, and `--publish` with `--data` wrote fixture rows to the orders table
-      (`optim/data/dataset.py:30-46`). Take basis-job's `empty="fail"|"allow"`. **[repro]**
-    - One portfolio that kills its worker rejects the rest of the book (`optim/engine.py:37-44`); duplicate ids are
-      dropped, and `options` can loosen "optimal" (`optim/cvxpy.py:57-106`). **[repro]**
-    - Converge now, since it is safe whatever the quant meeting decides: settings through
-      `basis.core.environments`, QA safeguards onto core's QA tier, `regressions` for `check --full`, and its docs'
-      commands, every one of which fails today for want of `--env`.
+14. **7.14** fixed the third part's bugs with money consequences, in the nine commits the Status table names; the part
+    went in step 13.1, and [the design](docs/design.md#the-packages) lists those commits for trellis.
 
 ## Phase 8: gates that hold
 
@@ -598,10 +581,10 @@ Each of these is a refactor with behaviour unchanged, safe once phases 6 and 7 h
      manifest carries its part's version but no format version, and a record is read with `extra="forbid"`, which
      is 8.10's `basis review` failure.
 7. **11.7 Housekeeping.** Four definitions nothing references (`api/openapi.py:95` `_reached`, `job/api.py:94`
-   `fixture_interval`, `optim/data/frames.py:61` `to_models`, `optim/schema.py:31` `Par`), which ruff does not see:
-   add a dead-code check. One ruff pin, by replacing the `ruff-pre-commit` mirror with a local hook as ty's is. One
-   policy for `PLR0913`, which three packages suppress 37 times and optim ignores whole. Four tests that claim more
-   than they assert (`job/tests/test_cli.py::test_a_run_told_again_records_it_and_resume_takes_again_too` and
+   `fixture_interval`, and the third part's `to_models` and `Par`), which ruff does not see: add a dead-code check. One
+   ruff pin, by replacing the `ruff-pre-commit` mirror with a local hook as ty's is. One policy for `PLR0913`, which
+   three packages suppress 37 times and the third part ignores whole. Four tests that claim more than they assert
+   (`job/tests/test_cli.py::test_a_run_told_again_records_it_and_resume_takes_again_too` and
    `::test_a_run_that_would_write_to_prod_is_refused_unless_the_deployment_sets_the_flag`,
    `core/tests/test_command.py::test_a_repo_without_tool_basis_still_tells_its_version_and_checks_its_desktop`,
    `core/tests/test_core.py::test_core_is_a_portion_of_the_basis_namespace`), and a table of refusals for job
@@ -649,16 +632,10 @@ Each needs a design decision first, written into [the design](docs/design.md) in
 ## Deferred
 
 - **Orders and an order-management system.** Deferred by the maintainer. When it starts, bring 12.8, 7.10's
-  commit-outcome problem, and from optim: the duplicate-order guard, the order row's missing price, model and as-of
-  date, and a report a portfolio manager or an approval step can read.
-- **optim after the quant meeting.** Bring: "not solved: infeasible" names no constraint; sizing, caps and turnover
-  exist only as a copy in each model repo, so a fix cannot arrive by upgrade, and the copied per-bond cap builds a
-  dense matrix (1.6 GB at 12,000 bonds); `Security` has no duration, spread duration or benchmark; `regress`
-  compares exact trades and records no solver version, so a solver upgrade reads as a change. And one opinion: a
-  model is mostly a job. Params, inputs, a pure transform, a check and one appended table with a ledger are the job
-  contract, and what is optim's own is the fan-out per portfolio, rounding and acceptance, `reserve`, and sweeps.
-  Its second copy of snapshots, runs, the loader and settings is where findings came from that job's side had
-  already closed.
+  commit-outcome problem, and from the third part: the duplicate-order guard, the order row's missing price, model and
+  as-of date, and a report a portfolio manager or an approval step can read.
+- **The third part, after the quant meeting.** It went in step 13.1 instead, and lives on as trellis; what this
+  review left for it is in this page at `4a69721`.
 - **Proving a port.** Per system, by its owner. No verb.
 - **The firm's CI.** The roadmap's 4.6. The generated pipeline's `basis check --full` stage stays ready; note that
   its check stage's checkout fetches the whole history (`fetchDepth: 0`), for mutation testing's comparison with where

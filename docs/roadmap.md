@@ -16,17 +16,17 @@ Actions.
 |---|---|---|
 | A. Core and jobs | `basis-core`, `basis-job` | 1, 4, 5 |
 | B. APIs | `basis-api` | 2, and basis-api's side of 5.1 and 5.8 |
-| C. Optim (provisional) | `optim` | 3 |
 | D. Eval | `evals/` | 0, then every phase |
+
+Lane C built a third part, in phase 3, which step 13.1 of [the Dash plan](dash-plan.md) removed; [the
+design](design.md#the-packages) has its history.
 
 The critical path runs through lanes A and B: the namespace spike, the workspace, etl-framework's move, `basis-core`'s
 extraction, the `basis` command, the repo files, the desktop gates, the API, and its resources' move into `basis-core`
 (step 5.1). From there it forks, through the service errors (5.8), the contract tests and gates (2.6) and the new app
 (2.7) on one side, and pandas (5.0b) and environments (5.6) on the other, and joins at `basis smoke` (2.10), before
 the pilot, which confirms spikes 0.5 to 0.8 at the firm; no step waits for those spikes. Step 2.11 is on it too, since
-the first release (1.8) waits for it. Steps 2.12 to 2.14, 5.2 to 5.5 and 5.7 are off it. Optim is off the critical
-path, and runs alongside phase 2. Its design is provisional until the maintainer meets the firm's quant team, and
-nothing in lanes A and B may depend on it (see [the design](design.md#the-packages)).
+the first release (1.8) waits for it. Steps 2.12 to 2.14, 5.2 to 5.5 and 5.7 are off it.
 
 ```mermaid
 flowchart TD
@@ -55,11 +55,6 @@ flowchart TD
   a7 --> a10[2.10 basis smoke]
   c6 --> a10
   a10 --> a8
-  r4 --> o2[3.2 move optim]
-  r6 --> o2
-  o1[3.1 oracle snapshot] --> o2 --> o3[3.3 port the plumbing] --> o4[3.4 orders through the ledger] --> o6[3.6 proof and release, on hold]
-  a2 --> o3
-  o3 --> o5[3.5 verbs, sync and docs] --> o6
   a8 --> g[4 records and upkeep]
   c1 --> c0[5.0b pandas and float64]
   c0 --> c2[5.2 calendars]
@@ -180,9 +175,9 @@ Lane A. Needs spike 0.2.
    Needs 1.4 and 1.6. Done when a generated repo's push hook runs `regress` against a local store and the QA tier
    against the SQL Server container standing in for QA, and `basis review` prints both.
 8. **1.8 Releases.** One tag releases basis-core, basis-job and basis-api at one version, each depending on
-   `basis-core` at exactly that version, and attaches their wheels to a GitHub release. optim keeps the same version in
-   the repo, built and green with the rest, but is not published until step 3.6. **(work)** Publish to the internal feed through Azure DevOps,
-   with spike 0.1's steps. Point etl-framework's README at basis; archiving that repo is the maintainer's call. Needs
+   `basis-core` at exactly that version, and attaches their wheels to a GitHub release. **(work)** Publish to the
+   internal feed through Azure DevOps, with spike 0.1's steps. Point etl-framework's README at basis; archiving that
+   repo is the maintainer's call. Needs
    1.7 and 2.11: the first tag, `v0.1.0`, comes after 2.11, so the first release already has the float contract and
    basis-ui pins its sample once. Done when `v0.1.0` is tagged, and installs from git here and from the internal feed
    at the firm.
@@ -293,29 +288,10 @@ Lane B. Needs step 1.3. Steps 2.3 and 2.4 run at once, and so do 2.5 and 2.9.
     need. An app without a UI is unchanged. Needs 2.1. Done when one app serves a built folder at `/` and its routes
     under `/api`, from one container.
 
-## Phase 3: optim on basis-core
+## Phase 3: a third part, since removed
 
-Lane C. Needs steps 1.4 and 1.6. Its plumbing port waits for step 2.2's changes to `basis-core` to merge, so that
-`basis-core` isn't reshaped under it. It runs alongside phase 2. Steps 3.1 to 3.5 are done; optim's design is
-provisional until the maintainer meets the firm's quant team, so step 3.6 is on hold until then, and what optim becomes
-may replace it. Whatever it becomes, nothing outside `packages/optim` may depend on it, which CI's `without-optim` job
-checks.
-
-1. **3.1 Oracle snapshot.** With optim 0.2.0 as it is, run the example model on its fixture, and keep the snapshot and
-   its decisions as the oracle for step 3.6. It can run at any time before 3.2.
-2. **3.2 Move optim.** Bring portfolio-optim into `packages/optim` with its history.
-3. **3.3 Port the plumbing.** Replace optim's sources, settings, logs, storage and snapshots with `basis.core`'s, and
-   delete optim's copies, the SQL Server snapshot defect with them. optim's per-portfolio batching (ids bound as JSON, a
-   semaphore per source, a read-only transaction per batch) stays optim's own, built on `basis.core`'s reads. Needs 3.2
-   and 2.2.
-4. **3.4 Orders through the ledger.** Orders are written through `basis.core`'s publishing, with a ledger row in the
-   same transaction, and `resume` finishes a partial write. Needs 3.3.
-5. **3.5 Verbs, sync and docs.** optim's verbs (`run`, `replay`, `sweep`, `describe`, `regress`, `new model`) come under
-   `basis`, with `optim` as an alias. Its `sync`, `new` and docs printing move onto `basis.core`'s machinery, while its
-   templates, skills and docs stay its own. `uvx optim new repo` works from the feed. Needs 3.3, and runs alongside 3.4.
-6. **3.6 Proof and release (on hold).** Done when the example model's decisions on its fixture match step 3.1's exactly (`basis
-   regress` against its snapshot), and a generated model repo with a second model passes its checks. optim then releases
-   with the next basis version. Needs 3.4 and 3.5, and the maintainer's meeting with the quant team.
+Lane C moved the repo that is now [trellis](https://github.com/jacobragsdale/trellis) into `packages/` as a third part,
+on basis-core's plumbing (steps 3.1 to 3.5, with 3.6 on hold); step 13.1 removed it, and it lives on there.
 
 ## Phase 4: records and upkeep
 

@@ -1,14 +1,14 @@
 # The etl-framework design
 
-etl-framework is a package that ETL job repos depend on, modelled on
-[portfolio-optim](https://github.com/jacobragsdale/portfolio-optim)'s idea: the core owns the run loop, so job code is
-pure and every run replays. It was designed on 2026-11-06 and built as 0.1.0 the same day. The docs for job authors,
-in `src/basis/job/docs/`, describe the result; this page records the decisions and their reasons.
+etl-framework is a package that ETL job repos depend on, modelled on the idea of the repo that is now
+[trellis](https://github.com/jacobragsdale/trellis): the core owns the run loop, so job code is pure and every run
+replays. It was designed on 2026-11-06 and built as 0.1.0 the same day. The docs for job authors, in
+`src/basis/job/docs/`, describe the result; this page records the decisions and their reasons.
 
 Since basis's step 1.3, etl-framework is basis-job, which imports as `basis.job`, and its plumbing is basis-core's:
 the databases, settings, logs, storage, snapshots, publishing with the ledger, the shared halves of `replay`, `resume`
 and `regress`, and the machinery of `new`, `sync` and the contract tests. [basis's design](../../../docs/design.md)
-supersedes the decisions below about sharing a core with portfolio-optim, and about polars, whose frames became pandas
+supersedes the decisions below about sharing a core with that repo, and about polars, whose frames became pandas
 in basis's step 5.0b, as the table now says; the rest stand.
 
 ## The problem
@@ -21,7 +21,7 @@ read and write SQL Server or Oracle, and they do not feed each other.
 
 | Decision | Reason |
 |---|---|
-| A package separate from portfolio-optim, sharing its patterns but not its code | The two are similar, but separate on purpose; the generic modules were adapted from optim rather than shared. |
+| A package separate from the repo that is now trellis, sharing its patterns but not its code | The two are similar, but separate on purpose; the generic modules were adapted from it rather than shared. |
 | Generic: every table shape, every number of databases, nothing assumed | A framework for hundreds of jobs cannot lean on the common case. Every output names its write mode, every `Decimal` its precision, every `datetime` its zone, every input what empty means. |
 | All or nothing | A run writes nothing unless every check passes for every output; each database commits in one transaction. |
 | Runs in a container; no scheduler is assumed | The CLI is the entry point, `tini` the first process, the exit code the contract. Anything a scheduler wants recorded arrives as `--label`. |
@@ -31,7 +31,7 @@ read and write SQL Server or Oracle, and they do not feed each other.
 | Databases commit one at a time, in name order; `resume` finishes a partial run from its snapshot | Distributed transactions are not dependable from these drivers; resuming the same rows gives the same end state. |
 | No DDL at run time | Whether job logins have DDL rights is unknown, so runs never need them: SQL Server stages in `#temp` tables, Oracle binds frames to batched statements, and `basis ddl` prints the tables. |
 | pandas, every column Arrow-backed (since basis's 5.0b; polars before it) | ETL moves values that must arrive exactly: integers with nulls, decimals at their scale, zone-aware datetimes. An Arrow-backed pandas column keeps each, where numpy's would make a nullable integer a float and a decimal an object, and data arrives and leaves as Arrow. Why pandas rather than polars is [basis's design](../../../docs/design.md#jobs-basisjob)'s. |
-| No worker processes or partitions | Data fits in memory. optim's process pool exists for CPU-bound solves. |
+| No worker processes or partitions | Data fits in memory. trellis's process pool exists for CPU-bound solves. |
 | Destination checks against what the database says the table is | A drifted table fails a run in seconds, before it loads; a value too long or too precise fails it before the database would truncate it or fail halfway. |
 | Read isolation is a required setting per database | SQL Server's snapshot isolation must be enabled, and Oracle's read-only transactions fail on a table truncated seconds before; the trade-off is each database's own. |
 
@@ -41,8 +41,8 @@ read and write SQL Server or Oracle, and they do not feed each other.
   `interval_end` in both dialects.
 - With autocommit off, mssql-python's implicit transaction begins at `SET TRANSACTION ISOLATION LEVEL SNAPSHOT` itself,
   under the default level, and SQL Server then refuses snapshot reads of user tables. Reads connect with autocommit on
-  and begin the transaction explicitly. portfolio-optim's `sources/mssql.py` reads the same way it first did here, and
-  likely has the same defect.
+  and begin the transaction explicitly. The `sources/mssql.py` of the repo that is now trellis read the same way it
+  first did here, and likely has the same defect.
 - mssql-python's bulk copy opens a connection of its own, outside the run's transaction, so writes use `executemany`.
   Its own typing, in 1.17.0, types each column from the column's longest value: one whose longest is ASCII binds as
   `varchar`, losing what the database's code page cannot hold without an error, and a batch with a string past 4,000
@@ -73,7 +73,7 @@ read and write SQL Server or Oracle, and they do not feed each other.
 
 | Option | Why not |
 |---|---|
-| A shared core with portfolio-optim | Kept separate by choice. |
+| A shared core with the repo that is now trellis | Kept separate by choice. |
 | Defaults for write modes, decimal precision, time zones or empty inputs | Each would be wrong for some jobs, silently. |
 | A `Custom(sql)` write mode | Invisible to replay and regression. |
 | Plain appends without a guard | A rerun would duplicate them; the ledger refuses a second publish unless `--again`. |

@@ -1,7 +1,7 @@
-# Plan: Dash apps, and optim's removal
+# Plan: Dash apps, and one part's removal
 
 Written on 2026-11-13, against commit `a63f5fe`. basis gets a new kind of part, `dash`: a Dash app that reads the
-firm's data straight from Python, with no API behind it. optim leaves the repo. [The design](design.md) still holds
+firm's data straight from Python, with no API behind it. The portfolio part leaves the repo. [The design](design.md) still holds
 the decisions and [PLAN.md](../PLAN.md) phases 6 to 12, which are done; this page adds phases 13 to 18, and its step
 ids continue theirs, so a branch is named as `AGENTS.md` says, such as `15.2-cache`.
 
@@ -15,7 +15,7 @@ Keep this table true in each step's own commit.
 
 | Step | State | Commit |
 |---|---|---|
-| 13.1 optim goes | In progress: the code and its wiring are gone; the docs remain | |
+| 13.1 The portfolio part goes | Done: the code and its wiring, then the docs; history in [the design](design.md#the-packages) | `99aaf2e`, the commit "Step 13.1, part 2" |
 | 14.1 The spike | Not started | |
 | 14.2 The design, written down | Not started | |
 | 14.3 Rows in core | Not started | |
@@ -204,28 +204,24 @@ The names above are the plan's proposal; the steps settle each as it is built, a
 - **Exports carry provenance.** An Excel export applies each column's format as Excel's own, and its second sheet
   says what was asked, as of when, and when it was loaded.
 
-## Phase 13: optim goes
+## Phase 13: the portfolio part goes
 
-One step, one agent, on the main checkout. It can run beside 14.1.
+One step, one agent, on the main checkout. It ran beside 14.1.
 
-**13.1 Remove optim.** optim lives on as [trellis](https://github.com/jacobragsdale/trellis), a repo of its own, so
-its copy here goes whole:
+**13.1 Remove the portfolio part.** It lives on as [trellis](https://github.com/jacobragsdale/trellis), a repo of its
+own, so its copy here went whole: its package, its CI workflow and job, the script that checked nothing else needed
+it, its import-contract hook, and every mention in the root `pyproject.toml` and the docs, with a relock. basis is
+then APIs, batch jobs and, once phase 14 builds them, Dash apps.
 
-- `packages/optim`, `.github/workflows/optim.yml`, `scripts/without_optim.py` and CI's `without-optim` job, the
-  `lint-imports-optim` hook, and every mention in the root `pyproject.toml`: the `-p no:optim` option, the pytest
-  path, the coverage source, the import contract that names it, and the comments. Relock.
-- The docs: `README.md`, `AGENTS.md`, `docs/design.md` (the packages table, the provisional paragraphs, the verbs
-  and paths of models, "Decided against"), `docs/roadmap.md` (lane C and phase 3, kept as two lines of history),
-  `PLAN.md` (lane C of phase 7 and "optim after the quant meeting", which move to the note below),
-  `docs/releasing.md` and `packages/job/docs/design.md`. basis is then "APIs, batch jobs and Dash apps".
-- The rule optim brought stays, said without it: core names no part, and a mechanism only one part uses must be
-  one a job could use as it stands.
+- The rule it brought stays, said without it: core names no part, parts import core and never each other, and a
+  mechanism only one part uses must be one a job could use as it stands.
 - `docs/surface/0.1.0/` is a corpus v0.1.0's own code wrote, and stays byte for byte.
-- One paragraph of history in `docs/design.md`: where optim went, and the commits that fixed defects only in this
-  copy (step 7.14's nine, `3594ded` to `700bd7e`, and any since), so that trellis can take them.
+- One paragraph of history in `docs/design.md`, under [the packages](design.md#the-packages): where the part went,
+  and the commits that fixed defects only in this copy, so that trellis can take them. This step as first written is
+  in this page at `4a69721`.
 
-Done when `git grep -i optim` finds only that history and the 0.1.0 corpus, the hooks and unit tests pass, the
-lockfile has lost cvxpy, highspy, scipy and coptpy, and CI is green on `main`.
+Done when a case-insensitive `git grep` of the part's name finds only that history and the 0.1.0 corpus, the hooks
+and unit tests pass, the lockfile has lost cvxpy, highspy, scipy and coptpy, and CI is green on `main`.
 
 ## Phase 14: foundations
 
@@ -417,6 +413,9 @@ Each has the pick this plan builds on. None blocks a step before the one named.
 | Do `Row` and serving move into core, which touches basis-job and basis-api? | Yes: a second copy of each would drift, and their tests prove the move | 14.3, 14.4 |
 | Does the look follow basis-ui's theme? | Yes, held by a drift test | 16.1 |
 | Does `v0.2.0` publish basis-dash? | Yes, on the maintainer's word | 17.8 |
+| The design's "Decided against" row "Shared datasets across packages", whose one reason was the removed part | Removed with it; a Dash app's datasets are 15.1's to decide | 13.1 |
+| A part that gives no share of the tool settings (`AgentFiles.tools` of `None`), which only the removed part used | Kept: it is general, any part may give none, and basis then leaves the repo's own settings alone | 13.1 |
+| PLAN.md's findings and figures about the removed part | Kept as history, naming it "the third part"; its full text is PLAN.md at `4a69721` | 13.1 |
 
 ## Rules for this work
 

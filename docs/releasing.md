@@ -2,16 +2,14 @@
 
 A release is a `v*` tag on `main`. The release workflow, `.github/workflows/release.yml`, then builds each package
 that says a release publishes it, installs them from those files alone, makes job repos from them, and creates the
-GitHub release with the files attached. A release publishes basis-core, basis-job and basis-api. optim's version moves
-with theirs, since it pins basis-core exactly, and CI builds and tests it on every pull request, but releases leave it
-out until its design settles.
+GitHub release with the files attached. A release publishes basis-core, basis-job and basis-api.
 
 ## The version and what a release publishes
 
 basis has one version, the root `pyproject.toml`'s `[project] version`. Every member carries it, and each depends on
 basis-core at exactly that version, so a repo's lock can only hold basis packages from one release. Each member's own
-`pyproject.toml` says whether a release publishes it, as `[tool.basis-release] publish = true` or `false`; optim's says
-`false`, so making it true is a reviewed change to `packages/optim/pyproject.toml`. The root's `dependencies`, which a
+`pyproject.toml` says whether a release publishes it, as `[tool.basis-release] publish = true` or `false`, so a member
+that a release leaves out says so in a reviewed change to its own `pyproject.toml`. The root's `dependencies`, which a
 plain `uv sync` installs, list exactly the published members. `scripts/release.py` sets the version and checks all of
 this. The commit hook runs its check whenever a `pyproject.toml`, `uv.lock` or the script
 changes, and refuses a member, a pin or the lock at another version with one `ERROR` line and its fix.
@@ -155,6 +153,6 @@ with no `--index` takes the release's tag from GitHub: a wheel's file, unlike an
 take its packages from. And the `release` job creates the release with its files.
 
 No run here proves the firm's feed: the stand-in has no authentication and no upstream of its own, and the desktops'
-`uv.toml`, Windows and the feed's upload are spike 0.1's. A tag also leaves optim installable from git
-(`#subdirectory=packages/optim`), as every commit does; what a release adds is the GitHub release's files and, at the
-firm, the feed's.
+`uv.toml`, Windows and the feed's upload are spike 0.1's. A tag leaves every package installable from git
+(`#subdirectory=packages/job`, say), as every commit does; what a release adds is the GitHub release's files and, at
+the firm, the feed's.

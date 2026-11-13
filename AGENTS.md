@@ -1,12 +1,12 @@
 # Agent guide
 
-This repo is basis (a placeholder name): the Python packages that give a firm's APIs, batch jobs and portfolio
-optimizers one shape. UIs live in its TypeScript sibling, [basis-ui](https://github.com/jacobragsdale/basis-ui), and
-meet basis at the contract in [docs/design.md](docs/design.md#what-a-ui-can-rely-on). [docs/design.md](docs/design.md)
-holds the decisions and their reasons, and [docs/roadmap.md](docs/roadmap.md) the phases, their steps, and the lanes
-that run at the same time, [PLAN.md](PLAN.md) the review after the MVP and its phases 6 to 12, and
-[docs/dash-plan.md](docs/dash-plan.md) phases 13 to 18: optim's removal, and Dash apps. The code is in
-`packages/`: basis-core, basis-job, basis-api, and optim, whose design is provisional.
+This repo is basis (a placeholder name): the Python packages that give a firm's APIs, batch jobs and, once phase 14
+builds them, Dash apps one shape. UIs live in its TypeScript sibling,
+[basis-ui](https://github.com/jacobragsdale/basis-ui), and meet basis at the contract in
+[docs/design.md](docs/design.md#what-a-ui-can-rely-on). [docs/design.md](docs/design.md) holds the decisions and their
+reasons, and [docs/roadmap.md](docs/roadmap.md) the phases, their steps, and the lanes that run at the same time,
+[PLAN.md](PLAN.md) the review after the MVP and its phases 6 to 12, and [docs/dash-plan.md](docs/dash-plan.md) phases 13
+to 18: one part's removal, and Dash apps. The code is in `packages/`: basis-core, basis-job and basis-api.
 
 ## Working here
 
@@ -15,10 +15,10 @@ that run at the same time, [PLAN.md](PLAN.md) the review after the MVP and its p
 - Work one roadmap step per branch and git worktree, named after the step's id, such as `1.3-extract-core`, and follow
   the roadmap's rules for working in parallel.
 - Changes to `basis-core` land one pull request at a time.
-- Nothing outside `packages/optim` may need optim, whose design is provisional until the maintainer meets the firm's
-  quant team: basis-core, basis-job and basis-api, their release, and the contract a UI relies on stay as they are if
-  optim changes or goes. A mechanism in core that only one part uses must be one a job could use as it stands.
-  `scripts/without_optim.py` checks the rest, and CI runs it on every pull request.
+- Core names no part, and parts import core and never each other, so a part can change, or go, and core, the other
+  parts, their release and the contract a UI relies on stay as they are. A mechanism in core that only one part uses
+  must be one a job could use as it stands. The import contracts in the root `pyproject.toml` check what core and each
+  part import.
 - A change to the contract a UI relies on is a change to basis-ui's too: say so in the pull request, and update
   basis-ui's pinned sample.
 - A spike writes its result to `docs/spikes/NAME.md`: the versions it used, a yes or no for each question, and the
@@ -32,13 +32,12 @@ that run at the same time, [PLAN.md](PLAN.md) the review after the MVP and its p
 ## Checks
 
 ```sh
-uv sync --all-packages              # every member; a plain `uv sync` installs only what basis releases, and removes optim
+uv sync --all-packages              # every member, as CI installs them
 uv run pre-commit install           # once per clone: the commit hook runs the checks below
 uv run pre-commit run --all-files   # ruff, ty with every rule an error, dead code, the lockfile, the import contracts, file hygiene
-uv run pytest -n auto               # every package's unit tests, optim's among them, and scripts/tests, from the root
+uv run pytest -n auto               # every package's unit tests, and scripts/tests and evals/tests, from the root
 uv run scripts/release.py check     # every member at the root's one version, pinning basis-core at it (docs/releasing.md)
 uv run pytest -m integration        # real SQL Server and Oracle, every package's: packages/job/tests/integration/README.md
-uv run scripts/without_optim.py     # the name check, then the hooks and unit tests with packages/optim removed
 ```
 
 To check what `basis-job new repo` generates, from the root:
@@ -50,13 +49,11 @@ uv run basis check                  # the framework files, the hooks, the lockfi
 git add --all && git commit -m "First commit"   # the commit hook fixes, formats and runs basis check
 ```
 
-To check what `optim new repo` generates, from the root, then as the Checks section of
-[packages/optim/AGENTS.md](packages/optim/AGENTS.md) goes on:
+To check what `basis-api new app` generates, from the root:
 
 ```sh
-uv run optim new repo sma income --dir SCRATCH --framework-path .   # its first model is income
-cd SCRATCH/sma && uv run basis new model ladder
-uv run basis check
+uv run basis-api new app pricing --dir SCRATCH --framework-path .   # its first job beside it is positions
+cd SCRATCH/pricing && uv run basis check
 ```
 
 A repo whose image builds needs basis from git rather than a checkout: push the branch, and make one with
