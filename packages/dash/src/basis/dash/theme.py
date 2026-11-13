@@ -428,18 +428,19 @@ def mantine() -> dict[str, object]:
 def template() -> go.layout.Template:
     """basis's Plotly template: transparent, in Inter's tabular figures, with the series' colours, small margins and
     quiet axes. It holds only what differs from Plotly's own, since each figure carries its template (under 0.5 KB),
-    and no colour but the series' and the text's, the light scheme's, which basis's CSS replaces in the page, with
-    the lines', in either scheme."""
-    axis = {"automargin": True, "zeroline": False}
+    and no colour but the series', which reads on both backgrounds: basis's CSS gives the text and lines theirs, in
+    either scheme. A title sits at the top left, in the top margin it makes room for, and the legend between it and the
+    plot, so the two never meet at any width; the mode bar shows on hover alone (`bd.graph`'s config)."""
     return go.layout.Template(
         layout={
-            "font": {"family": "Inter Tabular, sans-serif", "size": 12, "color": srgb("foreground", "light")},
+            "font": {"family": "Inter Tabular, sans-serif", "size": 12},
             "paper_bgcolor": "rgba(0,0,0,0)",
             "plot_bgcolor": "rgba(0,0,0,0)",
             "colorway": list(SERIES),
             "margin": {"l": 8, "r": 8, "t": 8, "b": 8},
-            "xaxis": axis | {"showgrid": False, "showline": True, "ticks": "outside", "ticklen": 4},
-            "yaxis": axis,
+            "title": {"x": 0, "yref": "container", "y": 1, "automargin": True, "font": {"size": 14}},
+            "xaxis": {"automargin": True, "showgrid": False, "showline": True, "ticks": "outside"},
+            "yaxis": {"automargin": True},
             "legend": {"orientation": "h", "x": 0, "y": 1, "yanchor": "bottom"},
         }
     )

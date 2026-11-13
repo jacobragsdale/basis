@@ -60,6 +60,11 @@ html:root body {
 .js-plotly-plot .main-svg .gtitle {
   fill: var(--basis-foreground) !important;
 }
+/* Text Plotly draws outside a mark, such as a waterfall's amounts, sits on the card, so it takes the card's colour;
+   text inside a mark keeps the colour Plotly chose against the mark's fill. */
+.js-plotly-plot .main-svg .bartext-outside {
+  fill: var(--basis-muted-foreground) !important;
+}
 .js-plotly-plot .main-svg .gridlayer path,
 .js-plotly-plot .main-svg .zerolinelayer path {
   stroke: var(--basis-edge) !important;

@@ -639,6 +639,22 @@ an active filter. `bd.grid` gives an `html.Div` subclass, which Dash sends as a 
 it on the server for its totals. Dash 4's own `--Dash-*` variables, which its `dcc` components draw with, point at
 the tokens too, held by a test to every colour variable Dash's bundle reads. The module is `grids`, as `texts` is.
 
+**Charts, as built (16.5).** `bd.graph(id, figure=, height=)` is a `dcc.Graph` with basis's config: the mode bar on
+hover alone, no Plotly logo, no lasso or box select, and the figure as wide as its card. `bd.charts` holds the
+builders, each a pure function of a frame and its row that returns a figure: `line`, `bar` (grouped, stacked or
+across), `scatter` with a least-squares fit, `curve` (a yield curve on a log axis of years, so the short end has room,
+its tenors as the ticks), `waterfall` (gains in the series' green, losses in its red, ending in their total),
+`heatmap` (the diverging scale about zero where values have both signs, else the sequential one, each value written in
+its cell up to 200 cells) and `histogram`. A value axis's ticks are worked out on the server, round values bounding
+the data, written by `bd.text` in the column's format with the fewest decimals that write every tick exactly, an
+amount abbreviated by its largest tick ("$200M"); hover text is the column's own format, as the grid writes it. A
+daily axis skips weekends and the declared calendar's holidays by Plotly's `rangebreaks`. Up to four series are named
+at their lines' ends, each name beside a dash of its line's colour and spaced a line of text apart, and more keep a
+legend. An empty frame draws a sentence where the plot would be. The template puts a title at the top left in the top
+margin it makes room for (`yref` the container, `automargin`) and the legend between the title and the plot, so they
+never meet at any width; the template is 504 bytes. Text Plotly draws outside a mark takes the card's muted colour in
+basis's CSS; text inside one keeps Plotly's choice against the mark.
+
 **Two ids every page has.** basis's chrome around every page holds two components whose ids are fixed and exported
 from `basis.dash.ids`, so the data and display lanes build against them: `NOTIFICATIONS`, DMC's
 `NotificationContainer`, whose `sendNotifications` prop takes a list of notifications, each a dict of DMC's
