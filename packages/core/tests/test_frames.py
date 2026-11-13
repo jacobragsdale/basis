@@ -194,7 +194,7 @@ SPRING_FORWARD = pd.Series([datetime(2026, 3, 8, 2, 30)])
 
 @pytest.mark.parametrize(("given", "reads"), [(FALL_BACK, "twice, as its clocks go back"), (SPRING_FORWARD, "never, as its clocks go forward")], ids=["ambiguous", "missing"])
 def test_a_naive_source_time_its_zone_shows_twice_or_never_is_refused_with_the_fix(given: pd.Series, reads: str) -> None:
-    _, problem = frames.convert(given, Column("t", "datetime", nullable=True, zone="America/New_York"), "in_zone")
+    _, problem = frames.convert(given, Column("t", "datetime", nullable=True, zone="America/New_York"), "in_zone", spelling="etl")
     assert problem is not None
     assert reads in problem
     assert "etl.Zone('America/New_York', ambiguous=" in problem or "etl.Zone('America/New_York', nonexistent=" in problem

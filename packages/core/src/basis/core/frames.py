@@ -141,12 +141,13 @@ def _to_float(values: Array) -> _Converted:
     return None, f"{found} cannot become double"
 
 
-def convert(series: pd.Series, column: Column, naive: Naive) -> tuple[pd.Series, str | None]:
+def convert(series: pd.Series, column: Column, naive: Naive, *, spelling: str = "basis.core.rows") -> tuple[pd.Series, str | None]:
     """`series` as `column`'s type, named as the column, or why it cannot become it without loss. Any dtype converts:
     Arrow's, numpy's, whose NaN is pandas' null, and `object`, whose Python values Arrow types first. Text converts to
     every kind, as a CSV's does; any number to a float, the nearest double to it, but whole numbers beyond 2^53; a
     float that is infinite is refused; a datetime at midnight to a date; 0 and 1 to a boolean; a datetime to UTC, a
-    naive one read in its column's zone unless `naive` is `reject`."""
+    naive one read in its column's zone unless `naive` is `reject`. A problem's fix names a row's names under
+    `spelling`, the alias of the part whose row it is (`basis.core.rows.Row.spelling`)."""
     try:
         array = _array(series)
     except (pa.ArrowInvalid, pa.ArrowTypeError) as error:
@@ -170,8 +171,12 @@ def convert(series: pd.Series, column: Column, naive: Naive) -> tuple[pd.Series,
     if problem is None and converted is not None and column.kind == "float" and _any(_call("is_inf", converted)):
         problem = "infinite values"
     if problem is not None or converted is None:
-        return series, problem
+        return series, problem.replace(_SPELLING, spelling) if problem is not None else problem
     return _series(converted, column.name), None
+
+
+_SPELLING = "{spelling}"
+"""Where a converter's problem names a row's name, such as `Zone`, which `convert` spells as the row's part does."""
 
 
 _ASTRAL = r"[\x{10000}-\x{10FFFF}]"
@@ -303,7 +308,7 @@ def _to_utc(array: Array, column: Column, naive: Naive) -> _Converted:
                 if getattr(column, fold) == "raise":
                     return None, (
                         f"naive times {column.zone} shows {says}, such as {_unread(local, column.zone, fold)}, which name no one instant:"
-                        f" declare how to read them, as etl.Zone({column.zone!r}, {fold}='earliest'), or 'latest'"
+                        f" declare how to read them, as {_SPELLING}.Zone({column.zone!r}, {fold}='earliest'), or 'latest'"
                     )
         array = _call("assume_timezone", local, options=pc.AssumeTimezoneOptions(column.zone, ambiguous=column.ambiguous, nonexistent=column.nonexistent))
     return pc.cast(_microseconds(array), arrow_type(column)), None

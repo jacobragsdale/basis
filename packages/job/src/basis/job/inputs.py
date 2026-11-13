@@ -17,7 +17,6 @@ function of what the run saved."""
 import codecs
 import inspect
 import json
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -30,6 +29,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import pandas as pd
 
 from basis.core import resources
+from basis.core.dialects import named_binds
 from basis.core.interval import Interval
 from basis.core.paths import WILD, inside
 from basis.core.resources import HttpResource
@@ -191,15 +191,12 @@ WATERMARK = "watermark"
 """The name a query binds its watermark by, where it declares one."""
 INTERVAL_BINDS = frozenset({"interval_start", "interval_end"})
 """The names a query may bind: the run's interval's ends, as `Interval.binds` gives them."""
-_UNBOUND = re.compile(r"--[^\n]*|/\*.*?\*/|'(?:[^']|'')*'|\"[^\"]*\"", re.DOTALL)
-"""What holds no bind: a comment, a string literal, and a quoted identifier."""
-_BIND = re.compile(r"(?<![:\w]):([A-Za-z_]\w*)|%\(([A-Za-z_]\w*)\)s")
 
 
 def binds(sql: str) -> set[str]:
-    """Each name `sql` binds, as Oracle's `:name` or SQL Server's `%(name)s`, outside its comments and literals; a
-    cast's `::` is none."""
-    return {oracle or mssql for oracle, mssql in _BIND.findall(_UNBOUND.sub(" ", sql))}
+    """Each name `sql` binds, as Oracle's `:name` or SQL Server's `%(name)s`, outside its comments and literals
+    (`basis.core.dialects.named_binds`)."""
+    return {name for names in named_binds(sql).values() for name in names}
 
 
 def sql_problems(inputs: type[Inputs]) -> list[str]:

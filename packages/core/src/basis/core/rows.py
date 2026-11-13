@@ -1,5 +1,5 @@
 """Row schemas. A row is a class whose annotations are a frame's columns, in order, as a job's table and a Dash app's
-dataset declare them alike (`basis.job` exports these names as `etl.Row` and the rest):
+dataset declare them alike (`basis.job` exports these names as `etl.Row` and the rest, and `basis.dash` as `bd.Row`):
 
     class Position(etl.Row):
         as_of: date
@@ -21,7 +21,11 @@ type, by the one table in `basis.core.frames`; a `datetime` keeps its zone.
 `conform` is the boundary: every frame that enters or leaves a job, or an app's dataset, passes through it. It converts only where nothing
 is lost but a number's rounding to the nearest double (an Oracle `NUMBER(10,2)` to a float, a CSV's text to a date, a
 transform's numpy text to Arrow's) and reports every column it cannot convert, by `basis.core.frames.convert`'s
-rules. Pure: it reads and writes nothing."""
+rules. Pure: it reads and writes nothing.
+
+A refusal names the fix in the words of the part that declared the row: a part's base row gives its spelling, as
+`class Row(rows.Row, spelling="etl")`, and every row declared from it, and every frame conformed to one, reads
+`etl.Zone('UTC')` and `etl.json_text`. A row declared from this module's `Row` reads `basis.core.rows.Zone('UTC')`."""
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -75,15 +79,28 @@ class RowError(BasisError, TypeError):
     """A row class that does not declare its columns as `conform` needs them."""
 
 
+SPELLING = "basis.core.rows"
+"""How a refusal spells this module's names, where no part's base row gives its own."""
+
+
 class Row:
-    """Base for a table's columns. Subclass it and annotate one attribute per column; it is never instantiated."""
+    """Base for a table's columns. Subclass it and annotate one attribute per column; it is never instantiated. A
+    part's base row, which declares no columns, gives `spelling`: the module alias its code imports the part as."""
 
     columns: ClassVar[tuple[Column, ...]] = ()
+    spelling: ClassVar[str] = SPELLING
+    """The alias a refusal names the fix's names under, as `etl` in `etl.Zone('UTC')`: the part's that declared it."""
 
-    def __init_subclass__(cls) -> None:
+    def __init_subclass__(cls, *, spelling: str | None = None) -> None:
         super().__init_subclass__()
-        hints = get_type_hints(cls, include_extras=True)
-        cls.columns = tuple(_column(cls, name, hint) for name, hint in hints.items() if get_origin(hint) is not ClassVar)
+        hints = {name: hint for name, hint in get_type_hints(cls, include_extras=True).items() if get_origin(hint) is not ClassVar}
+        if spelling is not None:
+            if hints:
+                msg = f"{cls.__qualname__} gives a spelling and declares columns: a part's base row gives its spelling alone, and each row subclasses it"
+                raise RowError(msg)
+            cls.spelling = spelling
+            return
+        cls.columns = tuple(_column(cls, name, hint) for name, hint in hints.items())
         if not cls.columns:
             msg = f"{cls.__qualname__} declares no columns: annotate one attribute per column"
             raise RowError(msg)
@@ -137,10 +154,10 @@ def _column(row: type, name: str, hint: object) -> Column:
     if kind is None:
         msg = f"{where}: {hint} is not a column type; use float, str, bool, date or datetime"
         raise RowError(msg)
-    return _with_metadata(where, name, kind, nullable=nullable, metadata=metadata)
+    return _with_metadata(where, name, kind, nullable=nullable, metadata=metadata, spelling=row.spelling if issubclass(row, Row) else SPELLING)
 
 
-def _with_metadata(where: str, name: str, kind: Kind, *, nullable: bool, metadata: list[object]) -> Column:
+def _with_metadata(where: str, name: str, kind: Kind, *, nullable: bool, metadata: list[object], spelling: str) -> Column:
     max_length = zone = display = None
     json = False
     ambiguous: Fold = "raise"
@@ -170,7 +187,7 @@ def _with_metadata(where: str, name: str, kind: Kind, *, nullable: bool, metadat
                 msg = f"{where}: {item!r} does not apply to a {kind} column"
                 raise RowError(msg)
     if kind == "datetime" and zone is None:
-        msg = f"{where}: a datetime column names the zone its naive values are in, as Annotated[datetime, etl.Zone('UTC')]"
+        msg = f"{where}: a datetime column names the zone its naive values are in, as Annotated[datetime, {spelling}.Zone('UTC')]"
         raise RowError(msg)
     return Column(name, kind, nullable, max_length=max_length, zone=zone, json=json, display=display, ambiguous=ambiguous, nonexistent=nonexistent)
 
@@ -188,11 +205,12 @@ def conform(frame: pd.DataFrame, row: type[Row], *, what: str, naive: Naive) -> 
     index that only counts its rows, or `SchemaError` naming every column that is missing, extra, not convertible
     without loss, null where it may not be, or too long. Column names match without regard to case, since Oracle
     reports them in upper case."""
-    return conform_columns(frame, row.columns, what=what, naive=naive)
+    return conform_columns(frame, row.columns, what=what, naive=naive, spelling=row.spelling)
 
 
-def conform_columns(frame: pd.DataFrame, columns: Sequence[Column], *, what: str, naive: Naive) -> pd.DataFrame:
-    """`conform`, for some of a row's columns: those a delete matches on."""
+def conform_columns(frame: pd.DataFrame, columns: Sequence[Column], *, what: str, naive: Naive, spelling: str = SPELLING) -> pd.DataFrame:
+    """`conform`, for some of a row's columns: those a delete matches on. `spelling` is the row's, which its
+    refusals name the fix's names under."""
     by_name = _by_name(frame)
     names = [column.name for column in columns]
     problems = _named_once(by_name, by_name)
@@ -203,11 +221,11 @@ def conform_columns(frame: pd.DataFrame, columns: Sequence[Column], *, what: str
         raise SchemaError(what, problems)
     converted: dict[str, pd.Series] = {}
     for column in columns:
-        series, problem = frames.convert(frame[by_name[column.name][0]], column, naive)
+        series, problem = frames.convert(frame[by_name[column.name][0]], column, naive, spelling=spelling)
         if problem is not None:
             problems.append(f"{column.name}: {problem}")
             continue
-        problems.extend(f"{column.name}: {found}" for found in _invalid(series, column))
+        problems.extend(f"{column.name}: {found}" for found in _invalid(series, column, spelling))
         converted[column.name] = series
     if problems:
         raise SchemaError(what, problems)
@@ -246,7 +264,7 @@ def _missing(frame: pd.DataFrame, by_name: dict[str, list[object]], names: Seque
     return [f"missing columns: {', '.join(missing)}{hint}"]
 
 
-def _invalid(series: pd.Series, column: Column) -> list[str]:
+def _invalid(series: pd.Series, column: Column, spelling: str) -> list[str]:
     problems: list[str] = []
     if not column.nullable and (nulls := int(series.isna().sum())):
         problems.append(f"{nulls} nulls in a column that may not be null")
@@ -255,6 +273,6 @@ def _invalid(series: pd.Series, column: Column) -> list[str]:
     if column.json:
         for position, text in series.dropna().items():
             if (refused := jsontext.problem(str(text))) is not None:
-                problems.append(f"row {position}'s value is {refused}: write it with etl.json_text")
+                problems.append(f"row {position}'s value is {refused}: write it with {spelling}.json_text")
                 break
     return problems

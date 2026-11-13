@@ -21,7 +21,8 @@ Keep this table true in each step's own commit.
 | 14.3 Rows in core | Done: `basis.core.rows`, a `float`'s `Display`; `basis.job.rows` re-exports | the commit "Step 14.3" |
 | 14.4 Serving in core | Done: `basis.core.serving`, its `requests` and `server`; `basis-core[serve]` | the commit "Step 14.4" |
 | 14.5 The package and an empty app | Done: `packages/dash`, an empty app served, health and drain, a callback in the process; modules by lane in its AGENTS.md | the commit "Step 14.5" |
-| 15.1 to 15.8 Data | Not started | |
+| 15.1 Declarations | Done: `bd.database`, `bd.folder`, `bd.query`, `bd.file`, `bd.view`, `bd.Row`, `bd.format`; SQL binds checked at build; core's row refusals in the declaring part's words | the commit "Step 15.1" |
+| 15.2 to 15.8 Data | Not started | |
 | 16.1 to 16.9 Display | Not started | |
 | 17.1 to 17.8 The repo around it | Not started | |
 
@@ -458,7 +459,9 @@ Each has the pick this plan builds on. None blocks a step before the one named.
 | The design's "Decided against" row "Shared datasets across packages", whose one reason was the removed part | Removed with it; a Dash app's datasets are 15.1's to decide | 13.1 |
 | A part that gives no share of the tool settings (`AgentFiles.tools` of `None`), which only the removed part used | Kept: it is general, any part may give none, and basis then leaves the repo's own settings alone | 13.1 |
 | Are `basis serve` and `basis dev` core's verbs, shared by NAME as `run` is, or each serving part's own? | Each part's own: no repo holds two parts that serve, core's refusal of two parts adding one verb is then the one line, and basis-api's surface keeps `verb api serve --env` | 14.2 |
-| Do core's row refusals keep the job's words, such as `etl.Zone('UTC')`? | Yes for now, as `frames` and `destination` already did; a Dash app's names for the fix are 15.1's | 14.3 |
+| Do core's row refusals keep the job's words, such as `etl.Zone('UTC')`? | No: a part's base row gives its spelling (`class Row(rows.Row, spelling="bd")`), so a job reads `etl.`, an app `bd.`, and core names no part. `destination`'s refusals, a job's alone, keep `etl.` | Settled by 15.1 |
+| Does `bd.database` name its dialect? | Yes: a SQL file's binds are checked before any environment says the database's kind, and opening it refuses settings of another kind (15.2) | 15.1 |
+| Which datasets are an app's? | Those every resource of which the app lists, by identity: no list of datasets to keep beside the resources | 15.1 |
 | Where does the Dash app's path prefix come from? | Two settings, `serve.prefix` and `serve.prefix_stripped`, mapped to Dash's two prefixes; the health routes answer at the root too, for the cluster's probes, which reach the pod past the proxy | 14.5 |
 | Which callbacks are an app's? | Those of the modules that declared it and its pages, since Dash's registry is the process's and tests build several apps | 14.5 |
 | Where do the lanes add their names to `bd`? | Each in a module of its own, `_data.py` or `_display.py`, whose `__all__` the package's extends | 14.5 |

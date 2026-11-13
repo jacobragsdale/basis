@@ -1,5 +1,7 @@
 """Building a Dash app from its declaration, the same way for every app, as basis-api builds a service's:
 
+- its resources and datasets, checked before anything else, each query's SQL file against its declared params
+  (`basis.dash.declarations.check`);
 - its settings, read once here, so that a missing one stops the app before it serves;
 - Dash on its FastAPI backend, on a FastAPI server of basis's own, with every setting Dash would otherwise read from a
   `DASH_*` variable given (`enable_mcp=False`, `shared_storage=None`, `compress=False`, `serve_locally=True`), its
@@ -32,7 +34,7 @@ import dash
 from basis.core import traces
 from basis.core.serving import Lifecycle, Stage
 from basis.core.serving import requests as boundary
-from basis.dash import errors, internals, shell
+from basis.dash import declarations, errors, internals, shell
 from basis.dash.app import App
 from basis.dash.errors import DeclarationError
 from basis.dash.settings import Settings
@@ -61,7 +63,9 @@ class Built:
 def build(app: App, *, settings: Settings | None = None, environment: str | None = None, dev_tools: bool = False) -> Built:
     """`app`, built, with `settings`, or its settings read from the environment. `environment` names the environment
     the settings are of, which its spans carry. `dev_tools` turns on Dash's dev tools and hot reload, which `basis dev`
-    alone asks for. An app starts once."""
+    alone asks for. An app starts once. Its resources and datasets are checked first, every SQL file opened, before
+    any environment is read."""
+    declarations.check(app.name, app.resources)
     if settings is None:
         settings = app.settings()
     elif not isinstance(settings, app.settings):

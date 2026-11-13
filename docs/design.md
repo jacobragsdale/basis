@@ -477,6 +477,24 @@ keep their Arrow table, handing each caller a fresh frame. A dataset's row is a 
 each number's display format on its column. An app reads: its databases give a reader and no writer. Phase 15 builds
 it, in modules of the data lane's own.
 
+**Datasets are declared, and nothing is guessed** (`basis.dash.declarations`, 15.1). `bd.database(name, dialect=,
+deadline_s=, max_concurrent=)` names a database and the dialect its SQL files are written in, since the check of a
+file's binds runs before any environment says which kind the database is; `bd.folder(name)` a shared folder. A dataset
+is `bd.query(name, DATABASE, sql, Row, binds={"as_of": date}, ttl_s=, stale_s=)`, `bd.file(name, FOLDER, path, Row,
+ttl_s=, stale_s=)`, a CSV or Parquet file, or `bd.view(name, function, Row, **inputs)`. A param is one value of `str`,
+`float`, `int`, `bool` or `date`, never a list. `ttl_s` and `stale_s` have no default: a dataset that does not say how
+fresh it must be is refused where it is declared, with the fix; a view's freshness is its inputs'. A view's params are
+its inputs' and its function's own parameters that are no input, each annotated with its type, and a param two of them
+name has one type. An app's datasets are those every resource of which it lists in `resources`, two never of one name.
+Building the app opens every SQL file, before it reads the settings, and refuses a file that is missing, binds a name
+it does not declare, leaves a declared param unbound, or binds in the other dialect's form.
+
+**A refusal is in the caller's words.** basis-core's `Row` takes a spelling from a part's base row, `class
+Row(rows.Row, spelling="bd")`, and its refusals name the fix under it, as `bd.Zone('UTC')` and `bd.json_text` for an
+app and `etl.Zone('UTC')` for a job, whose `etl.Row` is now that subclass of core's; core's own spells
+`basis.core.rows.Zone`, and names no part. `bd.format` gives a column's display format, each basis-core's `Display`,
+as `api.format` does for an API.
+
 **One look.** One table of tokens in Python, from basis-ui's, gives the CSS variables, the Mantine theme, the AG Grid
 theme and the Plotly template, light and dark, held to basis-ui's `theme.css` by a drift test. The scheme switches in
 the browser alone: the tokens are CSS variables keyed on `data-mantine-color-scheme`, the grid's theme is

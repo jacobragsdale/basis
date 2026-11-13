@@ -16,7 +16,7 @@ from basis.core import frames
 from basis.core.interval import Interval, unsound_end
 from basis.core.tables import Changes, Delete, Range
 from basis.job.outputs import Append, InsertNew, Manual, Outputs, Replace, ReplaceWhere, Target, Upsert, table_value
-from basis.job.rows import SchemaError, conform, conform_columns, select
+from basis.job.rows import Row, SchemaError, conform, conform_columns, select
 
 
 @dataclass(frozen=True)
@@ -87,7 +87,7 @@ def _conformed(name: str, target: Target, changes: Changes) -> Changes:
     if delete is not None and delete.matching is not None:
         try:
             columns = [target.row.column(str(column).lower()) for column in delete.matching.columns]
-            delete = Delete(delete.within, conform_columns(delete.matching, columns, what=f"{name}'s delete", naive="reject"))
+            delete = Delete(delete.within, conform_columns(delete.matching, columns, what=f"{name}'s delete", naive="reject", spelling=Row.spelling))
         except (SchemaError, KeyError) as error:
             problems.extend(f"delete: {problem}" for problem in (error.problems if isinstance(error, SchemaError) else [str(error)]))
     result = Changes(delete, conformed(changes.upsert, "upsert"), conformed(changes.insert_new, "insert_new"), conformed(changes.insert, "insert"))

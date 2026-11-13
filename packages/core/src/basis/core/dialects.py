@@ -166,3 +166,17 @@ DIALECTS: dict[Dialect, SqlDialect] = {"mssql": MSSQL, "oracle": ORACLE}
 
 def of(name: Dialect) -> SqlDialect:
     return DIALECTS[name]
+
+
+_UNBOUND = re.compile(r"--[^\n]*|/\*.*?\*/|'(?:[^']|'')*'|\"[^\"]*\"", re.DOTALL)
+"""What holds no bind: a comment, a string literal, and a quoted identifier."""
+_BIND = re.compile(r"(?<![:\w]):([A-Za-z_]\w*)|%\(([A-Za-z_]\w*)\)s")
+
+
+def named_binds(sql: str) -> dict[Dialect, set[str]]:
+    """Each name `sql` binds, by the dialect whose form it is in, Oracle's `:name` or SQL Server's `%(name)s`, outside its
+    comments and literals; a cast's `::` is none. A dialect it binds nothing in is left out."""
+    found: dict[Dialect, set[str]] = {}
+    for oracle, mssql in _BIND.findall(_UNBOUND.sub(" ", sql)):
+        found.setdefault("oracle" if oracle else "mssql", set()).add(oracle or mssql)
+    return found
