@@ -43,3 +43,11 @@ def test_the_ledger_has_the_columns_of_every_release_s_ledger_since_its_tables_o
     released = json.loads((surface.FOLDER / release / "surface.json").read_text(encoding="utf-8"))
     current: dict[str, Any] = surface.surface()
     assert released["formats"]["ledger"] == current["formats"]["ledger"]
+
+
+def test_the_surface_records_basis_dash_where_it_is_installed() -> None:
+    found: dict[str, Any] = surface.surface()
+    assert {"App", "load", "load_rows", "grid", "page"} <= set(found["python"]["basis.dash"])
+    assert {"serve", "dev", "render", "load"} <= set(found["verbs"]["dash"])
+    assert "--set" in found["verbs"]["dash"]["render"]
+    assert {"BASIS_CACHE_MB", "BASIS_SMOKE__URL", "BASIS_SERVE__PREFIX", "BASIS_SERVE__PREFIX_STRIPPED"} <= set(found["settings"])

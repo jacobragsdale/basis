@@ -91,7 +91,8 @@ jobs:
 
   verify:
     # The release's files alone, with no checkout of the workspace: each package from its wheel and from its sdist in
-    # an environment of its own, and job repos made from the basis-job wheel and from a feed that holds the files.
+    # an environment of its own, job repos made from the basis-job wheel and from a feed that holds the files, and a
+    # Dash app's repo made from the basis-dash wheel.
     timeout-minutes: 40
     needs: build
     runs-on: ubuntu-latest
@@ -147,6 +148,19 @@ jobs:
               assert (locked[name]["version"], locked[name]["source"]) == (os.environ["VERSION"], {"registry": os.environ["FEED"]}), locked[name]
           PY
           uv run basis check
+      - name: Make a Dash app's repo with uvx from the basis-dash wheel, taking basis from the feed, and run its checks
+        working-directory: ${{ runner.temp }}
+        run: |
+          uvx --from "$DIST/basis_dash-$VERSION-py3-none-any.whl" --with "$DIST/basis_core-$VERSION-py3-none-any.whl" basis-dash new app desk --index "$FEED"
+          cd desk
+          python3 - <<'PY'  # the lock holds the release's basis packages, from the feed
+          import os, tomllib
+          locked = {package["name"]: package for package in tomllib.load(open("uv.lock", "rb"))["package"]}
+          for name in ("basis-dash", "basis-core"):
+              assert (locked[name]["version"], locked[name]["source"]) == (os.environ["VERSION"], {"registry": os.environ["FEED"]}), locked[name]
+          PY
+          uv run basis check
+          uv run basis render / | python3 -c 'import json, sys; shown = json.load(sys.stdin); assert shown["failed"] == [] and shown["outputs"]["positions-grid.rowData"]["rows"] == 320, shown'
       - name: Make one as a developer does, with uvx from the feed, which refuses without --index, since uv does not record it
         working-directory: ${{ runner.temp }}
         run: |

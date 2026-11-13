@@ -6,7 +6,8 @@ release, and what `scripts/tests/test_surface.py` holds the code to.
 
 The surface is:
 
-- `python`: each part's `__all__`, `basis.job`'s and `basis.api`'s, the names a repo imports;
+- `python`: each part's `__all__`, `basis.job`'s, `basis.api`'s and, where it is installed, `basis.dash`'s, the names a
+  repo imports;
 - `verbs`: each part's verbs, its own and its side of those core shares, with each one's options;
 - `settings`: every `BASIS_*` variable the settings read, with `NAME` where a repo names its own, as a database;
 - `formats`: the fields of a run's manifest, of `basis check --full`'s record and of the ledger's row, which runs and
@@ -18,10 +19,12 @@ release must read: a run's store, the example job's run on its fixture; a `basis
 
 A name may leave the surface only after one release in which using it is refused with its replacement
 (`RENAMED` in `scripts/tests/test_surface.py`, and `renamed` for a variable). It reads only what basis's first
-release, 0.1.0, already had, so it runs on the code of any release since."""
+release, 0.1.0, already had, so it runs on the code of any release since: basis-dash, which 0.1.0 had not, is read
+where it is installed."""
 
 import argparse
 import importlib
+import importlib.util
 import json
 import sys
 import types
@@ -34,7 +37,8 @@ from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parent.parent
 FOLDER = ROOT / "docs" / "surface"
-PARTS = ("job", "api")
+PARTS = ("job", "api", *(("dash",) if importlib.util.find_spec("basis.dash") is not None else ()))
+"""Each part whose surface is recorded: basis-dash where it is installed, since 0.1.0's code had none."""
 SHARED = ("run", "describe", "resume", "replay", "regress", "runs", "ddl")
 
 
@@ -43,7 +47,7 @@ def surface() -> dict[str, Any]:
 
 
 def _python() -> dict[str, list[str]]:
-    return {name: sorted(importlib.import_module(name).__all__) for name in ("basis.job", "basis.api")}
+    return {name: sorted(importlib.import_module(name).__all__) for name in (f"basis.{part}" for part in PARTS)}
 
 
 def _options(arguments: Callable[[argparse.ArgumentParser], None]) -> list[str]:
@@ -102,7 +106,10 @@ def _settings() -> list[str]:
     from basis.api.settings import Settings as ApiSettings  # noqa: PLC0415 -- each part's, as it is installed
     from basis.core.settings import Settings  # noqa: PLC0415
 
-    return sorted({*_variables(Settings, "BASIS"), *_variables(ApiSettings, "BASIS")})
+    found = {*_variables(Settings, "BASIS"), *_variables(ApiSettings, "BASIS")}
+    if "dash" in PARTS:
+        found |= set(_variables(importlib.import_module("basis.dash.settings").Settings, "BASIS"))
+    return sorted(found)
 
 
 def _formats() -> dict[str, list[str]]:
