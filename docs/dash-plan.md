@@ -17,7 +17,7 @@ Keep this table true in each step's own commit.
 |---|---|---|
 | 13.1 The portfolio part goes | Done: the code and its wiring, then the docs; history in [the design](design.md#the-packages) | `99aaf2e`, the commit "Step 13.1, part 2" |
 | 14.1 The spike | Done: twelve yeses, in [the spike](spikes/dash.md); the steps it changed say so | the commit "Step 14.1: the Dash spike" |
-| 14.2 The design, written down | Not started | |
+| 14.2 The design, written down | Done: [Dash apps](design.md#dash-apps-basisdash), the tables, README and AGENTS | the commit "Step 14.2" |
 | 14.3 Rows in core | Done: `basis.core.rows`, a `float`'s `Display`; `basis.job.rows` re-exports | the commit "Step 14.3" |
 | 14.4 Serving in core | Done: `basis.core.serving`, its `requests` and `server`; `basis-core[serve]` | the commit "Step 14.4" |
 | 14.5 The package and an empty app | Not started | |
@@ -457,6 +457,9 @@ Each has the pick this plan builds on. None blocks a step before the one named.
 | Does `v0.2.0` publish basis-dash? | Yes, on the maintainer's word | 17.8 |
 | The design's "Decided against" row "Shared datasets across packages", whose one reason was the removed part | Removed with it; a Dash app's datasets are 15.1's to decide | 13.1 |
 | A part that gives no share of the tool settings (`AgentFiles.tools` of `None`), which only the removed part used | Kept: it is general, any part may give none, and basis then leaves the repo's own settings alone | 13.1 |
+| Are `basis serve` and `basis dev` core's verbs, shared by NAME as `run` is, or each serving part's own? | Each part's own: no repo holds two parts that serve, core's refusal of two parts adding one verb is then the one line, and basis-api's surface keeps `verb api serve --env` | 14.2 |
+| Do core's row refusals keep the job's words, such as `etl.Zone('UTC')`? | Yes for now, as `frames` and `destination` already did; a Dash app's names for the fix are 15.1's | 14.3 |
+| Where does the Dash app's path prefix come from? | Two settings, `serve.prefix` and `serve.prefix_stripped`, mapped to Dash's two prefixes | 14.5 |
 | PLAN.md's findings and figures about the removed part | Kept as history, naming it "the third part"; its full text is PLAN.md at `4a69721` | 13.1 |
 
 ## Rules for this work

@@ -1,8 +1,8 @@
 # The basis design
 
-basis is a set of Python packages that give the firm's APIs, batch jobs and, once phase 14 of [the Dash
-plan](dash-plan.md) builds them, Dash apps one shape, so that the agents that now write nearly all of their code produce
-the same kind of repo every time, and checks, rather than people reading diffs, decide whether a change is right. Web
+basis is a set of Python packages that give the firm's APIs, batch jobs and Dash apps ([the Dash plan](dash-plan.md)
+builds the last) one shape, so that the agents that now write nearly all of their code produce the same kind of repo
+every time, and checks, rather than people reading diffs, decide whether a change is right. Web
 UIs are built with [basis-ui](https://github.com/jacobragsdale/basis-ui), a separate TypeScript project that talks to
 basis APIs through the contract in [What a UI can rely on](#what-a-ui-can-rely-on). "basis" and "basis-ui" are
 placeholder names. The design was agreed on 2026-11-06 in a brainstorm that built on
@@ -71,6 +71,7 @@ set of verbs lets them do it without thinking about which repo they are in. A ba
 | `basis sync`, `basis upgrade` | Rewrite the framework's files from the installed version; relock basis, sync, check and regress in one step | Every part |
 | `basis doctor`, `basis docs` | Check the desktop's setup and print the fix for each problem; print the docs for the installed version | Every part |
 | `basis dev`, `basis serve`, `basis call ROUTE` | Run the API on fakes; run the API; run one route in-process and print its response | An API |
+| `basis dev`, `basis serve` | Run the Dash app on its fixtures, with Dash's dev tools and hot reload; run it | A Dash app |
 | `basis records export` | Write chosen recorded requests and responses as JSON, for a UI's fixture mode | An API |
 | `basis run NAME`, `basis resume RUN`, `basis describe NAME` | Run a job, and with `--publish` write its outputs; finish a publish that failed partway; print its params, inputs and outputs | Jobs |
 | `basis runs [NAME]` | List the run store's recent runs, newest first, with each one's status, interval, error and trace id | Jobs |
@@ -89,15 +90,16 @@ the fix for each problem it finds.
 | `basis-core` | Internal: database sources for Oracle and SQL Server, the resources jobs and APIs share, settings and environments, JSON logs, storage, the run store, snapshots, publishing with a ledger, the machinery of `replay`, `regress`, `new` and `sync`, contract-test helpers, and the `basis` command | Nothing |
 | `basis-job` | Batch jobs: etl-framework's job contract | `basis-core` |
 | `basis-api` | HTTP APIs on FastAPI | `basis-core` |
+| `basis-dash` | Dash apps on Dash's FastAPI backend, which read the firm's data straight from Python | `basis-core` |
 
 Every package is published to the internal PyPI feed. `basis-core` is internal: no repo depends on it by name, no user
 code imports it, and no user doc mentions it. It arrives as a dependency of the packages a repo does depend on, and
 brings the `basis` command with it. Each kind of part adds its own verbs to that command through entry points, so a job
 author's docs, skills and commands are complete without a word about the core underneath.
 
-The packages import as `basis.job` and `basis.api`, with the core as `basis.core`, one namespace that each distribution
-adds to. An import contract in this repo's checks keeps the layers apart: `basis.core` imports none of the others, and
-`basis.job` and `basis.api` import `basis.core` and never each other.
+The packages import as `basis.job`, `basis.api` and `basis.dash`, with the core as `basis.core`, one namespace that each
+distribution adds to. An import contract in this repo's checks keeps the layers apart: `basis.core` imports none of the
+others, and the parts import `basis.core` and never each other.
 
 `basis.core` is the one place basis shares code rather than only formats, and the reason is the code itself. Jobs and
 APIs both read and write Oracle and SQL Server, read settings, log, and keep what they did; etl-framework carries all of
@@ -157,13 +159,14 @@ repo still behaves the same.
 
 ## Repos and products
 
-A repo declares its parts in its `pyproject.toml`: an API, jobs, or both, and basis never infers a part from which
-folders exist. The declaration is `[tool.basis] parts = ["api", "job"]`, naming each part the repo
+A repo declares its parts in its `pyproject.toml`: an API or a Dash app, jobs, or one of those and jobs, and basis never
+infers a part from which folders exist. The declaration is `[tool.basis] parts = ["api", "job"]`, naming each part the repo
 has. A product can span several repos, and its UI is always one of its own.
 
 | Path | Holds, when the repo has that part |
 |---|---|
 | `api/` | The API, on `basis-api` |
+| `NAME/` | The Dash app's package, on `basis-dash`: `app.py`, `data.py`, `domain.py` and `pages/` |
 | `jobs/JOB/` | One folder per job, on `basis-job` |
 | `openapi.json` | The API's OpenAPI document, committed |
 | `fixtures/` | Synthetic data and its manifests, which the tests read |
@@ -171,8 +174,8 @@ has. A product can span several repos, and its UI is always one of its own.
 | `AGENTS.md`, `CLAUDE.md`, `.agents/skills/`, `.claude/skills/` | The agent files; see [Agents](#agents) |
 | `.githooks/`, `.gitattributes` | The commit and push hooks, and LF line endings on Windows and in WSL alike |
 
-The image has an entry point per part, under `tini`: `basis serve` runs the API, and `basis run NAME --publish` runs a
-job. Whatever schedules a job runs the container with that command, so basis assumes no scheduler.
+The image has an entry point per part, under `tini`: `basis serve` runs the API or the Dash app, and `basis run NAME
+--publish` runs a job. Whatever schedules a job runs the container with that command, so basis assumes no scheduler.
 
 ## What a UI can rely on
 
@@ -414,6 +417,78 @@ stays the I/O layer, for Parquet, the run store, Arrow responses and the lake. T
 code to port are all pandas, and polars' gains matter little here: frame work was about 5% of a measured run of the
 portfolio models that then lived here, and bulk movement goes through pyarrow. A job with a huge in-memory transform can
 convert to polars itself.
+
+## Dash apps: basis.dash
+
+A Dash app reads the firm's data straight from Python, with no API behind it, decided on 2026-11-13 with the
+maintainer's leave ([the Dash plan](dash-plan.md), whose phases 14 to 17 build it). basis owns what every team
+reinvents around Dash, the loads, the cache, the theme, the grid and chart defaults, the states, the server and the
+checks, and a page is still written in plain Dash's idioms (`from dash import Input, Output, callback`, `dmc`, `dag`),
+which agents know well. App code imports the part as `import basis.dash as bd`, and basis's ruff settings hold the
+alias. The plan's [What the best Dash app is](dash-plan.md#what-the-best-dash-app-is) lists the failures each piece
+answers, and [the spike](spikes/dash.md) the facts the choices below rest on.
+
+**The stack.** Dash 4.5 on its FastAPI backend, served by uvicorn through basis-core's runner, as an API is: one server
+for both, on Windows desktops too, where gunicorn does not run, and the road to WebSocket and streaming callbacks. React
+19.2.4, Dash 4.5's opt-in, which Mantine 9 needs; dash-mantine-components 3 for the shell, inputs and notifications;
+dash-ag-grid 35, Community features only, for the grid; Plotly 7 for charts; orjson, which cuts Dash's encoding of a
+large answer five-fold. Nothing else: no dash-bootstrap-components, no dash-extensions, and no dash-iconify, which
+fetches icons from a public CDN. The stack adds about 128 MB to an environment, every wheel pure Python or built for
+Windows and Linux on 3.14. DMC 3 rather than 2.8.1: DMC 2 has no branch left to fix it, and no open defect of DMC 3 or
+React 19 is one DMC 2 would avoid.
+
+**`bd.App` is a declaration.** `bd.App(name=, title=, settings=, resources=, pages=, fakes=)` says what the app is, and
+basis builds the Dash app from it, as `api.Service` is to basis-api: a repo's code never makes `dash.Dash`. Building
+it, which `basis serve`, `basis dev`, `basis check` and every test do alike:
+
+- chooses React 19 when `basis.dash` is imported (`dash._dash_renderer._set_react_version`), so it holds for every app
+  in the process, a test's among them;
+- passes Dash every setting itself, so none of Dash's 24 `DASH_*` variables changes one: `enable_mcp=False`,
+  `shared_storage=None`, `compress=False` (Dash's gzip is level 9, 340 ms for 10,000 rows; basis compresses at level
+  1, as an API does, or the ingress does), `serve_locally=True`; `basis serve` refuses to start while any `DASH_*`
+  variable or `_DASH_FASTAPI_CONFIG` is set, since the FastAPI backend turns the dev tools on from the latter with no
+  argument to stop it;
+- sets up the server at once (`_setup_server`), so a setup error fails the build, not the first request;
+- mounts basis-core's health routes and request boundary on the FastAPI server, with the same lifecycle and shutdown
+  as an API's (see [What jobs and APIs share](#what-jobs-and-apis-share)).
+
+**A path prefix is one setting.** Behind the firm's proxy an app lives under a path, which the proxy strips or keeps.
+`serve.prefix` names it and `serve.prefix_stripped` says which: stripped, it is Dash's `requests_pathname_prefix`
+with routes at `/`; kept, it is `url_base_pathname`, and the health routes move under it too, since a proxy that keeps
+the prefix asks for `/apps/pos/health/ready`. Pages and links use `dash.get_relative_path`.
+
+**The dev tools are `basis dev`'s alone.** `basis dev` runs uvicorn with its reloader itself and turns Dash's dev
+tools and hot reload on for the app it builds, with Dash's version check off, since it calls plotly.com; `basis
+serve` never has them. Hot reload is proved on Linux; WSL, where watchfiles polls, and Windows are 17.7's to prove.
+
+**One served thing per repo.** A repo declares `dash` beside `job` where it holds the jobs that fill the tables it
+shows, and never beside `api`: each serves, so `basis serve` and `basis dev` would mean two things. Each serving part
+gives those verbs as its own, not as verbs of core's that parts share by NAME, since no repo holds two parts that
+serve; basis refuses two declared parts that add the same verb, in one line whose fix is a repo for each.
+
+**Loads leave the loop.** A callback that is not `async` runs on the event loop's own thread on this backend, so one
+slow query would stop every user's page. Every load is `await bd.load(DATASET, **params)`: it runs in
+`anyio.to_thread.run_sync`, under its database's `CapacityLimiter`, never a bare executor, so Dash's `ctx` and
+`set_props` hold inside it; and a load called on the loop raises, with the fix. Datasets are declared by name, query
+by the few params that change what is read, filter in views, cache by their params with a TTL and a stale window, and
+keep their Arrow table, handing each caller a fresh frame. A dataset's row is a job's row, `basis.core.rows.Row`, with
+each number's display format on its column. An app reads: its databases give a reader and no writer. Phase 15 builds
+it, in modules of the data lane's own.
+
+**One look.** One table of tokens in Python, from basis-ui's, gives the CSS variables, the Mantine theme, the AG Grid
+theme and the Plotly template, light and dark, held to basis-ui's `theme.css` by a drift test. The scheme switches in
+the browser alone: the tokens are CSS variables keyed on `data-mantine-color-scheme`, the grid's theme is
+`themeQuartz.withParams` with `var()` values, and a figure, which Plotly.js draws with colours it parses itself, gets a
+transparent template and basis's CSS over the styles Plotly writes. A template cannot be sent once for a page, so
+basis's holds only what differs from Plotly's, under 0.5 KB a figure. basis's CSS, fonts and JavaScript are the
+package's, served by Dash fingerprinted (`dash.hooks.stylesheet` and `script`, a font `dynamic`), beside an app's own
+`assets/`; basis's grid functions join `window.dashAgGridFunctions` under `basis` names and never replace it. Nothing
+is fetched from another origin. Phase 16 builds it, in modules of the display lane's own.
+
+**Dash's internals are in one module.** `basis.dash.internals` holds every private name of Dash's that basis touches,
+and a test holds each, as `basis.api.internals` holds FastAPI's, so an upgrade that moves one fails there.
+`basis.dash.testing` builds an app in the process and drives it through FastAPI's `TestClient`: the index, health and
+readiness, and a callback's round trip through `/_dash-update-component`, with no browser and no socket.
 
 ## What jobs and APIs share
 
@@ -863,8 +938,9 @@ Python is 3.14, as etl-framework required, set up with uv only.
 
 | Option | Why not |
 |---|---|
-| A UI inside basis | One language per project keeps each toolchain, its checks and its docs whole; the UI is basis-ui. |
+| A TypeScript UI inside basis | One language per project keeps each toolchain, its checks and its docs whole; a TypeScript UI is basis-ui. A Dash app is Python, so it is a part of basis: [Dash apps](#dash-apps-basisdash). |
 | Repos that hold an API and its UI | Each repo has one toolchain; the firm already keeps most UIs apart from their APIs. |
+| Repos that hold an API and a Dash app | Each serves, and a repo has one served thing, so `basis serve` and `basis dev` mean one thing in it. |
 | C# services | One backend language keeps the stack small; engineering writes Python APIs too. |
 | Rust services | Rust's SQL Server drivers are weak (the original `tiberius` crate lives on in forks, and sqlx dropped its SQL Server driver), its builds slow an agent's loop, and memory is not the cost that matters most. |
 | A command per kind of part | People move between their product's repos; one `basis` command with the same verbs everywhere spares them working out which tool a repo uses. |
@@ -873,7 +949,7 @@ Python is 3.14, as etl-framework required, set up with uv only.
 | Pushing upgrades to repos | Owners relock when they choose; `basis upgrade` makes that one command. |
 | Docker on the desktops | Not available. The QA tier reaches real databases instead. |
 | MCP servers | Every agent reads MCP settings from a different file. |
-| Code shared between `basis.job` and `basis.api` | Each depends on `basis.core` only, so one cannot break another. |
+| Code shared between parts, such as `basis.job` and `basis.api` | Each depends on `basis.core` only, so one cannot break another. |
 | Core code shaped by one part | A part's design can change, or the part can go, and core's must not change with it; a mechanism only one part uses is one a job could use as it stands. |
 | Lint and format rules in prose | An agent eventually breaks a rule nobody checks. |
 | DVC or Git LFS for run data | Each adds a tool and storage credentials to every desktop, and the packages already own their storage. |
