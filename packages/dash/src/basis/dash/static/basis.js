@@ -203,8 +203,105 @@
     return window.dash_clientside.no_update;
   };
 
+  /* A grid's totals are of the rows shown. The server's stand while nothing is filtered; while a quick filter or a
+     column's filter is on, the declared totals are worked out here over the rows the filter keeps, and the server's
+     come back when it is cleared. The grid's context holds what was declared (basis.dash.grids). */
+  function sum(values) {
+    var total = 0;
+    var lost = 0; /* Neumaier's compensation, so a long column sums as the server's fsum does to 15 digits */
+    for (var i = 0; i < values.length; i++) {
+      var next = total + values[i];
+      lost += Math.abs(total) >= Math.abs(values[i]) ? total - next + values[i] : values[i] - next + total;
+      total = next;
+    }
+    return total + lost;
+  }
+
+  function given(value) {
+    return typeof value === "number" && Number.isFinite(value);
+  }
+
+  function totalOf(rows, field, kind) {
+    var values = [];
+    if (kind && typeof kind === "object") {
+      var products = [];
+      var weights = [];
+      for (var w = 0; w < rows.length; w++) {
+        var value = rows[w][field];
+        var weight = rows[w][kind.weighted];
+        if (given(value) && given(weight)) {
+          products.push(value * weight);
+          weights.push(weight);
+        }
+      }
+      var weighed = sum(weights);
+      return weighed !== 0 ? sum(products) / weighed : null;
+    }
+    for (var i = 0; i < rows.length; i++) if (given(rows[i][field])) values.push(rows[i][field]);
+    if (kind === "count") return values.length;
+    if (!values.length) return null;
+    if (kind === "sum") return sum(values);
+    if (kind === "mean") return sum(values) / values.length;
+    return kind === "min" ? Math.min.apply(null, values) : Math.max.apply(null, values);
+  }
+
+  /* The totals row of `rows` by `declared`: {totals: {FIELD: KIND}, label, key}, as the server writes it. */
+  function totalsOf(rows, declared) {
+    var row = {};
+    Object.keys(declared.totals).forEach(function (field) {
+      row[field] = totalOf(rows, field, declared.totals[field]);
+    });
+    if (declared.label) row[declared.label] = "Total";
+    if (declared.key && !(declared.key in row)) row[declared.key] = "";
+    return row;
+  }
+
+  var grids = new WeakMap();
+  function totals(event) {
+    var api = event.api;
+    var declared = (api.getGridOption("context") || {}).basis;
+    if (!declared) return;
+    var state = grids.get(api);
+    if (!state) grids.set(api, (state = { mine: null, server: null, busy: false }));
+    if (state.busy) return;
+    var current = api.getGridOption("pinnedBottomRowData");
+    if (current !== state.mine) state.server = current;
+    var all = 0;
+    var shown = [];
+    api.forEachNode(function () {
+      all += 1;
+    });
+    api.forEachNodeAfterFilter(function (node) {
+      shown.push(node.data);
+    });
+    var filtered = api.isAnyFilterPresent();
+    var next = null;
+    if (filtered && Object.keys(declared.totals).length) {
+      var row = totalsOf(shown, declared);
+      if (current !== state.mine || JSON.stringify(state.mine[0]) !== JSON.stringify(row)) next = [row];
+    } else if (state.mine && current === state.mine) {
+      next = state.server || [];
+    }
+    if (next) {
+      state.mine = filtered ? next : null;
+      state.busy = true;
+      try {
+        api.setGridOption("pinnedBottomRowData", next);
+      } finally {
+        state.busy = false;
+      }
+    }
+    if (declared.count && window.dash_clientside.set_props) {
+      var whole = format(all, { decimals: 0 });
+      var text = filtered ? format(shown.length, { decimals: 0 }) + " of " + whole : whole;
+      window.dash_clientside.set_props(declared.count, { children: text + " " + declared.noun });
+    }
+  }
+
+  basis.totalsOf = totalsOf;
   basis.format = format;
   var grid = (window.dashAgGridFunctions = window.dashAgGridFunctions || {});
+  grid.basisTotals = totals;
   grid.basisFormat = format;
   grid.basisScale = scale;
 })();

@@ -14,9 +14,12 @@ from the row's, so a page never restates what the row declares:
   sorting and resizing.
 - **Rows keep their ids** (`key`, a text column), so a refresh changes the rows that changed, and keeps the
   selection and the scroll.
-- **Totals are the server's**, a pinned row under the rows: `grid.totals(frame)`, a change to the grid's options, sums, counts, takes the least or
-  most, or a mean weighted by a declared column (`bd.weighted("par")`), skipping missing values, as each column's
-  `totals` entry says, and labels the row in the first text column without one.
+- **Totals are of the rows shown**, a pinned row under them: `grid.totals(frame)`, a change to the grid's options,
+  sums, counts, takes the least or most, or a mean weighted by a declared column (`bd.weighted("par")`), skipping
+  missing values, as each column's `totals` entry says, and labels the row in the first text column without one. While
+  a filter is on, the quick filter's or a column's, basis's script works the same totals out over the rows it keeps,
+  and the server's come back when it is cleared.
+- **A count** beside the quick filter: "300 rows", or "50 of 300 rows" while a filter is on.
 - **A quick filter** over every column, above the grid, which filters in the browser alone; text a person can select
   and copy; a height of its own, so a large table scrolls inside it and draws only the rows shown.
 - **A page overrides a column** where it must, with `bd.column(header=, width=, pin=, hide=, signed=, bar=, heat=)`:
@@ -45,6 +48,8 @@ from dash.development.base_component import Component
 type Total = Literal["sum", "mean", "min", "max", "count"] | Weighted
 type Pin = Literal["left", "right"]
 
+COUNT: Final = "basis-grid-count"
+"""The type of a grid's count's id, `{"type": COUNT, "grid": ID}`, which basis's script writes: "50 of 300 rows"."""
 SEARCH: Final = "basis-grid-search"
 """The type of a grid's quick filter's id, `{"type": SEARCH, "grid": ID}`, which the shell's one callback reads."""
 HEIGHT: Final = 520
@@ -126,10 +131,12 @@ def grid(
     columns: Mapping[str, ColumnShown] | None = None,
     height: int | None = HEIGHT,
     search: bool = True,
+    noun: str = "rows",
 ) -> Grid:
     """A grid of `row`'s columns at `id`, its rows known by `key`, with `totals` and `columns`' overrides, `height`
-    pixels tall, or as tall as its rows where None, for a short table, and a quick filter unless `search` is False.
-    What a page lays out: the grid, under its quick filter."""
+    pixels tall, or as tall as its rows where None, for a short table, and a quick filter unless `search` is False. Its
+    count names its rows `noun`: "300 holdings", or "50 of 300 holdings" while a filter is on. What a page lays out:
+    the grid, under its quick filter and its count."""
     if not (isinstance(row, type) and issubclass(row, Row)):
         msg = f"grid {id}'s row is {row!r}: give a bd.Row subclass, whose columns the grid shows"
         raise DeclarationError(msg)
@@ -148,6 +155,8 @@ def grid(
     }
     if height is None:
         options["domLayout"] = "autoHeight"
+    count = {"type": COUNT, "grid": id}
+    options["context"] = {"basis": {"totals": {name: _total_json(total) for name, total in given_totals.items()}, "label": label, "key": key, "count": count, "noun": noun}}
     table = dag.AgGrid(
         id=id,
         rowData=[],
@@ -155,17 +164,24 @@ def grid(
         defaultColDef={"sortable": True, "resizable": True, "filter": True},
         dashGridOptions=options,
         getRowId=f"params.data.{key}" if key is not None else None,
+        eventListeners={event: ["basisTotals(params)"] for event in ("firstDataRendered", "rowDataUpdated", "modelUpdated", "pinnedRowDataChanged")},
         className="basis-grid-table",
         style={"height": f"{height}px" if height is not None else None, "width": "100%"},
     )
-    parts: list[Component] = []
+    tools: list[Component] = []
     if search:
         box = dcc.Input(id={"type": SEARCH, "grid": id}, type="search", placeholder="Filter rows", debounce=False, className="basis-grid-search-input", autoComplete="off")
         named = html.Span("Filter the rows", className="basis-visually-hidden")  # the box's name, which the label gives it
-        parts.append(html.Div([html.Label([icon("search"), named, box], className="basis-grid-search")], className="basis-grid-tools"))
-    shown = Grid([*parts, table], className="basis-grid")
+        tools.append(html.Label([icon("search"), named, box], className="basis-grid-search"))
+    tools.append(html.Span(id=count, className="basis-grid-count", role="status"))
+    shown = Grid([html.Div(tools, className="basis-grid-tools"), table], className="basis-grid")
     object.__setattr__(shown, "declared", Declared(row, key, given_totals, label))  # beside the component, which Dash never sends
     return shown
+
+
+def _total_json(total: Total) -> object:
+    """A total as basis's script reads it: its kind, or `{"weighted": COLUMN}`."""
+    return {"weighted": total.by} if isinstance(total, Weighted) else total
 
 
 def header(name: str) -> str:

@@ -607,8 +607,13 @@ grid shares the rest of its width out, and scrolls sideways where the columns ne
 a text column never null. Totals are the server's: `grid.totals(frame)` sums (by `math.fsum`), counts, takes the
 least or most, or a mean weighted by another column over the rows where both are given (`bd.weighted("par")`), labels
 the row "Total" in the first text column with no total, and is a `Patch` of the grid's `dashGridOptions`, its pinned
-row alone, since AG Grid's pinned rows are an option, not a prop. They are the totals of the rows sent, not of a
-filter applied in the browser. The quick filter above the grid is the shell's one pattern-matching clientside
+row alone, since AG Grid's pinned rows are an option, not a prop. A total is of the rows shown: while a quick filter
+or a column's filter is on, basis's script works the declared totals out again over the rows the filter keeps (a
+compensated sum, so a long column sums as `fsum` does to 15 digits), formats them through `basisFormat`, and puts the
+server's back when the filter is cleared, a server's answer that arrives meanwhile among them; the grid's `context`
+carries what was declared, and AG Grid's `modelUpdated`, `rowDataUpdated`, `firstDataRendered` and
+`pinnedRowDataChanged` events run it. A count beside the quick filter says "300 holdings", or "50 of 300 holdings"
+while a filter is on (`noun=`), written by the script through `dash_clientside.set_props`. The quick filter above the grid is the shell's one pattern-matching clientside
 callback for every grid, through `dash_ag_grid.getApiAsync`, so it filters with no request. A page overrides a column
 with `bd.column(header=, width=, pin=, hide=, signed=, bar=, heat=)`: gain and loss colours, a bar, or a heat colour,
 drawn in the browser against the column's largest magnitude in the rows sent, the heat at most 24% of the diverging

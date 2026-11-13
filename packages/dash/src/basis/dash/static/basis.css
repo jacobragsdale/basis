@@ -427,3 +427,9 @@ html:root body {
   white-space: nowrap;
   border: 0;
 }
+.basis-grid-count {
+  color: var(--basis-muted-foreground);
+  font-size: var(--basis-text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

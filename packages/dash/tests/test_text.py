@@ -122,7 +122,7 @@ def test_the_script_adds_to_the_grid_s_functions_and_never_replaces_them() -> No
     console.log(JSON.stringify({grid: Object.keys(window.dashAgGridFunctions).sort(), clientside: Object.keys(window.dash_clientside).sort()}));
     """
     ran = subprocess.run([str(NODE), "-e", probe, str(STATIC / "basis.js")], capture_output=True, text=True, encoding="utf-8", check=True, timeout=30)
-    assert json.loads(ran.stdout) == {"grid": ["appUpper", "basisFormat", "basisScale"], "clientside": ["app", "basis"]}
+    assert json.loads(ran.stdout) == {"grid": ["appUpper", "basisFormat", "basisScale", "basisTotals"], "clientside": ["app", "basis"]}
 
 
 def test_a_spec_resolves_every_default_the_browser_would_need() -> None:

@@ -267,3 +267,79 @@ def test_a_grid_s_declaration_stays_on_the_server() -> None:
     assert isinstance(GRID.declared.row, type)
     assert GRID.declared.totals["ytw"] == bd.weighted("par")
     assert Display(kind="money", currency="USD", decimals=0) == Position.column("par").display
+
+
+def _node(probe: str, *arguments: str) -> Any:  # noqa: ANN401 -- what the probe prints, JSON of any shape
+    ran = subprocess.run(["node", "-e", probe, str(STATIC / "basis.js"), *arguments], capture_output=True, text=True, encoding="utf-8", check=True, timeout=30)  # noqa: S607 -- node, on the path
+    return json.loads(ran.stdout)
+
+
+needs_node = pytest.mark.skipif(shutil.which("node") is None and "CI" not in os.environ, reason="the browser script runs under node, which this machine lacks; CI has it")
+
+
+def test_the_grid_tells_the_browser_what_its_totals_are() -> None:
+    table = _table(GRID)
+    assert table["dashGridOptions"]["context"]["basis"] == {
+        "totals": {"par": "sum", "pnl": "sum", "ytw": {"weighted": "par"}, "oas": {"weighted": "par"}, "price": "mean", "quantity": "count"},
+        "label": "cusip",
+        "key": "cusip",
+        "count": {"type": grids.COUNT, "grid": "grid-positions"},
+        "noun": "rows",
+    }
+    assert table["eventListeners"] == {event: ["basisTotals(params)"] for event in ("firstDataRendered", "rowDataUpdated", "modelUpdated", "pinnedRowDataChanged")}
+    count = next(part for part in _sent(GRID)["props"]["children"][0]["props"]["children"] if part["props"].get("className") == "basis-grid-count")
+    assert count["props"]["role"] == "status"
+
+
+@needs_node
+def test_the_browser_totals_rows_as_the_server_does() -> None:
+    declared = _table(GRID)["dashGridOptions"]["context"]["basis"]
+    rows = json.loads(FRAME.drop(columns=["maturity"]).to_json(orient="records"))
+    probe = """
+    const SCRIPT = require("fs").readFileSync(process.argv[1], "utf8");
+    globalThis.window = {};
+    eval(SCRIPT);
+    const [rows, declared] = JSON.parse(process.argv[2]);
+    console.log(JSON.stringify(window.dash_clientside.basis.totalsOf(rows, declared)));
+    """
+    browser = _node(probe, json.dumps([rows, declared]))
+    [server] = grids.totals(FRAME, GRID.declared)
+    assert browser.keys() == server.keys()
+    for name, value in server.items():
+        assert browser[name] == (pytest.approx(value, rel=1e-15) if isinstance(value, float) else value), name
+
+
+@needs_node
+def test_a_filter_totals_the_rows_it_keeps_and_clearing_it_brings_the_server_s_back() -> None:
+    probe = """
+    const SCRIPT = require("fs").readFileSync(process.argv[1], "utf8");
+    const props = [];
+    globalThis.window = {dash_clientside: {set_props: (id, given) => props.push(given.children)}};
+    eval(SCRIPT);
+    const rows = [{cusip: "A", par: 1}, {cusip: "B", par: 2}, {cusip: "C", par: 4}];
+    const server = [{cusip: "Total", par: 7}];
+    let pinned = server, kept = rows;
+    const options = {context: {basis: {totals: {par: "sum"}, label: "cusip", key: "cusip", count: {type: "c", grid: "g"}, noun: "holdings"}}};
+    const api = {
+      getGridOption: (name) => name === "pinnedBottomRowData" ? pinned : options[name],
+      setGridOption: (name, value) => { pinned = value; },
+      forEachNode: (each) => rows.forEach((data) => each({data})),
+      forEachNodeAfterFilter: (each) => kept.forEach((data) => each({data})),
+      isAnyFilterPresent: () => kept !== rows,
+    };
+    const totals = window.dashAgGridFunctions.basisTotals;
+    const seen = [];
+    totals({api}); seen.push(pinned);
+    kept = rows.slice(1); totals({api}); seen.push(pinned);
+    pinned = [{cusip: "Total", par: 70}]; totals({api}); seen.push(pinned);
+    kept = rows; totals({api}); seen.push(pinned);
+    console.log(JSON.stringify({seen, props}));
+    """
+    found = _node(probe)
+    assert found["seen"] == [
+        [{"cusip": "Total", "par": 7}],  # nothing filtered: the server's
+        [{"par": 6, "cusip": "Total"}],  # filtered: the rows kept
+        [{"par": 6, "cusip": "Total"}],  # the server answers again while filtered: still the rows kept
+        [{"cusip": "Total", "par": 70}],  # cleared: the server's latest
+    ]
+    assert found["props"] == ["3 holdings", "2 of 3 holdings", "2 of 3 holdings", "3 holdings"]
