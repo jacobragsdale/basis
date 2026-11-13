@@ -122,6 +122,10 @@ class Runtime:
                 found = key(dataset.name, params)
                 read = lambda: self._read_or_stale(dataset, params, found)  # noqa: E731 -- the read the flight starts
             entry, how = self.cache.fresh(found), "hit"
+            if entry is None and (failure := self.cache.failing(found)) is not None:
+                if (kept := self.cache.kept(found)) is None:
+                    raise _again(failure)  # backed off, with nothing to show: the same failure, and no query
+                entry, how = replace(kept, stale=True), "backoff"
             if entry is None:
                 loop = asyncio.get_running_loop()
                 task, joined = self.cache.flight(found, lambda: loop.create_task(read()))
@@ -138,7 +142,10 @@ class Runtime:
     def reload(self, dataset: Dataset, params: Mapping[str, Hashable]) -> bool:
         found = key(dataset.name, params)
         entry = self.cache.kept(found)
-        floor = dataset.reload_s if isinstance(dataset, Query | File) else None
+        if self.cache.failing(found) is not None:
+            log.info("kept %s, as its last read failed and its back-off lasts", dataset.name, extra={"dataset": dataset.name})
+            return False
+        floor = dataset.reload_s if isinstance(dataset, Query | File | Fetch) else None
         if entry is not None and floor is not None and self.cache.clock() - entry.read_at < floor:
             log.info("kept %s, read %.0f s ago, less than its reload_s", dataset.name, self.cache.clock() - entry.read_at, extra={"dataset": dataset.name, "reload_s": floor})
             return False
@@ -158,18 +165,19 @@ class Runtime:
         """`_read`, or, where it fails with a resource's failure inside the dataset's `stale_s`, the last good value,
         marked stale."""
         try:
-            return await self._read(dataset, params, found)
+            read = await self._read(dataset, params, found)
         except ServiceError as error:
+            delay = self.cache.failed(found, error, ttl_s=dataset.ttl_s if isinstance(dataset, Query | File | Fetch) else 0.0)
+            fields = {"dataset": dataset.name, "kind": type(error).__name__, "resource": error.resource, "reason": error.reason, "backoff_s": delay}
             if (kept := self.cache.kept(found)) is None:
+                log.info("%s is not read again for %g s, as its read failed", dataset.name, delay, extra=fields)
                 raise
             log.warning(
-                "%s could not be read again (%s), so its last good value answers, read at %s",
-                dataset.name,
-                error.detail,
-                kept.loaded_at.isoformat(),
-                extra={"dataset": dataset.name, "kind": type(error).__name__, "resource": error.resource, "reason": error.reason},
+                "%s could not be read again (%s), so its last good value answers, read at %s; not read again for %g s", dataset.name, error.detail, kept.loaded_at.isoformat(), delay, extra=fields
             )
             return replace(kept, stale=True)
+        self.cache.cleared(found)
+        return read
 
     async def _read(self, dataset: Dataset, params: Mapping[str, Hashable], found: Key) -> Entry:
         loaded_at = datetime.now(UTC)
@@ -256,6 +264,11 @@ class Runtime:
             return frames.to_arrow(conform(frame, dataset.row, what=f"fetch {dataset.name}", naive="in_zone"))
 
         return await anyio.to_thread.run_sync(rows)
+
+
+def _again(failure: ServiceError) -> ServiceError:
+    """The failure a backed-off key's last read met, as a new exception of its kind, with its detail and reason."""
+    return type(failure)(failure.detail, resource=failure.resource, status=failure.status, reason=failure.reason)
 
 
 def _unversioned(found: Key) -> Key:

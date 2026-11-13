@@ -9,6 +9,10 @@ changes its frame changes nobody else's.
 - **Versioned**: each value loaded has a number no other has, which a view's key carries for each of its inputs, so a
   view is computed again when an input is loaded again, and never otherwise (15.3).
 
+- **Backed off** after a read fails (`failed`): the key is not read again until `BACKOFF_FIRST_S` passes, which
+  doubles with each failure to `BACKOFF_MOST_S`, and never past the dataset's `ttl_s`; a read that succeeds clears it
+  (`cleared`). Meanwhile a load answers the stale value where one is kept, and the same failure where none is.
+
 Callers that ask for one key at the same moment share one load (`Cache.flight`), and nothing here blocks: the cache is
 the event loop's alone, and only the load itself leaves it."""
 
@@ -23,12 +27,18 @@ from datetime import datetime
 
 import pyarrow as pa
 
+from basis.core.errors import ServiceError
+
 log = logging.getLogger(__name__)
 
 type Key = tuple[str, tuple[tuple[str, Hashable], ...]]
 """A value's key: its dataset's name, and its params by name, in order; a view's params carry its inputs' versions."""
 
 MEGABYTE = 1024 * 1024
+BACKOFF_FIRST_S = 5.0
+"""Seconds a key is not read again after its first failure."""
+BACKOFF_MOST_S = 60.0
+"""The most seconds a key is not read again, however many times it has failed."""
 
 
 def key(name: str, params: Mapping[str, Hashable]) -> Key:
@@ -51,6 +61,14 @@ class Entry:
     """Whether it is a value past its TTL that a load answered because reading it again failed: never kept so."""
 
 
+@dataclass(frozen=True)
+class _Failure:
+    error: ServiceError
+    delay_s: float
+    until: float
+    """The cache's clock before which the key is not read again."""
+
+
 class Cache:
     """The values of one app, in its process, at most `max_mb` megabytes of them."""
 
@@ -61,6 +79,7 @@ class Cache:
         self._entries: OrderedDict[Key, Entry] = OrderedDict()
         self._bytes: int = 0
         self._flights: dict[Key, asyncio.Task[Entry]] = {}
+        self._failures: dict[Key, _Failure] = {}
         self._latest: dict[Key, Key] = {}
         """A view's last key, by the key without its inputs' versions."""
         self._versions = itertools.count(1)
@@ -119,6 +138,22 @@ class Cache:
     def forget(self, found: Key) -> None:
         """Drop the value at `found`, so the next load reads it again."""
         self._drop(found)
+
+    def failing(self, found: Key) -> ServiceError | None:
+        """The failure the key's last read met while its back-off lasts, or None where it may be read."""
+        failure = self._failures.get(found)
+        return failure.error if failure is not None and self.clock() < failure.until else None
+
+    def failed(self, found: Key, error: ServiceError, *, ttl_s: float) -> float:
+        """Back the key off after its read failed with `error`: the seconds until it may be read again."""
+        before = self._failures.get(found)
+        delay = min(before.delay_s * 2 if before is not None else BACKOFF_FIRST_S, BACKOFF_MOST_S, ttl_s)
+        self._failures[found] = _Failure(error, delay, self.clock() + delay)
+        return delay
+
+    def cleared(self, found: Key) -> None:
+        """The key's read succeeded: no back-off."""
+        self._failures.pop(found, None)
 
     def flight(self, found: Key, start: Callable[[], asyncio.Task[Entry]]) -> tuple[asyncio.Task[Entry], bool]:
         """The load of `found` under way, and whether this caller joined it rather than started it: callers that ask at

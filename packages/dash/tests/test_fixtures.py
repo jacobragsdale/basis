@@ -50,8 +50,11 @@ def test_a_fixture_database_fails_on_demand_as_the_database_would(caplog: pytest
     assert isinstance(warehouse, fixtures.FixtureDatabase)
     warehouse.fails(Unavailable, query="positions", times=1)
     with testing.client(_app(), fakes=made) as client:
+        now = [1000.0]
+        client.built.runtime.cache.clock = lambda: now[0]
         assert "fixture-par" not in client.fire("fixture-par.children", {"fixture-day.value": "2026-11-13"})  # the output keeps what it showed
         assert "database warehouse could not be reached" in caplog.text
+        now[0] += 5  # past the read's back-off
         assert client.fire("fixture-par.children", {"fixture-day.value": "2026-11-13"})["fixture-par"] == {"children": "2 positions, 1,250,000 par"}
     assert warehouse.queries == [("positions", {"as_of": date(2026, 11, 13)})] * 2
     with pytest.raises(fixtures.FixtureError, match="has no query trades: name one of positions"):

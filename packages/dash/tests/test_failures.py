@@ -82,6 +82,7 @@ def test_a_dataset_inside_its_stale_window_answers_its_last_good_value_marked_st
         warnings = [record for record in caplog.records if record.levelno == logging.WARNING and record.name == "basis.dash.runtime"]
         assert [record.__dict__["kind"] for record in warnings] == ["Unavailable"]
         assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
+        now[0] += 5  # past the read's back-off
         fresh = client.fire("fixture-par.children", DAY)  # the database answers again, and the value is read
         assert _status(fresh)["stale"] is False
         assert _status(fresh)["loaded_at"] > _status(first)["loaded_at"]

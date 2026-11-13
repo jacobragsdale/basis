@@ -30,6 +30,7 @@ Keep this table true in each step's own commit.
 | 15.6 Refresh | Done: `bd.refresh` (a timer, 5 s at least), `bd.reload` under a dataset's declared `reload_s`, `bd.loaded` | the commit "Step 15.6" |
 | 15.7 More sources | Done: `bd.http` and `bd.fetch`, `bd.lake`, a workbook's sheet and a path's params in `bd.file`; no paging yet | the commit "Step 15.7" |
 | 15.8 Rows to the browser, the rest | Done: each callback's answer logged with its bytes, a warning past 4 MB; the integration test of a query's load on SQL Server and Oracle; the numbers in [the design](design.md#dash-apps-basisdash) | the commit "Step 15.8, part 2" |
+| 15.9 A failed read backs off | Done: 5 s doubling to 60 s, never past `ttl_s`, cleared by a success; the stale value or the same failure meanwhile, with no query; `bd.reload` does not cut it short | the commit "Step 15.9" |
 | 16.1 Tokens and theme | Done: `basis.dash.theme`, its table held to basis-ui's `theme.css`; the CSS, Mantine, AG Grid and Plotly from it; the fonts | the commit "Step 16.1" |
 | 16.2 The shell and the page | Done: the header (title, environment, navigation, switch), `bd.page`'s body and filters, `bd.card`, the 404 page, tab titles, `bd.icon` | the commit "Step 16.2" |
 | 16.3 One number, one text | Done: `bd.text`; `basisFormat` in `static/basis.js`, held under node to `format.json`'s float cases and to core's text for each display format | the commit "Step 16.3" |

@@ -713,6 +713,14 @@ before: try again in a moment.` for a `Timeout`, `could not be reached` for `Una
 instead, marked `stale` in the status store, with one warning logged and no notification; a view of a stale input is
 stale too. Past `stale_s`, a failure is a failure.
 
+**A failed read backs off** (15.9), so a database that is down is not met by every page's every load. After a read
+fails, its dataset and params are not read again until a back-off passes: 5 s after the first failure, doubling with
+each failure after it to 60 s at most, and never past the dataset's `ttl_s`; a read that succeeds clears it. Meanwhile
+a load answers the stale value where one is kept, marked stale as above, and the same failure at once where none is,
+without touching the database, so the page's notification says what the last read met; `bd.reload` keeps the value and
+does not cut the back-off short. Each failure logs the seconds of its back-off, `backoff_s`, and a load the back-off
+answered has `cache` `backoff`. The back-off is the process's, as the cache is: each pod backs off on its own.
+
 **The package is laid out for two lanes.** The foundations' modules build, serve and test an app; the data lane's
 (declarations, the cache, loads, views, fixtures) and the display lane's (theme, shell, page, grid, charts, states,
 exports and `static/`) are their own, and each lane adds its names to `bd` through a module only it edits
