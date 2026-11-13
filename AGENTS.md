@@ -56,6 +56,15 @@ uv run basis-api new app pricing --dir SCRATCH --framework-path .   # its first 
 cd SCRATCH/pricing && uv run basis check
 ```
 
+To check what `basis-dash new app` generates, from the root:
+
+```sh
+uv run basis-dash new app desk --dir SCRATCH --framework-path .   # the example's positions page, on its fixtures
+cd SCRATCH/desk && uv run basis check && uv run basis new page risk && uv run basis render /risk
+git add --all && git commit -m "First commit"   # the commit hook runs basis check
+uv run basis dev                    # serves it at http://127.0.0.1:8000, reloading as code changes
+```
+
 A repo whose image builds needs basis from git rather than a checkout: push the branch, and make one with
 `uvx --from 'git+https://github.com/jacobragsdale/basis@BRANCH#subdirectory=packages/job' basis-job new repo loads`,
 which takes basis from the commit uvx installed. CI runs all of this on every pull request that changes more than

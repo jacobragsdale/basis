@@ -24,6 +24,9 @@ from basis.dash.app import App
 from basis.dash.building import Built, build
 from basis.dash.settings import Settings
 
+type Json = Any
+"""A value of a callback's answer, as JSON holds it."""
+
 ROUTER = "_pages_content.children"
 """What Dash Pages' router callback outputs, among its outputs: the page the URL names."""
 
@@ -56,11 +59,11 @@ class Client:
             raise TypeError(msg)
         return [_object(entry, "a dependency") for entry in found]
 
-    def fire(self, output: str, inputs: Mapping[str, object], *, state: Mapping[str, object] | None = None, changed: list[str] | None = None) -> dict[str, dict[str, object]]:
+    def fire(self, output: str, inputs: Mapping[str, object], *, state: Mapping[str, object] | None = None, changed: list[str] | None = None) -> dict[str, dict[str, Json]]:
         """Fire the callback whose output is `output`, as `_dash-dependencies` writes it, with each input's and
         state's value by `id.prop`, and `changed` the inputs that changed, by default all of them; what it answers, by
         component and property, its outputs and what it set with `set_props` alike, or nothing where it prevents the
-        update."""
+        update. Each value is JSON as Dash sent it, which a test indexes as it expects it to be."""
         body = internals.request(
             output, [_value(key, value) for key, value in inputs.items()], state=[_value(key, value) for key, value in (state or {}).items()], changed=list(inputs) if changed is None else changed
         )
@@ -68,7 +71,7 @@ class Client:
         if answered.status_code == HTTPStatus.NO_CONTENT:
             return {}
         found = _object(self._ok(answered).json(), "a callback's answer")
-        answered_props: dict[str, dict[str, object]] = {}
+        answered_props: dict[str, dict[str, Json]] = {}
         for part in ("response", "sideUpdate"):
             for component, props in _object(found.get(part, {}), f"a callback's {part}").items():
                 answered_props.setdefault(component, {}).update(_object(props, "a component's props"))

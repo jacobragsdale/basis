@@ -62,6 +62,12 @@ class Tools:
     """Ruff's rules the part's own files may break by design, by glob, as a job's hooks share one signature."""
     markers: tuple[str, ...] = ()
     """pytest markers the part's tests use, each `NAME: what it means`."""
+    aliases: Mapping[str, str] = field(default_factory=dict[str, str])
+    """The name a module is imported as, by the module, which ruff holds every import of it to, as basis-dash's
+    `import basis.dash as bd`."""
+    plugins_off: tuple[str, ...] = ()
+    """pytest plugins a dependency of the part's registers, which the repo's tests turn off (`-p no:NAME`), as Dash's
+    own, which drives a browser."""
 
 
 class Exception_(Model):  # noqa: N801 -- `Exception`, which the builtin's name takes
@@ -129,6 +135,9 @@ def ruff_toml(marker: str, parts: Sequence[Tools], repo: Sequence[Exception_]) -
         ignores.setdefault(exception.path, []).append(exception.rule)
         reasons.setdefault(exception.path, []).append(f"{exception.rule}: {exception.reason}")
     per_file = "\n".join(f"{_quoted(glob)} = [{', '.join(_quoted(rule) for rule in rules)}]{_comment(reasons.get(glob, []))}" for glob, rules in ignores.items())
+    aliases = {module: alias for part in parts for module, alias in part.aliases.items()}
+    conventions = "".join(f"\n{_quoted(module)} = {_quoted(alias)}" for module, alias in aliases.items())
+    conventions = f"\n[lint.flake8-import-conventions.extend-aliases]{conventions}\n" if aliases else ""
     return f"""# {marker}. The repo's own exceptions go in [tool.basis] exceptions, each with its reason.
 line-length = 200
 required-version = "=={RUFF}"
@@ -151,7 +160,7 @@ ignore = [
 
 [lint.per-file-ignores]
 {per_file}
-
+{conventions}
 [lint.isort]
 split-on-trailing-comma = false
 
@@ -186,9 +195,10 @@ def pytest_ini(marker: str, parts: Sequence[Tools]) -> str:
     testpaths = list(dict.fromkeys(path for part in parts for path in part.testpaths))
     markers = list(dict.fromkeys(["integration: needs a real database or service; excluded from the default run", *(marker for part in parts for marker in part.markers)]))
     lines = "".join(f"\n    {found}" for found in markers)
+    off = "".join(f" -p no:{name}" for name in dict.fromkeys(name for part in parts for name in part.plugins_off))
     return f"""# {marker}.
 [pytest]
-addopts = -ra --strict-markers --strict-config --import-mode=importlib -m "not integration"
+addopts = -ra --strict-markers --strict-config --import-mode=importlib -m "not integration"{off}
 testpaths = {" ".join(testpaths)}
 xfail_strict = true
 filterwarnings = error

@@ -145,3 +145,10 @@ def test_the_svg_namespace_in_basiss_icons_is_no_other_origin(tmp_path: Path, mo
         sheets = [opened.http.get(href).text for href in checks.stylesheets(index)]
     assert any("http://www.w3.org/2000/svg" in sheet for sheet in sheets)
     assert checks.problems(repo) == []
+
+
+def test_the_packaged_example_passes_the_checks_of_its_app() -> None:
+    """Its callbacks, and its pages on its fakes; its layers are held in a repo `new app` makes of it."""
+    from basis.dash.example.app import app  # noqa: PLC0415 -- the example, as a repo's code imports it
+
+    assert (checks.blocking(app), checks.driven(app)) == ([], [])

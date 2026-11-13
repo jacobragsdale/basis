@@ -193,8 +193,14 @@ dependencies = [
     { name = "plotly" },
 ]
 
+[package.optional-dependencies]
+dev = [
+    { name = "basis-core", extra = ["dev"] },
+]
+
 [package.metadata]
 requires-dist = [
+    { name = "basis-core", extras = ["dev"], marker = "extra == 'dev'", editable = "packages/core" },
     { name = "basis-core", extras = ["serve"], editable = "packages/core" },
     { name = "dash", extras = ["fastapi"], specifier = ">=4.5.0" },
     { name = "dash-ag-grid", specifier = ">=35.3.0" },
@@ -202,6 +208,7 @@ requires-dist = [
     { name = "orjson", specifier = ">=3.13.0" },
     { name = "plotly", specifier = ">=7.1.0" },
 ]
+provides-extras = ["dev"]
 
 [[package]]
 name = "basis-job"

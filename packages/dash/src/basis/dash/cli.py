@@ -16,7 +16,9 @@ parts that add one verb, in one line. uvicorn loads when a verb runs, not for ev
 
 import argparse
 import json
+import logging
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,9 +29,12 @@ from basis.core import command, environments, hooks
 from basis.core.errors import BasisError
 from basis.core.sync import Problem
 from basis.core.verbs import Part, Verb, fail
+from basis.dash import docs, sync
 from basis.dash.app import App
 from basis.dash.loading import load
 from basis.dash.settings import Settings, unreadable
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -73,9 +78,48 @@ def part() -> Part:
                 lambda n: _load(LoadArgs(n.dataset, tuple(n.param or ()), n.app, n.env)),
             ),
         ),
+        files=sync.agent_files,
+        docs=docs.FOLDER,
+        new={"page": _new_page},
         checks=_checks,
         smoke=_smoke,
     )
+
+
+def _new_page(repo: Path, name: str) -> Path:
+    from basis.dash import new  # noqa: PLC0415 -- the generator loads when the verb runs
+
+    return new.page(repo, name)
+
+
+@dataclass(frozen=True)
+class NewArgs:
+    name: str
+    directory: Path
+    index: str | None
+    framework_path: Path | None
+
+
+def scaffold(argv: Sequence[str] | None = None) -> int:
+    """The `basis-dash` console script, which `uvx basis-dash new app NAME` runs."""
+    return command.standalone("basis-dash", "Make a repo of a basis Dash app.", [Verb("new", "make a Dash app's repo: basis-dash new app NAME", _new_arguments, _new_from)], argv)
+
+
+def _new_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("what", metavar="app", choices=["app"], help="what to make: an app")
+    parser.add_argument("name", metavar="NAME", help="the app's name, and its repo's folder")
+    parser.add_argument("--dir", type=Path, default=Path(), help="where to make the repo")
+    parser.add_argument("--index", help="the package index basis is published to, written into the repo")
+    parser.add_argument("--framework-path", type=Path, help="a checkout of basis, whose packages the repo installs editable")
+
+
+def _new_from(namespace: argparse.Namespace) -> int:
+    from basis.dash import new  # noqa: PLC0415 -- the generator loads when the verb runs
+
+    args = NewArgs(namespace.name, namespace.dir, namespace.index, namespace.framework_path)
+    path = new.app(args.directory / args.name, args.name, index=args.index, framework_path=args.framework_path)
+    log.info("made %s: run `uv run basis dev` in it, and `uv run basis check`", path)
+    return 0
 
 
 def _smoke(repo: Path, env: str, commit: str | None) -> list[Problem]:

@@ -104,9 +104,10 @@ def _refused(line: str, repo: command.Repo, *, scratch: Path, whole: bool) -> st
 
 @contextlib.contextmanager
 def _paths(scratch: Path, argv: Iterable[str]) -> Generator[None]:
-    """In `scratch`, with each path `argv` names made: a file where it has a suffix, a folder where not."""
+    """In `scratch`, with each relative path `argv` names made: a file where it has a suffix, a folder where not. An
+    absolute one, such as a Dash page's `/positions`, is no file of the repo's, and is made nowhere."""
     for word in argv:
-        if "/" in word and not word.startswith(("-", "@")):
+        if "/" in word and not word.startswith(("-", "@", "/")):
             path = scratch / word
             if path.suffix:
                 path.parent.mkdir(parents=True, exist_ok=True)

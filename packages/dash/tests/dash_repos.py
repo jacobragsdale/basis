@@ -105,7 +105,7 @@ page = bd.page("/sectors", "Sectors", body=[bd.card("By sector", bd.graph("secto
 
 
 @callback(Output("sector-chart", "figure"), Output("sector-grid", "rowData"), Input("sector-chart", "id"))
-async def show(_: str) -> tuple[bd.Figure, bd.Rows]:
+async def show(_: str) -> tuple[object, bd.Rows]:
     sectors = await bd.load(SECTORS, as_of=date(2026, 11, 13))
     return bd.charts.bar(sectors, Sector, x="sector", y="par"), bd.rows(sectors)
 """,

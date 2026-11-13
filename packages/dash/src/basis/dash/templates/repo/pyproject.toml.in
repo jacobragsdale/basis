@@ -1,0 +1,28 @@
+[project]
+name = "{repo}"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = ["basis-dash>={version},<{upper}", "pandas>=3.1.1"]  # a Dash app, whose views are pandas
+
+[project.entry-points."basis.dash_apps"]
+{app} = "{package}.app:app"
+
+[tool.basis]
+parts = ["dash"]  # the parts this repo has, whose verbs `basis` offers; basis never infers one from a folder
+coverage = 90  # the percentage of the code's lines and branches the unit tests must cover, which `basis check` holds them to
+
+[build-system]
+requires = ["uv_build>=0.13.6,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "{package}"
+module-root = ""
+
+{source}
+[dependency-groups]
+# The tools `basis check` runs, at the versions basis checks with, which `basis upgrade` moves with basis: ruff, ty,
+# pytest and pytest-cov, and mutmut, which tests mutants in `basis check --full` and needs fork: WSL or Linux. Their
+# settings are basis's too, in ruff.toml, ty.toml and pytest.ini, which `basis sync` writes; the repo's own exceptions
+# go in [tool.basis] exceptions, each with its reason.
+dev = ["basis-dash[dev]"]

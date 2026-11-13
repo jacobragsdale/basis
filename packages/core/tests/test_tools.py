@@ -15,7 +15,12 @@ from basis.core.sync import AgentFiles
 from basis.core.tools import Tools
 
 type Git = Callable[..., str]
-SHARE = AgentFiles("basis-alpha", "the alpha block\n", {}, tools=Tools(testpaths=("tests", "alphas"), per_file_ignores={"**/hook.py": ("ARG001",)}, markers=("slow: takes a while",)))
+SHARE = AgentFiles(
+    "basis-alpha",
+    "the alpha block\n",
+    {},
+    tools=Tools(testpaths=("tests", "alphas"), per_file_ignores={"**/hook.py": ("ARG001",)}, markers=("slow: takes a while",), aliases={"basis.alpha": "ba"}, plugins_off=("alphas",)),
+)
 UNSHARED = AgentFiles("basis-beta", "the beta block\n", {})
 PYPROJECT = '[tool.basis]\nparts = ["alpha"]\ncoverage = 90\n'
 
@@ -117,3 +122,10 @@ def test_a_coverage_floor_under_basiss_fails_unless_the_repo_says_why(repo: Path
     sync.write(repo, [SHARE])
     assert check(repo, [SHARE], run=run) == 0
     assert "The coverage floor is 10%, under basis's 90%." in review.exceptions_markdown(repo / "pyproject.toml")
+
+
+def test_a_parts_import_aliases_and_the_pytest_plugins_it_turns_off_are_written(repo: Path) -> None:
+    ruff = tomllib.loads((repo / "ruff.toml").read_text(encoding="utf-8"))
+    assert ruff["lint"]["flake8-import-conventions"]["extend-aliases"] == {"basis.alpha": "ba"}
+    addopts = next(line for line in (repo / "pytest.ini").read_text(encoding="utf-8").splitlines() if line.startswith("addopts = "))
+    assert addopts.endswith(" -p no:alphas")

@@ -827,6 +827,20 @@ through the environment's settings, as `basis load --env` would, so a database, 
 environment refuses is named. An example names each of its dataset's params and no other, checked where it is
 declared; a view has none, since its inputs' examples load what it reads.
 
+**New repos and their files, as built (17.3).** `uvx basis-dash new app NAME` makes a repo of the packaged example,
+`basis.dash.example`, copied as basis-api's example is: the positions page of a fixed income desk's holdings, on 320
+synthetic bonds in `fixtures/holdings.csv`, which `tests/example_fixtures.py` makes from a seed, priced from a plausible
+Treasury curve and spreads by sector and rating, issuers under placeholder names. The repo declares `parts = ["dash"]`
+alone and `coverage = 90`, which every module counts towards, `domain.py` among them. `basis new page NAME` writes
+`pages/NAME.py`, with a layout and a callback that loads, and its test, and adds the page to the app's `pages=[...]`.
+`basis sync` writes the part's block of `AGENTS.md`, the skills `dash-add-page`, `dash-add-dataset` and
+`dash-why-failed`, the Dockerfile's line (`serve`), and the part's share of the tools: basis-core's `Tools` gains
+`aliases`, which ruff's import conventions hold (`import basis.dash as bd`), and `plugins_off`, pytest's `-p no:NAME`,
+which turns Dash's own plugin off; both are general, and a part that gives none writes what it wrote before, byte for
+byte. `basis docs` lists a tutorial, how-to guides and a reference as `dash/PAGE`, held to the code as basis-api's are.
+`basis dev` was run for real on a generated repo under uvicorn's reloader on Linux: a page's module changed, WatchFiles
+restarted the app within a second, and the router served the change.
+
 **The package is laid out for two lanes.** The foundations' modules build, serve and test an app; the data lane's
 (declarations, the cache, loads, views, fixtures) and the display lane's (theme, shell, page, grid, charts, states,
 exports and `static/`) are their own, and each lane adds its names to `bd` through a module only it edits

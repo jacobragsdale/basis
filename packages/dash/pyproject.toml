@@ -13,6 +13,12 @@ dependencies = [
     "plotly>=7.1.0",
 ]
 
+[project.optional-dependencies]
+dev = ["basis-core[dev]"]  # what a repo's dev group takes, as basis-dash[dev]: basis-core's tools, at the versions basis checks with
+
+[project.scripts]
+basis-dash = "basis.dash.cli:scaffold"  # `uvx basis-dash new app NAME` makes a Dash app's repo
+
 [project.entry-points."basis.verbs"]
 dash = "basis.dash.cli:part"  # basis-dash's verbs, in a repo whose [tool.basis] parts include "dash"
 

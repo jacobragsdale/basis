@@ -19,6 +19,7 @@ each callback that failed, with why. A callback that failed makes the command fa
 `basis load DATASET [--param NAME=VALUE]...` loads one dataset of the app's, twice, and prints its rows, its columns,
 its first rows as text, and each load's milliseconds and how the cache answered, so the second shows a hit."""
 
+import base64
 import json
 import logging
 import time
@@ -27,6 +28,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Final
 
+import numpy as np
 import pandas as pd
 
 from basis.core.errors import BasisError
@@ -200,10 +202,22 @@ def _figure(figure: Mapping[str, Json]) -> dict[str, Json]:
     for trace in figure.get("data") or []:
         if not isinstance(trace, dict):
             continue
-        points = next((len(trace[axis]) for axis in ("x", "y", "values", "z", "labels") if isinstance(trace.get(axis), list)), 0)
+        points = next((found for axis in ("x", "y", "values", "z", "labels") if (found := _length(trace.get(axis))) is not None), 0)
         traces.append({"type": trace.get("type", "scatter"), "name": trace.get("name"), "points": points})
     axes = {name: {"title": _title(axis.get("title")), "type": axis.get("type")} for name, axis in sorted(layout.items()) if name.startswith(("xaxis", "yaxis")) and isinstance(axis, dict)}
     return {"kind": "figure", "title": _title(layout.get("title")), "traces": traces, "axes": axes}
+
+
+def _length(given: Json) -> int | None:
+    """How many values an array of a trace holds: a list, or Plotly's typed array, `{"dtype", "bdata"}`, base64."""
+    if isinstance(given, list):
+        return len(given)
+    if isinstance(given, dict) and isinstance(given.get("bdata"), str) and isinstance(given.get("dtype"), str):
+        shape = given.get("shape")
+        if isinstance(shape, str) and shape:
+            return int(shape.split(",")[0])
+        return len(base64.b64decode(given["bdata"])) // np.dtype(given["dtype"]).itemsize
+    return None
 
 
 def _title(given: Json) -> str | None:

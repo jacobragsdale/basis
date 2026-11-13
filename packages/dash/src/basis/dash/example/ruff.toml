@@ -1,0 +1,12 @@
+# Sort imports as an app's repo does, where basis is a third-party package and the app's own modules, here
+# basis.dash.example, are first-party.
+extend = "../../../../../../pyproject.toml"
+
+[lint.isort]
+known-first-party = ["basis.dash.example"]
+known-third-party = ["basis", "dash"]  # dash, which this folder's path would make first-party
+split-on-trailing-comma = false
+
+[lint]
+# A generated repo's ruff selects PLR0913, which the workspace's ignores, and the example is copied into one.
+extend-select = ["PLR0913"]
