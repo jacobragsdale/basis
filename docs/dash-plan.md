@@ -41,7 +41,8 @@ Keep this table true in each step's own commit.
 | 16.8 States | Done: loading after 400 ms in place, empty only once answered, failed marked on its component until its next answer, stale from the status store; on the grid, graph and tile | the commit "Step 16.8" |
 | 16.9 Exports | Not started | |
 | 17.1 The checks | Done: `basis.dash.checks`, the part's `checks`: the layers and the domain's purity, a view's function's too; callbacks outside the app's and its pages' modules, and ones that load without `async`; every page built, every id and property, every callback called on the fakes, its failure, its size, its hold on the loop, its figure, a grid's rows and a store's; DataTable; other origins | the commit "Step 17.1" |
-| 17.2 to 17.8 The repo around it | Not started | |
+| 17.2 The agent's eyes | Done: `basis render PAGE [--set ID.PROP=VALUE]` and `basis load DATASET [--param NAME=VALUE]`, each `[--env ENV]`, JSON on stdout; a grid's rows through its columns' formats; `basis.dash.driving`, shared with 17.1's check | the commit "Step 17.2" |
+| 17.3 to 17.8 The repo around it | Not started | |
 
 ## What the best Dash app is
 

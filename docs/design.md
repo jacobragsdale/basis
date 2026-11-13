@@ -776,6 +776,18 @@ nothing, so it passes on any component but `html.Link`; an XML namespace, `http:
 repo's code is imported from its folder by basis-core's `testing.importable` and `repo_packages`, which basis-api's
 checks use too.
 
+**The agent's eyes, as built (17.2).** `basis render PAGE [--set ID.PROP=VALUE]... [--env ENV]` builds the app, on
+its fakes unless an environment is named, takes the page, by its path or its title, with each `--set` value, JSON where
+it parses, in place of the layout's, and calls every callback a load of the page calls, as `basis check` does
+(`basis.dash.driving`, which both share). It prints JSON on stdout: each output as a person sees it, a grid's rows
+counted, its columns by header and its first ten rows as the grid writes them, each number of a `bd.grid` through its
+column's format by `bd.text`, a grid's totals likewise, a figure's title, traces (type, name, points) and axes, and the
+text components hold; each dataset loaded, from its `loaded` record, with how the cache answered; the notifications a
+callback sent; and each callback that failed, with why, which fails the command after the JSON, one `ERROR` line each.
+`basis load DATASET [--param NAME=VALUE]... [--env ENV]` loads one dataset of the app's twice, each param read as its
+declared type, and prints its rows, its columns, its first ten rows as text and each load's milliseconds and cache, so
+the second shows the hit. Both read an environment through its settings as `basis serve` does, read-only as ever.
+
 **The package is laid out for two lanes.** The foundations' modules build, serve and test an app; the data lane's
 (declarations, the cache, loads, views, fixtures) and the display lane's (theme, shell, page, grid, charts, states,
 exports and `static/`) are their own, and each lane adds its names to `bd` through a module only it edits

@@ -39,18 +39,15 @@ alone, since no page load calls it with values the layout gives."""
 
 import ast
 import inspect
-import logging
 import re
 import textwrap
-import time
-from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
-from contextlib import ExitStack, contextmanager, suppress
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import ExitStack, suppress
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from pathlib import Path
-from typing import Any, Final, override
+from typing import Any, Final
 
-import anyio
 import grimp
 import grimp.exceptions
 import orjson
@@ -59,7 +56,7 @@ from basis.core.sync import Problem
 from basis.core.testing import FORBIDDEN, import_chains, importable, repo_packages
 from basis.dash import declarations, ids, internals, loading, sizes
 from basis.dash.app import App
-from basis.dash.testing import Client, client
+from basis.dash.driving import Drive, Json, Node, PageError, driving, nodes, outputs, short
 
 RANKS: Final[Mapping[str, int]] = {"app": 3, "pages": 2, "data": 1, "domain": 0}
 """Each layer, by its module's name, and its height: a module imports only those below it."""
@@ -86,10 +83,6 @@ _ATTRIBUTE = re.compile(r"""(?i)\b(?:src|href)\s*=\s*["']([^"']+)["']""")
 _STYLESHEET = re.compile(r"""(?i)<link\b[^>]*\brel=["']stylesheet["'][^>]*>""")
 _CSS_URL = re.compile(r"""(?i)(?:url\(\s*["']?|@import\s+["'])((?:https?:)?//[^"')\s]+)""")
 _WILDCARDS: Final = frozenset({"ALL", "MATCH", "ALLSMALLER"})
-
-type Json = Any
-"""A value as orjson parses a layout or an answer, whose shape each function tests with `isinstance` before it relies
-on it."""
 
 
 def problems(repo: Path) -> list[Problem]:
@@ -206,65 +199,48 @@ def driven(app: App, *, skip: frozenset[int] = frozenset()) -> list[Problem]:
                 "declare bd.App(..., fakes='module:function'), a function that returns a fake of each resource, as fixtures.database(WAREHOUSE)",
             )
         ]
-    with _captured() as records, ExitStack() as stack:
+    with ExitStack() as stack:
         try:
-            opened = stack.enter_context(client(app))
+            drive = stack.enter_context(driving(app))
         except Exception as error:  # noqa: BLE001 -- the repo's own code, its fakes or its startup, whatever it raises
             return [(f"app {app.name} does not build on the fakes it declares", _said(error))]
-        portal = opened.http.portal
-        if portal is None:  # the client is open, so its portal is
-            return []
-        drive = _Drive(app, opened, records, skip)
-        watching = portal.start_task_soon(_watching, drive.watch)
-        try:
-            return drive.problems()
-        finally:
-            watching.cancel()  # else the client's portal, closing, waits for it
+        return _Checked(drive, skip).problems()
+    return []  # pragma: no cover -- ExitStack never swallows what the block raises
 
 
 @dataclass
-class _Watch:
-    """The longest the event loop has been held, in seconds, since `worst` was last set to 0."""
-
-    worst: float = 0.0
-
-
-@dataclass
-class _Drive:
-    app: App
-    client: Client
-    records: list[logging.LogRecord]
+class _Checked:
+    drive: Drive
     skip: frozenset[int]
     found: list[Problem] = field(default_factory=list[Problem])
-    watch: _Watch = field(default_factory=_Watch)
+
+    @property
+    def app(self) -> App:
+        return self.drive.app
 
     def problems(self) -> list[Problem]:
         self._index()
-        chrome = self.client.layout()
-        dependencies = [entry for entry in self.client.dependencies() if not str(entry.get("output", "")).startswith(".._pages_content")]
-        functions = _functions(self.client.built.dash)
-        modules = {output: getattr(function, "__module__", None) for output, function in functions.items()}
-        own = {self.app.module, *(page.module for page in self.app.pages)}
-        pages: dict[str, list[dict[str, Any]]] = {}
+        pages: dict[str, list[Node]] = {}
         for page in self.app.pages:
-            content = self._page(page.path)
-            if content is None:
+            try:
+                pages[page.path] = self.drive.page(page.path)
+            except PageError as error:
+                self.found.append((f"app {self.app.name}'s page {page.path} does not build on the fakes: {error}", f"fix its layout, as `uv run basis render {page.path}` shows it"))
                 continue
-            tree = _replaced(chrome, content)
-            pages[page.path] = list(_nodes(tree))
             self._layout(page.path, pages[page.path])
-        for entry in dependencies:
-            module = modules.get(str(entry["output"]))
+        for entry in self.drive.dependencies:
+            module = self.drive.module(str(entry["output"]))
             on = [path for path in pages if module in {page.module for page in self.app.pages if page.path == path}] or list(pages)
             self._ids(entry, [node for path in on for node in pages[path]], on)
-        for page in self.app.pages:
-            if page.path in pages:
-                calls = [entry for entry in dependencies if modules.get(str(entry["output"])) in own & {page.module, self.app.module} and id(functions.get(str(entry["output"]))) not in self.skip]
-                self._fire_all(page.path, pages[page.path], calls)
+        for path, components in pages.items():
+            values = self.drive.first(path, components)
+            kinds = {str(props["id"]): node for node in components if isinstance((props := node.get("props") or {}).get("id"), str)}
+            for entry in self.drive.calls(path, components, skip=self.skip):
+                self._call(path, entry, values, kinds)
         return self.found
 
     def _index(self) -> None:
-        index = self.client.index()
+        index = self.drive.client.index()
         for value in _ATTRIBUTE.findall(index):
             if _foreign(value):
                 self.found.append(
@@ -277,7 +253,7 @@ class _Drive:
             href = next(iter(_ATTRIBUTE.findall(tag)), None)
             if href is None or _foreign(href):
                 continue
-            answered = self.client.http.get(href)
+            answered = self.drive.client.http.get(href)
             for url in _CSS_URL.findall(answered.text if answered.status_code == HTTPStatus.OK else ""):
                 if _foreign(url):
                     self.found.append(
@@ -287,90 +263,48 @@ class _Drive:
                         )
                     )
 
-    def _page(self, path: str) -> dict[str, Any] | None:
-        del self.records[:]
-        try:
-            return self.client.page(path)
-        except (AssertionError, TypeError, KeyError, StopIteration) as error:
-            said = next((record.getMessage() for record in self.records if record.levelno >= logging.ERROR), _said(error))
-            self.found.append((f"app {self.app.name}'s page {path} does not build on the fakes: {said}", f"fix its layout, as `uv run basis render {path}` shows it"))
-            return None
-
-    def _layout(self, path: str, nodes: list[dict[str, Any]]) -> None:
-        for node, prop, url in _urls(nodes[0] if nodes else None):
+    def _layout(self, path: str, components: list[Node]) -> None:
+        for node, prop, url in _urls(components[0] if components else None):
             self.found.append((f"page {path}'s {_named(node)} names {url} in its {prop}, of another origin, which the browser would fetch", _ORIGIN_FIX))
-        for node in nodes:
+        for node in components:
             kind, props = f"{node.get('namespace')}.{node.get('type')}", node.get("props") or {}
             if node.get("namespace") == "dash_table":
                 self.found.append((f"page {path} holds {_named(node)}, a dash_table.DataTable, which Dash deprecates", "show rows with bd.grid(ID, Row), or dash_ag_grid's AgGrid"))
             if kind == "dash_core_components.Store" and props.get("id") != ids.STATUS and _rows(props.get("data")):
                 self.found.append((f"page {path}'s store {_named(node)} holds rows", _STORE_FIX))
 
-    def _ids(self, entry: Mapping[str, Any], nodes: list[dict[str, Any]], on: list[str]) -> None:
+    def _ids(self, entry: Mapping[str, Any], components: list[Node], on: list[str]) -> None:
         output = str(entry["output"])
         where = f"page {on[0]}" if len(on) == 1 else "any page"
-        for role, given in [("output", _outputs(output)), ("input", entry.get("inputs") or []), ("state", entry.get("state") or [])]:
+        for role, given in [("output", outputs(output)), ("input", entry.get("inputs") or []), ("state", entry.get("state") or [])]:
             for one in given:
                 component, prop = _parsed(str(one["id"])), str(one["property"])
-                matched = [node for node in nodes if _matches((node.get("props") or {}).get("id"), component)]
+                matched = [node for node in components if _matches((node.get("props") or {}).get("id"), component)]
                 if not matched:
                     if not isinstance(component, dict):
                         fix = "give a component that id in the page's layout, or name one it has"
-                        self.found.append((f"callback {_short(output)}'s {role} {_key(component, prop)} names no component of {where}", fix))
+                        self.found.append((f"callback {short(output)}'s {role} {_key(component, prop)} names no component of {where}", fix))
                     continue
                 for node in matched:
                     if (known := _properties(node)) is not None and not _has(known, prop):
                         listed = ", ".join(sorted(name for name in known[0] if name != "id")[:12])
                         fix = f"name one of its properties, as {listed}"
-                        self.found.append((f"callback {_short(output)}'s {role} {_key(component, prop)} names a property {node.get('type')} does not have", fix))
+                        self.found.append((f"callback {short(output)}'s {role} {_key(component, prop)} names a property {node.get('type')} does not have", fix))
 
-    def _fire_all(self, path: str, nodes: list[dict[str, Any]], entries: list[dict[str, Any]]) -> None:
-        values: dict[str, object] = {}
-        kinds: dict[str, dict[str, Any]] = {}
-        for node in nodes:
-            component = (node.get("props") or {}).get("id")
-            if isinstance(component, str):
-                kinds[component] = node
-                for prop, value in (node.get("props") or {}).items():
-                    values[f"{component}.{prop}"] = value
-        pathname = f"{str(self.client.built.dash.config.requests_pathname_prefix).rstrip('/')}{path}"
-        values |= {"_pages_location.pathname": pathname, "_pages_location.search": "", "_pages_location.hash": "", "_pages_location.href": f"http://testserver{pathname}"}
-        fired = [entry for entry in entries if _fired(entry, kinds)]
-        for entry in _ordered(fired):
-            self._fire(path, entry, values, kinds)
-
-    def _fire(self, path: str, entry: Mapping[str, Any], values: dict[str, object], kinds: Mapping[str, dict[str, Any]]) -> None:
-        output = str(entry["output"])
-        inputs = [{"id": one["id"], "property": one["property"], "value": values.get(f"{one['id']}.{one['property']}")} for one in entry.get("inputs") or []]
-        state = [{"id": one["id"], "property": one["property"], "value": values.get(f"{one['id']}.{one['property']}")} for one in entry.get("state") or []]
-        body = internals.request(output, inputs, state=state, changed=[])
-        for attempt in range(2):  # a second time where the first held the loop too long, as Python's first import of a module does
-            del self.records[:]
-            self.watch.worst = 0.0
-            answered = self.client.http.post(f"{self.client.base}{internals.UPDATE}", json=body)
-            if (portal := self.client.http.portal) is not None:
-                portal.call(anyio.sleep, 0.02)  # the watch's last tick
-            held_ms = self.watch.worst * 1000
-            if held_ms <= LOOP_BUDGET_MS or attempt:
-                break
-        name, start = _short(output), f"from page {path}'s first values"
-        failed = [record for record in self.records if record.name == "basis.dash.errors" and record.levelno >= logging.ERROR]
-        if failed or answered.status_code not in {HTTPStatus.OK, HTTPStatus.NO_CONTENT}:
-            said = failed[0].getMessage() if failed else f"the app answered {answered.status_code}"
+    def _call(self, path: str, entry: Mapping[str, Any], values: dict[str, Json], kinds: Mapping[str, Node]) -> None:
+        called = self.drive.call(entry, values, again_past_ms=LOOP_BUDGET_MS)
+        name, start = short(called.output), f"from page {path}'s first values"
+        if called.failed:
+            said = called.failures[0] if called.failures else f"the app answered {called.status}"
             self.found.append((f"callback {name} failed on the fakes, {start}: {said}", f"fix it, as `uv run basis render {path}` shows it"))
             return
-        if held_ms > LOOP_BUDGET_MS:
-            self.found.append((f"callback {name} held the event loop for {held_ms:.0f} ms on the fakes, {start}, past the {LOOP_BUDGET_MS:.0f} ms every user's page waits on", _LOOP_FIX))
-        if answered.status_code == HTTPStatus.NO_CONTENT:
-            return
-        if len(answered.content) > sizes.BUDGET_BYTES:
-            megabytes = len(answered.content) / 1_048_576
+        if called.held_ms > LOOP_BUDGET_MS:
+            self.found.append((f"callback {name} held the event loop for {called.held_ms:.0f} ms on the fakes, {start}, past the {LOOP_BUDGET_MS:.0f} ms every user's page waits on", _LOOP_FIX))
+        if len(called.content) > sizes.BUDGET_BYTES:
+            megabytes = len(called.content) / 1_048_576
             self.found.append((f"callback {name} answered {megabytes:.1f} MB on the fakes, {start}, past the {sizes.BUDGET_BYTES / 1_048_576:.0f} MB budget", _SIZE_FIX))
-        decoded: Any = orjson.loads(answered.content)
-        response: dict[str, dict[str, Any]] = (decoded or {}).get("response") or {}
-        for component, props in response.items():
+        for component, props in called.response.items():
             for prop, value in props.items():
-                values[f"{component}.{prop}"] = value
                 self._answer(name, path, kinds.get(component), f"{component}.{prop}", value)
 
     def _answer(self, name: str, path: str, node: Mapping[str, Any] | None, key: str, value: Json) -> None:
@@ -380,7 +314,7 @@ class _Drive:
         prop = key.rpartition(".")[2]
         for _, _, url in _urls(value, prop=prop if node is None or kind != "dash_html_components.Link" else None):
             self.found.append((f"callback {name} answers {key} naming {url}, of another origin, which the browser would fetch", _ORIGIN_FIX))
-        if any(found.get("namespace") == "dash_table" for found in _nodes(value)):
+        if any(found.get("namespace") == "dash_table" for found in nodes(value)):
             self.found.append((f"callback {name} answers {key} holding a dash_table.DataTable, which Dash deprecates", "show rows with bd.grid(ID, Row), or dash_ag_grid's AgGrid"))
         if kind == "dash_core_components.Graph" and prop == "figure" and (why := _bad_figure(value)) is not None:
             self.found.append((f"callback {name} answers {key} with a figure Plotly refuses: {why}", "build it with bd.charts, or a plotly.graph_objects.Figure, which checks each property"))
@@ -403,36 +337,6 @@ _ORIGIN_FIX = "serve the file from the app's assets/, by a path of its own"
 _STORE_FIX = "keep rows out of stores: each callback that needs a dataset asks bd.load for it again, which the cache answers in under a millisecond"
 _LOOP_FIX = "move the work into a view (bd.view), which runs in a worker thread, or narrow what it computes"
 _SIZE_FIX = "send fewer rows or columns: filter in a view, or show a summary and let the person ask for the detail"
-
-
-async def _watching(watch: _Watch) -> None:
-    """Keep `watch.worst` the longest the loop was held, from how late each short sleep wakes."""
-    tick = 0.005
-    while True:
-        before = time.perf_counter()
-        await anyio.sleep(tick)
-        watch.worst = max(watch.worst, time.perf_counter() - before - tick)
-
-
-@contextmanager
-def _captured() -> Generator[list[logging.LogRecord]]:
-    """Every log record while the app is driven, kept for the check rather than written: one per request would be
-    hundreds of lines."""
-    records: list[logging.LogRecord] = []
-
-    class Keep(logging.Handler):
-        @override
-        def emit(self, record: logging.LogRecord) -> None:
-            records.append(record)
-
-    root = logging.getLogger()
-    handlers, level = root.handlers[:], root.level
-    kept: list[logging.Handler] = [Keep()]
-    root.handlers, root.level = kept, logging.INFO
-    try:
-        yield records
-    finally:
-        root.handlers, root.level = handlers, level
 
 
 def _said(error: BaseException) -> str:
@@ -536,47 +440,6 @@ def _loads_called(function: Callable[..., object]) -> list[str]:
     return found
 
 
-def _functions(made: object) -> dict[str, object]:
-    """Each callback's output, as `_dash-dependencies` writes it, with its function as its module wrote it, or None
-    for a clientside one."""
-    found: dict[str, object] = {}
-    for output, entry in getattr(made, "callback_map", {}).items():
-        function = entry.get("callback")
-        found[str(output)] = getattr(function, "__wrapped__", function)
-    return found
-
-
-def _nodes(tree: Json) -> Iterator[dict[str, Any]]:
-    """Each component of a layout as Dash sends it, `{"type", "namespace", "props"}`, at any depth."""
-    if isinstance(tree, dict):
-        if "type" in tree and "namespace" in tree and isinstance(tree.get("props"), dict):
-            yield tree
-            for value in tree["props"].values():
-                yield from _nodes(value)
-        else:
-            for value in tree.values():
-                yield from _nodes(value)
-    elif isinstance(tree, list):
-        for value in tree:
-            yield from _nodes(value)
-
-
-def _replaced(chrome: dict[str, Any], content: dict[str, Any]) -> dict[str, Any]:
-    """The chrome, with the page's content where Dash Pages puts it."""
-
-    def walk(tree: Json) -> Json:
-        if isinstance(tree, dict):
-            if isinstance(tree.get("props"), dict) and tree["props"].get("id") == "_pages_content":
-                return {**tree, "props": {**tree["props"], "children": content}}
-            return {key: walk(value) for key, value in tree.items()}
-        if isinstance(tree, list):
-            return [walk(value) for value in tree]
-        return tree
-
-    replaced = walk(chrome)
-    return replaced if isinstance(replaced, dict) else chrome
-
-
 def _named(node: Mapping[str, Any]) -> str:
     component = (node.get("props") or {}).get("id")
     return f"{node.get('type')} {component!r}" if component is not None else str(node.get("type"))
@@ -601,23 +464,6 @@ def _matches(given: Json, wanted: str | dict[str, Any]) -> bool:
 
 def _key(component: str | dict[str, Any], prop: str) -> str:
     return f"{component}.{prop}" if isinstance(component, str) else f"{orjson.dumps(component).decode()}.{prop}"
-
-
-def _short(output: str) -> str:
-    """A callback's output, as a person reads it: its first output's id and property, and how many more."""
-    outputs = _outputs(output)
-    first = outputs[0] if outputs else {"id": output, "property": ""}
-    more = f" (and {len(outputs) - 1} more)" if len(outputs) > 1 else ""
-    return f"{first['id']}.{first['property']}{more}"
-
-
-def _outputs(output: str) -> list[dict[str, str]]:
-    ones = output[2:-2].split("...") if output.startswith("..") and output.endswith("..") else [output]
-    found: list[dict[str, str]] = []
-    for one in ones:
-        component, _, prop = one.rpartition(".")
-        found.append({"id": component, "property": prop.partition("@")[0]})
-    return found
 
 
 def _properties(node: Mapping[str, Any]) -> tuple[frozenset[str], tuple[str, ...]] | None:
@@ -645,28 +491,6 @@ def _properties(node: Mapping[str, Any]) -> tuple[frozenset[str], tuple[str, ...
 def _has(known: tuple[frozenset[str], tuple[str, ...]], prop: str) -> bool:
     names, wildcards = known
     return prop in names or (bool(wildcards) and prop.startswith(wildcards))
-
-
-def _fired(entry: Mapping[str, Any], kinds: Mapping[str, object]) -> bool:
-    """Whether a page's load calls the callback with values its layout gives: a server callback, called on load, with
-    no pattern-matching id, whose inputs and outputs are on the page."""
-    if entry.get("clientside_function") or entry.get("prevent_initial_call"):
-        return False
-    given = [*_outputs(str(entry["output"])), *(entry.get("inputs") or []), *(entry.get("state") or [])]
-    if any(str(one["id"]).startswith("{") for one in given):
-        return False
-    return all(str(one["id"]) in kinds or str(one["id"]).startswith("_pages_") for one in given)
-
-
-def _ordered(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """`entries` in the order the browser calls them: one whose input another answers after that one."""
-    produced = {f"{one['id']}.{one['property']}": index for index, entry in enumerate(entries) for one in _outputs(str(entry["output"]))}
-    waits = {index: {produced[key] for one in entry.get("inputs") or [] if (key := f"{one['id']}.{one['property']}") in produced and produced[key] != index} for index, entry in enumerate(entries)}
-    done: list[int] = []
-    while len(done) < len(entries):
-        ready = [index for index in range(len(entries)) if index not in done and waits[index] <= set(done)]
-        done.extend(ready or [next(index for index in range(len(entries)) if index not in done)])  # a cycle: in the order declared
-    return [entries[index] for index in done]
 
 
 def _patch(value: object) -> bool:

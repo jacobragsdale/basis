@@ -118,7 +118,7 @@ exclude = ["evals/tasks"]  # a generated repo's files, which its own ty checks w
 # As pytest's `pythonpath`, so basis-job's tests can import `builders`. Their names differ, since ty, like Python,
 # resolves a name one way per run. A path that does not exist fails ty, so a member that basis does not release lists
 # none here: ty 0.0.99 finds a test's helper module in the test's folder or a folder above it.
-extra-paths = ["packages/job/tests", "scripts", "evals"]  # and the module the scripts share, which each imports from its own folder, and the eval's package
+extra-paths = ["packages/job/tests", "packages/dash/tests", "scripts", "evals"]  # and basis-dash's `dash_repos`, the module the scripts share, which each imports from its own folder, and the eval's package
 
 [tool.ty.analysis]
 respect-type-ignore-comments = false  # Require a specific `# ty: ignore[rule]` suppression.
@@ -138,7 +138,7 @@ error-on-warning = true
 # which basis never uses, stays out too: its hooks use a form pytest 9 deprecates, which this session's warnings fail.
 addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration' --ignore-glob=packages/*/src/*/templates -p pytester -p no:basis -p no:dash"
 testpaths = ["packages/*/tests", "packages/*/src/basis/*/example", "scripts/tests", "evals/tests"]  # every member's tests, its example's, the release script's, and the eval's runner's
-pythonpath = ["packages/job/tests", "scripts", "evals"]  # each member's shared test modules, such as basis-job's `builders`, scripts/release.py, and the eval's package; a missing path adds nothing
+pythonpath = ["packages/job/tests", "packages/dash/tests", "scripts", "evals"]  # each member's shared test modules, such as basis-job's `builders` and basis-dash's `dash_repos`, scripts/release.py, and the eval's package; a missing path adds nothing
 xfail_strict = true  # An xfail that starts passing is a failure, not a silent pass.
 filterwarnings = [
     "error",  # A warning is a defect until someone decides otherwise.
