@@ -13,6 +13,9 @@ one fails `tests/test_internals.py`, and nowhere else: spike 14.1, question 8. N
   hold that app's pages alone.
 - The wire format of `POST _dash-update-component`, which `basis.dash.testing` drives: `request` and `UPDATE`,
   `DEPENDENCIES` and `LAYOUT`.
+- `in_callback` and `updated`: Dash's callback context, `dash._callback_context.context_value`, which holds what the
+  callback running sets with `set_props` (`updated_props`), so a load adds its dataset to the status store's `Patch`
+  rather than replace another load's.
 - `FASTAPI_CONFIG`: the variable from which Dash's FastAPI backend turns its dev tools on, on its first request, with
   no argument to stop it, which `basis serve` refuses."""
 
@@ -20,7 +23,7 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Final
 
 import dash
-from dash import _callback, _dash_renderer, _pages
+from dash import _callback, _callback_context, _dash_renderer, _pages
 
 REACT: Final = "19.2.4"
 """The React Dash 4.5 opts into, which Mantine 9 needs."""
@@ -93,3 +96,14 @@ def _outputs(output: str) -> object:
 def _output(one: str) -> dict[str, str]:
     component, _, prop = one.rpartition(".")
     return {"id": component, "property": prop}
+
+
+def in_callback() -> bool:
+    """Whether a callback is running in this context."""
+    return bool(_callback_context.context_value.get({}))
+
+
+def updated(component: str, prop: str) -> object:
+    """What the running callback has set `component`'s `prop` to with `set_props`, or None."""
+    found = getattr(_callback_context.context_value.get({}), "updated_props", None)
+    return found.get(component, {}).get(prop) if isinstance(found, dict) else None

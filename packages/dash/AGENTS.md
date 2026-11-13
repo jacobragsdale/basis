@@ -30,9 +30,9 @@ and phase 16 (display), each in modules of its own, so they never edit one file.
 | `internals.py` | Every private name of Dash's basis touches, held by `tests/test_internals.py`: React's choice, the callbacks of each app's own modules, Pages' registry, setting the server up, the wire format. | Foundations; a lane that needs another adds it here, with its test |
 | `server.py` | `serve` on core's runner, `dev` on uvicorn's reloader with Dash's dev tools, and the refusal of `DASH_*` variables. | Foundations |
 | `cli.py` | `part`: `basis serve [APP] --env ENV` and `basis dev [APP]`. | Foundations; 17.x adds verbs |
-| `loading.py` | `load`, an app by entry point (`basis.dash_apps`) or module. | Foundations |
+| `loading.py` | `load`, an app by entry point (`basis.dash_apps`) or module; `bd.load` is a dataset's (`loads.py`). | Foundations |
 | `testing.py` | `client`: an app built in the process, driven through FastAPI's `TestClient`, with `index`, `layout`, `dependencies`, `page` and `fire`; 15.4 adds the fakes. | Foundations; data from 15.4 |
-| Data's own, from 15.1 | `declarations.py` (`bd.Row`, `bd.database`, `bd.folder`, `bd.query`, `bd.file`, `bd.view`, and `check`, which building runs first), `format.py` (`bd.format`, each column's display format), `cache.py`, `loads.py` (`bd.load`), `views.py`, `fixtures.py`, `rows.py` (`bd.rows`). | Data |
+| Data's own, from 15.1 | `declarations.py` (`bd.Row`, `bd.database`, `bd.folder`, `bd.query`, `bd.file`, `bd.view`, and `check`, which building runs first), `format.py` (`bd.format`, each column's display format), `cache.py`, `loads.py` (`bd.load`, which app code imports, so it opens nothing), `runtime.py` (what a built app opens for its datasets, and how each is read), `views.py`, `fixtures.py`, `rows.py` (`bd.rows`). | Data |
 | Display's own, from 16.1 | `theme.py`, `grid.py`, `charts.py`, `states.py`, `exports.py`, `filters.py`, `text.py`. | Display |
 
 A lane adds a name to `bd` in two lines of its own file: the import, and the name in its `__all__`.

@@ -1,0 +1,182 @@
+"""What a built app opens for its datasets, which `bd.load` (`basis.dash.loads`) reaches while the app runs: each
+database's port, basis-core's or a fake's, read through its read login alone in a transaction that only reads, and its
+`anyio.CapacityLimiter`; each folder; the SQL each query runs, read when the app is built; and the cache
+(`basis.dash.cache`). Opening connects to nothing. Fakes stand in for every resource the app lists, or none, so a fake
+never meets a real database. `loads.py`'s docstring says what a load does."""
+
+import asyncio
+import io
+import logging
+import time
+from collections.abc import Hashable, Mapping, Sequence
+from contextlib import AbstractContextManager
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
+from pathlib import Path
+from typing import Protocol
+
+import anyio
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+from opentelemetry.trace import Tracer
+
+from basis.core import frames, traces
+from basis.core.databases import Bind, Statements, open_database
+from basis.core.errors import Timeout
+from basis.core.folders import Folder as OpenFolder
+from basis.core.folders import folder as open_folder
+from basis.core.rows import conform
+from basis.core.settings import MssqlSettings, SettingsError
+from basis.dash import loads
+from basis.dash.cache import Cache, Entry, Key, key
+from basis.dash.declarations import Database, Dataset, File, Folder, Query
+from basis.dash.errors import DeclarationError
+from basis.dash.loads import LoadError
+from basis.dash.settings import Settings
+
+log = logging.getLogger(__name__)
+
+
+class DatabasePort(Protocol):
+    """What a database reaches: basis-core's database, or a fake, such as basis-core's `fakes.Database`."""
+
+    def statements(self, *, writes: bool) -> AbstractContextManager[Statements]: ...
+
+
+@dataclass
+class _Database:
+    declared: Database
+    port: DatabasePort
+    limiter: anyio.CapacityLimiter | None = None
+    """Made when the app starts, inside its event loop."""
+
+
+class Runtime:
+    """What a built app opened for its datasets: each database's port and limiter, each folder, the SQL each query
+    runs, and the cache. Opening connects to nothing; the app's lifespan starts it, and `bd.load` finds the one the
+    process runs."""
+
+    def __init__(self, app_name: str, *, datasets: Sequence[Dataset], resources: Sequence[object], settings: Settings, tracer: Tracer, fakes: Mapping[str, object] | None) -> None:
+        self.app = app_name
+        self.datasets = {id(dataset): dataset for dataset in datasets}
+        self.tracer = tracer
+        self.cache = Cache(settings.cache_mb)
+        self.sql = {dataset.name: dataset.sql.read_text(encoding="utf-8") for dataset in datasets if isinstance(dataset, Query)}
+        self._databases: dict[int, _Database] = {}
+        self._folders: dict[int, OpenFolder] = {}
+        _check_fakes(app_name, resources, fakes)
+        for resource in resources:
+            given = fakes.get(resource.name) if fakes is not None and isinstance(resource, Database | Folder) else None
+            if isinstance(resource, Database):
+                self._databases[id(resource)] = _Database(resource, _port(resource, given, settings))
+            elif isinstance(resource, Folder):
+                self._folders[id(resource)] = _folder(resource, given, settings)
+
+    def start(self) -> None:
+        """Start: each database's limiter, in the running loop, and this the process's runtime."""
+        for database in self._databases.values():
+            database.limiter = anyio.CapacityLimiter(database.declared.max_concurrent)
+        loads.running = self
+
+    def stop(self) -> None:
+        if loads.running is self:
+            loads.running = None
+
+    async def load(self, dataset: Dataset, params: Mapping[str, Hashable]) -> pd.DataFrame:
+        started = time.perf_counter()
+        found = key(dataset.name, params)
+        shown = loads.shown(params)
+        with self.tracer.start_as_current_span(f"load {dataset.name}", attributes={"basis.dataset": dataset.name, **{f"basis.param.{name}": str(value) for name, value in shown.items()}}) as span:
+            entry, how = self.cache.fresh(found), "hit"
+            if entry is None:
+                loop = asyncio.get_running_loop()
+                task, joined = self.cache.flight(found, lambda: loop.create_task(self._read(dataset, params, found)))
+                entry, how = await asyncio.shield(task), "shared" if joined else "miss"
+            frame = frames.from_arrow(entry.table)
+            span.set_attributes({"basis.rows": len(frame), "basis.cache": how})
+        ms = round((time.perf_counter() - started) * 1000, 3)
+        log.info("loaded %s", dataset.name, extra={"dataset": dataset.name, "params": shown, "rows": len(frame), "ms": ms, "cache": how})
+        loads.report(dataset.name, entry.loaded_at, shown, rows=len(frame))
+        return frame
+
+    async def _read(self, dataset: Dataset, params: Mapping[str, Hashable], found: Key) -> Entry:
+        loaded_at = datetime.now(UTC)
+        if isinstance(dataset, Query):
+            table = await self._query(dataset, params)
+        elif isinstance(dataset, File):
+            table = await anyio.to_thread.run_sync(self._file, dataset)
+        else:
+            msg = f"{dataset.name} is a {dataset.kind}, which no load reads yet"
+            raise LoadError(msg)
+        ttl_s, stale_s = (dataset.ttl_s, dataset.stale_s) if isinstance(dataset, Query | File) else (0.0, 0.0)
+        return self.cache.put(found, table, loaded_at=loaded_at, ttl_s=ttl_s, stale_s=stale_s)
+
+    async def _query(self, dataset: Query, params: Mapping[str, Hashable]) -> pa.Table:
+        database = self._databases[id(dataset.database)]
+        declared = database.declared
+        sql, tracer = self.sql[dataset.name], self.tracer
+        binds: dict[str, Bind] = {name: value for name, value in params.items() if isinstance(value, str | float | int | bool | date)}
+
+        def read() -> pa.Table:
+            with traces.tracing(tracer), database.port.statements(writes=False) as statements:
+                table = statements.query(sql, binds, timeout_s=declared.deadline_s)
+            return frames.to_arrow(conform(frames.from_arrow(table), dataset.row, what=f"query {dataset.name}", naive="in_zone"))
+
+        try:
+            with anyio.fail_after(declared.deadline_s):
+                return await anyio.to_thread.run_sync(read, limiter=database.limiter, abandon_on_cancel=True)
+        except TimeoutError as error:
+            msg = f"database {declared.name} did not answer query {dataset.name} within its deadline of {declared.deadline_s:g}s"
+            raise Timeout(msg, resource=declared.name) from error
+
+    def _file(self, dataset: File) -> pa.Table:
+        opened = self._folders[id(dataset.folder)]
+        with traces.tracing(self.tracer):
+            content = opened.read_bytes(dataset.path)
+        if dataset.path.lower().endswith(".parquet"):
+            frame = frames.from_arrow(pq.read_table(io.BytesIO(content)))
+        else:  # every field as text, which the row types, so nothing is inferred
+            frame = pd.read_csv(io.BytesIO(content), dtype=str, keep_default_na=False, na_filter=False)
+        return frames.to_arrow(conform(frame, dataset.row, what=f"file {dataset.name}", naive="in_zone"))
+
+
+def _check_fakes(app_name: str, resources: Sequence[object], fakes: Mapping[str, object] | None) -> None:
+    """Fakes for every resource or for none, so a fake never meets a real database."""
+    if fakes is None:
+        return
+    names = {resource.name for resource in resources if isinstance(resource, Database | Folder)}
+    if unfaked := sorted(names - set(fakes)):
+        msg = f"app {app_name} is given fakes, and none for {', '.join(unfaked)}: give a fake of every resource, since a fake never meets a real one"
+        raise DeclarationError(msg)
+    if unknown := sorted(set(fakes) - names):
+        msg = f"app {app_name} is given fakes of {', '.join(unknown)}, which it does not list in its resources: fake its own alone"
+        raise DeclarationError(msg)
+
+
+def _port(declared: Database, fake: object, settings: Settings) -> DatabasePort:
+    if fake is not None:
+        if not callable(getattr(fake, "statements", None)):
+            msg = f"the fake of database {declared.name} is a {type(fake).__qualname__}: give one with statements(writes=...), as basis-core's fakes.Database"
+            raise DeclarationError(msg)
+        if (dialect := getattr(fake, "dialect", declared.dialect)) != declared.dialect:
+            msg = f"the fake of database {declared.name} is {dialect}, and the database is declared {declared.dialect}: make the fake's dialect the database's"
+            raise DeclarationError(msg)
+        return fake  # ty: ignore[invalid-return-type] -- checked to have statements, as a port's
+    found = settings.database(declared.name)
+    kind = "mssql" if isinstance(found, MssqlSettings) else "oracle"
+    if kind != declared.dialect:
+        msg = f"database {declared.name} is declared {declared.dialect}, and its settings are {kind}'s: set its settings for the database its SQL is written for, or declare dialect={kind!r}"
+        raise SettingsError(msg)
+    return open_database(settings, declared.name)
+
+
+def _folder(declared: Folder, fake: object, settings: Settings) -> OpenFolder:
+    if fake is None:
+        return open_folder(declared.name, settings)
+    if isinstance(fake, OpenFolder):
+        return fake
+    if isinstance(fake, Path | str):
+        return OpenFolder(declared.name, Path(fake))
+    msg = f"the fake of folder {declared.name} is a {type(fake).__qualname__}: give the path of a folder of test files"
+    raise DeclarationError(msg)

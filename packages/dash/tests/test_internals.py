@@ -4,7 +4,7 @@ it: an upgrade of Dash that moves one fails here, and nowhere else."""
 import inspect
 
 import dash
-from dash import _callback, _dash_renderer, _pages
+from dash import _callback, _callback_context, _dash_renderer, _pages
 from dash.backends import _fastapi
 
 from basis.dash import internals
@@ -48,3 +48,16 @@ def test_the_wire_format_and_the_fastapi_backends_variable() -> None:
         "changedPropIds": ["b.value"],
     }
     assert internals.request("..a.children...b.data..", [])["outputs"] == [{"id": "a", "property": "children"}, {"id": "b", "property": "data"}]
+
+
+def test_a_callbacks_context_holds_what_set_props_set() -> None:
+    assert not internals.in_callback()
+    assert internals.updated("basis-status", "data") is None
+    context = dash._utils.AttributeDict(updated_props={})  # noqa: SLF001 -- what Dash's dispatch sets for each callback
+    token = _callback_context.context_value.set(context)
+    try:
+        assert internals.in_callback()
+        dash.set_props("basis-status", {"data": {"a": 1}})
+        assert internals.updated("basis-status", "data") == {"a": 1}
+    finally:
+        _callback_context.context_value.reset(token)

@@ -495,6 +495,29 @@ app and `etl.Zone('UTC')` for a job, whose `etl.Row` is now that subclass of cor
 `basis.core.rows.Zone`, and names no part. `bd.format` gives a column's display format, each basis-core's `Display`,
 as `api.format` does for an API.
 
+**A load, and the cache** (`basis.dash.loads`, `runtime`, `cache`, 15.2). `await bd.load(DATASET, **params)` checks
+its params, each named, of its declared type (an `int` serves a `float`; a `datetime` is no `date`), and runs its query
+in `anyio.to_thread.run_sync` under its database's `CapacityLimiter`, within its `deadline_s` from when it was asked
+for, the wait for a thread included, past which it raises basis-core's `Timeout`; the driver's timeout is the same
+deadline, since a thread cannot be stopped. `bd.load` called from a function that is not `async`, which on this backend
+runs on the loop's thread, or from a thread with no loop, raises `LoadError`, whose fix is to make the callback `async`
+and await it. Callers that ask for one key at once share one query, which runs as a task of its own, so one that goes
+away leaves it to the rest. The cache is the process's, of Arrow tables keyed by the dataset's name and its params,
+each fresh for `ttl_s` and kept `stale_s` past it, its ceiling the setting `cache_mb` (`BASIS_CACHE_MB`, 512 by
+default), least recently used evicted first, and each caller gets a frame of its own, so a change to it is the caller's
+alone. A value is versioned, for a view's key (15.3). Each load is one span and one log record, `loaded DATASET`, with
+its params, rows, milliseconds and `cache`: `hit`, `miss` or `shared`. A built app opens its resources, or their fakes,
+which stand in for every resource or none; a database's settings must be of its declared dialect. A database gives
+statements through its read login alone, so an app cannot write. The app loader, `basis.dash.loading.load`, is no
+longer `bd.load`.
+
+**What the status store holds.** Inside a callback, each load sets `STATUS`'s `data[DATASET]` to
+`{"loaded_at": "2026-11-13T14:05:00.123456Z", "rows": 1234, "stale": false, "params": {"as_of": "2026-11-13"}}`: when
+it was read from its source, in UTC, so a value the cache answered keeps its first time; its rows; whether it is a
+stale value a failed reload left (15.5); and its params as JSON holds them, a date as ISO text. It is sent as a Dash
+`Patch`, one assignment per dataset, so the store keeps every other dataset's, and a callback's several loads are one
+patch. The store holds no rows.
+
 **One look.** One table of tokens in Python, from basis-ui's, gives the CSS variables, the Mantine theme, the AG Grid
 theme and the Plotly template, light and dark, held to basis-ui's `theme.css` by a drift test. The scheme switches in
 the browser alone: the tokens are CSS variables keyed on `data-mantine-color-scheme`, the grid's theme is
@@ -543,7 +566,7 @@ from `basis.dash.ids`, so the data and display lanes build against them: `NOTIFI
 `NotificationContainer`, whose `sendNotifications` prop takes a list of notifications, each a dict of DMC's
 `Notification` props, and whose `hideNotifications` takes their ids, which the app's `on_error` sends to and the shell
 restyles; and `STATUS`, a `dcc.Store` whose `data` is a dict by dataset name, each value what the page knows of that
-dataset's last load (when, whether stale, how many rows: phase 15 fixes the keys), which the loads report into and the
+dataset's last load (its keys under [what the status store holds](#dash-apps-basisdash)), which the loads report into and the
 freshness line reads. It starts as `{}`, and never holds rows. A test holds that every page shows inside both.
 
 **One app per process.** Dash keeps one app per process (`dash.get_app`, Pages' registry, and the callbacks

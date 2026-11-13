@@ -1,7 +1,7 @@
 """Building a Dash app from its declaration, the same way for every app, as basis-api builds a service's:
 
 - its resources and datasets, checked before anything else, each query's SQL file against its declared params
-  (`basis.dash.declarations.check`);
+  (`basis.dash.declarations.check`), then opened, or their fakes, which connects to nothing (`basis.dash.loads`);
 - its settings, read once here, so that a missing one stops the app before it serves;
 - Dash on its FastAPI backend, on a FastAPI server of basis's own, with every setting Dash would otherwise read from a
   `DASH_*` variable given (`enable_mcp=False`, `shared_storage=None`, `compress=False`, `serve_locally=True`), its
@@ -37,6 +37,7 @@ from basis.core.serving import requests as boundary
 from basis.dash import declarations, errors, internals, shell
 from basis.dash.app import App
 from basis.dash.errors import DeclarationError
+from basis.dash.runtime import Runtime
 from basis.dash.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -58,14 +59,16 @@ class Built:
     lifecycle: Lifecycle
     provider: TracerProvider
     """The app's own tracer provider, every span of the app's on it, to which a test may add a processor of its own."""
+    runtime: Runtime
+    """What the app opened for its datasets, and their cache."""
 
 
-def build(app: App, *, settings: Settings | None = None, environment: str | None = None, dev_tools: bool = False) -> Built:
+def build(app: App, *, settings: Settings | None = None, environment: str | None = None, dev_tools: bool = False, fakes: Mapping[str, object] | None = None) -> Built:
     """`app`, built, with `settings`, or its settings read from the environment. `environment` names the environment
     the settings are of, which its spans carry. `dev_tools` turns on Dash's dev tools and hot reload, which `basis dev`
-    alone asks for. An app starts once. Its resources and datasets are checked first, every SQL file opened, before
-    any environment is read."""
-    declarations.check(app.name, app.resources)
+    alone asks for. `fakes`, by resource name, stand in for every resource the app lists, or none. An app starts once.
+    Its resources and datasets are checked first, every SQL file opened, before any environment is read."""
+    datasets = declarations.check(app.name, app.resources)
     if settings is None:
         settings = app.settings()
     elif not isinstance(settings, app.settings):
@@ -75,6 +78,7 @@ def build(app: App, *, settings: Settings | None = None, environment: str | None
     serve = configured.serve
     lifecycle = Lifecycle()
     provider = traces.provider(app.name, version=configured.git_sha, environment=environment)
+    runtime = Runtime(app.name, datasets=datasets, resources=app.resources, settings=configured, tracer=provider.get_tracer("basis.dash"), fakes=fakes)
     started = False
 
     @asynccontextmanager
@@ -86,11 +90,13 @@ def build(app: App, *, settings: Settings | None = None, environment: str | None
         started = True
         if (exporter := traces.exporter(configured.traces)) is not None:
             provider.add_span_processor(exporter)
+        runtime.start()
         lifecycle.advance(Stage.READY)
         log.info("%s is ready", app.name, extra={"app": app.name, "traces": configured.traces.exporter if configured.traces is not None else None})
         try:
             yield {}
         finally:
+            runtime.stop()
             lifecycle.advance(Stage.STOPPING)
             await asyncio.to_thread(provider.shutdown)  # exports the spans still queued, which blocks
             lifecycle.advance(Stage.STOPPED)
@@ -148,7 +154,7 @@ def build(app: App, *, settings: Settings | None = None, environment: str | None
     internals.set_up(made)
     server.add_middleware(boundary.Requests, health=health)
     server.add_middleware(GZipMiddleware, minimum_size=COMPRESS_FROM, compresslevel=COMPRESS_LEVEL)  # outside the boundary, which logs what the app answered
-    return Built(app, configured, made, server, lifecycle, provider)
+    return Built(app, configured, made, server, lifecycle, provider, runtime)
 
 
 def _prefixes(prefix: str, *, stripped: bool) -> tuple[str | None, str | None, str | None]:

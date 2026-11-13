@@ -39,6 +39,9 @@ class Serve(serving.Serve):
 
 class Settings(core.Settings):
     serve: Serve = Field(default_factory=Serve)
+    cache_mb: Annotated[int, Field(ge=1)] = 512
+    """The most megabytes of datasets the process keeps, `BASIS_CACHE_MB`, as their Arrow tables count them: past it,
+    the least recently used are evicted first (`basis.dash.cache`)."""
 
     @classmethod
     def given(cls, **values: object) -> Self:

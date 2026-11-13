@@ -32,7 +32,7 @@ DEV_APP = "_BASIS_DASH_DEV_APP"
 
 
 def serve(app: App | str | None = None, *, settings: Settings | None = None, host: str | None = None, environment: str | None = None) -> None:
-    """Serve `app`, or the app a reference names (see `bd.load`), or the one the installed packages list, with
+    """Serve `app`, or the app a reference names (see `basis.dash.loading.load`), or the one the installed packages list, with
     `settings`, or its settings read from the environment, on `host`, or the one the settings name; `environment` names
     the environment the settings are of, which its spans carry."""
     logs.setup()

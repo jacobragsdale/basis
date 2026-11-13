@@ -34,7 +34,6 @@ from basis.dash._display import *  # noqa: F403 -- the display lane's names, lik
 from basis.dash.app import App
 from basis.dash.errors import DeclarationError
 from basis.dash.ids import NOTIFICATIONS, STATUS
-from basis.dash.loading import load
 from basis.dash.pages import Page, page
 from basis.dash.settings import Serve, Settings
 from basis.dash.version import VERSION
@@ -50,7 +49,7 @@ __version__ = VERSION
 internals.choose_react()
 assets.register()
 
-__all__ = ["NOTIFICATIONS", "STATUS", "VERSION", "App", "Built", "DeclarationError", "Page", "Serve", "Settings", "build", "load", "page", "serve", "testing"]
+__all__ = ["NOTIFICATIONS", "STATUS", "VERSION", "App", "Built", "DeclarationError", "Page", "Serve", "Settings", "build", "page", "serve", "testing"]
 __all__ += _data.__all__
 __all__ += _display.__all__
 

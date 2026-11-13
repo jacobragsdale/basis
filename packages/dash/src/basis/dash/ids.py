@@ -7,8 +7,9 @@ page, a callback and a test name it by its constant.
   `Notification` props (`id`, `title`, `message`, `color`, `autoClose` and the rest), as
   `set_props(NOTIFICATIONS, {"sendNotifications": [...]})`; `hideNotifications`, a list of ids, hides them.
 - `STATUS`: a `dcc.Store` whose `data` is a dict by dataset name, each value what the page knows of that dataset's
-  last load (phase 15 says which keys: when it was loaded, whether it is stale, how many rows). It starts as `{}`,
-  and holds no rows: a dataset never travels to the browser in a store."""
+  last load: `{"loaded_at": ISO 8601 UTC, "rows": N, "stale": BOOL, "params": {NAME: VALUE}}`, which each load sets
+  through a `Patch` (`basis.dash.loads`). It starts as `{}`, and holds no rows: a dataset never travels to the browser
+  in a store."""
 
 from typing import Final
 

@@ -57,7 +57,8 @@ class Client:
     def fire(self, output: str, inputs: Mapping[str, object], *, state: Mapping[str, object] | None = None, changed: list[str] | None = None) -> dict[str, dict[str, object]]:
         """Fire the callback whose output is `output`, as `_dash-dependencies` writes it, with each input's and
         state's value by `id.prop`, and `changed` the inputs that changed, by default all of them; what it answers, by
-        component and property, or nothing where it prevents the update."""
+        component and property, its outputs and what it set with `set_props` alike, or nothing where it prevents the
+        update."""
         body = internals.request(
             output, [_value(key, value) for key, value in inputs.items()], state=[_value(key, value) for key, value in (state or {}).items()], changed=list(inputs) if changed is None else changed
         )
@@ -65,8 +66,11 @@ class Client:
         if answered.status_code == HTTPStatus.NO_CONTENT:
             return {}
         found = _object(self._ok(answered).json(), "a callback's answer")
-        response = _object(found.get("response", {}), "a callback's response")
-        return {component: _object(props, "a component's props") for component, props in response.items()}
+        answered_props: dict[str, dict[str, object]] = {}
+        for part in ("response", "sideUpdate"):
+            for component, props in _object(found.get(part, {}), f"a callback's {part}").items():
+                answered_props.setdefault(component, {}).update(_object(props, "a component's props"))
+        return answered_props
 
     def page(self, path: str) -> dict[str, object]:
         """The layout of the page at `path`, under the app's prefix, as Dash Pages' router answers it for a browser
@@ -89,9 +93,10 @@ class Client:
 
 
 @contextmanager
-def client(app: App, *, settings: Settings | None = None) -> Generator[Client]:
-    """`app`, built with `settings`, or its settings' defaults alone, and started, as a `Client`."""
-    built = build(app, settings=settings if settings is not None else app.settings.given())
+def client(app: App, *, settings: Settings | None = None, fakes: Mapping[str, object] | None = None) -> Generator[Client]:
+    """`app`, built with `settings`, or its settings' defaults alone, on `fakes`, by resource name, and started, as a
+    `Client`."""
+    built = build(app, settings=settings if settings is not None else app.settings.given(), fakes=fakes)
     with TestClient(built.asgi) as http:
         yield Client(built, http)
 

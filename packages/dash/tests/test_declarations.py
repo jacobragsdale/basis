@@ -11,6 +11,7 @@ import pytest
 from dash import html
 
 import basis.dash as bd
+from basis.core import fakes
 from basis.core.rows import RowError, SchemaError, conform
 
 
@@ -167,7 +168,7 @@ def test_a_query_whose_file_binds_exactly_its_params_builds(tmp_path: Path) -> N
     sql = "SELECT account, cusip, par, as_of FROM positions -- :not_a_bind\nWHERE as_of = :as_of AND note <> ':nor_this'"
     bd.query("positions", warehouse, _sql(tmp_path, sql), Position, binds={"as_of": date}, ttl_s=900, stale_s=0)
     app = bd.App(name="positions", title="Positions", settings=bd.Settings, resources=[warehouse], pages=[PAGE])
-    assert bd.build(app, settings=bd.Settings.given()).app is app
+    assert bd.build(app, settings=bd.Settings.given(), fakes={"warehouse": fakes.Database("warehouse", dialect="oracle")}).app is app
 
 
 def test_an_apps_resources_are_declared_and_its_datasets_named_once(tmp_path: Path) -> None:
