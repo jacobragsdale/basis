@@ -6,7 +6,7 @@ shape. UIs live in its TypeScript sibling,
 [docs/design.md](docs/design.md#what-a-ui-can-rely-on). [docs/design.md](docs/design.md) holds the decisions and their
 reasons, and [docs/roadmap.md](docs/roadmap.md) the phases, their steps, and the lanes that run at the same time,
 [PLAN.md](PLAN.md) the review after the MVP and its phases 6 to 12, and [docs/dash-plan.md](docs/dash-plan.md) phases 13
-to 18: one part's removal, and Dash apps. The code is in `packages/`: basis-core, basis-job, basis-api and, from step 14.5, basis-dash.
+to 18: one part's removal, and Dash apps. The code is in `packages/`: basis-core, basis-job, basis-api and basis-dash.
 
 ## Working here
 

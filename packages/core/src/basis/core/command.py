@@ -321,7 +321,7 @@ def _claim(owners: dict[str, str], key: str, part: str, what: str) -> None:
     elif owner == part:
         msg = f"the {part} part adds `{what}` twice, a defect in its package: install its package from a basis release, with `uv sync --reinstall`"
     else:
-        msg = f"the {owner} and {part} parts both add `{what}`, and a repo cannot have both: declare one of them"
+        msg = f"the {owner} and {part} parts both add `{what}`, and a repo cannot have both: declare one of them, and keep the other in a repo of its own"
     raise CommandError(msg)
 
 

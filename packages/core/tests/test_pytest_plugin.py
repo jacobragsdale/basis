@@ -9,7 +9,9 @@ import sys
 
 import pytest
 
-INI = "[pytest]\naddopts = -p no:randomly\nmarkers =\n    integration: needs a real database or service\nfilterwarnings = error\n"
+INI = "[pytest]\naddopts = -p no:randomly -p no:dash\nmarkers =\n    integration: needs a real database or service\nfilterwarnings = error\n"
+"""A session's settings: Dash's plugin, which this workspace has installed and a repo without a Dash app does not,
+stays out, as the workspace's own session leaves it out."""
 UNROUTABLE = '("192.0.2.1", 9)'
 """TEST-NET-1, which no network routes, so a connection the plugin let through would fail, never reach anything."""
 

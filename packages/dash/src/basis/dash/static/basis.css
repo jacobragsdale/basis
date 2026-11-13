@@ -1,0 +1,4 @@
+/* basis's own styles for every Dash app, served from the app's origin (basis.dash.assets). Step 16.1 writes the theme here. */
+:root {
+  color-scheme: light dark;
+}

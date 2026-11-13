@@ -281,7 +281,7 @@ def test_bad_log_settings_name_their_variable(tmp_path: Path, capsys: pytest.Cap
 def test_two_declared_parts_cannot_add_the_same_verb(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     installed = {"alpha": lambda: Part(verbs=(verb("serve"),)), "beta": lambda: Part(verbs=(verb("serve"),))}
     assert basis(repo(tmp_path, BOTH), "serve", installed=installed) == 1
-    assert error_line(capsys).endswith("the alpha and beta parts both add `basis serve`, and a repo cannot have both: declare one of them")
+    assert error_line(capsys).endswith("the alpha and beta parts both add `basis serve`, and a repo cannot have both: declare one of them, and keep the other in a repo of its own")
 
 
 @pytest.mark.parametrize(

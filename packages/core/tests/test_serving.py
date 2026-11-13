@@ -47,7 +47,7 @@ def _app(lifecycle: Lifecycle, *, prefix: str = PREFIX) -> Starlette:
         raise RuntimeError(msg)
 
     routes = [*health(lifecycle, "abc123", prefix=prefix), Route(f"{prefix}/", page), Route(f"{prefix}/broken", broken)]
-    return Starlette(routes=routes, lifespan=lifespan, middleware=[Middleware(Requests, prefix=prefix)])
+    return Starlette(routes=routes, lifespan=lifespan, middleware=[Middleware(Requests, health=[prefix])])
 
 
 def test_health_answers_under_the_prefix_and_readiness_follows_the_lifecycle() -> None:
@@ -130,7 +130,7 @@ async def slow(_):
     await asyncio.sleep(2)
     return PlainTextResponse("slept")
 
-app = Starlette(routes=[*health(lifecycle, None, prefix="/apps/pos"), Route("/apps/pos/slow", slow)], lifespan=lifespan, middleware=[Middleware(Requests, prefix="/apps/pos")])
+app = Starlette(routes=[*health(lifecycle, None, prefix="/apps/pos"), Route("/apps/pos/slow", slow)], lifespan=lifespan, middleware=[Middleware(Requests, health=["/apps/pos"])])
 run(app, Serve(port=int(sys.argv[1]), drain_s=1, shutdown_s=10), lifecycle, host="127.0.0.1")
 """
 

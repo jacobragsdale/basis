@@ -59,7 +59,7 @@ class Steps:
         arguments = list(argv[argv.index("pytest") + 1 :])
         if self.real:
             kept = {name: value for name, value in os.environ.items() if name not in check.COVERAGE_VARIABLES}  # as check.run_command keeps them
-            environment = {**kept, "PYTHONPATH": str(folder), "PYTHONDONTWRITEBYTECODE": "1"}
+            environment = {**kept, "PYTHONPATH": str(folder), "PYTHONDONTWRITEBYTECODE": "1", "PYTEST_ADDOPTS": "-p no:dash"}  # Dash's plugin, which this workspace has and an API repo does not
             return subprocess.run([sys.executable, "-m", "pytest", *arguments], cwd=folder, env=environment, check=False).returncode
         for argument in arguments:
             if argument.startswith("--cov-report=json:"):

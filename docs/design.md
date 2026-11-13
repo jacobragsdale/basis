@@ -449,6 +449,8 @@ it, which `basis serve`, `basis dev`, `basis check` and every test do alike:
   variable or `_DASH_FASTAPI_CONFIG` is set, since the FastAPI backend turns the dev tools on from the latter with no
   argument to stop it;
 - sets up the server at once (`_setup_server`), so a setup error fails the build, not the first request;
+- leaves the tab's title alone while a callback runs (`update_title`), and Dash's log handler out, so Dash's records
+  go through basis-core's as JSON, and none reaches stdout;
 - mounts basis-core's health routes and request boundary on the FastAPI server, with the same lifecycle and shutdown
   as an API's (see [What jobs and APIs share](#what-jobs-and-apis-share)).
 
@@ -484,6 +486,28 @@ basis's holds only what differs from Plotly's, under 0.5 KB a figure. basis's CS
 package's, served by Dash fingerprinted (`dash.hooks.stylesheet` and `script`, a font `dynamic`), beside an app's own
 `assets/`; basis's grid functions join `window.dashAgGridFunctions` under `basis` names and never replace it. Nothing
 is fetched from another origin. Phase 16 builds it, in modules of the display lane's own.
+
+**Two ids every page has.** basis's chrome around every page holds two components whose ids are fixed and exported
+from `basis.dash.ids`, so the data and display lanes build against them: `NOTIFICATIONS`, DMC's
+`NotificationContainer`, whose `sendNotifications` prop takes a list of notifications, each a dict of DMC's
+`Notification` props, and whose `hideNotifications` takes their ids, which the app's `on_error` sends to and the shell
+restyles; and `STATUS`, a `dcc.Store` whose `data` is a dict by dataset name, each value what the page knows of that
+dataset's last load (when, whether stale, how many rows: phase 15 fixes the keys), which the loads report into and the
+freshness line reads. It starts as `{}`, and never holds rows. A test holds that every page shows inside both.
+
+**One app per process.** Dash keeps one app per process (`dash.get_app`, Pages' registry, and the callbacks
+`dash.callback` registers, which the first app set up takes). Building an app makes it the process's: Pages' registry
+holds its pages alone, and it gets the callbacks of its own modules, its declaration's and its pages', and no other
+app's, so tests can build one app after another. A page's module holds its layout and its callbacks.
+
+**Errors go through one handler.** basis gives Dash one `on_error` for the whole app (`basis.dash.errors`): a
+callback's exception is logged once, with its traceback, and each output keeps what it showed. Step 15.5 makes it a
+sentence a person can act on, in the notifications. A page writes no handler of its own.
+
+**The package is laid out for two lanes.** The foundations' modules build, serve and test an app; the data lane's
+(declarations, the cache, loads, views, fixtures) and the display lane's (theme, shell, page, grid, charts, states,
+exports and `static/`) are their own, and each lane adds its names to `bd` through a module only it edits
+(`_data.py`, `_display.py`). [basis-dash's agent guide](../packages/dash/AGENTS.md) says which module is whose.
 
 **Dash's internals are in one module.** `basis.dash.internals` holds every private name of Dash's that basis touches,
 and a test holds each, as `basis.api.internals` holds FastAPI's, so an upgrade that moves one fails there.

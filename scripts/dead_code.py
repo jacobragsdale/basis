@@ -18,8 +18,12 @@ PATHS = [ROOT / "packages", ROOT / "scripts", ROOT / "evals"]
 EXCLUDE = ["*/templates/*", "*/.venv/*", "*/__pycache__/*"]
 KINDS = frozenset({"function", "class", "method", "property"})
 """What it reports: a variable or an attribute is as often a field a library reads, which vulture cannot tell."""
-DECORATORS = ["@field_validator", "@model_validator", "@override", "@pytest.fixture", "@*.setter", "@pytest.hookimpl", "@*.get", "@*.post", "@*.put", "@*.patch", "@*.delete", "@*.api_route"]
-"""A function behind one of these is called by its library, not by name: a validator, a fixture, a hook, a route."""
+DECORATORS = [
+    *("@callback", "@dash.callback", "@field_validator", "@model_validator", "@override", "@pytest.fixture", "@*.setter", "@pytest.hookimpl"),
+    *("@*.get", "@*.post", "@*.put", "@*.patch", "@*.delete", "@*.api_route"),
+]
+"""A function behind one of these is called by its library, not by name: a Dash callback, a validator, a fixture, a
+hook, a route."""
 NAMES = ["pytest_*", "__getattr__", "do_GET", "do_HEAD", "do_POST"]
 """A pytest hook, a module's lookup of a name it does not define, and an `http.server` handler's methods."""
 KEPT: dict[str, str] = {
@@ -32,6 +36,7 @@ KEPT: dict[str, str] = {
     "Hidden": "a test's class whose being unused is what the test checks",
     "Twice": "a test's class whose declaration is what the test refuses, so it is never made",
     "without_pricing": 'a test\'s fakes, which `Service(fakes="module:function")` names as text',
+    "dev_app": "the factory `basis dev` gives uvicorn's reloader as text, `basis.dash.server:dev_app`",
 }
 """Each name vulture finds no use of that is used, with why."""
 

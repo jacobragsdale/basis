@@ -20,7 +20,7 @@ Keep this table true in each step's own commit.
 | 14.2 The design, written down | Done: [Dash apps](design.md#dash-apps-basisdash), the tables, README and AGENTS | the commit "Step 14.2" |
 | 14.3 Rows in core | Done: `basis.core.rows`, a `float`'s `Display`; `basis.job.rows` re-exports | the commit "Step 14.3" |
 | 14.4 Serving in core | Done: `basis.core.serving`, its `requests` and `server`; `basis-core[serve]` | the commit "Step 14.4" |
-| 14.5 The package and an empty app | Not started | |
+| 14.5 The package and an empty app | Done: `packages/dash`, an empty app served, health and drain, a callback in the process; modules by lane in its AGENTS.md | the commit "Step 14.5" |
 | 15.1 to 15.8 Data | Not started | |
 | 16.1 to 16.9 Display | Not started | |
 | 17.1 to 17.8 The repo around it | Not started | |
@@ -459,8 +459,21 @@ Each has the pick this plan builds on. None blocks a step before the one named.
 | A part that gives no share of the tool settings (`AgentFiles.tools` of `None`), which only the removed part used | Kept: it is general, any part may give none, and basis then leaves the repo's own settings alone | 13.1 |
 | Are `basis serve` and `basis dev` core's verbs, shared by NAME as `run` is, or each serving part's own? | Each part's own: no repo holds two parts that serve, core's refusal of two parts adding one verb is then the one line, and basis-api's surface keeps `verb api serve --env` | 14.2 |
 | Do core's row refusals keep the job's words, such as `etl.Zone('UTC')`? | Yes for now, as `frames` and `destination` already did; a Dash app's names for the fix are 15.1's | 14.3 |
-| Where does the Dash app's path prefix come from? | Two settings, `serve.prefix` and `serve.prefix_stripped`, mapped to Dash's two prefixes | 14.5 |
+| Where does the Dash app's path prefix come from? | Two settings, `serve.prefix` and `serve.prefix_stripped`, mapped to Dash's two prefixes; the health routes answer at the root too, for the cluster's probes, which reach the pod past the proxy | 14.5 |
+| Which callbacks are an app's? | Those of the modules that declared it and its pages, since Dash's registry is the process's and tests build several apps | 14.5 |
+| Where do the lanes add their names to `bd`? | Each in a module of its own, `_data.py` or `_display.py`, whose `__all__` the package's extends | 14.5 |
 | PLAN.md's findings and figures about the removed part | Kept as history, naming it "the third part"; its full text is PLAN.md at `4a69721` | 13.1 |
+
+## Found while building
+
+- **`basis serve` ends a SIGTERM shutdown with an `ERROR` line and exit 143**, an API's and a Dash app's alike:
+  uvicorn raises the signal again once it has shut down, into the command's own handler, which reports a stop by
+  signal. The drain and the shutdown are whole before it, so a pod is unharmed, but the last line misleads. Left as it
+  is in 14.5, since basis-api's tests hold the re-raise; a fix is core's runner or command's (found in 14.5).
+- **Dash ships a pytest plugin, `dash`**, which drives a browser and fails pytest 9's deprecation warnings. The
+  workspace turns it off (`-p no:dash`); the pytest settings `basis sync` writes for a Dash repo must too (17.3).
+- **`basis --help` in a Dash repo imports Dash**, about 0.2 s, since the part's module imports `basis.dash`; uvicorn
+  and FastAPI load only when a verb serves.
 
 ## Rules for this work
 

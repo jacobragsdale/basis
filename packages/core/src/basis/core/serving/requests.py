@@ -10,7 +10,7 @@ seconds."""
 
 import logging
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from http import HTTPStatus
 from uuid import UUID, uuid7
 
@@ -83,12 +83,12 @@ def _no_fields(_: Scope) -> Mapping[str, object]:
 
 class Requests:
     """The request boundary, as the module's docstring says, for Starlette's `Middleware(Requests, ...)`: health
-    checks under `prefix`, the 500 `answer` gives for an exception nothing expected, and each request's log line with
-    what `fields` adds."""
+    checks under each of `health`, the prefixes an app's health routes are under, the 500 `answer` gives for an
+    exception nothing expected, and each request's log line with what `fields` adds."""
 
-    def __init__(self, app: ASGIApp, *, prefix: str = "", answer: Answer = _answer, fields: Fields = _no_fields) -> None:
+    def __init__(self, app: ASGIApp, *, health: Sequence[str] = ("",), answer: Answer = _answer, fields: Fields = _no_fields) -> None:
         self.app = app
-        self._prefix = prefix
+        self._health = tuple(health)
         self._answer = answer
         self._fields = fields
 
@@ -133,7 +133,7 @@ class Requests:
         """How a request that ended without an unexpected error is logged: a server error as a warning, a health
         check only when it fails, and everything else as information."""
         failed = status is None or status >= _FIRST_ERROR
-        if is_health(path, self._prefix):
+        if any(is_health(path, prefix) for prefix in self._health):
             return logging.INFO if failed else None
         return logging.WARNING if status is None or status >= _FIRST_SERVER_ERROR else logging.INFO
 

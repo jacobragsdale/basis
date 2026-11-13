@@ -1,0 +1,30 @@
+[project]
+name = "basis-dash"
+version = "0.1.0"
+description = "Dash apps on Dash's FastAPI backend: an app declares its pages, data and settings, and basis builds the same app around them in every repo"
+license = "MIT"
+requires-python = ">=3.14"
+dependencies = [
+    "basis-core[serve]==0.1.0",  # every basis package depends on basis-core at exactly its own version, and its server, uvicorn on Starlette
+    "dash[fastapi]>=4.5.0",  # Dash on its FastAPI backend, the server basis-api runs too (docs/spikes/dash.md)
+    "dash-ag-grid>=35.3.0",  # the grid; Community features only
+    "dash-mantine-components>=3.0.0",  # the shell, inputs and notifications, on Mantine 9 and React 19
+    "orjson>=3.13.0",  # Dash's encoder of a callback's answer, five times faster than json's on a large grid
+    "plotly>=7.1.0",
+]
+
+[project.entry-points."basis.verbs"]
+dash = "basis.dash.cli:part"  # basis-dash's verbs, in a repo whose [tool.basis] parts include "dash"
+
+[tool.uv.sources]
+basis-core = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.13.6,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "basis.dash"
+
+[tool.basis-release]
+publish = true  # a basis release publishes this package, at the one version every member has

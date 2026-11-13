@@ -5,7 +5,7 @@
 name = "basis-workspace"
 version = "0.1.0"
 requires-python = ">=3.14"
-dependencies = ["basis-api", "basis-core[excel,mongo]", "basis-job"]  # what basis releases, with basis-core's extras, which its tests use; `uv sync --all-packages` installs every member
+dependencies = ["basis-api", "basis-core[excel,mongo]", "basis-dash", "basis-job"]  # what basis releases, with basis-core's extras, which its tests use; `uv sync --all-packages` installs every member
 
 [tool.uv]
 package = false
@@ -17,6 +17,7 @@ members = ["packages/*"]
 [tool.uv.sources]
 basis-api = { workspace = true }
 basis-core = { workspace = true }
+basis-dash = { workspace = true }
 basis-job = { workspace = true }
 
 [dependency-groups]
@@ -91,6 +92,9 @@ ignore = [
 # The eval's entry point, which puts its own folder first on sys.path, as the scripts' do; evals/ is no package.
 "evals/run.py" = ["INP001"]
 
+[tool.ruff.lint.flake8-import-conventions.extend-aliases]
+"basis.dash" = "bd"  # as the ecosystem writes dmc, dag and px, so bd never collides with dash itself
+
 [tool.ruff.lint.isort]
 known-first-party = ["basis"]  # every member's portion of the namespace, wherever its src/ is
 split-on-trailing-comma = false  # Do not preserve comma-forced import line breaks.
@@ -128,8 +132,9 @@ error-on-warning = true
 # repos a member's tests make; a conftest below the root cannot load it. basis-core's pytest plugin, `basis`, which keeps
 # a repo's unit tests off sockets, stays out of this session (`-p no:basis`): this workspace's own tests serve and reach
 # real servers on sockets, by design. pytester's own sessions still load it, and the example's tests run under it as a
-# repo's do, in the tests of basis-api's checks.
-addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration' --ignore-glob=packages/*/src/*/templates -p pytester -p no:basis"
+# repo's do, in the tests of basis-api's checks. Dash's own plugin, `dash`, which drives a browser with Selenium and
+# which basis never uses, stays out too: its hooks use a form pytest 9 deprecates, which this session's warnings fail.
+addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not integration' --ignore-glob=packages/*/src/*/templates -p pytester -p no:basis -p no:dash"
 testpaths = ["packages/*/tests", "packages/*/src/basis/*/example", "scripts/tests", "evals/tests"]  # every member's tests, its example's, the release script's, and the eval's runner's
 pythonpath = ["packages/job/tests", "scripts", "evals"]  # each member's shared test modules, such as basis-job's `builders`, scripts/release.py, and the eval's package; a missing path adds nothing
 xfail_strict = true  # An xfail that starts passing is a failure, not a silent pass.
@@ -144,7 +149,7 @@ markers = [
 
 [tool.coverage.run]
 branch = true  # Statement coverage hides the untaken half of every condition.
-source = ["packages/core/src/basis", "packages/job/src/basis", "packages/api/src/basis"]  # each package's code, not its tests
+source = ["packages/core/src/basis", "packages/job/src/basis", "packages/api/src/basis", "packages/dash/src/basis"]  # each package's code, not its tests
 omit = ["**/templates/**", "*/example/tests/*"]  # a generated repo's files, which run in that repo, and the example's tests, which are not code under test; coverage's `*` stops at a `/`
 relative_files = true  # so CI can combine the unit and integration jobs' data, each measured in its own checkout
 
@@ -156,7 +161,7 @@ fail_under = 85  # basis's own floor, which CI holds on the unit and integration
 
 # The import contracts of basis-core, basis-job and basis-api.
 [tool.importlinter]
-root_packages = ["basis.core", "basis.job", "basis.api"]  # portions of one namespace, each named (spike 0.2)
+root_packages = ["basis.core", "basis.job", "basis.api", "basis.dash"]  # portions of one namespace, each named (spike 0.2)
 include_external_packages = true  # so a contract can forbid a database driver
 exclude_type_checking_imports = true
 
@@ -164,12 +169,12 @@ exclude_type_checking_imports = true
 name = "basis-core imports no part: every part builds on it, and none ships with another"
 type = "forbidden"
 source_modules = ["basis.core"]
-forbidden_modules = ["basis.job", "basis.api"]
+forbidden_modules = ["basis.job", "basis.api", "basis.dash"]
 
 [[tool.importlinter.contracts]]
 name = "Parts import basis-core and never each other, so a change to one cannot break another"
 type = "independence"
-modules = ["basis.job", "basis.api"]
+modules = ["basis.job", "basis.api", "basis.dash"]
 
 [[tool.importlinter.contracts]]
 name = "basis's command, its checks and basis-job load no server: basis --version and a job repo's commands stay light"
@@ -228,6 +233,19 @@ ignore_imports = [
     "basis.api -> basis.api.server",  # as does `api.serve`, and `api.serve_on_fakes`
     "basis.api -> basis.api.call",  # as does `api.call_route`
 ]
+
+[[tool.importlinter.contracts]]
+name = "A Dash app's declarations load no server: basis builds the app, serves it and drives it in tests"
+type = "forbidden"
+source_modules = [
+    "basis.dash", "basis.dash.app", "basis.dash.pages", "basis.dash.settings", "basis.dash.ids", "basis.dash.errors", "basis.dash.loading",
+    "basis.dash.assets", "basis.dash.internals", "basis.dash.shell", "basis.dash._data", "basis.dash._display", "basis.dash.version",
+]
+forbidden_modules = [
+    "basis.dash.building", "basis.dash.server", "basis.dash.testing", "basis.dash.cli", "basis.core.serving.server", "basis.core.serving.requests",
+    "uvicorn", "fastapi", "starlette", "basis.core.databases", "basis.core.opened", "basis.core.fakes", "basis.core.traces", "mssql_python", "oracledb", "httpx", "httpx2",
+]
+as_packages = false  # `bd.build`, `bd.serve` and `bd.testing` load on first use, which an app's modules never make
 
 [[tool.importlinter.contracts]]
 name = "Compute modules do no I/O and reach no resource: the process pool gives each function values, and it returns one"
