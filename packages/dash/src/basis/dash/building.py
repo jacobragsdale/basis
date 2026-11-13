@@ -69,12 +69,7 @@ def build(app: App, *, settings: Settings | None = None, environment: str | None
     alone asks for. `fakes`, by resource name, stand in for every resource the app lists, or none. An app starts once.
     Its resources and datasets are checked first, every SQL file opened, before any environment is read."""
     datasets = declarations.check(app.name, app.resources)
-    if settings is None:
-        settings = app.settings()
-    elif not isinstance(settings, app.settings):
-        msg = f"app {app.name}'s settings are {app.settings.__qualname__}, so build it with those, not a {type(settings).__qualname__}"
-        raise DeclarationError(msg)
-    configured = settings
+    configured = _settings(app, settings)
     serve = configured.serve
     lifecycle = Lifecycle()
     provider = traces.provider(app.name, version=configured.git_sha, environment=environment)
@@ -155,6 +150,16 @@ def build(app: App, *, settings: Settings | None = None, environment: str | None
     server.add_middleware(boundary.Requests, health=health)
     server.add_middleware(GZipMiddleware, minimum_size=COMPRESS_FROM, compresslevel=COMPRESS_LEVEL)  # outside the boundary, which logs what the app answered
     return Built(app, configured, made, server, lifecycle, provider, runtime)
+
+
+def _settings(app: App, settings: Settings | None) -> Settings:
+    """`settings`, which must be the app's, or the app's read from the environment."""
+    if settings is None:
+        return app.settings()
+    if not isinstance(settings, app.settings):
+        msg = f"app {app.name}'s settings are {app.settings.__qualname__}, so build it with those, not a {type(settings).__qualname__}"
+        raise DeclarationError(msg)
+    return settings
 
 
 def _prefixes(prefix: str, *, stripped: bool) -> tuple[str | None, str | None, str | None]:
