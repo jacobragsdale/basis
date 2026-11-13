@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from pydantic import AwareDatetime, BaseModel, Field
 
 from basis import api
-from basis.api import fakes
+from basis.api import arrow, fakes
 
 ARROW = "application/vnd.apache.arrow.stream"
 AT = datetime(2026, 11, 6, 14, 30, tzinfo=UTC)
@@ -102,6 +102,34 @@ def test_a_table_answers_json_and_arrow_with_the_same_rows(client: TestClient, p
     assert (as_arrow.headers["content-type"], table.column_names) == (ARROW, ["book", "quantity", "as_of", "at", "note"])
     assert table.schema.field("quantity").type == pa.float64()
     assert table.column("quantity").to_pylist() == [1.5, None]
+
+
+def many(count: int) -> pa.Table:
+    return pa.table({"book": ["RATES"] * count, "quantity": [float(row) for row in range(count)], "as_of": [date(2026, 11, 6)] * count, "at": [AT] * count, "note": pa.nulls(count, pa.string())})
+
+
+def test_a_tables_stream_holds_its_rows_in_order_in_batches_of_at_most_65536() -> None:
+    """Issue 37: a table of one chunk went out as one batch, which a grid can show only once all of it has arrived. A
+    chunk that already holds fewer rows is a batch as it is, and a table of no rows is its schema alone."""
+    count = arrow.BATCH_ROWS + 1
+    whole = arrow.write(many(count))
+    assert [batch.num_rows for batch in pa.ipc.open_stream(whole)] == [arrow.BATCH_ROWS, 1]
+    assert pa.ipc.open_stream(whole).read_all().column("quantity").to_pylist() == [float(row) for row in range(count)]
+    chunked = pa.concat_tables([many(3), many(count)])
+    assert [batch.num_rows for batch in pa.ipc.open_stream(arrow.write(chunked))] == [3, arrow.BATCH_ROWS, 1]
+    assert list(pa.ipc.open_stream(arrow.write(many(0)))) == []
+
+
+def test_a_table_route_answers_its_stream_in_batches(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(arrow, "BATCH_ROWS", 2)
+
+    def five() -> api.Table[Position]:
+        return many(5)
+
+    app = api.build(service(five), settings=api.Settings.given(), fakes={WAREHOUSE: fakes.Database(answers={})})
+    with TestClient(app.asgi) as client:
+        answered = client.get("/five", headers={"accept": ARROW}).content
+    assert [batch.column("quantity").to_pylist() for batch in pa.ipc.open_stream(answered)] == [[0.0, 1.0], [2.0, 3.0], [4.0]]
 
 
 def test_a_table_that_lacks_a_column_is_a_defect_and_its_writes_roll_back(client: TestClient, warehouse: fakes.Database) -> None:

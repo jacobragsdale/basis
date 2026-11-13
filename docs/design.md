@@ -206,7 +206,10 @@ of the `openapi.json` that this repo's example API produces. [The contract page]
   key.
 - **Datasets as Arrow.** A route that returns a dataset declares it, and returns Arrow when the request asks for
   `application/vnd.apache.arrow.stream`, which is how parallax, basis-ui's grid, receives its data. Its rows are flat,
-  one column for each field, so its Arrow and its JSON hold the same values.
+  one column for each field, so its Arrow and its JSON hold the same values. The stream is written in record batches of
+  at most 65,536 rows, because a reader has an IPC message only once all of it has arrived: one batch of every row kept
+  a grid empty until the last byte and held the table twice while it was read (issue 37, from basis-ui's review of
+  2026-11-13). The size is the one parallax's budgets were measured at.
 - **Display formats.** A dataset's number column may declare how it is shown, on its float field, as
   `Annotated[float, api.format.money("USD")]` or `api.format.pct(2)`, so pages never choose decimals. basis-api writes
   it as a JSON object: in Arrow, as the field metadata key `basis.format`, whose value is the object as a JSON string,

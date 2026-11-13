@@ -81,6 +81,10 @@ def plain() -> list[Lot]:
     return [Lot(lots=7)]
 
 
+def five() -> list[Lot]:
+    return [Lot(lots=lot) for lot in range(5)]
+
+
 def held() -> list[Lot]:
     return [Held(lots=7), Held(lots=8)]  # ty: ignore[invalid-return-type] -- objects whose attributes the rows read from
 
@@ -154,6 +158,21 @@ def test_no_rows_are_a_stream_of_the_schema_alone(client: TestClient) -> None:
     response = client.get("/none-yet", headers={"accept": ARROW})
     table = pa.ipc.open_stream(response.content).read_all()
     assert (table.num_rows, table.schema.names[:2]) == (0, ["book", "desk"])
+
+
+def test_a_stream_holds_its_rows_in_order_in_batches_of_at_most_65536(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue 37: a reader has a batch only once all of it has arrived, so one batch of every row shows a grid nothing
+    until the last byte. The contract promises a UI the size."""
+    assert arrow.BATCH_ROWS == 65_536
+    rows = dataset.rows(list[Lot], "lots")
+    stream = arrow.encode(rows, [{"lots": float(lot)} for lot in range(arrow.BATCH_ROWS + 1)])
+    assert [batch.num_rows for batch in pa.ipc.open_stream(stream)] == [arrow.BATCH_ROWS, 1]
+    assert pa.ipc.open_stream(stream).read_all().column("lots").to_pylist() == [float(lot) for lot in range(arrow.BATCH_ROWS + 1)]
+    monkeypatch.setattr(arrow, "BATCH_ROWS", 2)
+    service = api.Service(name="lots", settings=api.Settings, routes=[api.get("/lots", five, deadline_s=1, response=list[Lot], errors=[], dataset=True)])
+    with TestClient(api.build(service, settings=api.Settings.given()).asgi) as client:
+        answered = client.get("/lots", headers={"accept": ARROW}).content
+    assert [batch.column("lots").to_pylist() for batch in pa.ipc.open_stream(answered)] == [[0.0, 1.0], [2.0, 3.0], [4.0]]
 
 
 def test_rows_read_from_objects_attributes_as_arrow_and_as_json_alike(client: TestClient) -> None:

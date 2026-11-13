@@ -4,8 +4,9 @@ basis-ui's grid, receives its data. `dataset.py` says what a dataset route decla
 A dataset route answers Arrow when the request's `Accept` names the stream's media type, with a `q` above 0 and at
 least as high as JSON's (`application/json`, `application/*` or `*/*`), and JSON otherwise; `Accept:
 application/vnd.apache.arrow.stream` alone, as basis-ui's client sends it, asks for Arrow. Either answer says `Vary:
-Accept`, and an error is a problem in JSON whichever was asked for. The stream holds one record batch of every row,
-with the columns `dataset.Rows` declares, and none when there are no rows: a reader gets the schema either way.
+Accept`, and an error is a problem in JSON whichever was asked for. The stream holds the rows in their order, in record
+batches of at most `BATCH_ROWS` rows each, with the columns `dataset.Rows` declares, and no batch when there are no
+rows: a reader gets the schema either way.
 
 The rows are validated as the route's response, by one adapter, as FastAPI validates a JSON one, objects' attributes
 included, and dumped once, before they are written, so a request's transaction commits only after both, and a value no
@@ -30,6 +31,10 @@ _JSON_RANGES = frozenset({"application/json", "application/*", "*/*"})
 _Q = re.compile(r"\s*q\s*=\s*(\S*)\s*", re.IGNORECASE)
 _QUALITY = re.compile(r"0(?:\.[0-9]{0,3})?|1(?:\.0{0,3})?")
 """A weight, as RFC 9110 writes one: a range with any other `q` counts for nothing."""
+BATCH_ROWS = 65_536
+"""The most rows a record batch of a stream holds, which the contract promises a UI. A reader has an IPC message only
+once all of it has arrived, so one batch of every row would keep a grid empty until the last byte, and hold the table
+twice while it is read; this is the size parallax's budgets were measured at."""
 
 
 def wanted(accept: str | None) -> bool:
@@ -67,7 +72,7 @@ def encode(rows: Rows, values: Sequence[Mapping[str, object]]) -> bytes:
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, declared) as writer:
         if values:
-            writer.write_table(pa.Table.from_pylist(list(values), schema=declared))
+            writer.write_table(pa.Table.from_pylist(list(values), schema=declared), max_chunksize=BATCH_ROWS)
     return bytes(sink.getvalue())
 
 
@@ -183,10 +188,11 @@ def _first(values: pa.ChunkedArray, wrong: pa.ChunkedArray) -> object:
 
 
 def write(table: pa.Table) -> bytes:
-    """`table` as an Arrow IPC stream."""
+    """`table` as an Arrow IPC stream, in batches of at most `BATCH_ROWS` rows: a chunk of the table that holds fewer
+    is a batch as it is."""
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
+        writer.write_table(table, max_chunksize=BATCH_ROWS)
     return bytes(sink.getvalue())
 
 

@@ -174,9 +174,11 @@ JSON range's (`application/json`, `application/*` or `*/*`), and JSON otherwise.
 application/vnd.apache.arrow.stream` alone asks for Arrow. Both answers carry `Vary: Accept`, and an error is a problem
 in JSON whichever was asked for.
 
-The stream holds one record batch of every row, or none when there are no rows, and its schema either way. Each field of
-the row's model is a column, named as the JSON names it, nullable only where the field may be null, but for a `float`:
-a float column is always nullable, in the Arrow schema and in the document, because NaN and ±inf travel as null.
+The stream holds the rows in their order, in record batches of at most 65,536 rows each, so a UI may show the first
+rows before the last arrive. A batch may hold fewer, and the stream holds none when there are no rows; its schema comes
+first either way. Each field of the row's model is a column, named as the JSON names it, nullable only where the field
+may be null, but for a `float`: a float column is always nullable, in the Arrow schema and in the document, because NaN
+and ±inf travel as null.
 
 | Field | Column |
 |---|---|
