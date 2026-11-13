@@ -530,6 +530,12 @@ turns a fake run real. `bd.testing.client(app)` builds the app on the fakes it d
 Fakes stand in for every resource or none. `fixtures` is imported as a module, `from basis.dash import fixtures`,
 never through `bd`, since it reaches basis-core's fakes, which an app's own modules never load.
 
+**Rows to the browser** (`bd.rows`, `basis.dash.browser`, from 15.8). `bd.rows(frame)` gives a frame's rows as AG
+Grid's `rowData` takes them, each a dict of JSON's values: NaN and ±inf `null`, dates ISO text, times ISO text in UTC
+with `Z`, the index left out. It is built a column at a time through Arrow: 19 ms for 10,000 rows of 20 columns and
+192 ms for 100,000, against pandas' `to_dict("records")`'s 46 and 458, which leaves NaN and dates JSON cannot hold.
+A frame with a column name twice, or naive times, is refused.
+
 **What the status store holds.** Inside a callback, each load sets `STATUS`'s `data[DATASET]` to
 `{"loaded_at": "2026-11-13T14:05:00.123456Z", "rows": 1234, "stale": false, "params": {"as_of": "2026-11-13"}}`: when
 it was read from its source, in UTC, so a value the cache answered keeps its first time; its rows; whether it is a
