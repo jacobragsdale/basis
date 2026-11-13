@@ -17,13 +17,21 @@ one fails `tests/test_internals.py`, and nowhere else: spike 14.1, question 8. N
   callback running sets with `set_props` (`updated_props`), so a load adds its dataset to the status store's `Patch`
   rather than replace another load's.
 - `FASTAPI_CONFIG`: the variable from which Dash's FastAPI backend turns its dev tools on, on its first request, with
-  no argument to stop it, which `basis serve` refuses."""
+  no argument to stop it, which `basis serve` refuses.
+- `write_answers_fast` and `answer_json`: Dash writes a callback's answer with `dash._callback.to_json`, Plotly's
+  `to_json_plotly`, which tries orjson and, where orjson refuses one value, a `Patch` among them, walks every value
+  in Python first: 160 ms of the 228 a 10,000-row grid's answer held the loop (step 17.6). basis's writer is orjson
+  with each object's `to_plotly_json` as its default and Plotly's own escapes, the same bytes, and Plotly's writer
+  for anything orjson still refuses."""
 
 from collections.abc import Callable, Iterable, Mapping
 from typing import Final
 
+import orjson
+from plotly.io import _json as plotly_json
+
 import dash
-from dash import _callback, _callback_context, _dash_renderer, _pages
+from dash import _callback, _callback_context, _dash_renderer, _pages, _utils
 
 REACT: Final = "19.2.4"
 """The React Dash 4.5 opts into, which Mantine 9 needs."""
@@ -124,3 +132,30 @@ def updated(component: str, prop: str) -> object:
     """What the running callback has set `component`'s `prop` to with `set_props`, or None."""
     found = getattr(_callback_context.context_value.get({}), "updated_props", None)
     return found.get(component, {}).get(prop) if isinstance(found, dict) else None
+
+
+_OPTIONS: Final = orjson.OPT_NON_STR_KEYS | orjson.OPT_SERIALIZE_NUMPY
+"""orjson's options as Plotly's writer gives them."""
+
+
+def _plotly_default(found: object) -> object:
+    """What orjson writes of a value it has no type for: its Plotly JSON, as a `Patch`'s, a component's or a figure's."""
+    made = getattr(found, "to_plotly_json", None)
+    if made is None:
+        msg = f"{type(found).__qualname__} is no value orjson writes"
+        raise TypeError(msg)
+    return made()
+
+
+def answer_json(value: object) -> str:
+    """`value`, a callback's answer, as Dash's writer writes it, by orjson in one pass."""
+    try:
+        written = orjson.dumps(value, default=_plotly_default, option=_OPTIONS).decode("utf8")
+    except TypeError:
+        return str(_utils.to_json(value))  # Plotly's writer, which cleans what orjson refuses
+    return str(plotly_json._safe(written, plotly_json._swap_orjson))  # noqa: SLF001 -- Plotly's escapes for JSON in a page
+
+
+def write_answers_fast() -> None:
+    """Write every callback's answer with `answer_json`, for every app in the process."""
+    _callback.to_json = answer_json  # ty: ignore[invalid-assignment] -- Dash's writer, whose signature its annotation leaves bare

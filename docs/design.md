@@ -883,6 +883,16 @@ the example's 25 columns, which holds the loop about 150 ms; and 250 ms (`checks
 answer stops every user's page for a quarter of a second, is passed at about 15,000 such rows. The browser's own time,
 AG Grid's and the per-cell formatter's on 10,000 rows, is unmeasured.
 
+**Where a large answer's time goes, and the writer.** One cached 10,000-row answer of the bench's grid, 5.0 MB of
+JSON, held the loop 212 ms. Of that, writing its JSON took about 165 ms: Dash writes a callback's answer with Plotly's
+`to_json_plotly`, which tries orjson first, but the totals' `Patch` is a type orjson refuses, so Plotly walked all
+250,000 values in Python before it wrote them. The rest was `bd.rows` about 20 to 30 ms, gzip at level 1 about 23 ms
+through uvicorn, orjson itself 9 to 12 ms, the totals 1 to 6 ms, the fresh frame from Arrow 1 to 5 ms, and Dash's
+dispatch and the middleware 6 to 10 ms. basis now writes every callback's answer itself (`internals.answer_json`,
+installed when `basis.dash` is imported): orjson, each object it has no type for written by its `to_plotly_json`, a
+`Patch`, a component or a figure, then Plotly's own escapes for JSON in a page, the same bytes as Dash's writer, a test
+holds, and Dash's writer for anything orjson still refuses. The same answer now holds the loop 53 ms.
+
 **The package is laid out for two lanes.** The foundations' modules build, serve and test an app; the data lane's
 (declarations, the cache, loads, views, fixtures) and the display lane's (theme, shell, page, grid, charts, states,
 exports and `static/`) are their own, and each lane adds its names to `bd` through a module only it edits

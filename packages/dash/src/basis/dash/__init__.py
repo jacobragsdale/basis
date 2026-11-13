@@ -47,6 +47,7 @@ __version__ = VERSION
 """basis-dash's version, which Dash fingerprints the package's own files with."""
 
 internals.choose_react()
+internals.write_answers_fast()  # every callback answer in one pass of orjson, as Dash writes it (internals)
 assets.register()
 
 __all__ = ["NOTIFICATIONS", "STATUS", "VERSION", "App", "Built", "DeclarationError", "Page", "Serve", "Settings", "build", "page", "serve", "testing"]
