@@ -45,7 +45,8 @@ Keep this table true in each step's own commit.
 | 17.3 New repos and their files | Done: `basis-dash new app NAME`, from the packaged example's positions page on synthetic fixtures; `basis new page NAME`; `basis sync`'s block of `AGENTS.md`, three skills, the Dockerfile line, the `bd` alias and `-p no:dash` (core's `Tools` gains `aliases` and `plugins_off`); the tutorial, how-to and reference; a generated repo checked, committed through its hook, and served by `basis dev` under its reloader, a page changed and the change served | the commit "Step 17.3" |
 | 17.4 Smoke | Done: `basis smoke --env ENV [--commit SHA]` for a Dash app: readiness and the commit, every page's index and layout through Dash Pages' router, every dataset's `smoke=` example loaded through the environment's settings; `BASIS_SMOKE__URL` | the commit "Step 17.4" |
 | 17.5 The example | Done: `basis.dash.example`, a fixed income desk's holdings on 320 synthetic bonds and a Treasury curve: Overview (tiles with the day's changes, sector, rating and maturity, issuers), Positions (the grid, filters, totals, exports), Curve (four closes, moves, the book against the curve, DV01 by maturity) and P&L (carry, rates, spread and residual, by sector, the largest moves), every number reconciled across pages by a test; `new app` keeps its positions page | the commit "Step 17.5" |
-| 17.6 to 17.8 The repo around it | Not started | |
+| 17.6 Measure | Done: `packages/dash/tests/bench_dash.py`, through `heavy`: grids of 1,000 to 100,000 rows (time read and cached, the loop's hold, JSON and gzip bytes, the cache's and the process's memory) and fifty sessions beside a 2 s query; the numbers in [the design](design.md#dash-apps-basisdash), which keep 17.1's budgets, 4 MB and 250 ms | the commit "Step 17.6" |
+| 17.7 to 17.8 The repo around it | Not started | |
 
 ## What the best Dash app is
 
@@ -487,7 +488,7 @@ Each has the pick this plan builds on. None blocks a step before the one named.
 | Does a new Dash repo hold jobs beside the app? | No: `parts = ["dash"]` alone; a repo that builds the tables it shows adds `"job"` and `basis new job` | 17.3 |
 | What is `new app`'s starter? | The packaged example (`basis.dash.example`), copied as basis-api's is, its fixtures to the repo's `fixtures/`; 17.5 grows the example, and the starter keeps its positions page | 17.3 |
 | Does the coverage floor leave a Dash repo's pages out? | No: every module counts, `domain.py` among them, as in any repo; the starter's tests cover its pages through `bd.testing` | 17.3 |
-| How long may a callback hold the event loop, in 17.1's check? | 250 ms, measured on the fakes, a call past it made once more; 17.6's numbers revisit it | 17.1 |
+| How long may a callback hold the event loop, in 17.1's check? | 250 ms, measured on the fakes, a call past it made once more; kept by 17.6's numbers, about 15,000 rows of 25 columns, beside the 4 MB answer budget, about 8,000 | 17.1, 17.6 |
 | Does 17.1's check of other origins refuse a link to the firm's wiki? | No: an `href` is navigation and fetches nothing, so it passes on any component but `html.Link`, a stylesheet's | 17.1 |
 | Which callbacks does 17.1 call? | Those a page's load calls: server callbacks of the app's and its pages' modules, with no pattern-matching id and no `prevent_initial_call`, in the browser's order; the rest by their ids alone | 17.1 |
 | Which callbacks are an app's? | Those of the modules that declared it and its pages, since Dash's registry is the process's and tests build several apps | 14.5 |

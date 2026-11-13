@@ -71,7 +71,8 @@ IMPURE: Final = (
 """What a domain module, or a view's function's, may not reach through its imports."""
 LOOP_BUDGET_MS: Final = 250.0
 """The longest a callback may hold the event loop, which every user's page waits on meanwhile: work a callback does
-itself, outside an awaited load, as `bd.rows` of 10,000 rows takes about 20 ms (step 15.8)."""
+itself, outside an awaited load, its answer's JSON among it. Step 17.6 measured about 17 ms for 1,000 rows of 25
+columns and 176 ms for 10,000, so the budget passes at about 15,000, past `sizes.BUDGET_BYTES`' 8,000."""
 LOADS: Final = frozenset({"load", "reload"})
 """What a callback that is not `async` must not call of `bd`'s: each awaits a load."""
 NAMESPACES: Final[Mapping[str, str]] = {"dash_html_components": "dash.html", "dash_core_components": "dash.dcc", "dash_table": "dash.dash_table"}

@@ -19,7 +19,8 @@ type Send = Callable[[Message], Awaitable[None]]
 type ASGI = Callable[[Message, Receive, Send], Awaitable[None]]
 
 BUDGET_BYTES = 4 * 1024 * 1024
-"""The largest answer that is not a warning: about 10,000 rows of 20 columns."""
+"""The largest answer that is not a warning, and that `basis check` passes: about 10,000 rows of 20 columns, or 8,000
+of the example's 25, which hold the event loop about 150 ms (step 17.6)."""
 _PEEK = 64 * 1024
 """The most bytes of a request read to find its output's name; a larger request is named by its path alone."""
 

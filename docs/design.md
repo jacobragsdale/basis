@@ -854,6 +854,35 @@ P&L the day explained, by sector, and its 25 largest moves. A fixture with no da
 app shows the same book whatever day the as-of filter starts on. `new app` keeps every dataset and the positions page,
 at `/`.
 
+**Measured, step 17.6.** On the development host, by `packages/dash/tests/bench_dash.py` through `heavy`: a page
+whose one callback loads the example's positions view, 25 columns, and answers a `bd.grid`'s rows and totals, with
+holdings sampled from the example's, through `bd.testing`:
+
+| Rows | Read from the database | From the cache | Held the loop | JSON | gzip, level 1 | Cache | Process |
+|---|---|---|---|---|---|---|---|
+| 1,000 | 68 ms | 45 ms | 22 ms | 0.5 MB | 0.14 MB | 0.3 MB | 262 MB |
+| 10,000 | 359 ms | 246 ms | 176 ms | 5.1 MB | 1.35 MB | 3.4 MB | 349 MB |
+| 50,000 | 1,499 ms | 990 ms | 679 ms | 25.2 MB | 6.7 MB | 16.8 MB | 660 MB |
+| 100,000 | 2,221 ms | 2,012 ms | 1,457 ms | 50.4 MB | 13.5 MB | 33.7 MB | 978 MB |
+
+The same app served by uvicorn on a socket, fifty sessions each asking twenty times for an answer from the cache while
+one other session's query took 2 s:
+
+| Each answer | The slow query answered in | The fifty's 1,000 answers | Each waited, median (p95) | `/health/live`, median (slowest) |
+|---|---|---|---|---|
+| A line of text | 2,007 ms | 1.7 s | 78 ms (127) | 2 ms (158) |
+| 1,000 rows of the grid | 2,214 ms | 16.4 s | 851 ms (1,010) | 185 ms (626) |
+
+So the slow query delays no one: it runs off the loop, and the other sessions never wait on it. What a busy page costs
+is its rows' JSON, which the loop writes, about 17 ms of it for 1,000 rows of 25 columns: one process answers some 60
+such grids a second, and fifty users asking at once queue behind each other, the health routes among them, though well
+inside a probe's second. An app scales by pods (18), and a page that shows many rows to many users wants fewer rows,
+a summary, or the server-side row model (18). The cache holds about a third of a row's JSON: 33.7 MB for 100,000 rows.
+The budgets 17.1 checks stand, set by these numbers: an answer of 4 MB (`sizes.BUDGET_BYTES`) is about 8,000 rows of
+the example's 25 columns, which holds the loop about 150 ms; and 250 ms (`checks.LOOP_BUDGET_MS`), past which one
+answer stops every user's page for a quarter of a second, is passed at about 15,000 such rows. The browser's own time,
+AG Grid's and the per-cell formatter's on 10,000 rows, is unmeasured.
+
 **The package is laid out for two lanes.** The foundations' modules build, serve and test an app; the data lane's
 (declarations, the cache, loads, views, fixtures) and the display lane's (theme, shell, page, grid, charts, states,
 exports and `static/`) are their own, and each lane adds its names to `bd` through a module only it edits
